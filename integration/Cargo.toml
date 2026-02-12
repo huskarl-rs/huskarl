@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["huskarl-testkit"]
+
+[workspace.dependencies]
+bon = { version = "3.9", default-features = false, features = [
+  "experimental-generics-setters",
+  "experimental-overwritable",
+  "implied-bounds",
+] }
+serde = { version = "1.0", default-features = false, features = ["derive", "std"] }

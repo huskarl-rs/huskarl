@@ -1,0 +1,16 @@
+[package]
+name = "huskarl-testkit"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "huskarl_testkit"
+
+[dependencies]
+huskarl-core = { version = "0.1" }
+reqwest = { version = "0.13", features = ["json", "form"] }
+serde = { workspace = true }
+bon = { workspace = true }
+tokio = { version = "1", features = ["rt"] }
+uuid = { version = "1", features = ["v4"] }

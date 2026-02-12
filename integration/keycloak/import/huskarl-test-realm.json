@@ -1,0 +1,58 @@
+{
+  "realm": "huskarl-test",
+  "enabled": true,
+  "registrationAllowed": false,
+  "clients": [
+    {
+      "clientId": "huskarl-admin",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "huskarl-admin-secret",
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "huskarl-refresh",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "huskarl-refresh-secret",
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "protocol": "openid-connect",
+      "attributes": {
+        "client_credentials.use_refresh_token": "true"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "service-account-huskarl-admin",
+      "enabled": true,
+      "serviceAccountClientId": "huskarl-admin",
+      "clientRoles": {
+        "realm-management": [
+          "realm-admin"
+        ]
+      }
+    },
+    {
+      "username": "testuser",
+      "enabled": true,
+      "email": "testuser@example.com",
+      "firstName": "Test",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "testpassword",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

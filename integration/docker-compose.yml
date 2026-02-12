@@ -1,0 +1,26 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.5.3
+    command: >-
+      start-dev --import-realm
+      --https-certificate-file=/opt/keycloak/certs/server.pem
+      --https-certificate-key-file=/opt/keycloak/certs/server.key
+      --https-client-auth=request
+      --https-trust-store-file=/opt/keycloak/certs/ca.pem
+      --https-trust-store-type=PEM
+    restart: always
+    ports:
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8443:8443"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+      timeout: 1s
+    volumes:
+      - ./keycloak/import:/opt/keycloak/data/import
+      - ./keycloak/certs:/opt/keycloak/certs:ro

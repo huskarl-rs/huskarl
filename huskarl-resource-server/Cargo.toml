@@ -1,0 +1,54 @@
+[package]
+name = "huskarl-resource-server"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "OAuth2 resource server (JWT validation) support for the huskarl ecosystem."
+repository = "https://github.com/huskarl-rs/huskarl"
+license = "MIT OR Apache-2.0"
+keywords = ["oauth2", "jwt", "security", "authentication"]
+categories = ["authentication"]
+readme = "README.md"
+
+[features]
+default = ["default-jws-verifier-platform"]
+
+# When enabled, adds support for the platform default crypto implementation.
+default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypto-webcrypto"]
+
+[dependencies]
+huskarl-core = { version = "0.1" }
+
+bon = { workspace = true }
+bytes = { version = "1", default-features = false }
+form_urlencoded = { workspace = true }
+http = { version = "1" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+snafu = { workspace = true }
+sha2 = { workspace = true }
+base64 = { version = "0.22", default-features = false, features = ["std"] }
+
+
+### Dependencies available on all platforms except WASM-not-WASI
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
+tokio = { version = "1", default-features = false, features = ["time"] }
+huskarl-crypto-native = { version = "0.1", path = "../../huskarl-crypto-native", optional = true }
+
+### Dependencies available on WASM-not-WASI
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
+huskarl-crypto-webcrypto = { version = "0.1", path = "../../huskarl-crypto-webcrypto", optional = true }
+getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
+gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
+web-time = { version = "1", default-features = false }
+
+[dev-dependencies]
+huskarl-reqwest = { version = "0.1" }
+metrics = { workspace = true }
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+httpmock = "0.8.3"

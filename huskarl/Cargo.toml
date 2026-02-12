@@ -1,0 +1,77 @@
+[package]
+name = "huskarl"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = '''
+A modern OAuth2 client library.
+'''
+repository = "https://github.com/huskarl-rs/huskarl"
+license = "MIT OR Apache-2.0"
+keywords = ["oauth2", "security", "authentication"]
+categories = ["authentication"]
+readme = "README.md"
+
+[features]
+default = ["default-jws-verifier-platform"]
+# Enables integration tests that require a running Keycloak instance.
+# See integration/README.md for setup instructions.
+keycloak-tests = []
+
+# When enabled, adds support for the platform default crypto implementation.
+default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypto-webcrypto"]
+
+# When enabled, adds support for a loopback HTTP server that can handle
+# the callback for the authorization code flow.
+authorization-flow-loopback = ["dep:url", "tokio/net", "tokio/io-util"]
+
+# When enabled, an EndpointUrl can be constructed from a url::Url.
+url = ["huskarl-core/url"]
+
+[dependencies]
+huskarl-core = { version = "0.1" }
+huskarl-macros = { version = "0.1" }
+
+arc-swap = "1"
+base64 = { version = "0.22", default-features = false, features = ["std"] }
+bon = { workspace = true }
+bytes = { version = "1", default-features = false }
+form_urlencoded = { workspace = true }
+http = { version = "1", default-features = false, features = ["std"] }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_html_form = { version = "0.4", default-features = false, features = ["ser", "std"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+snafu = { workspace = true }
+subtle = { version = "2", default-features = false }
+tokio = { version = "1", default-features = false, features = ["sync"] }
+url = { workspace = true, optional = true }
+
+### Dependencies available on all platforms except WASM-not-WASI
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
+huskarl-crypto-native = { version = "0.1", optional = true }
+
+### Dependencies available on WASM-not-WASI
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
+huskarl-crypto-webcrypto = { version = "0.1", optional = true }
+getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
+gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
+web-time = { version = "1", default-features = false }
+
+[dev-dependencies]
+#huskarl = { version = "0.1", default-features = true }
+huskarl-crypto-native = { version = "0.1" }
+huskarl-resource-server = { version = "0.1", default-features = true }
+
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dev-dependencies]
+huskarl = { path = ".", features = ["authorization-flow-loopback"] }
+huskarl-reqwest = { version = "0.1", features = ["rustls-tls"] }
+huskarl-testkit = { path = "../integration/huskarl-testkit" }
+pem = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
+httpmock = "0.8.3"
