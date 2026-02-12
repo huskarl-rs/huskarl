@@ -4,4 +4,5 @@
 //! top of the [`core`] module, which provides the shared exchange logic,
 //! form serialization, and token response handling.
 
+pub mod client_credentials;
 pub mod core;
