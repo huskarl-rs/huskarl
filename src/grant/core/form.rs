@@ -45,17 +45,16 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
         parts.method = Method::POST;
         parts.uri = self.uri.clone();
 
-        if let Some(dpop) = self.dpop {
-            if let Some(proof) = dpop
+        if let Some(dpop) = self.dpop
+            && let Some(proof) = dpop
                 .proof(&parts.method, &parts.uri)
                 .await
                 .context(DPoPSignSnafu)?
-            {
-                parts.headers.insert(
-                    "DPoP",
-                    HeaderValue::from_str(proof.expose_secret()).context(BadHeaderSnafu)?,
-                );
-            }
+        {
+            parts.headers.insert(
+                "DPoP",
+                HeaderValue::from_str(proof.expose_secret()).context(BadHeaderSnafu)?,
+            );
         }
 
         parts.headers.insert(
@@ -85,14 +84,16 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
         if let Some(nonce) = response.headers().get("DPoP-Nonce")
             && let Ok(nonce_str) = nonce.to_str()
         {
-            self.dpop.map(|d| d.update_nonce(nonce_str.to_string()));
+            if let Some(d) = self.dpop {
+                d.update_nonce(nonce_str.to_string())
+            }
             *updated_nonce = true;
         }
 
         let body = response.body().await.context(ResponseBodyReadSnafu)?;
 
         let parsed_response =
-            parse_oauth2_response(status, content_type, body).context(ResponseSnafu)?;
+            parse_oauth2_response(status, content_type, &body).context(ResponseSnafu)?;
 
         Ok(parsed_response)
     }
@@ -125,15 +126,15 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
 fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
     status: http::StatusCode,
     content_type: Option<HeaderValue>,
-    body: Bytes,
+    body: &Bytes,
 ) -> Result<T, HandleResponseError> {
     if !status.is_success() {
         // Attempt to parse the body as a standard OAuth 2.0 error response.
-        let error_body = serde_json::from_slice::<OAuth2ErrorBody>(&body).context(
+        let error_body = serde_json::from_slice::<OAuth2ErrorBody>(body).context(
             UnparseableErrorResponseSnafu {
                 status,
                 content_type: content_type.clone(),
-                body: String::from_utf8_lossy(&body),
+                body: String::from_utf8_lossy(body),
             },
         )?;
 
@@ -145,8 +146,8 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
         .fail();
     }
 
-    serde_json::from_slice(&body).context(UnparseableSuccessResponseSnafu {
-        body: String::from_utf8_lossy(&body),
+    serde_json::from_slice(body).context(UnparseableSuccessResponseSnafu {
+        body: String::from_utf8_lossy(body),
     })
 }
 
@@ -216,8 +217,7 @@ pub enum SerializeOAuth2FormError<DPoPErr: crate::Error> {
 impl<DPoPErr: crate::Error + 'static> crate::Error for SerializeOAuth2FormError<DPoPErr> {
     fn is_retryable(&self) -> bool {
         match self {
-            Self::SerializeForm { .. } => false,
-            Self::BadHeader { .. } => false,
+            Self::SerializeForm { .. } | Self::BadHeader { .. } => false,
             Self::DPoPSign { source } => source.is_retryable(),
         }
     }

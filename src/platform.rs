@@ -11,7 +11,7 @@ pub use web_time::{Duration, Instant, SystemTime};
 
 #[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))]
 pub async fn sleep(duration: Duration) {
-    tokio::time::sleep(duration).await
+    tokio::time::sleep(duration).await;
 }
 
 #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))]

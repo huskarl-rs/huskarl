@@ -8,7 +8,8 @@ mod form;
 mod grant;
 mod token_response;
 
-pub use grant::{OAuth2ExchangeGrant, RefreshableGrant};
+pub use grant::OAuth2ExchangeGrant;
+pub use grant::RefreshableGrant;
 pub use token_response::TokenResponse;
 
 /// Standard implementation for converting a sequence of scopes into a scope string.
@@ -17,7 +18,7 @@ pub(crate) fn mk_scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> 
         .into_iter()
         .filter_map(|s| {
             let s = s.into();
-            (!s.trim().is_empty()).then(|| s)
+            (!s.trim().is_empty()).then_some(s)
         })
         .collect::<Vec<_>>();
 

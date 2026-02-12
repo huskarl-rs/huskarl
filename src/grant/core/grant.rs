@@ -4,25 +4,23 @@ use http::Uri;
 use serde::Serialize;
 use snafu::prelude::*;
 
+use crate::grant::refresh::RefreshGrant;
 use crate::{
     client_auth::ClientAuthentication,
     dpop::AuthorizationServerDPoP,
-    grant::{
-        core::{
-            form::{OAuth2FormError, OAuth2FormRequest},
-            token_response::TokenResponse,
-        },
-        refresh::RefreshGrant,
+    grant::core::{
+        form::{OAuth2FormError, OAuth2FormRequest},
+        token_response::TokenResponse,
     },
     http::{HttpClient, HttpResponse},
     platform::{MaybeSend, MaybeSendSync},
 };
 
-/// An OAuth2 exchange grant.
+/// An `OAuth2` exchange grant.
 ///
-/// This represents an OAuth2 grant implementation. It provides
+/// This represents an `OAuth2` grant implementation. It provides
 /// the ability of the grant to provide features like parameters,
-/// authentication, its DPoP configuration, and so forth.
+/// authentication, its `DPoP` configuration, and so forth.
 pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Parameters exchanged when making the token request.
     type Parameters: MaybeSendSync;
@@ -57,6 +55,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     fn allowed_auth_methods(&self) -> Option<&[String]>;
 
     /// Exchange the parameters for an access token.
+    #[allow(clippy::type_complexity)]
     fn exchange<C: HttpClient>(
         &self,
         http_client: &C,

@@ -39,6 +39,10 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
 
     // -- Metadata fields --
     /// The URL of the token endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL is an invalid URI.
     #[builder(with = |url: Url| -> Result<_, InvalidUri> { url.to_string().parse::<Uri>()})]
     token_endpoint: Uri,
 

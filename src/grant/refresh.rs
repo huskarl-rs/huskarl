@@ -46,9 +46,14 @@ pub struct RefreshGrant<
 impl<Auth: ClientAuthentication, D: AuthorizationServerDPoP, S: builder::State>
     RefreshGrantBuilder<Auth, D, S>
 {
+    /// The URL of the token endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL is an invalid URI.
     pub fn token_endpoint(
         self,
-        url: Url,
+        url: &Url,
     ) -> Result<RefreshGrantBuilder<Auth, D, builder::SetTokenEndpoint<S>>, InvalidUri>
     where
         S::TokenEndpoint: builder::IsUnset,
