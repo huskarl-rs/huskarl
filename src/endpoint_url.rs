@@ -7,6 +7,7 @@
 use std::convert::Infallible;
 
 use http::{Uri, uri::InvalidUri};
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// A validated endpoint URL.
@@ -14,8 +15,21 @@ use url::Url;
 /// This is a newtype over [`Uri`] which can be constructed from common
 /// string and URL types via [`IntoEndpointUrl`]. Once constructed, it can be
 /// freely cloned and passed between grants without re-validation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointUrl(Uri);
+
+impl Serialize for EndpointUrl {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for EndpointUrl {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.into_endpoint_url().map_err(serde::de::Error::custom)
+    }
+}
 
 impl EndpointUrl {
     /// Returns the inner [`Uri`].

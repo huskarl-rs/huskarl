@@ -5,13 +5,16 @@
 //! `reqwest`, `hyper`, or a WASM-compatible client) and the library operates
 //! against these traits.
 
-#[cfg(feature = "http-client-reqwest-0_13")]
+mod get;
+#[cfg(all(not(target_arch = "wasm32"), feature = "http-client-reqwest-0_13"))]
 mod reqwest_0_13;
 
 use bytes::Bytes;
 use http::{HeaderMap, Request, StatusCode};
 
 use crate::platform::{MaybeSend, MaybeSendSync};
+
+pub(crate) use get::{GetError, get};
 
 /// Defines the common interface for HTTP requests.
 pub trait HttpClient: MaybeSendSync {
