@@ -12,7 +12,7 @@ mod client_secret;
 mod form_value;
 mod no_auth;
 
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use bon::Builder;
 use http::{HeaderMap, Uri};
@@ -60,7 +60,7 @@ impl<Auth: ClientAuthentication> ClientAuthentication for Arc<Auth> {
 #[derive(Debug, Clone, Builder)]
 pub struct AuthenticationParams<'a> {
     /// Additional headers to include in the request.
-    pub headers: Option<Cow<'a, HeaderMap>>,
+    pub headers: Option<HeaderMap>,
     /// Additional form parameters to include in the request body.
     pub form_params: Option<Vec<(&'static str, FormValue<'a>)>>,
 }

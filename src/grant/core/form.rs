@@ -28,7 +28,7 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
             .auth_params
             .headers
             .as_ref()
-            .map(|h| h.clone().into_owned())
+            .map(|h| h.clone())
             .unwrap_or_default();
 
         let mut body = serde_html_form::to_string(self.form).context(SerializeFormSnafu)?;

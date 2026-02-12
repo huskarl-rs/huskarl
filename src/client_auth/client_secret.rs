@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use base64::prelude::*;
 use http::{HeaderMap, Uri, header::InvalidHeaderValue};
 use secrecy::ExposeSecret as _;
@@ -43,9 +41,7 @@ impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
             auth_header.parse().context(InvalidHeaderSnafu)?,
         );
 
-        Ok(AuthenticationParams::builder()
-            .headers(Cow::Owned(headers))
-            .build())
+        Ok(AuthenticationParams::builder().headers(headers).build())
     }
 
     fn post_authentication_params<'a>(
