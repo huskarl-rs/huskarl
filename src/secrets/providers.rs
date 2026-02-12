@@ -17,14 +17,18 @@ pub struct EnvVarSecret<Output = SecretString> {
 
 impl<O> EnvVarSecret<O> {
     /// Creates a new environment variable secret provider with the specified encoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the environment variable doesn't exist, or if the value
+    /// isn't valid UTF-8.
     pub fn new<E: SecretDecoder<Output = O>>(
         var_name: impl Into<OsString>,
-        encoding: E,
+        encoding: &E,
     ) -> Result<Self, EnvVarSecretError> {
         let var_name = var_name.into();
 
-        let encoded_value =
-            std::env::var(&var_name.clone()).context(EnvAccessSnafu { var_name })?;
+        let encoded_value = std::env::var(var_name.clone()).context(EnvAccessSnafu { var_name })?;
         let value = encoding
             .decode(encoded_value.as_bytes())
             .context(DecodeSnafu)?;
@@ -37,8 +41,13 @@ impl<O> EnvVarSecret<O> {
 
 impl EnvVarSecret<SecretString> {
     /// Creates a new environment variable secret provider returning a `SecretString`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the environment variable doesn't exist, or if the value
+    /// isn't valid UTF-8.
     pub fn string(var_name: impl Into<OsString>) -> Result<Self, EnvVarSecretError> {
-        Self::new(var_name, StringEncoding)
+        Self::new(var_name, &StringEncoding)
     }
 }
 

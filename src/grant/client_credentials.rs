@@ -12,9 +12,11 @@ use crate::{
     client_auth::ClientAuthentication,
     dpop::{AuthorizationServerDPoP, NoDPoP},
     grant::{
+        client_credentials::builder::{SetTokenEndpoint, SetTokenEndpointAuthMethodsSupported},
         core::{OAuth2ExchangeGrant, RefreshableGrant, mk_scopes},
         refresh::RefreshGrant,
     },
+    server_metadata::AuthorizationServerMetadata,
 };
 
 /// An `OAuth2` client credentials grant.
@@ -43,7 +45,7 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
 
     // -- Metadata fields --
     /// The URL of the token endpoint.
-    #[builder(setters(vis = "", name = "token_endpoint_internal"))]
+    #[builder(setters(name = "token_endpoint_url"))]
     token_endpoint: EndpointUrl,
 
     /// Supported endpoint auth methods; used to auto-select basic or form auth for client secrets.
@@ -54,22 +56,43 @@ impl<Auth: ClientAuthentication + 'static> ClientCredentialsGrant<Auth> {
     pub fn builder() -> ClientCredentialsGrantBuilder<Auth, NoDPoP> {
         ClientCredentialsGrant::<Auth, NoDPoP>::builder_internal()
     }
+
+    pub fn build_from_metadata(
+        metadata: &AuthorizationServerMetadata,
+    ) -> ClientCredentialsGrantBuilder<
+        Auth,
+        NoDPoP,
+        SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<builder::Empty>>,
+    > {
+        Self::builder()
+            .token_endpoint_url(metadata.token_endpoint.clone())
+            .maybe_token_endpoint_auth_methods_supported(
+                metadata
+                    .token_endpoint_auth_signing_alg_values_supported
+                    .clone(),
+            )
+    }
 }
 
-impl<
-    Auth: ClientAuthentication + 'static,
-    DPoP: AuthorizationServerDPoP + 'static,
-    S: builder::State,
-> ClientCredentialsGrantBuilder<Auth, DPoP, S>
+impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, S: builder::State>
+    ClientCredentialsGrantBuilder<Auth, D, S>
 where
     S::Dpop: builder::IsUnset,
 {
     /// The `DPoP` signer.
-    pub fn dpop<D: AuthorizationServerDPoP + 'static>(
+    pub fn dpop<D1: AuthorizationServerDPoP + 'static>(
         self,
-        dpop: D,
-    ) -> ClientCredentialsGrantBuilder<Auth, D, builder::SetDpop<S>> {
+        dpop: D1,
+    ) -> ClientCredentialsGrantBuilder<Auth, D1, builder::SetDpop<S>> {
         self.conv_d().dpop_internal(dpop)
+    }
+
+    /// The `DPoP` signer.
+    pub fn maybe_dpop<D1: AuthorizationServerDPoP + 'static>(
+        self,
+        dpop: Option<D1>,
+    ) -> ClientCredentialsGrantBuilder<Auth, D1, builder::SetDpop<S>> {
+        self.conv_d().maybe_dpop_internal(dpop)
     }
 }
 
@@ -92,7 +115,7 @@ impl<Auth: ClientAuthentication, D: AuthorizationServerDPoP, S: builder::State>
     where
         S::TokenEndpoint: builder::IsUnset,
     {
-        Ok(self.token_endpoint_internal(url.into_endpoint_url()?))
+        Ok(self.token_endpoint_url(url.into_endpoint_url()?))
     }
 }
 

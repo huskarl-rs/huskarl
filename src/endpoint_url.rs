@@ -51,6 +51,10 @@ pub trait IntoEndpointUrl {
     type Error;
 
     /// Attempts to convert this value into an [`EndpointUrl`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be parsed into an [`EndpointUrl`].
     fn into_endpoint_url(self) -> Result<EndpointUrl, Self::Error>;
 }
 

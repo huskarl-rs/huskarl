@@ -13,7 +13,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     let http_client = reqwest::Client::new();
 
     let client_auth = ClientSecret::new(
-        EnvVarSecret::new("CLIENT_SECRET", StringEncoding)
+        EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)
             .whatever_context("Failed to get CLIENT_SECRET")?,
     );
 

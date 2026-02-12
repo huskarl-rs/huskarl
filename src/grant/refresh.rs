@@ -12,17 +12,26 @@ use crate::{
     EndpointUrl, IntoEndpointUrl,
     client_auth::ClientAuthentication,
     dpop::{AuthorizationServerDPoP, NoDPoP},
-    grant::core::{OAuth2ExchangeGrant, RefreshableGrant},
+    grant::{
+        core::{OAuth2ExchangeGrant, RefreshableGrant},
+        refresh::builder::{SetTokenEndpoint, SetTokenEndpointAuthMethodsSupported},
+    },
+    server_metadata::AuthorizationServerMetadata,
     token::RefreshToken,
 };
 
 #[derive(Debug, Clone, Builder)]
-#[builder(state_mod(name = "builder"))]
+#[builder(
+    start_fn(vis = "", name = "builder_internal"),
+    state_mod(name = "builder"),
+    generics(setters(name = "conv_{}"))
+)]
 pub struct RefreshGrant<
     Auth: ClientAuthentication + 'static,
     D: AuthorizationServerDPoP + 'static = NoDPoP,
 > {
     /// The `DPoP` signer.
+    #[builder(setters(vis = "", name = "dpop_internal"))]
     dpop: Option<D>,
 
     // -- User-supplied fields --
@@ -35,11 +44,55 @@ pub struct RefreshGrant<
 
     // -- Metadata fields --
     /// The URL of the token endpoint.
-    #[builder(setters(vis = "", name = "token_endpoint_internal"))]
+    #[builder(setters(name = "token_endpoint_url"))]
     token_endpoint: EndpointUrl,
 
     /// Supported endpoint auth methods; used to auto-select basic or form auth for client secrets.
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
+}
+
+impl<Auth: ClientAuthentication + 'static> RefreshGrant<Auth> {
+    pub fn builder() -> RefreshGrantBuilder<Auth, NoDPoP> {
+        RefreshGrant::<Auth, NoDPoP>::builder_internal()
+    }
+
+    pub fn builder_from_metadata(
+        metadata: &AuthorizationServerMetadata,
+    ) -> RefreshGrantBuilder<
+        Auth,
+        NoDPoP,
+        SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<builder::Empty>>,
+    > {
+        Self::builder()
+            .token_endpoint_url(metadata.token_endpoint.clone())
+            .maybe_token_endpoint_auth_methods_supported(
+                metadata
+                    .token_endpoint_auth_signing_alg_values_supported
+                    .clone(),
+            )
+    }
+}
+
+impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, S: builder::State>
+    RefreshGrantBuilder<Auth, D, S>
+where
+    S::Dpop: builder::IsUnset,
+{
+    /// The `DPoP` signer.
+    pub fn dpop<D1: AuthorizationServerDPoP + 'static>(
+        self,
+        dpop: D1,
+    ) -> RefreshGrantBuilder<Auth, D1, builder::SetDpop<S>> {
+        self.conv_d().dpop_internal(dpop)
+    }
+
+    /// The `DPoP` signer.
+    pub fn maybe_dpop<D1: AuthorizationServerDPoP + 'static>(
+        self,
+        dpop: Option<D1>,
+    ) -> RefreshGrantBuilder<Auth, D1, builder::SetDpop<S>> {
+        self.conv_d().maybe_dpop_internal(dpop)
+    }
 }
 
 impl<Auth: ClientAuthentication, D: AuthorizationServerDPoP, S: builder::State>
@@ -61,7 +114,7 @@ impl<Auth: ClientAuthentication, D: AuthorizationServerDPoP, S: builder::State>
     where
         S::TokenEndpoint: builder::IsUnset,
     {
-        Ok(self.token_endpoint_internal(url.into_endpoint_url()?))
+        Ok(self.token_endpoint_url(url.into_endpoint_url()?))
     }
 }
 

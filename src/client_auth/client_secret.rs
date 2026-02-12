@@ -22,11 +22,10 @@ impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
     }
 
     /// Selects the authentication method to use from a set of allowed methods.
-    fn basic_authentication_params(
-        &self,
-        client_id: &str,
+    fn basic_authentication_params<'a>(
+        client_id: &'a str,
         client_secret: &SecretString,
-    ) -> Result<AuthenticationParams<'_>, ClientSecretError<Sec::Error>> {
+    ) -> Result<AuthenticationParams<'a>, ClientSecretError<Sec::Error>> {
         use url::form_urlencoded::byte_serialize;
         let client_id: String = byte_serialize(client_id.as_bytes()).collect();
         let client_secret: String =
@@ -44,11 +43,10 @@ impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
         Ok(AuthenticationParams::builder().headers(headers).build())
     }
 
-    fn post_authentication_params<'a>(
-        &'a self,
-        client_id: &'a str,
+    fn post_authentication_params(
+        client_id: &str,
         client_secret: SecretString,
-    ) -> AuthenticationParams<'a> {
+    ) -> AuthenticationParams<'_> {
         AuthenticationParams::builder()
             .form_params(bon::map! {
                 "client_id": client_id,
@@ -75,10 +73,10 @@ impl<Sec: Secret<Output = SecretString>> ClientAuthentication for ClientSecret<S
 
         match select_method(allowed_methods) {
             ClientSecretMethod::Basic => {
-                self.basic_authentication_params(client_id, &client_secret)
+                Self::basic_authentication_params(client_id, &client_secret)
             }
             ClientSecretMethod::Post => {
-                Ok(self.post_authentication_params(client_id, client_secret))
+                Ok(Self::post_authentication_params(client_id, client_secret))
             }
         }
     }
