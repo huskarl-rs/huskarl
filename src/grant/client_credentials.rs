@@ -5,11 +5,10 @@
 use std::borrow::Cow;
 
 use bon::Builder;
-use http::{Uri, uri::InvalidUri};
 use serde::Serialize;
-use url::Url;
 
 use crate::{
+    EndpointUrl, IntoEndpointUrl,
     client_auth::ClientAuthentication,
     dpop::{AuthorizationServerDPoP, NoDPoP},
     grant::{
@@ -24,9 +23,14 @@ use crate::{
 /// interaction is required. The client authenticates directly with the
 /// authorization server using its own credentials.
 #[derive(Debug, Builder)]
-#[builder(state_mod(name = "builder"))]
+#[builder(
+    start_fn(vis = "", name = "builder_internal"),
+    state_mod(name = "builder"),
+    generics(setters(name = "conv_{}"))
+)]
 pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP> {
     /// The `DPoP` signer.
+    #[builder(setters(vis = "", name = "dpop_internal"))]
     dpop: Option<D>,
 
     // -- User-supplied fields --
@@ -39,15 +43,57 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
 
     // -- Metadata fields --
     /// The URL of the token endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the URL is an invalid URI.
-    #[builder(with = |url: Url| -> Result<_, InvalidUri> { url.to_string().parse::<Uri>()})]
-    token_endpoint: Uri,
+    #[builder(setters(vis = "", name = "token_endpoint_internal"))]
+    token_endpoint: EndpointUrl,
 
     /// Supported endpoint auth methods; used to auto-select basic or form auth for client secrets.
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
+}
+
+impl<Auth: ClientAuthentication + 'static> ClientCredentialsGrant<Auth> {
+    pub fn builder() -> ClientCredentialsGrantBuilder<Auth, NoDPoP> {
+        ClientCredentialsGrant::<Auth, NoDPoP>::builder_internal()
+    }
+}
+
+impl<
+    Auth: ClientAuthentication + 'static,
+    DPoP: AuthorizationServerDPoP + 'static,
+    S: builder::State,
+> ClientCredentialsGrantBuilder<Auth, DPoP, S>
+where
+    S::Dpop: builder::IsUnset,
+{
+    /// The `DPoP` signer.
+    pub fn dpop<D: AuthorizationServerDPoP + 'static>(
+        self,
+        dpop: D,
+    ) -> ClientCredentialsGrantBuilder<Auth, D, builder::SetDpop<S>> {
+        self.conv_d().dpop_internal(dpop)
+    }
+}
+
+impl<Auth: ClientAuthentication, D: AuthorizationServerDPoP, S: builder::State>
+    ClientCredentialsGrantBuilder<Auth, D, S>
+{
+    /// Sets the token endpoint URL.
+    ///
+    /// Accepts any type that implements [`IntoEndpointUrl`], including
+    /// `&str`, [`String`], [`Url`](url::Url), [`Uri`](http::Uri), and
+    /// [`EndpointUrl`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the URL cannot be parsed as a valid URI.
+    pub fn token_endpoint<U: IntoEndpointUrl>(
+        self,
+        url: U,
+    ) -> Result<ClientCredentialsGrantBuilder<Auth, D, builder::SetTokenEndpoint<S>>, U::Error>
+    where
+        S::TokenEndpoint: builder::IsUnset,
+    {
+        Ok(self.token_endpoint_internal(url.into_endpoint_url()?))
+    }
 }
 
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static> OAuth2ExchangeGrant
@@ -58,7 +104,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     type DPoP = D;
     type Form<'a> = ClientCredentialsGrantForm;
 
-    fn token_endpoint(&self) -> &Uri {
+    fn token_endpoint(&self) -> &EndpointUrl {
         &self.token_endpoint
     }
 
@@ -97,7 +143,8 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
             .client_id(self.client_id.clone())
             .client_auth(self.client_auth.clone())
             .maybe_dpop(self.dpop.clone())
-            .token_endpoint_uri(self.token_endpoint.clone())
+            .token_endpoint(self.token_endpoint.clone())
+            .unwrap_or_else(|e: std::convert::Infallible| match e {})
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )

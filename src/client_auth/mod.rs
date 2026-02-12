@@ -8,6 +8,7 @@
 //! need any credentials inside the request, and [`NoAuth`] authentication
 //! may suffice here.
 
+mod client_secret;
 mod form_value;
 mod no_auth;
 
@@ -18,6 +19,7 @@ use http::{HeaderMap, Uri};
 
 use crate::platform::{MaybeSend, MaybeSendSync};
 
+pub use client_secret::{ClientSecret, ClientSecretError};
 pub use form_value::FormValue;
 pub use no_auth::NoAuth;
 

@@ -5,6 +5,9 @@
 //! `reqwest`, `hyper`, or a WASM-compatible client) and the library operates
 //! against these traits.
 
+#[cfg(feature = "http-client-reqwest-0_13")]
+mod reqwest_0_13;
+
 use bytes::Bytes;
 use http::{HeaderMap, Request, StatusCode};
 

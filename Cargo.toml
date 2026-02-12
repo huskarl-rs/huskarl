@@ -4,22 +4,35 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 
+[features]
+default = []
+http-client-reqwest-0_13 = ["dep:reqwest"]
+
 [dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
-bon = { version = "3.8", default-features = false, features = ["implied-bounds"] }
+bon = { git = "https://github.com/elastio/bon", default-features = false, features = [
+  "experimental-generics-setters",
+  "implied-bounds",
+] }
 bytes = { version = "1", default-features = false }
 hex = { version = "0.4", default-features = false, features = ["std"] }
 http = { version = "1", default-features = false, features = ["std"] }
 rand = { version = "0.10", default-features = false }
+reqwest = { version = "0.13", default-features = false, optional = true }
 secrecy = { version = "0.10", default-features = false, features = ["serde"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "rc"] }
 serde_html_form = { version = "0.3", default-features = false, features = ["std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
 sha2 = { version = "0.11.0-rc.5", default-features = false }
-snafu = { version = "0.8", default-features = false, features = ["rust_1_81"] }
+snafu = { version = "0.8", default-features = false, features = ["rust_1_81", "std"] }
 subtle = { version = "2", default-features = false }
 url = { version = "2", default-features = false }
 uuid = { version = "1.13", default-features = false, features = ["v7"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { version = "1", default-features = false, features = ["time"] }
+
+[dev-dependencies]
+huskarl = { path = ".", features = ["http-client-reqwest-0_13"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+reqwest = { version = "0.13", default-features = true }

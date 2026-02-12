@@ -1,11 +1,11 @@
 use std::borrow::Cow;
 
-use http::Uri;
 use serde::Serialize;
 use snafu::prelude::*;
 
 use crate::grant::refresh::RefreshGrant;
 use crate::{
+    EndpointUrl,
     client_auth::ClientAuthentication,
     dpop::AuthorizationServerDPoP,
     grant::core::{
@@ -42,8 +42,8 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns the configured client auth.
     fn client_auth(&self) -> &Self::ClientAuth;
 
-    /// Returns the token endpoint URI.
-    fn token_endpoint(&self) -> &Uri;
+    /// Returns the token endpoint URL.
+    fn token_endpoint(&self) -> &EndpointUrl;
 
     /// Returns the configured `DPoP` implementation (if any).
     fn dpop(&self) -> Option<&Self::DPoP>;
@@ -76,7 +76,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .client_auth()
                 .authentication_params(
                     self.client_id(),
-                    self.token_endpoint(),
+                    self.token_endpoint().as_uri(),
                     self.allowed_auth_methods(),
                 )
                 .await
@@ -88,7 +88,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .auth_params(auth_params)
                 .maybe_dpop(self.dpop())
                 .form(&form)
-                .uri(self.token_endpoint().clone())
+                .uri(self.token_endpoint().as_uri().clone())
                 .build()
                 .execute(http_client)
                 .await

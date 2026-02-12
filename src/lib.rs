@@ -4,13 +4,16 @@
 
 pub mod client_auth;
 pub mod dpop;
+mod endpoint_url;
 mod error;
 pub mod grant;
 pub mod http;
 pub mod platform;
+pub mod prelude;
 pub mod secrets;
 pub mod token;
 
+pub use endpoint_url::{EndpointUrl, IntoEndpointUrl};
 pub use error::{BoxedError, Error};
 
 /// Documentation

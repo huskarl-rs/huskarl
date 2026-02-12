@@ -6,11 +6,10 @@
 use std::borrow::Cow;
 
 use bon::Builder;
-use http::{Uri, uri::InvalidUri};
 use serde::Serialize;
-use url::Url;
 
 use crate::{
+    EndpointUrl, IntoEndpointUrl,
     client_auth::ClientAuthentication,
     dpop::{AuthorizationServerDPoP, NoDPoP},
     grant::core::{OAuth2ExchangeGrant, RefreshableGrant},
@@ -36,8 +35,8 @@ pub struct RefreshGrant<
 
     // -- Metadata fields --
     /// The URL of the token endpoint.
-    #[builder(setters(name = "token_endpoint_uri"))]
-    token_endpoint: Uri,
+    #[builder(setters(vis = "", name = "token_endpoint_internal"))]
+    token_endpoint: EndpointUrl,
 
     /// Supported endpoint auth methods; used to auto-select basic or form auth for client secrets.
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
@@ -46,19 +45,23 @@ pub struct RefreshGrant<
 impl<Auth: ClientAuthentication, D: AuthorizationServerDPoP, S: builder::State>
     RefreshGrantBuilder<Auth, D, S>
 {
-    /// The URL of the token endpoint.
+    /// Sets the token endpoint URL.
+    ///
+    /// Accepts any type that implements [`IntoEndpointUrl`], including
+    /// `&str`, [`String`], [`Url`](url::Url), [`Uri`](http::Uri), and
+    /// [`EndpointUrl`].
     ///
     /// # Errors
     ///
-    /// Returns an error if the URL is an invalid URI.
-    pub fn token_endpoint(
+    /// Returns an error if the URL cannot be parsed as a valid URI.
+    pub fn token_endpoint<U: IntoEndpointUrl>(
         self,
-        url: &Url,
-    ) -> Result<RefreshGrantBuilder<Auth, D, builder::SetTokenEndpoint<S>>, InvalidUri>
+        url: U,
+    ) -> Result<RefreshGrantBuilder<Auth, D, builder::SetTokenEndpoint<S>>, U::Error>
     where
         S::TokenEndpoint: builder::IsUnset,
     {
-        Ok(self.token_endpoint_uri(url.to_string().parse::<Uri>()?))
+        Ok(self.token_endpoint_internal(url.into_endpoint_url()?))
     }
 }
 
@@ -75,7 +78,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         self.token_endpoint_auth_methods_supported.as_deref()
     }
 
-    fn token_endpoint(&self) -> &Uri {
+    fn token_endpoint(&self) -> &EndpointUrl {
         &self.token_endpoint
     }
 

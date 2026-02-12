@@ -9,6 +9,12 @@ pub enum FormValue<'a> {
     Sensitive(Cow<'a, SecretString>),
 }
 
+impl<'a> From<Cow<'a, str>> for FormValue<'a> {
+    fn from(value: Cow<'a, str>) -> Self {
+        Self::NonSensitive(value)
+    }
+}
+
 impl From<String> for FormValue<'_> {
     fn from(value: String) -> Self {
         Self::NonSensitive(Cow::Owned(value))

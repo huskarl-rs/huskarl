@@ -5,10 +5,12 @@
 //! and hex.
 
 pub mod encodings;
+mod providers;
 
 use crate::platform::{MaybeSend, MaybeSendSync};
 
 pub use encodings::{DecodingError, SecretDecoder};
+pub use providers::EnvVarSecret;
 
 /// Trait for secret retrieval.
 pub trait Secret: MaybeSendSync {
