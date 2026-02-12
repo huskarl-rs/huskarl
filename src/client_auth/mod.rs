@@ -11,11 +11,10 @@
 mod form_value;
 mod no_auth;
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use bon::Builder;
-use http::HeaderMap;
-use url::Url;
+use http::{HeaderMap, Uri};
 
 use crate::platform::{MaybeSend, MaybeSendSync};
 
@@ -35,9 +34,24 @@ pub trait ClientAuthentication: MaybeSendSync {
     fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
-        token_endpoint: &'a Url,
+        token_endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> impl Future<Output = Result<AuthenticationParams<'a>, Self::Error>> + MaybeSend;
+}
+
+impl<Auth: ClientAuthentication> ClientAuthentication for Arc<Auth> {
+    type Error = Auth::Error;
+
+    async fn authentication_params<'a>(
+        &'a self,
+        client_id: &'a str,
+        token_endpoint: &'a Uri,
+        allowed_methods: Option<&'a [String]>,
+    ) -> Result<AuthenticationParams<'a>, Self::Error> {
+        self.as_ref()
+            .authentication_params(client_id, token_endpoint, allowed_methods)
+            .await
+    }
 }
 
 /// The authentication credentials that need to be added to the request.

@@ -5,13 +5,17 @@
 use std::borrow::Cow;
 
 use bon::Builder;
+use http::{Uri, uri::InvalidUri};
 use serde::Serialize;
 use url::Url;
 
 use crate::{
     client_auth::ClientAuthentication,
     dpop::{AuthorizationServerDPoP, NoDPoP},
-    grant::core::{OAuth2ExchangeGrant, mk_scopes},
+    grant::{
+        core::{OAuth2ExchangeGrant, RefreshableGrant, mk_scopes},
+        refresh::RefreshGrant,
+    },
 };
 
 /// An `OAuth2` client credentials grant.
@@ -20,6 +24,7 @@ use crate::{
 /// interaction is required. The client authenticates directly with the
 /// authorization server using its own credentials.
 #[derive(Debug, Builder)]
+#[builder(state_mod(name = "builder"))]
 pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP> {
     /// The `DPoP` signer.
     dpop: Option<D>,
@@ -34,21 +39,22 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
 
     // -- Metadata fields --
     /// The URL of the token endpoint.
-    token_endpoint: Url,
+    #[builder(with = |url: Url| -> Result<_, InvalidUri> { url.to_string().parse::<Uri>()})]
+    token_endpoint: Uri,
 
     /// Supported endpoint auth methods; used to auto-select basic or form auth for client secrets.
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
-impl<Auth: ClientAuthentication + 'static, DPoP: AuthorizationServerDPoP + 'static>
-    OAuth2ExchangeGrant for ClientCredentialsGrant<Auth, DPoP>
+impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static> OAuth2ExchangeGrant
+    for ClientCredentialsGrant<Auth, D>
 {
     type Parameters = ClientCredentialsGrantParameters;
     type ClientAuth = Auth;
-    type DPoP = DPoP;
+    type DPoP = D;
     type Form<'a> = ClientCredentialsGrantForm;
 
-    fn token_endpoint(&self) -> &Url {
+    fn token_endpoint(&self) -> &Uri {
         &self.token_endpoint
     }
 
@@ -56,7 +62,7 @@ impl<Auth: ClientAuthentication + 'static, DPoP: AuthorizationServerDPoP + 'stat
         &self.client_auth
     }
 
-    fn client_id(&self) -> &str {
+    fn client_id(&self) -> &Cow<'static, str> {
         &self.client_id
     }
 
@@ -76,7 +82,26 @@ impl<Auth: ClientAuthentication + 'static, DPoP: AuthorizationServerDPoP + 'stat
     }
 }
 
-/// Parameters when requesting a token.
+impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + Clone + 'static>
+    RefreshableGrant for ClientCredentialsGrant<Auth, D>
+{
+    type ClientAuth = Auth;
+    type DPoP = D;
+
+    fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
+        RefreshGrant::builder()
+            .client_id(self.client_id.clone())
+            .client_auth(self.client_auth.clone())
+            .maybe_dpop(self.dpop.clone())
+            .token_endpoint_uri(self.token_endpoint.clone())
+            .maybe_token_endpoint_auth_methods_supported(
+                self.token_endpoint_auth_methods_supported.clone(),
+            )
+            .build()
+    }
+}
+
+/// Parameters when requesting a token using the client credentials grant.
 #[derive(Debug, Clone, Builder)]
 pub struct ClientCredentialsGrantParameters {
     #[builder(required, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]

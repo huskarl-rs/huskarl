@@ -7,6 +7,8 @@
 
 mod no_dpop;
 
+use std::sync::Arc;
+
 use crate::secrecy::SecretString;
 use http::{Method, Uri};
 
@@ -39,6 +41,28 @@ pub trait AuthorizationServerDPoP: MaybeSendSync {
 
     /// Returns the corresponding resource server variant.
     fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP;
+}
+
+impl<D: AuthorizationServerDPoP> AuthorizationServerDPoP for Arc<D> {
+    type Error = D::Error;
+
+    type ResourceServerDPoP = D::ResourceServerDPoP;
+
+    fn jwk_thumbprint(&self) -> Option<&str> {
+        self.as_ref().jwk_thumbprint()
+    }
+
+    fn update_nonce(&self, nonce: String) {
+        self.as_ref().update_nonce(nonce);
+    }
+
+    async fn proof(&self, method: &Method, uri: &Uri) -> Result<Option<SecretString>, Self::Error> {
+        self.as_ref().proof(method, uri).await
+    }
+
+    fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
+        self.as_ref().to_resource_server_dpop()
+    }
 }
 
 pub trait ResourceServerDPoP: MaybeSendSync {

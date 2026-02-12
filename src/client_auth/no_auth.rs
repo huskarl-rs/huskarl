@@ -1,5 +1,7 @@
 use std::convert::Infallible;
 
+use http::Uri;
+
 use crate::client_auth::{AuthenticationParams, ClientAuthentication};
 
 /// Authentication that only provides the client ID.
@@ -14,7 +16,7 @@ impl ClientAuthentication for NoAuth {
     async fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
-        _token_endpoint: &'a url::Url,
+        _token_endpoint: &'a Uri,
         _allowed_methods: Option<&'a [String]>,
     ) -> Result<AuthenticationParams<'a>, Self::Error> {
         Ok(AuthenticationParams::builder()

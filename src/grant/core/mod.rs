@@ -8,7 +8,7 @@ mod form;
 mod grant;
 mod token_response;
 
-pub use grant::OAuth2ExchangeGrant;
+pub use grant::{OAuth2ExchangeGrant, RefreshableGrant};
 pub use token_response::TokenResponse;
 
 /// Standard implementation for converting a sequence of scopes into a scope string.

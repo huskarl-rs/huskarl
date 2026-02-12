@@ -1,14 +1,18 @@
+use std::borrow::Cow;
+
 use http::Uri;
 use serde::Serialize;
 use snafu::prelude::*;
-use url::Url;
 
 use crate::{
     client_auth::ClientAuthentication,
     dpop::AuthorizationServerDPoP,
-    grant::core::{
-        form::{OAuth2FormError, OAuth2FormRequest},
-        token_response::TokenResponse,
+    grant::{
+        core::{
+            form::{OAuth2FormError, OAuth2FormRequest},
+            token_response::TokenResponse,
+        },
+        refresh::RefreshGrant,
     },
     http::{HttpClient, HttpResponse},
     platform::{MaybeSend, MaybeSendSync},
@@ -23,7 +27,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Parameters exchanged when making the token request.
     type Parameters: MaybeSendSync;
 
-    /// The client credentials used when making token request.
+    /// The client credentials used when making the token request.
     type ClientAuth: ClientAuthentication + 'static;
 
     /// The proof implementation used when adding a `DPoP` token binding.
@@ -35,22 +39,19 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         Self: 'a;
 
     /// Returns the configured client ID.
-    fn client_id(&self) -> &str;
+    fn client_id(&self) -> &Cow<'static, str>;
 
     /// Returns the configured client auth.
     fn client_auth(&self) -> &Self::ClientAuth;
 
-    /// Returns the token endpoint URL.
-    fn token_endpoint(&self) -> &Url;
+    /// Returns the token endpoint URI.
+    fn token_endpoint(&self) -> &Uri;
 
     /// Returns the configured `DPoP` implementation (if any).
     fn dpop(&self) -> Option<&Self::DPoP>;
 
     /// Builds the body for the request.
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_>;
-
-    /// Returns the refresh grant corresponding to this grant.
-    // fn refresh_grant(&self) -> refresh::Grant<Self::ClientAuth, Self::DPoP>;
 
     /// Returns allowed authentication methods (formatted as in authorization server metadata).
     fn allowed_auth_methods(&self) -> Option<&[String]>;
@@ -88,12 +89,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .auth_params(auth_params)
                 .maybe_dpop(self.dpop())
                 .form(&form)
-                .uri(
-                    self.token_endpoint()
-                        .to_string()
-                        .parse::<Uri>()
-                        .context(InvalidUriSnafu)?,
-                )
+                .uri(self.token_endpoint().clone())
                 .build()
                 .execute(http_client)
                 .await
@@ -102,6 +98,21 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             Ok(token_response)
         }
     }
+}
+
+/// A refreshable grant.
+///
+/// This represents the ability to obtain a refresh grant that can
+/// refresh the refresh tokens acquired by this grant.
+pub trait RefreshableGrant: MaybeSendSync {
+    /// The client credentials used when making the token request.
+    type ClientAuth: ClientAuthentication + 'static;
+
+    /// The proof implementation used when adding a `DPoP` token binding.
+    type DPoP: AuthorizationServerDPoP + 'static;
+
+    /// Returns the refresh grant corresponding to this grant.
+    fn to_refresh_grant(&self) -> RefreshGrant<Self::ClientAuth, Self::DPoP>;
 }
 
 #[derive(Debug, Snafu)]
@@ -113,9 +124,6 @@ pub enum OAuth2ExchangeGrantError<
 > {
     Auth {
         source: AuthErr,
-    },
-    InvalidUri {
-        source: http::uri::InvalidUri,
     },
     OAuth2Form {
         source: OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>,
@@ -132,7 +140,6 @@ impl<
     fn is_retryable(&self) -> bool {
         match self {
             Self::Auth { source } => source.is_retryable(),
-            Self::InvalidUri { .. } => false,
             Self::OAuth2Form { source } => source.is_retryable(),
         }
     }
