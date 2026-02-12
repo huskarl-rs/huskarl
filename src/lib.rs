@@ -8,6 +8,7 @@ mod error;
 pub mod grant;
 pub mod http;
 pub mod platform;
+pub mod secrets;
 pub mod token;
 
 pub use error::{BoxedError, Error};

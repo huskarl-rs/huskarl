@@ -117,10 +117,10 @@ pub trait RefreshableGrant: MaybeSendSync {
 
 #[derive(Debug, Snafu)]
 pub enum OAuth2ExchangeGrantError<
-    HttpReqErr: crate::Error + 'static,
-    HttpRespErr: crate::Error + 'static,
-    AuthErr: crate::Error + 'static,
-    DPoPErr: crate::Error + 'static,
+    HttpReqErr: crate::Error,
+    HttpRespErr: crate::Error,
+    AuthErr: crate::Error,
+    DPoPErr: crate::Error,
 > {
     Auth {
         source: AuthErr,
@@ -130,12 +130,8 @@ pub enum OAuth2ExchangeGrantError<
     },
 }
 
-impl<
-    HttpErr: crate::Error + 'static,
-    HttpRespErr: crate::Error + 'static,
-    AuthErr: crate::Error + 'static,
-    DPoPErr: crate::Error + 'static,
-> crate::Error for OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
+impl<HttpErr: crate::Error, HttpRespErr: crate::Error, AuthErr: crate::Error, DPoPErr: crate::Error>
+    crate::Error for OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
 {
     fn is_retryable(&self) -> bool {
         match self {

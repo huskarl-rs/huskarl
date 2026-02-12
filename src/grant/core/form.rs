@@ -152,11 +152,8 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
 
 /// Errors that can occur when attempting to get a token using `OAuth2`.
 #[derive(Debug, Snafu)]
-pub enum OAuth2FormError<
-    HttpReqErr: crate::Error,
-    HttpRespErr: crate::Error,
-    DPoPErr: crate::Error + 'static,
-> {
+pub enum OAuth2FormError<HttpReqErr: crate::Error, HttpRespErr: crate::Error, DPoPErr: crate::Error>
+{
     /// There was an error when attempting to serialize the form.
     Serialize {
         /// The underlying serialization error.
@@ -181,11 +178,8 @@ pub enum OAuth2FormError<
     },
 }
 
-impl<
-    HttpReqErr: crate::Error + 'static,
-    HttpRespErr: crate::Error + 'static,
-    DPoPErr: crate::Error + 'static,
-> crate::Error for OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>
+impl<HttpReqErr: crate::Error, HttpRespErr: crate::Error, DPoPErr: crate::Error> crate::Error
+    for OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>
 {
     fn is_retryable(&self) -> bool {
         match self {
