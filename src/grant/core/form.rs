@@ -24,10 +24,7 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
     pub async fn build_request(
         &self,
     ) -> Result<Request<Bytes>, SerializeOAuth2FormError<D::Error>> {
-        let headers = self
-            .auth_params
-            .headers.clone()
-            .unwrap_or_default();
+        let headers = self.auth_params.headers.clone().unwrap_or_default();
 
         let mut body = serde_html_form::to_string(self.form).context(SerializeFormSnafu)?;
 

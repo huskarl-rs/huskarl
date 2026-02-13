@@ -12,7 +12,9 @@ use crate::{
     client_auth::ClientAuthentication,
     dpop::{AuthorizationServerDPoP, NoDPoP},
     grant::{
-        client_credentials::builder::{SetTokenEndpoint, SetTokenEndpointAuthMethodsSupported},
+        client_credentials::builder::{
+            SetIssuer, SetTokenEndpoint, SetTokenEndpointAuthMethodsSupported,
+        },
         core::{OAuth2ExchangeGrant, RefreshableGrant, mk_scopes},
         refresh::RefreshGrant,
     },
@@ -44,6 +46,10 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
     client_auth: Auth,
 
     // -- Metadata fields --
+    /// The issuer for tokens created by the authorization server.
+    #[builder(into)]
+    issuer: Option<String>,
+
     /// The URL of the token endpoint.
     #[builder(setters(name = "token_endpoint_url"))]
     token_endpoint: EndpointUrl,
@@ -62,9 +68,10 @@ impl<Auth: ClientAuthentication + 'static> ClientCredentialsGrant<Auth> {
     ) -> ClientCredentialsGrantBuilder<
         Auth,
         NoDPoP,
-        SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<builder::Empty>>,
+        SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<SetIssuer<builder::Empty>>>,
     > {
         Self::builder()
+            .issuer(metadata.issuer.clone())
             .token_endpoint_url(metadata.token_endpoint.clone())
             .maybe_token_endpoint_auth_methods_supported(
                 metadata
@@ -139,6 +146,10 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         &self.client_id
     }
 
+    fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+
     fn dpop(&self) -> Option<&Self::DPoP> {
         self.dpop.as_ref()
     }
@@ -164,6 +175,7 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
     fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
         RefreshGrant::builder()
             .client_id(self.client_id.clone())
+            .maybe_issuer(self.issuer.clone())
             .client_auth(self.client_auth.clone())
             .maybe_dpop(self.dpop.clone())
             .token_endpoint(self.token_endpoint.clone())

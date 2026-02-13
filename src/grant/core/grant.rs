@@ -39,6 +39,9 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns the configured client ID.
     fn client_id(&self) -> &Cow<'static, str>;
 
+    /// Returns the configured issuer.
+    fn issuer(&self) -> Option<&str>;
+
     /// Returns the configured client auth.
     fn client_auth(&self) -> &Self::ClientAuth;
 
@@ -76,6 +79,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .client_auth()
                 .authentication_params(
                     self.client_id(),
+                    self.issuer(),
                     self.token_endpoint().as_uri(),
                     self.allowed_auth_methods(),
                 )

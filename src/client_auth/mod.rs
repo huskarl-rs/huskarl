@@ -10,6 +10,7 @@
 
 mod client_secret;
 mod form_value;
+mod jwt_bearer;
 mod no_auth;
 
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use crate::platform::{MaybeSend, MaybeSendSync};
 
 pub use client_secret::{ClientSecret, ClientSecretError};
 pub use form_value::FormValue;
+pub use jwt_bearer::{JwtBearer, JwtBearerBuilder};
 pub use no_auth::NoAuth;
 
 /// Abstracts over client authentication types.
@@ -36,6 +38,7 @@ pub trait ClientAuthentication: MaybeSendSync {
     fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
+        issuer: Option<&'a str>,
         token_endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> impl Future<Output = Result<AuthenticationParams<'a>, Self::Error>> + MaybeSend;
@@ -47,11 +50,12 @@ impl<Auth: ClientAuthentication> ClientAuthentication for Arc<Auth> {
     async fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
+        issuer: Option<&'a str>,
         token_endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> Result<AuthenticationParams<'a>, Self::Error> {
         self.as_ref()
-            .authentication_params(client_id, token_endpoint, allowed_methods)
+            .authentication_params(client_id, issuer, token_endpoint, allowed_methods)
             .await
     }
 }

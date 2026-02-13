@@ -14,7 +14,7 @@ use crate::{
     dpop::{AuthorizationServerDPoP, NoDPoP},
     grant::{
         core::{OAuth2ExchangeGrant, RefreshableGrant, mk_scopes},
-        refresh::builder::{SetTokenEndpoint, SetTokenEndpointAuthMethodsSupported},
+        refresh::builder::{SetIssuer, SetTokenEndpoint, SetTokenEndpointAuthMethodsSupported},
     },
     server_metadata::AuthorizationServerMetadata,
     token::RefreshToken,
@@ -43,6 +43,10 @@ pub struct RefreshGrant<
     client_auth: Auth,
 
     // -- Metadata fields --
+    /// The issuer for tokens created by the authorization server.
+    #[builder(into)]
+    issuer: Option<String>,
+
     /// The URL of the token endpoint.
     #[builder(setters(name = "token_endpoint_url"))]
     token_endpoint: EndpointUrl,
@@ -61,9 +65,10 @@ impl<Auth: ClientAuthentication + 'static> RefreshGrant<Auth> {
     ) -> RefreshGrantBuilder<
         Auth,
         NoDPoP,
-        SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<builder::Empty>>,
+        SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<SetIssuer<builder::Empty>>>,
     > {
         Self::builder()
+            .issuer(metadata.issuer.clone())
             .token_endpoint_url(metadata.token_endpoint.clone())
             .maybe_token_endpoint_auth_methods_supported(
                 metadata
@@ -141,6 +146,10 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
 
     fn client_id(&self) -> &Cow<'static, str> {
         &self.client_id
+    }
+
+    fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
     }
 
     fn dpop(&self) -> Option<&Self::DPoP> {

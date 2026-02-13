@@ -62,6 +62,7 @@ impl<Sec: Secret<Output = SecretString>> ClientAuthentication for ClientSecret<S
     async fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
+        _issuer: Option<&'a str>,
         _token_endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> Result<super::AuthenticationParams<'a>, Self::Error> {
