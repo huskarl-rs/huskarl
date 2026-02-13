@@ -1,0 +1,325 @@
+use http::Uri;
+use secrecy::{ExposeSecret, SecretString};
+use serde::Serialize;
+use snafu::ResultExt;
+use subtle::ConstantTimeEq;
+
+use crate::{
+    EndpointUrl,
+    client_auth::ClientAuthentication,
+    dpop::AuthorizationServerDPoP,
+    grant::{
+        authorization_code::{
+            error::{
+                ClientAuthSnafu, CompleteError, GrantSnafu, IssuerMismatchSnafu, JarSnafu,
+                MissingIssuerSnafu, ParSnafu, StartError, StateMismatchSnafu, UrlSnafu,
+            },
+            exchange::AuthorizationCodeGrantParameters,
+            grant::AuthorizationCodeGrant,
+            jar::Jar,
+            par,
+            pkce::Pkce,
+            types::{
+                AuthorizationPayload, AuthorizationPayloadWithClientId, CompleteInput,
+                PendingState, StartInput, StartOutput,
+            },
+        },
+        core::{OAuth2ExchangeGrant, OAuth2ExchangeGrantError, TokenResponse},
+    },
+    http::{HttpClient, HttpResponse},
+};
+
+#[cfg(feature = "authorization-flow-loopback")]
+use crate::grant::authorization_code::LoopbackError;
+
+impl<
+    Auth: ClientAuthentication + 'static,
+    D: AuthorizationServerDPoP + Clone + 'static,
+    J: Jar + 'static,
+> AuthorizationCodeGrant<Auth, D, J>
+{
+    #[cfg(feature = "authorization-flow-loopback")]
+    pub async fn complete_on_loopback<C: HttpClient>(
+        &self,
+        http_client: &C,
+        listener: &tokio::net::TcpListener,
+        pending_state: &PendingState,
+    ) -> Result<
+        TokenResponse,
+        LoopbackError<
+            CompleteError<
+                OAuth2ExchangeGrantError<
+                    C::Error,
+                    <C::Response as HttpResponse>::Error,
+                    Auth::Error,
+                    D::Error,
+                >,
+            >,
+        >,
+    > {
+        use crate::grant::authorization_code::loopback;
+
+        loopback::complete_on_loopback(
+            listener,
+            &pending_state.redirect_uri,
+            async |complete_input| {
+                self.complete(http_client, &pending_state, complete_input)
+                    .await
+            },
+        )
+        .await
+    }
+
+    async fn request_object(
+        &self,
+        payload: AuthorizationPayloadWithClientId<'_>,
+    ) -> Result<Option<SecretString>, J::Error> {
+        match &self.jar {
+            Some(jar) => {
+                jar.generate_request_object(
+                    self.issuer
+                        .as_ref()
+                        .unwrap_or(&self.authorization_endpoint.as_uri().to_string()),
+                    payload,
+                )
+                .await
+            }
+            None => Ok(None),
+        }
+    }
+
+    pub async fn start<C: HttpClient>(
+        &self,
+        http_client: &C,
+        start_input: StartInput,
+    ) -> Result<
+        StartOutput,
+        StartError<Auth::Error, C::Error, <C::Response as HttpResponse>::Error, D::Error, J::Error>,
+    > {
+        let pkce = Pkce::generate_s256_pair();
+        let payload = build_authorization_payload(self, &start_input, &pkce);
+
+        let request_object = self
+            .request_object(payload.clone())
+            .await
+            .context(JarSnafu)?;
+
+        let (authorization_url, expires_in) = if let Some(par_url) =
+            &self.pushed_authorization_request_endpoint
+            && (self.prefer_pushed_authorization_requests
+                || self.require_pushed_authorization_requests)
+        {
+            self.deliver_via_par(http_client, &payload.rest, request_object.as_ref(), par_url)
+                .await?
+        } else {
+            self.deliver_direct::<C>(&payload, request_object.as_ref())?
+        };
+
+        Ok(StartOutput {
+            authorization_url,
+            expires_in,
+            pending_state: PendingState {
+                redirect_uri: self.redirect_uri.clone(),
+                pkce_verifier: Some(pkce.verifier),
+                state: start_input.state,
+            },
+        })
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn deliver_direct<C: HttpClient>(
+        &self,
+        payload: &AuthorizationPayloadWithClientId<'_>,
+        request_object: Option<&SecretString>,
+    ) -> Result<
+        (Uri, Option<u64>),
+        StartError<Auth::Error, C::Error, <C::Response as HttpResponse>::Error, D::Error, J::Error>,
+    > {
+        let uri = if let Some(request_jwt) = request_object {
+            #[derive(Serialize)]
+            struct JarRedirect<'a> {
+                client_id: &'a str,
+                request: &'a str,
+            }
+            add_payload_to_uri(
+                &self.authorization_endpoint,
+                JarRedirect {
+                    client_id: self.client_id.as_ref(),
+                    request: request_jwt.expose_secret(),
+                },
+            )
+            .context(UrlSnafu)?
+        } else {
+            add_payload_to_uri(&self.authorization_endpoint, payload).context(UrlSnafu)?
+        };
+        Ok((uri, None))
+    }
+
+    async fn deliver_via_par<C: HttpClient>(
+        &self,
+        http_client: &C,
+        payload: &AuthorizationPayload<'_>,
+        request_object: Option<&SecretString>,
+        par_url: &EndpointUrl,
+    ) -> Result<
+        (Uri, Option<u64>),
+        StartError<Auth::Error, C::Error, <C::Response as HttpResponse>::Error, D::Error, J::Error>,
+    > {
+        let auth_params = self
+            .client_auth
+            .authentication_params(
+                self.client_id.as_ref(),
+                self.issuer.as_deref(),
+                self.token_endpoint.as_uri(),
+                self.token_endpoint_auth_methods_supported.as_deref(),
+            )
+            .await
+            .context(ClientAuthSnafu)?;
+
+        let par_body = match request_object {
+            Some(jwt) => par::ParBody::Jar {
+                request: jwt.expose_secret(),
+            },
+            None => par::ParBody::Expanded(payload.clone()),
+        };
+
+        let par_response = par::make_par_call(
+            http_client,
+            par_url,
+            auth_params,
+            &par_body,
+            self.dpop().cloned(),
+        )
+        .await
+        .context(ParSnafu)?;
+
+        let push_payload = par::AuthorizationPushPayload {
+            client_id: self.client_id.as_ref(),
+            request_uri: &par_response.request_uri,
+        };
+
+        Ok((
+            add_payload_to_uri(&self.authorization_endpoint, push_payload).context(UrlSnafu)?,
+            Some(par_response.expires_in),
+        ))
+    }
+
+    pub async fn complete<C: HttpClient>(
+        &self,
+        http_client: &C,
+        pending_state: &PendingState,
+        complete_input: CompleteInput,
+    ) -> Result<
+        TokenResponse,
+        CompleteError<
+            OAuth2ExchangeGrantError<
+                C::Error,
+                <C::Response as HttpResponse>::Error,
+                Auth::Error,
+                D::Error,
+            >,
+        >,
+    > {
+        // Request the token even in cases where checks fail. This removes the
+        // ability of an attacker to abuse the unused code.
+        let token_or_error = self
+            .exchange(
+                http_client,
+                AuthorizationCodeGrantParameters {
+                    code: complete_input.code.clone(),
+                    pkce_verifier: pending_state.pkce_verifier.clone(),
+                },
+            )
+            .await
+            .context(GrantSnafu);
+
+        // Required state check (one layer of CSRF protection).
+        if pending_state
+            .state
+            .as_bytes()
+            .ct_ne(complete_input.state.as_bytes())
+            .into()
+        {
+            return StateMismatchSnafu {
+                original: pending_state.state.clone(),
+                callback: complete_input.state,
+            }
+            .fail();
+        }
+
+        // RFC 9207 - check issuer match.
+        if self.authorization_response_iss_parameter_supported
+            && let Some(config_issuer) = &self.issuer
+        {
+            if let Some(issuer) = complete_input.iss {
+                if issuer.as_bytes().ct_ne(config_issuer.as_bytes()).into() {
+                    return IssuerMismatchSnafu {
+                        original: config_issuer,
+                        callback: issuer,
+                    }
+                    .fail();
+                }
+            } else {
+                // Server claimed to support RFC 9207 but no issuer received.
+                return MissingIssuerSnafu.fail();
+            }
+        }
+
+        token_or_error
+    }
+}
+
+fn build_payload_with_external_auth<
+    'a,
+    Auth: ClientAuthentication + 'static,
+    DPoP: AuthorizationServerDPoP + 'static,
+    J: Jar + 'static,
+>(
+    grant: &'a AuthorizationCodeGrant<Auth, DPoP, J>,
+    start_input: &'a StartInput,
+    pkce: &'a Pkce,
+) -> AuthorizationPayload<'a> {
+    AuthorizationPayload {
+        response_type: "code",
+        redirect_uri: &grant.redirect_uri,
+        scope: start_input.scopes.as_deref(),
+        state: &start_input.state,
+        code_challenge: &pkce.challenge,
+        code_challenge_method: "S256",
+        dpop_jkt: grant.dpop().and_then(|d| d.jwk_thumbprint()),
+    }
+}
+
+fn build_authorization_payload<
+    'a,
+    Auth: ClientAuthentication + 'static,
+    DPoP: AuthorizationServerDPoP + 'static,
+    J: Jar + 'static,
+>(
+    grant: &'a AuthorizationCodeGrant<Auth, DPoP, J>,
+    start_input: &'a StartInput,
+    pkce: &'a Pkce,
+) -> AuthorizationPayloadWithClientId<'a> {
+    AuthorizationPayloadWithClientId {
+        client_id: grant.client_id.as_ref(),
+        rest: build_payload_with_external_auth(grant, start_input, pkce),
+    }
+}
+
+fn add_payload_to_uri<T: Serialize>(
+    endpoint: &EndpointUrl,
+    payload: T,
+) -> Result<Uri, serde_html_form::ser::Error> {
+    let query = serde_html_form::to_string(&payload)?;
+    let separator = if endpoint.as_uri().query().is_some() {
+        '&'
+    } else {
+        '?'
+    };
+    let uri_string = format!("{}{separator}{query}", endpoint.as_uri());
+    // The base URI is already valid and we're only appending a query string
+    // produced by serde_html_form, which only emits valid query characters.
+    Ok(uri_string
+        .parse()
+        .expect("appending a query string to a valid URI should produce a valid URI"))
+}
