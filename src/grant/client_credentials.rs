@@ -63,7 +63,7 @@ impl<Auth: ClientAuthentication + 'static> ClientCredentialsGrant<Auth> {
         ClientCredentialsGrant::<Auth, NoDPoP>::builder_internal()
     }
 
-    pub fn build_from_metadata(
+    pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> ClientCredentialsGrantBuilder<
         Auth,

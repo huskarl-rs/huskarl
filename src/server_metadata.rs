@@ -68,7 +68,7 @@ impl AuthorizationServerMetadata {
     #[builder]
     pub async fn from_issuer<C: HttpClient>(
         #[builder(start_fn, into)] issuer: String,
-        http_client: &C,
+        #[builder(finish_fn)] http_client: &C,
         #[builder(into, default = "/.well-known/oauth-authorization-server")] well_known_path: &str,
         #[builder(default = false)] use_legacy_transformation: bool,
     ) -> Result<

@@ -3,6 +3,7 @@ use huskarl::{
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
     prelude::*,
     secrets::{EnvVarSecret, encodings::StringEncoding},
+    server_metadata::AuthorizationServerMetadata,
 };
 use secrecy::ExposeSecret as _;
 use snafu::prelude::*;
@@ -10,20 +11,21 @@ use snafu::prelude::*;
 #[snafu::report]
 #[tokio::main]
 pub async fn main() -> Result<(), snafu::Whatever> {
+    let issuer = std::env::var("ISSUER").whatever_context("Failed to get ISSUER")?;
+    let client_id = std::env::var("CLIENT_ID").whatever_context("Failed to get CLIENT_ID")?;
+    let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)
+        .whatever_context("Failed to get CLIENT_SECRET")?;
+
     let http_client = reqwest::Client::new();
 
-    let client_auth = ClientSecret::new(
-        EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)
-            .whatever_context("Failed to get CLIENT_SECRET")?,
-    );
+    let metadata = AuthorizationServerMetadata::from_issuer(issuer)
+        .call(&http_client)
+        .await
+        .whatever_context("Failed to get authorization server metadata")?;
 
-    let grant = ClientCredentialsGrant::builder()
-        .client_id(std::env::var("CLIENT_ID").whatever_context("Failed to get CLIENT_ID")?)
-        .client_auth(client_auth)
-        .token_endpoint(
-            std::env::var("TOKEN_ENDPOINT").whatever_context("Failed to get TOKEN_ENDPOINT")?,
-        )
-        .whatever_context("Invalid token endpoint URL")?
+    let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
+        .client_id(client_id)
+        .client_auth(ClientSecret::new(client_secret))
         .build();
 
     let token_response = grant
