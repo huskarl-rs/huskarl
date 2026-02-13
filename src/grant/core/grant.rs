@@ -62,7 +62,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     fn resource_server_dpop(
         &self,
     ) -> Option<<Self::DPoP as AuthorizationServerDPoP>::ResourceServerDPoP> {
-        self.dpop().map(|d| d.to_resource_server_dpop())
+        self.dpop().map(crate::dpop::AuthorizationServerDPoP::to_resource_server_dpop)
     }
 
     /// Exchange the parameters for an access token.

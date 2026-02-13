@@ -11,6 +11,7 @@ const HEX: [u8; 16] = *b"0123456789abcdef";
 /// UUID v7 uses a Unix timestamp in milliseconds for the first 48 bits,
 /// followed by random data. This provides time-ordered, unique identifiers.
 #[must_use]
+#[allow(clippy::cast_possible_truncation)]
 pub(crate) fn uuid_v7() -> String {
     let mut bytes = [0u8; 16];
 

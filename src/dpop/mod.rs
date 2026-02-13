@@ -5,6 +5,7 @@
 //! (token acquisition with nonce management) and resource server flow
 //! (proof creation bound to an access token).
 
+mod implementation;
 mod no_dpop;
 
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use crate::{
     token::AccessToken,
 };
 
+pub use implementation::{DPoP, DPoPBuilder, ResourceDPoP, ResourceDPoPBuilder};
 pub use no_dpop::NoDPoP;
 
 /// Proof implementation for `DPoP`.
