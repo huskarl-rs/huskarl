@@ -48,6 +48,11 @@ pub struct AuthorizationServerMetadata {
      */
     pub device_authorization_endpoint: Option<EndpointUrl>,
     /**
+     * RFC 8705 - OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens
+     */
+    #[serde(default)]
+    pub tls_client_certificate_bound_access_tokens: bool,
+    /**
      * RFC 9126 - OAuth 2.0 Pushed Authorization Requests
      */
     // Specifies the URL of the pushed authorization request endpoint (RFC 9126 §5).

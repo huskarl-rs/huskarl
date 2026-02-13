@@ -22,7 +22,7 @@ use crate::platform::{MaybeSend, MaybeSendSync};
 
 pub use client_secret::{ClientSecret, ClientSecretError};
 pub use form_value::FormValue;
-pub use jwt_bearer::{JwtBearer, JwtBearerBuilder};
+pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder};
 pub use no_auth::NoAuth;
 
 /// Abstracts over client authentication types.

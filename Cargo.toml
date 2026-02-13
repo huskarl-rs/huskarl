@@ -22,11 +22,13 @@ crypto-webcrypto = [
   "dep:web-sys",
 ]
 http-client-reqwest-0_13 = ["dep:reqwest"]
+authorization-flow-loopback = ["tokio/net", "tokio/io-util"]
 
 [dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
 bon = { version = "3.9", default-features = false, features = [
   "experimental-generics-setters",
+  "experimental-overwritable",
   "implied-bounds",
 ] }
 bytes = { version = "1", default-features = false }
@@ -40,12 +42,29 @@ rand = { version = "0.10.0-rc.9", default-features = false, features = [
 reqwest = { version = "0.13", default-features = false, optional = true }
 secrecy = { version = "0.10", default-features = false, features = ["serde"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "rc"] }
+serde_bytes = { version = "0.11", optional = true }
 serde_html_form = { version = "0.4", default-features = false, features = ["ser", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
+serde-wasm-bindgen = { version = "0.6", optional = true }
 sha2 = { version = "0.11.0-rc.5", default-features = false }
 snafu = { version = "0.8", default-features = false, features = ["rust_1_81", "std"] }
 subtle = { version = "2", default-features = false }
 url = { version = "2", default-features = false }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+  "Crypto",
+  "CryptoKey",
+  "CryptoKeyPair",
+  "JsonWebKey",
+  "SubtleCrypto",
+  "Window",
+  'Headers',
+  'Request',
+  'RequestInit',
+  'RequestMode',
+  'Response',
+] }
 
 # Native crypto dependencies
 p256 = { version = "0.14.0-rc.7", optional = true, default-features = false, features = [
@@ -102,25 +121,8 @@ hmac_default = { package = "hmac", version = "0.13.0-rc.5", optional = true, def
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
 gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false }
-serde_bytes = { version = "0.11", optional = true }
-serde-wasm-bindgen = { version = "0.6", optional = true }
-wasm-bindgen = { version = "0.2", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-web-sys = { version = "0.3", optional = true, features = [
-  "Crypto",
-  "CryptoKey",
-  "CryptoKeyPair",
-  "JsonWebKey",
-  "SubtleCrypto",
-  "Window",
-  'Headers',
-  'Request',
-  'RequestInit',
-  'RequestMode',
-  'Response',
-] }
 
 [dev-dependencies]
-huskarl = { path = ".", features = ["http-client-reqwest-0_13"] }
+huskarl = { path = ".", features = ["http-client-reqwest-0_13", "authorization-flow-loopback"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-reqwest = { version = "0.13", default-features = true }
+reqwest = { version = "0.13", features = ["cookies", "form", "json"] }

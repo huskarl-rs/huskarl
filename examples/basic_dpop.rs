@@ -2,7 +2,7 @@ use http::Method;
 use huskarl::{
     client_auth::ClientSecret,
     crypto::signer::native::Es256PrivateKey,
-    dpop::{DPoP, ResourceServerDPoP},
+    dpop::{AuthorizationServerDPoP, DPoP, ResourceServerDPoP},
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
     prelude::*,
     secrets::{EnvVarSecret, encodings::StringEncoding},
@@ -46,19 +46,19 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     println!("Access token: {}", access_token.expose_secret());
 
-    if let Some(resource_server_dpop) = grant.resource_server_dpop() {
-        let dpop_proof = resource_server_dpop
-            .proof(
-                &Method::GET,
-                &"https://blah/".parse().unwrap(),
-                &access_token,
-            )
-            .await
-            .whatever_context("Failed to create DPoP proof")?;
+    let resource_server_dpop = grant.dpop().to_resource_server_dpop();
 
-        if let Some(dpop_proof) = dpop_proof {
-            println!("DPoP header: {}", dpop_proof.expose_secret());
-        }
+    let dpop_proof = resource_server_dpop
+        .proof(
+            &Method::GET,
+            &"https://blah/".parse().unwrap(),
+            &access_token,
+        )
+        .await
+        .whatever_context("Failed to create DPoP proof")?;
+
+    if let Some(dpop_proof) = dpop_proof {
+        println!("DPoP header: {}", dpop_proof.expose_secret());
     }
 
     Ok(())

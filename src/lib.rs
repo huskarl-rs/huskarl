@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::panic)]
 #![warn(clippy::pedantic)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod client_auth;
 pub mod crypto;
@@ -13,6 +14,7 @@ pub mod jwk;
 pub mod jwt;
 pub mod platform;
 pub mod prelude;
+pub mod revocation;
 pub mod secrets;
 pub mod server_metadata;
 pub mod token;
