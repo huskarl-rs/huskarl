@@ -46,7 +46,6 @@ sha2 = { version = "0.11.0-rc.5", default-features = false }
 snafu = { version = "0.8", default-features = false, features = ["rust_1_81", "std"] }
 subtle = { version = "2", default-features = false }
 url = { version = "2", default-features = false }
-uuid = { version = "1.13", default-features = false, features = ["std", "v7"] }
 
 # Native crypto dependencies
 p256 = { version = "0.14.0-rc.7", optional = true, default-features = false, features = [
@@ -74,9 +73,8 @@ hmac = { version = "0.13.0-rc.5", optional = true, default-features = true }
 
 ### Dependencies available on all platforms except WASM
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
 tokio = { version = "1", default-features = false, features = ["time"] }
-
 p256_default = { package = "p256", version = "0.14.0-rc.7", optional = true, default-features = false, features = [
   "ecdsa",
   "pem",
@@ -100,7 +98,10 @@ rsa_default = { package = "rsa", version = "0.10.0-rc.15", optional = true, defa
 ] }
 hmac_default = { package = "hmac", version = "0.13.0-rc.5", optional = true, default-features = true }
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { version = "0.4", default-features = false,  features = ["wasm_js"] }
+gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
+web-time = { version = "1", default-features = false }
 serde_bytes = { version = "0.11", optional = true }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }

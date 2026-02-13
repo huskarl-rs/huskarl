@@ -5,7 +5,6 @@ use bon::Builder;
 use secrecy::SecretString;
 use serde::Serialize;
 use snafu::prelude::*;
-use uuid::Uuid;
 
 use crate::{
     crypto::signer::{JwsSignerError, JwsSigningKey},
@@ -35,7 +34,7 @@ where
     pub issued_at: Option<u64>,
     pub expiration: Option<u64>,
     pub not_before: Option<u64>,
-    #[builder(required, into, default = Uuid::now_v7().to_string())]
+    #[builder(required, into, default = crate::uuid::uuid_v7())]
     pub jti: Option<String>,
     pub extra_headers: Option<ExtraHeaders>,
     pub extra_claims: Option<ExtraClaims>,

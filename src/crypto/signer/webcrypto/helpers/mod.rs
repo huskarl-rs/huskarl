@@ -6,12 +6,11 @@ mod sign;
 pub use generate_key::{
     AsymmetricKeyGenParams, GenerateKeyError, KeyUsage, generate_asymmetric_key,
 };
-use js_sys::Reflect;
 pub use public_key::{GetPublicJwkError, get_public_jwk};
 pub use sign::{SignAlgorithm, SignError, sign_with_key};
 use snafu::prelude::*;
 use wasm_bindgen::{JsValue, convert::TryFromJsValue};
-use web_sys::Crypto;
+use web_sys::{Crypto, js_sys::Reflect};
 
 use crate::crypto::signer::webcrypto::JsError;
 

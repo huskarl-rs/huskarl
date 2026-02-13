@@ -1,10 +1,12 @@
 use bytes::Bytes;
-use js_sys::{Object, Uint8Array};
 use serde::Serialize;
 use snafu::prelude::*;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{CryptoKey, SubtleCrypto};
+use web_sys::{
+    CryptoKey, SubtleCrypto,
+    js_sys::{Object, Uint8Array},
+};
 
 use crate::crypto::signer::webcrypto::JsError;
 
