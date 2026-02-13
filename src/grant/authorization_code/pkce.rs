@@ -35,6 +35,34 @@ impl Pkce {
     }
 }
 
+#[cfg(all(test, all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))]
+mod wasm_tests {
+    use wasm_bindgen_test::*;
+
+    use super::*;
+
+    /// Tests that PKCE S256 pair generation works correctly on WASM, exercising
+    /// the WASM RNG, SHA-256, and base64url encoding.
+    #[wasm_bindgen_test]
+    fn test_s256_pair_on_wasm() {
+        let pkce = Pkce::generate_s256_pair();
+
+        // Verifier length (RFC 7636 §4.1)
+        assert!(pkce.verifier.len() >= 43);
+        assert!(pkce.verifier.len() <= 128);
+
+        // Challenge is BASE64URL(SHA256(verifier)) (RFC 7636 §4.2)
+        let mut hasher = sha2::Sha256::new();
+        sha2::Digest::update(&mut hasher, pkce.verifier.as_bytes());
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
+        assert_eq!(pkce.challenge, expected);
+
+        // Two pairs must differ (RNG is working)
+        let pkce2 = Pkce::generate_s256_pair();
+        assert_ne!(pkce.verifier, pkce2.verifier);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

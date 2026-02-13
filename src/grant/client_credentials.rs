@@ -67,10 +67,8 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         Self::builder()
             .issuer(metadata.issuer.clone())
             .token_endpoint_url(metadata.token_endpoint.clone())
-            .maybe_token_endpoint_auth_methods_supported(
-                metadata
-                    .token_endpoint_auth_signing_alg_values_supported
-                    .clone(),
+            .token_endpoint_auth_methods_supported(
+                metadata.token_endpoint_auth_methods_supported.clone(),
             )
     }
 
@@ -79,7 +77,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     /// # Panics
     ///
     /// Panics if the token endpoint returned from httpmock is not a valid URL.
-    #[cfg(test)]
+    #[cfg(all(test, not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))))]
     pub fn builder_from_httpmock(
         server: &httpmock::MockServer,
         prefix: &str,
@@ -181,13 +179,17 @@ pub struct ClientCredentialsGrantParameters {
     scope: Option<String>,
 }
 
+impl Default for ClientCredentialsGrantParameters {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
 impl ClientCredentialsGrantParameters {
-    /// Implements a simple set of parameters to the grant including just scopes.
-    ///
-    /// This is enough for most use cases; the builder exists as an extensible
-    /// API where arbitrary extra fields may be added in future.
-    pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self::builder().scopes(scopes).build()
+    /// Create an empty set of parameters for requesting a token.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::builder().build()
     }
 }
 
@@ -199,12 +201,11 @@ pub struct ClientCredentialsGrantForm {
     scope: Option<String>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))))]
 mod tests {
     use std::sync::LazyLock;
 
     use httpmock::MockServer;
-    use secrecy::ExposeSecret;
     use serde_json::json;
 
     use crate::{
@@ -212,17 +213,17 @@ mod tests {
         crypto::signer::native::Es256PrivateKey,
         dpop::{DPoP, NoDPoP},
         grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
-        prelude::OAuth2ExchangeGrant,
     };
 
     static MOCK_SERVER: LazyLock<MockServer> = LazyLock::new(MockServer::start);
     static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
     #[tokio::test]
-    async fn test_blah() {
+    async fn test_exchange() {
+        use crate::prelude::*;
         use httpmock::prelude::*;
 
-        let grant = ClientCredentialsGrant::builder_from_httpmock(&MOCK_SERVER, "/blah")
+        let grant = ClientCredentialsGrant::builder_from_httpmock(&MOCK_SERVER, "/no_dpop")
             .client_id("client")
             .client_auth(NoAuth)
             .dpop(NoDPoP)
@@ -231,7 +232,7 @@ mod tests {
         let mock = MOCK_SERVER
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path("/blah/token")
+                    .path("/no_dpop/token")
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header_missing("DPoP")
                     .form_urlencoded_tuple("grant_type", "client_credentials")
@@ -255,14 +256,15 @@ mod tests {
         mock.assert();
         let response = response.unwrap();
         assert_eq!(response.token_type, "Bearer");
-        assert_eq!(response.access_token.expose_secret(), "access_token");
+        assert_eq!(response.access_token.expose_token(), "access_token");
     }
 
     #[tokio::test]
-    async fn test_blah2() {
+    async fn test_exchange_with_dpop() {
+        use crate::prelude::*;
         use httpmock::prelude::*;
 
-        let grant = ClientCredentialsGrant::builder_from_httpmock(&MOCK_SERVER, "/blah2")
+        let grant = ClientCredentialsGrant::builder_from_httpmock(&MOCK_SERVER, "/with_dpop")
             .client_id("client")
             .client_auth(NoAuth)
             .dpop(DPoP::builder().signer(Es256PrivateKey::generate()).build())
@@ -271,7 +273,7 @@ mod tests {
         let mock = MOCK_SERVER
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path("/blah2/token")
+                    .path("/with_dpop/token")
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .header_exists("DPoP")
                     .form_urlencoded_tuple("grant_type", "client_credentials")
@@ -295,6 +297,6 @@ mod tests {
         mock.assert();
         let response = response.unwrap();
         assert_eq!(response.token_type, "DPoP");
-        assert_eq!(response.access_token.expose_secret(), "access_token");
+        assert_eq!(response.access_token.expose_token(), "access_token");
     }
 }

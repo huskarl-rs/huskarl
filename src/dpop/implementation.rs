@@ -14,7 +14,7 @@ use crate::{
     crypto::signer::{BoxedAsymmetricJwsSigningKey, HasPublicKey, JwsSigningKey},
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     jwt::{JwsSerializationError, Jwt},
-    secrecy::{ExposeSecret as _, SecretString},
+    secrets::SecretString,
     token::AccessToken,
 };
 
@@ -148,7 +148,7 @@ fn normalize_uri_for_dpop(uri: &Uri) -> Result<Uri, http::Error> {
 
 fn hash_access_token_for_dpop(access_token: &AccessToken) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(access_token.expose_secret().as_bytes());
+    hasher.update(access_token.expose_token().as_bytes());
     let hash_digest = hasher.finalize();
     BASE64_URL_SAFE_NO_PAD.encode(hash_digest)
 }

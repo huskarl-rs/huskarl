@@ -10,11 +10,11 @@ mod no_dpop;
 
 use std::sync::Arc;
 
-use crate::secrecy::SecretString;
 use http::{Method, Uri};
 
 use crate::{
     platform::{MaybeSend, MaybeSendSync},
+    secrets::SecretString,
     token::AccessToken,
 };
 

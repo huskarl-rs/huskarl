@@ -288,10 +288,9 @@ pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
     Ok(listener)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))))]
 mod tests {
     use super::*;
-    use secrecy::ExposeSecret as _;
     use tokio::net::TcpStream;
 
     #[derive(Debug, snafu::Snafu)]
@@ -342,7 +341,7 @@ mod tests {
 
         let result = handle.await.unwrap().unwrap();
         assert_eq!(result.token_type, "Bearer");
-        assert_eq!(result.access_token.expose_secret(), "test-token");
+        assert_eq!(result.access_token.expose_token(), "test-token");
     }
 
     #[tokio::test]
@@ -438,7 +437,7 @@ mod tests {
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
         let result = handle.await.unwrap().unwrap();
-        assert_eq!(result.access_token.expose_secret(), "test-token");
+        assert_eq!(result.access_token.expose_token(), "test-token");
     }
 
     #[tokio::test]

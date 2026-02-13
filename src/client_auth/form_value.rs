@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 
-use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
+
+use crate::secrets::SecretString;
 
 /// The types of form values that can be encoded when sending to an authorization server.
 #[derive(Debug, Clone)]

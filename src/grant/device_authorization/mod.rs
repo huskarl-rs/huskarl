@@ -2,4 +2,6 @@
 
 mod grant;
 
-pub use grant::{DeviceAuthorizationGrant, PollError, PollResult, StartInput};
+pub use grant::{
+    DeviceAuthorizationGrant, DeviceAuthorizationGrantParameters, PollError, PollResult, StartInput,
+};

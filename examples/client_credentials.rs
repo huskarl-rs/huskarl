@@ -6,7 +6,6 @@ use huskarl::{
     secrets::{EnvVarSecret, encodings::StringEncoding},
     server_metadata::AuthorizationServerMetadata,
 };
-use secrecy::ExposeSecret as _;
 use snafu::prelude::*;
 
 #[snafu::report]
@@ -33,14 +32,16 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     let token_response = grant
         .exchange(
             &http_client,
-            ClientCredentialsGrantParameters::scopes(["test"]),
+            ClientCredentialsGrantParameters::builder()
+                .scopes(vec!["test"])
+                .build(),
         )
         .await
         .whatever_context("Failed to get token")?;
 
     println!(
         "Access token: {}",
-        token_response.access_token.expose_secret()
+        token_response.access_token.expose_token()
     );
 
     Ok(())

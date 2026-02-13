@@ -1,12 +1,6 @@
 use std::{borrow::Cow, convert::Infallible, sync::Arc};
 
-use bytes::Bytes;
-#[cfg(feature = "crypto-native")]
 use hmac::{Hmac, KeyInit as _, Mac as _};
-
-#[cfg(feature = "default-crypto-native")]
-use hmac_default::{Hmac, KeyInit as _, Mac as _};
-
 use secrecy::{ExposeSecret, SecretBox};
 
 use crate::{
@@ -96,7 +90,7 @@ impl JwsSigningKey for HmacKey {
         Cow::Borrowed(&self.inner.metadata)
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<bytes::Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let key_bytes = self.inner.key.expose_secret();
 
         let signed_bytes = match self.inner.algorithm {
@@ -120,6 +114,6 @@ impl JwsSigningKey for HmacKey {
             }
         };
 
-        Ok(Bytes::from(signed_bytes))
+        Ok(signed_bytes)
     }
 }

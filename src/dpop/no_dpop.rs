@@ -1,10 +1,10 @@
 use std::convert::Infallible;
 
 use http::{Method, Uri};
-use secrecy::SecretString;
 
 use crate::{
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
+    secrets::SecretString,
     token::AccessToken,
 };
 

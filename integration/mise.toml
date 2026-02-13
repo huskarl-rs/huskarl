@@ -1,0 +1,5 @@
+[tasks.up]
+run = "docker compose up --wait"
+
+[tasks.down]
+run = "docker compose down"

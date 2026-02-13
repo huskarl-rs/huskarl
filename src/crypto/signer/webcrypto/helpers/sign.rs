@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use serde::Serialize;
 use snafu::prelude::*;
 use wasm_bindgen::JsValue;
@@ -51,13 +50,12 @@ pub async fn sign_with_key(
     sign_algorithm: SignAlgorithm<'_>,
     key: &CryptoKey,
     data: &[u8],
-) -> Result<Bytes, SignError> {
+) -> Result<Vec<u8>, SignError> {
     let sign_algorithm_js = Object::from(
         serde_wasm_bindgen::to_value(&sign_algorithm).context(SerializeAlgorithmSnafu)?,
     );
 
-    Ok(Bytes::from(
-        Uint8Array::new(
+    Ok(Uint8Array::new(
             &JsFuture::from(
                 crypto
                     .sign_with_object_and_u8_array(&sign_algorithm_js, key, data)
@@ -66,6 +64,5 @@ pub async fn sign_with_key(
             .await
             .context(AwaitSnafu)?,
         )
-        .to_vec(),
-    ))
+        .to_vec())
 }

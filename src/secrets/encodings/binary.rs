@@ -1,18 +1,15 @@
-use crate::{
-    secrecy::SecretBox,
-    secrets::{DecodingError, SecretDecoder},
-};
+use crate::secrets::{DecodingError, SecretBytes, SecretDecoder};
 
-/// Uses raw bytes directly, returning `SecretBox<[u8]>`.
+/// Uses raw bytes directly, returning `SecretBytes`.
 ///
 /// No transformation is applied - bytes pass through as-is.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BinaryEncoding;
 
 impl SecretDecoder for BinaryEncoding {
-    type Output = SecretBox<[u8]>;
+    type Output = SecretBytes;
 
     fn decode(&self, bytes: &[u8]) -> Result<Self::Output, DecodingError> {
-        Ok(SecretBox::new(bytes.to_vec().into_boxed_slice()))
+        Ok(SecretBytes::new(bytes.to_vec()))
     }
 }

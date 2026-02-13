@@ -1,7 +1,6 @@
 use bon::Builder;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, Uri, header::CONTENT_TYPE};
-use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt as _, Snafu};
 
@@ -309,9 +308,7 @@ pub struct OAuth2ErrorBody {
     /// The error field from the `OAuth2` error.
     pub error: String,
     /// The `error_description` field from the `OAuth2` error.
-    #[allow(dead_code)]
     pub error_description: Option<String>,
     /// The (optional) `error_uri` from the `OAuth2` error.
-    #[allow(dead_code)]
     pub error_uri: Option<String>,
 }

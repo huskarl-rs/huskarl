@@ -4,12 +4,13 @@ use snafu::prelude::*;
 
 use crate::{
     platform::MaybeSendSync,
-    secrecy::SecretString,
-    secrets::{DecodingError, Secret, SecretDecoder, SecretOutput, encodings::StringEncoding},
+    secrets::{
+        DecodingError, Secret, SecretDecoder, SecretOutput, SecretString, encodings::StringEncoding,
+    },
 };
 
 /// Retrieves secrets from environment variables with configurable encoding.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EnvVarSecret<Output = SecretString> {
     /// The name of the value read from the environment.
     value: Output,

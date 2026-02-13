@@ -2,13 +2,13 @@ use std::{borrow::Cow, convert::Infallible, time::Duration};
 
 use base64::prelude::*;
 use bon::Builder;
-use secrecy::SecretString;
 use serde::Serialize;
 use snafu::prelude::*;
 
 use crate::{
     crypto::signer::{JwsSignerError, JwsSigningKey},
     jwt::structure::{JwtClaims, JwtHeader},
+    secrets::SecretString,
 };
 
 /// A built JWT with all information except signing metadata.
@@ -187,7 +187,7 @@ where
         let signature_b64 = BASE64_URL_SAFE_NO_PAD.encode(&signature);
         let result = [signing_input, signature_b64].join(".");
 
-        Ok(result.into())
+        Ok(SecretString::new(result))
     }
 
     /// Creates a string using the JWS compact serialization.

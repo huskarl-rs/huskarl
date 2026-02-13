@@ -1,5 +1,4 @@
 use http::Uri;
-use secrecy::{ExposeSecret, SecretString};
 use serde::Serialize;
 use snafu::ResultExt;
 use subtle::ConstantTimeEq;
@@ -28,6 +27,7 @@ use crate::{
         core::{OAuth2ExchangeGrant, OAuth2ExchangeGrantError, TokenResponse},
     },
     http::{HttpClient, HttpResponse},
+    secrets::SecretString,
 };
 
 #[cfg(feature = "authorization-flow-loopback")]

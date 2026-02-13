@@ -1,3 +1,23 @@
 [tools]
+"aqua:drager/wasm-pack" = "latest"
 "cargo:cargo-docs-rs" = "latest"
+"cargo:cargo-geiger" = "latest"
 "cargo:cargo-llvm-cov" = "latest"
+"cargo:cargo-reedme" = "latest"
+"cargo:cargo-semver-checks" = "latest"
+"cargo:cargo-vet" = "latest"
+
+[tasks."test-wasm-chrome"]
+run = "wasm-pack test --headless --chrome -- --lib"
+
+[tasks."test-wasm-firefox"]
+run = "wasm-pack test --headless --firefox -- --lib"
+
+[tasks."test-wasm-node"]
+run = "wasm-pack test --node -- --lib"
+
+[tasks."docs-rs"]
+run = "cargo +nightly docs-rs"
+
+[tasks."reedme"]
+run = "cargo +nightly reedme"

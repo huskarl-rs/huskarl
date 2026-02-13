@@ -9,7 +9,6 @@
 
 mod helpers;
 
-use bytes::Bytes;
 use serde::Serialize;
 use snafu::prelude::*;
 use std::borrow::Cow;
@@ -133,7 +132,7 @@ impl AsymmetricPrivateJwsKey {
             .context(GetPublicJwkSnafu)?;
 
         Ok(Self {
-            inner: Arc::new(EcDsaPrivateKeyInner {
+            inner: Arc::new(AsymmetricPrivateJwsKeyInner {
                 crypto_key: key_pair.get_private_key(),
                 algorithm,
                 key_metadata: SigningKeyMetadata {
@@ -176,7 +175,7 @@ impl JwsSigningKey for AsymmetricPrivateJwsKey {
         Cow::Borrowed(&self.inner.key_metadata)
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let crypto = get_crypto().context(NoCryptoSnafu)?;
 
         sign_with_key(

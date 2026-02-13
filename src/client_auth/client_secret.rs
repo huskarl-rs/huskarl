@@ -1,12 +1,10 @@
 use base64::prelude::*;
 use http::{HeaderMap, Uri, header::InvalidHeaderValue};
-use secrecy::ExposeSecret as _;
 use snafu::prelude::*;
 
 use crate::{
     client_auth::{AuthenticationParams, ClientAuthentication},
-    secrecy::SecretString,
-    secrets::Secret,
+    secrets::{Secret, SecretString},
 };
 
 /// Client Secret authentication (RFC 6749 §2.3.1)

@@ -1,12 +1,11 @@
 use std::{convert::Infallible, time::Duration};
 
-use secrecy::SecretString;
-
 use crate::{
+    crypto::signer::JwsSigningKey,
     grant::authorization_code::types::AuthorizationPayloadWithClientId,
     jwt::{JwsSerializationError, Jwt},
     platform::{MaybeSend, MaybeSendSync},
-    prelude::JwsSigningKey,
+    secrets::SecretString,
 };
 
 /// Implementation for how to create a JAR (JWT-secured authorization request).

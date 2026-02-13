@@ -1,10 +1,3 @@
-#[cfg(feature = "crypto-native")]
-use p256;
-
-#[cfg(feature = "default-crypto-native")]
-use p256_default as p256;
-
-use bytes::Bytes;
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer};
 use p256::elliptic_curve::Generate as _;
 use p256::pkcs8::DecodePrivateKey;
@@ -147,9 +140,9 @@ impl JwsSigningKey for Es256PrivateKey {
         Cow::Borrowed(&self.inner.key_metadata)
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let signature: Signature = self.inner.signing_key.sign(input);
-        Ok(signature.to_vec().into())
+        Ok(signature.to_vec())
     }
 }
 

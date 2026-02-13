@@ -197,7 +197,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         let token_or_err = self
             .exchange(
                 http_client,
-                super::grant::Parameters {
+                super::grant::DeviceAuthorizationGrantParameters {
                     device_code: pending_state.device_code.clone(),
                 },
             )
@@ -233,7 +233,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
 
 /// Parameters passed to each token request.
 #[derive(Debug, Clone)]
-pub struct Parameters {
+pub struct DeviceAuthorizationGrantParameters {
     /// The device verification code, `device_code`, from the device authorization response.
     pub device_code: String,
 }
@@ -250,7 +250,7 @@ pub struct Form {
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static> OAuth2ExchangeGrant
     for DeviceAuthorizationGrant<Auth, D>
 {
-    type Parameters = Parameters;
+    type Parameters = DeviceAuthorizationGrantParameters;
     type ClientAuth = Auth;
     type DPoP = D;
     type Form<'a> = Form;

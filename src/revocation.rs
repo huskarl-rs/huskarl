@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::convert::Infallible;
 
 use bon::Builder;
-use secrecy::ExposeSecret as _;
 use serde::Serialize;
 use snafu::prelude::*;
 
@@ -32,7 +31,7 @@ pub trait RevocableToken {
 
 impl RevocableToken for AccessToken {
     fn token_value(&self) -> &str {
-        self.expose_secret()
+        self.expose_token()
     }
 
     fn token_type_hint(&self) -> &'static str {
@@ -42,7 +41,7 @@ impl RevocableToken for AccessToken {
 
 impl RevocableToken for RefreshToken {
     fn token_value(&self) -> &str {
-        self.expose_secret()
+        self.expose_token()
     }
 
     fn token_type_hint(&self) -> &'static str {

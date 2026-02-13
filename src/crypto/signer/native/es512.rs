@@ -1,14 +1,7 @@
-#[cfg(feature = "crypto-native")]
-use p521;
-
-#[cfg(feature = "default-crypto-native")]
-use p521_default as p521;
-
 use p521::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer};
 use p521::elliptic_curve::Generate as _;
 use p521::pkcs8::DecodePrivateKey as _;
 
-use bytes::Bytes;
 use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use snafu::prelude::*;
 use std::borrow::Cow;
@@ -151,9 +144,9 @@ impl JwsSigningKey for Es512PrivateKey {
         Cow::Borrowed(&self.inner.key_metadata)
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let signature: Signature = self.inner.signing_key.sign(input);
-        Ok(signature.to_vec().into())
+        Ok(signature.to_vec())
     }
 }
 

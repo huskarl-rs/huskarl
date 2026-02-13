@@ -1,11 +1,3 @@
-use bytes::Bytes;
-
-#[cfg(feature = "crypto-native")]
-use rsa;
-
-#[cfg(all(feature = "default-crypto-native", not(feature = "crypto-native")))]
-use rsa_default as rsa;
-
 use rsa::pkcs8::DecodePrivateKey as _;
 use rsa::signature::SignatureEncoding as _;
 use rsa::signature::Signer as _;
@@ -52,23 +44,20 @@ enum SigningKey {
 }
 
 impl SigningKey {
-    pub fn sign(&self, msg: &[u8]) -> bytes::Bytes {
+    pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
         use rsa::signature::RandomizedSigner;
 
         match self {
-            SigningKey::Rs256(signing_key) => signing_key.sign(msg).to_vec().into(),
-            SigningKey::Ps256(signing_key) => signing_key
-                .sign_with_rng(&mut rand::rng(), msg)
-                .to_vec()
-                .into(),
-            SigningKey::Ps384(signing_key) => signing_key
-                .sign_with_rng(&mut rand::rng(), msg)
-                .to_vec()
-                .into(),
-            SigningKey::Ps512(signing_key) => signing_key
-                .sign_with_rng(&mut rand::rng(), msg)
-                .to_vec()
-                .into(),
+            SigningKey::Rs256(signing_key) => signing_key.sign(msg).to_vec(),
+            SigningKey::Ps256(signing_key) => {
+                signing_key.sign_with_rng(&mut rand::rng(), msg).to_vec()
+            }
+            SigningKey::Ps384(signing_key) => {
+                signing_key.sign_with_rng(&mut rand::rng(), msg).to_vec()
+            }
+            SigningKey::Ps512(signing_key) => {
+                signing_key.sign_with_rng(&mut rand::rng(), msg).to_vec()
+            }
         }
     }
 }
@@ -221,7 +210,7 @@ impl JwsSigningKey for RsaPrivateKey {
         Cow::Borrowed(&self.inner.key_metadata)
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         Ok(self.inner.signing_key.sign(input))
     }
 }

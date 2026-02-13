@@ -1,48 +1,33 @@
-//! `OAuth2` refresh token support.
-
-use secrecy::zeroize::Zeroize;
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
+use crate::secrets::SecretString;
+
 /// An `OAuth2` refresh token.
-#[derive(Debug, Clone, Deserialize)]
-pub struct RefreshToken(pub SecretString);
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshToken(SecretString);
 
-impl Serialize for RefreshToken {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.expose_secret())
-    }
-}
-
-impl Zeroize for RefreshToken {
-    fn zeroize(&mut self) {
-        self.0.zeroize();
+impl RefreshToken {
+    /// Exposes the token as a string.
+    #[must_use] 
+    pub fn expose_token(&self) -> &str {
+        self.0.expose_secret()
     }
 }
 
 impl From<&str> for RefreshToken {
     fn from(value: &str) -> Self {
-        Self(value.into())
+        Self(SecretString::new(value.into()))
     }
 }
 
 impl From<String> for RefreshToken {
     fn from(value: String) -> Self {
-        Self(value.into())
+        Self(SecretString::new(value))
     }
 }
 
 impl From<SecretString> for RefreshToken {
     fn from(value: SecretString) -> Self {
         Self(value)
-    }
-}
-
-impl ExposeSecret<str> for RefreshToken {
-    fn expose_secret(&self) -> &str {
-        self.0.expose_secret()
     }
 }

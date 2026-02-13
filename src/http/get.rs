@@ -10,7 +10,7 @@ pub enum GetError<HttpReqErr: crate::Error + 'static, HttpRespErr: crate::Error 
     Request { source: HttpReqErr },
     Response { source: HttpRespErr },
     Deserialize { source: serde_json::Error },
-    BadStatus { status: StatusCode, body: Bytes },
+    BadStatus { status: StatusCode, body: Vec<u8> },
 }
 
 pub(crate) async fn get<C: HttpClient, T: DeserializeOwned>(

@@ -5,7 +5,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use bon::Builder;
-use bytes::Bytes;
 use snafu::prelude::*;
 
 use crate::crypto::signer::error::{MismatchedKeyMetadataSnafu, UnderlyingSnafu};
@@ -45,7 +44,7 @@ trait DynJwsSigningKey: MaybeSendSync {
     fn sign_unchecked<'a>(
         &'a self,
         input: &'a [u8],
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, BoxedError>> + 'a>>;
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>>;
 }
 
 impl<Sgn: JwsSigningKey> DynJwsSigningKey for Sgn {
@@ -56,7 +55,7 @@ impl<Sgn: JwsSigningKey> DynJwsSigningKey for Sgn {
     fn sign_unchecked<'a>(
         &'a self,
         input: &'a [u8],
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, BoxedError>> + 'a>> {
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>> {
         Box::pin(async {
             self.sign_unchecked(input)
                 .await
@@ -72,7 +71,7 @@ impl JwsSigningKey for BoxedJwsSigningKey {
         self.inner.key_metadata()
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         self.inner.sign_unchecked(input).await
     }
 }
@@ -108,7 +107,7 @@ trait DynAsymmetricJwsSigningKey: MaybeSendSync {
     fn sign_unchecked<'a>(
         &'a self,
         input: &'a [u8],
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, BoxedError>> + 'a>>;
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>>;
 
     fn public_key_jwk(&self) -> &PublicJwk;
 }
@@ -121,7 +120,7 @@ impl<Sgn: JwsSigningKey + HasPublicKey> DynAsymmetricJwsSigningKey for Sgn {
     fn sign_unchecked<'a>(
         &'a self,
         input: &'a [u8],
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Bytes, BoxedError>> + 'a>> {
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>> {
         Box::pin(async {
             self.sign_unchecked(input)
                 .await
@@ -141,7 +140,7 @@ impl JwsSigningKey for BoxedAsymmetricJwsSigningKey {
         self.inner.key_metadata()
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         self.inner.sign_unchecked(input).await
     }
 }
@@ -196,18 +195,24 @@ pub trait JwsSigningKey: MaybeSendSync {
     fn sign_unchecked(
         &self,
         input: &[u8],
-    ) -> impl Future<Output = Result<Bytes, Self::Error>> + MaybeSend;
+    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
 
-    /// Asynchronously signs the given input data and returns the signature with metadata.
+    /// Asynchronously signs the given input data, after verifying the caller's expected key metadata.
+    ///
+    /// The metadata must match the values signed. For example, if a key was rotated,
+    /// then either the key ID or algorithm (or both) could have changed, and this will be
+    /// detected by the `sign` implementation. In that case, the caller should retry the operation
+    /// (this is already done internally in the OAuth2 exchange code).
     ///
     /// # Errors
     ///
-    /// Returns an error if the key metadata is mismatched, or the signing operation fails.
+    /// Returns [`super::JwsSignerError::MismatchedKeyMetadata`] if the key metadata is mismatched, or
+    /// [`super::JwsSignerError::UnderlyingError`] if the signing operation fails.
     fn sign(
         &self,
         input: &[u8],
         key_metadata: &SigningKeyMetadata,
-    ) -> impl Future<Output = Result<Bytes, super::JwsSignerError<Self::Error>>> + MaybeSend {
+    ) -> impl Future<Output = Result<Vec<u8>, super::JwsSignerError<Self::Error>>> + MaybeSend {
         async move {
             if &*self.key_metadata() == key_metadata {
                 self.sign_unchecked(input).await.context(UnderlyingSnafu)
@@ -224,7 +229,7 @@ pub trait HasPublicKey: MaybeSendSync {
     fn public_key_jwk(&self) -> &PublicJwk;
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))))]
 mod tests {
     use std::{borrow::Cow, convert::Infallible};
 
@@ -251,8 +256,8 @@ mod tests {
             Cow::Borrowed(&self.key_metadata)
         }
 
-        async fn sign_unchecked(&self, _input: &[u8]) -> Result<bytes::Bytes, Self::Error> {
-            Ok(bytes::Bytes::new())
+        async fn sign_unchecked(&self, _input: &[u8]) -> Result<Vec<u8>, Self::Error> {
+            Ok(vec![])
         }
     }
 

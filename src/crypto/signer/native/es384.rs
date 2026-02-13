@@ -1,10 +1,3 @@
-#[cfg(feature = "crypto-native")]
-use p384;
-
-#[cfg(feature = "default-crypto-native")]
-use p384_default as p384;
-
-use bytes::Bytes;
 use p384::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer};
 use p384::elliptic_curve::Generate as _;
 use p384::pkcs8::DecodePrivateKey as _;
@@ -145,9 +138,9 @@ impl JwsSigningKey for Es384PrivateKey {
         Cow::Borrowed(&self.inner.key_metadata)
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Bytes, Self::Error> {
+    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let signature: Signature = self.inner.signing_key.sign(input);
-        Ok(signature.to_vec().into())
+        Ok(signature.to_vec())
     }
 }
 

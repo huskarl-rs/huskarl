@@ -11,6 +11,53 @@ use crate::platform::{MaybeSend, MaybeSendSync};
 
 pub use encodings::{DecodingError, SecretDecoder};
 pub use providers::EnvVarSecret;
+use secrecy::ExposeSecret as _;
+use serde::{Deserialize, Serialize};
+
+/// A secret string value that avoids accidental exposure in logs and debug output.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecretString(secrecy::SecretString);
+
+impl Serialize for SecretString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.0.expose_secret())
+    }
+}
+
+impl SecretString {
+    /// Creates a new `SecretString`.
+    #[must_use] 
+    pub fn new(secret: String) -> Self {
+        SecretString(secret.into())
+    }
+
+    /// Exposes the secret string value.
+    #[must_use] 
+    pub fn expose_secret(&self) -> &str {
+        self.0.expose_secret()
+    }
+}
+
+/// A secret byte buffer that avoids accidental exposure in logs and debug output.
+#[derive(Debug, Clone)]
+pub struct SecretBytes(secrecy::SecretBox<[u8]>);
+
+impl SecretBytes {
+    /// Creates a new `SecretBytes`.
+    #[must_use] 
+    pub fn new(secret: Vec<u8>) -> Self {
+        SecretBytes(secrecy::SecretBox::new(secret.into_boxed_slice()))
+    }
+
+    /// Exposes the secret byte slice.
+    #[must_use] 
+    pub fn expose_secret(&self) -> &[u8] {
+        self.0.expose_secret()
+    }
+}
 
 /// Secrets output the underlying secret value
 #[derive(Debug)]
