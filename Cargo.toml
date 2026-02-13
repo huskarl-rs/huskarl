@@ -99,7 +99,7 @@ rsa_default = { package = "rsa", version = "0.10.0-rc.15", optional = true, defa
 hmac_default = { package = "hmac", version = "0.13.0-rc.5", optional = true, default-features = true }
 
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
-getrandom = { version = "0.4", default-features = false,  features = ["wasm_js"] }
+getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
 gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false }
 serde_bytes = { version = "0.11", optional = true }

@@ -57,6 +57,14 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns allowed authentication methods (formatted as in authorization server metadata).
     fn allowed_auth_methods(&self) -> Option<&[String]>;
 
+    /// Returns a resource server `DPoP` implementation that can create proofs
+    /// bound to an access token for resource server requests.
+    fn resource_server_dpop(
+        &self,
+    ) -> Option<<Self::DPoP as AuthorizationServerDPoP>::ResourceServerDPoP> {
+        self.dpop().map(|d| d.to_resource_server_dpop())
+    }
+
     /// Exchange the parameters for an access token.
     #[allow(clippy::type_complexity)]
     fn exchange<C: HttpClient>(
