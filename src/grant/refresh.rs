@@ -21,19 +21,11 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Builder)]
-#[builder(
-    start_fn(vis = "", name = "builder_internal"),
-    state_mod(name = "builder"),
-    generics(setters(name = "conv_{}"))
-)]
+#[builder(state_mod(name = "builder"))]
 pub struct RefreshGrant<
     Auth: ClientAuthentication + 'static,
     D: AuthorizationServerDPoP + 'static = NoDPoP,
 > {
-    /// The `DPoP` signer.
-    #[builder(setters(vis = "", name = "dpop_internal"))]
-    dpop: Option<D>,
-
     // -- User-supplied fields --
     /// The client ID.
     #[builder(into)]
@@ -41,6 +33,9 @@ pub struct RefreshGrant<
 
     /// The client authentication method.
     client_auth: Auth,
+
+    /// The `DPoP` signer.
+    dpop: D,
 
     // -- Metadata fields --
     /// The issuer for tokens created by the authorization server.
@@ -55,16 +50,14 @@ pub struct RefreshGrant<
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
-impl<Auth: ClientAuthentication + 'static> RefreshGrant<Auth> {
-    pub fn builder() -> RefreshGrantBuilder<Auth, NoDPoP> {
-        RefreshGrant::<Auth, NoDPoP>::builder_internal()
-    }
-
+impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
+    RefreshGrant<Auth, D>
+{
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> RefreshGrantBuilder<
         Auth,
-        NoDPoP,
+        D,
         SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<SetIssuer<builder::Empty>>>,
     > {
         Self::builder()
@@ -75,28 +68,6 @@ impl<Auth: ClientAuthentication + 'static> RefreshGrant<Auth> {
                     .token_endpoint_auth_signing_alg_values_supported
                     .clone(),
             )
-    }
-}
-
-impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, S: builder::State>
-    RefreshGrantBuilder<Auth, D, S>
-where
-    S::Dpop: builder::IsUnset,
-{
-    /// The `DPoP` signer.
-    pub fn dpop<D1: AuthorizationServerDPoP + 'static>(
-        self,
-        dpop: D1,
-    ) -> RefreshGrantBuilder<Auth, D1, builder::SetDpop<S>> {
-        self.conv_d().dpop_internal(dpop)
-    }
-
-    /// The `DPoP` signer.
-    pub fn maybe_dpop<D1: AuthorizationServerDPoP + 'static>(
-        self,
-        dpop: Option<D1>,
-    ) -> RefreshGrantBuilder<Auth, D1, builder::SetDpop<S>> {
-        self.conv_d().maybe_dpop_internal(dpop)
     }
 }
 
@@ -152,8 +123,8 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         self.issuer.as_deref()
     }
 
-    fn dpop(&self) -> Option<&Self::DPoP> {
-        self.dpop.as_ref()
+    fn dpop(&self) -> &Self::DPoP {
+        &self.dpop
     }
 
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {

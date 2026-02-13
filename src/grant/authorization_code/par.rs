@@ -35,7 +35,7 @@ pub(super) async fn make_par_call<C: HttpClient, D: AuthorizationServerDPoP>(
     par_url: &EndpointUrl,
     auth_params: AuthenticationParams<'_>,
     payload: &ParBody<'_>,
-    dpop: Option<D>,
+    dpop: &D,
 ) -> Result<
     AuthorizationPushResponse,
     OAuth2FormError<C::Error, <C::Response as HttpResponse>::Error, D::Error>,
@@ -44,7 +44,7 @@ pub(super) async fn make_par_call<C: HttpClient, D: AuthorizationServerDPoP>(
         .form(payload)
         .auth_params(auth_params)
         .uri(par_url.as_uri())
-        .maybe_dpop(dpop.as_ref())
+        .dpop(dpop)
         .build()
         .execute(http_client)
         .await

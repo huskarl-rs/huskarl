@@ -49,21 +49,13 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     fn token_endpoint(&self) -> &EndpointUrl;
 
     /// Returns the configured `DPoP` implementation (if any).
-    fn dpop(&self) -> Option<&Self::DPoP>;
+    fn dpop(&self) -> &Self::DPoP;
 
     /// Builds the body for the request.
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_>;
 
     /// Returns allowed authentication methods (formatted as in authorization server metadata).
     fn allowed_auth_methods(&self) -> Option<&[String]>;
-
-    /// Returns a resource server `DPoP` implementation that can create proofs
-    /// bound to an access token for resource server requests.
-    fn resource_server_dpop(
-        &self,
-    ) -> Option<<Self::DPoP as AuthorizationServerDPoP>::ResourceServerDPoP> {
-        self.dpop().map(crate::dpop::AuthorizationServerDPoP::to_resource_server_dpop)
-    }
 
     /// Exchange the parameters for an access token.
     #[allow(clippy::type_complexity)]
@@ -98,9 +90,9 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
 
             let token_response = OAuth2FormRequest::builder()
                 .auth_params(auth_params)
-                .maybe_dpop(self.dpop())
+                .dpop(self.dpop())
                 .form(&form)
-                .uri(self.token_endpoint().as_uri().clone())
+                .uri(self.token_endpoint().as_uri())
                 .build()
                 .execute(http_client)
                 .await

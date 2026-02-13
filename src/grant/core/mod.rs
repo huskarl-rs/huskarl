@@ -4,12 +4,11 @@
 //! implement, along with the form serialization logic and token response
 //! parsing shared across grants.
 
-mod form;
+pub(crate) mod form;
 mod grant;
 mod token_response;
 
-pub use grant::OAuth2ExchangeGrant;
-pub use grant::RefreshableGrant;
+pub use grant::{OAuth2ExchangeGrant, OAuth2ExchangeGrantError, RefreshableGrant};
 pub use token_response::TokenResponse;
 
 /// Standard implementation for converting a sequence of scopes into a scope string.

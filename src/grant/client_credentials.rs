@@ -27,16 +27,8 @@ use crate::{
 /// interaction is required. The client authenticates directly with the
 /// authorization server using its own credentials.
 #[derive(Debug, Builder)]
-#[builder(
-    start_fn(vis = "", name = "builder_internal"),
-    state_mod(name = "builder"),
-    generics(setters(name = "conv_{}"))
-)]
+#[builder(state_mod(name = "builder"))]
 pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP> {
-    /// The `DPoP` signer.
-    #[builder(setters(vis = "", name = "dpop_internal"))]
-    dpop: Option<D>,
-
     // -- User-supplied fields --
     /// The client ID.
     #[builder(into)]
@@ -44,6 +36,9 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
 
     /// The client authentication method.
     client_auth: Auth,
+
+    /// The `DPoP` signer.
+    dpop: D,
 
     // -- Metadata fields --
     /// The issuer for tokens created by the authorization server.
@@ -58,16 +53,14 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
-impl<Auth: ClientAuthentication + 'static> ClientCredentialsGrant<Auth> {
-    pub fn builder() -> ClientCredentialsGrantBuilder<Auth, NoDPoP> {
-        ClientCredentialsGrant::<Auth, NoDPoP>::builder_internal()
-    }
-
+impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
+    ClientCredentialsGrant<Auth, D>
+{
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> ClientCredentialsGrantBuilder<
         Auth,
-        NoDPoP,
+        D,
         SetTokenEndpointAuthMethodsSupported<SetTokenEndpoint<SetIssuer<builder::Empty>>>,
     > {
         Self::builder()
@@ -82,28 +75,6 @@ impl<Auth: ClientAuthentication + 'static> ClientCredentialsGrant<Auth> {
 }
 
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, S: builder::State>
-    ClientCredentialsGrantBuilder<Auth, D, S>
-where
-    S::Dpop: builder::IsUnset,
-{
-    /// The `DPoP` signer.
-    pub fn dpop<D1: AuthorizationServerDPoP + 'static>(
-        self,
-        dpop: D1,
-    ) -> ClientCredentialsGrantBuilder<Auth, D1, builder::SetDpop<S>> {
-        self.conv_d().dpop_internal(dpop)
-    }
-
-    /// The `DPoP` signer.
-    pub fn maybe_dpop<D1: AuthorizationServerDPoP + 'static>(
-        self,
-        dpop: Option<D1>,
-    ) -> ClientCredentialsGrantBuilder<Auth, D1, builder::SetDpop<S>> {
-        self.conv_d().maybe_dpop_internal(dpop)
-    }
-}
-
-impl<Auth: ClientAuthentication, D: AuthorizationServerDPoP, S: builder::State>
     ClientCredentialsGrantBuilder<Auth, D, S>
 {
     /// Sets the token endpoint URL.
@@ -150,8 +121,8 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         self.issuer.as_deref()
     }
 
-    fn dpop(&self) -> Option<&Self::DPoP> {
-        self.dpop.as_ref()
+    fn dpop(&self) -> &Self::DPoP {
+        &self.dpop
     }
 
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {
@@ -177,7 +148,7 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
             .client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
             .client_auth(self.client_auth.clone())
-            .maybe_dpop(self.dpop.clone())
+            .dpop(self.dpop.clone())
             .token_endpoint(self.token_endpoint.clone())
             .unwrap_or_else(|e: std::convert::Infallible| match e {})
             .maybe_token_endpoint_auth_methods_supported(

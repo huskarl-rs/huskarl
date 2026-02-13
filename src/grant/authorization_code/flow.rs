@@ -74,18 +74,14 @@ impl<
         &self,
         payload: AuthorizationPayloadWithClientId<'_>,
     ) -> Result<Option<SecretString>, J::Error> {
-        match &self.jar {
-            Some(jar) => {
-                jar.generate_request_object(
-                    self.issuer
-                        .as_ref()
-                        .unwrap_or(&self.authorization_endpoint.as_uri().to_string()),
-                    payload,
-                )
-                .await
-            }
-            None => Ok(None),
-        }
+        self.jar
+            .generate_request_object(
+                self.issuer
+                    .as_ref()
+                    .unwrap_or(&self.authorization_endpoint.as_uri().to_string()),
+                payload,
+            )
+            .await
     }
 
     pub async fn start<C: HttpClient>(
@@ -183,15 +179,10 @@ impl<
             None => par::ParBody::Expanded(payload.clone()),
         };
 
-        let par_response = par::make_par_call(
-            http_client,
-            par_url,
-            auth_params,
-            &par_body,
-            self.dpop().cloned(),
-        )
-        .await
-        .context(ParSnafu)?;
+        let par_response =
+            par::make_par_call(http_client, par_url, auth_params, &par_body, self.dpop())
+                .await
+                .context(ParSnafu)?;
 
         let push_payload = par::AuthorizationPushPayload {
             client_id: self.client_id.as_ref(),
@@ -286,7 +277,7 @@ fn build_payload_with_external_auth<
         state: &start_input.state,
         code_challenge: &pkce.challenge,
         code_challenge_method: "S256",
-        dpop_jkt: grant.dpop().and_then(|d| d.jwk_thumbprint()),
+        dpop_jkt: grant.dpop().jwk_thumbprint(),
     }
 }
 

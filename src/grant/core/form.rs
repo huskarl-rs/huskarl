@@ -14,10 +14,10 @@ use crate::{
 #[derive(Debug, Builder)]
 #[builder(state_mod(name = builder))]
 pub struct OAuth2FormRequest<'a, F: Serialize, D: AuthorizationServerDPoP = NoDPoP> {
-    uri: Uri,
+    uri: &'a Uri,
     form: &'a F,
     auth_params: AuthenticationParams<'a>,
-    dpop: Option<&'a D>,
+    dpop: &'a D,
 }
 
 impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
@@ -40,11 +40,11 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
         parts.method = Method::POST;
         parts.uri = self.uri.clone();
 
-        if let Some(dpop) = self.dpop
-            && let Some(proof) = dpop
-                .proof(&parts.method, &parts.uri)
-                .await
-                .context(DPoPSignSnafu)?
+        if let Some(proof) = self
+            .dpop
+            .proof(&parts.method, &parts.uri)
+            .await
+            .context(DPoPSignSnafu)?
         {
             parts.headers.insert(
                 "DPoP",
@@ -79,9 +79,7 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
         if let Some(nonce) = response.headers().get("DPoP-Nonce")
             && let Ok(nonce_str) = nonce.to_str()
         {
-            if let Some(d) = self.dpop {
-                d.update_nonce(nonce_str.to_string());
-            }
+            self.dpop.update_nonce(nonce_str.to_string());
             *updated_nonce = true;
         }
 
@@ -116,6 +114,59 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
 
         response_or_error
     }
+
+    /// Executes the form request, expecting an empty response body on success.
+    ///
+    /// On success status codes, returns `Ok(())` after consuming the body.
+    /// On error status codes, attempts to parse the body as an `OAuth2` error.
+    ///
+    /// The main current use of this endpoint is the revocation endpoint, which is
+    /// not expected to require a DPoP nonce.
+    pub async fn execute_empty_response<C: HttpClient>(
+        &self,
+        http_client: &C,
+    ) -> Result<(), OAuth2FormError<C::Error, <C::Response as HttpResponse>::Error, D::Error>> {
+        let request = self.build_request().await.context(SerializeSnafu)?;
+        let response = http_client.execute(request).await.context(RequestSnafu)?;
+        let status = response.status();
+        let content_type = if status.is_success() {
+            None
+        } else {
+            response.headers().get(CONTENT_TYPE).cloned()
+        };
+
+        // Consume the body even if we ignore it in the success case.
+        let body = response.body().await.context(ResponseBodyReadSnafu)?;
+
+        if status.is_success() {
+            return Ok(());
+        }
+
+        Err(OAuth2FormError::Response {
+            source: parse_oauth2_error_response(status, content_type, &body),
+        })
+    }
+}
+
+/// Parses an error response body as an `OAuth2` error. Always returns `Err`.
+fn parse_oauth2_error_response(
+    status: http::StatusCode,
+    content_type: Option<HeaderValue>,
+    body: &Bytes,
+) -> HandleResponseError {
+    match serde_json::from_slice::<OAuth2ErrorBody>(body) {
+        Ok(error_body) => HandleResponseError::OAuth2 {
+            body: error_body,
+            status,
+            content_type,
+        },
+        Err(source) => HandleResponseError::UnparseableErrorResponse {
+            body: String::from_utf8_lossy(body).into_owned(),
+            status,
+            content_type,
+            source,
+        },
+    }
 }
 
 fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
@@ -124,21 +175,7 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
     body: &Bytes,
 ) -> Result<T, HandleResponseError> {
     if !status.is_success() {
-        // Attempt to parse the body as a standard OAuth 2.0 error response.
-        let error_body = serde_json::from_slice::<OAuth2ErrorBody>(body).context(
-            UnparseableErrorResponseSnafu {
-                status,
-                content_type: content_type.clone(),
-                body: String::from_utf8_lossy(body),
-            },
-        )?;
-
-        return OAuth2Snafu {
-            body: error_body,
-            status,
-            content_type,
-        }
-        .fail();
+        return Err(parse_oauth2_error_response(status, content_type, body));
     }
 
     serde_json::from_slice(body).context(UnparseableSuccessResponseSnafu {

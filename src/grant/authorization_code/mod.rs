@@ -14,6 +14,7 @@ mod types;
 pub use error::{CompleteError, StartError};
 pub use exchange::AuthorizationCodeGrantParameters;
 pub use grant::AuthorizationCodeGrant;
+pub use jar::{Jar, NoJar};
 #[cfg(feature = "authorization-flow-loopback")]
 pub use loopback::{LoopbackError, bind_loopback};
 pub use types::{CompleteInput, PendingState, StartInput, StartOutput};

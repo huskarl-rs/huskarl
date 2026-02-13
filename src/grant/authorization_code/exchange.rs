@@ -59,8 +59,8 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static,
         self.issuer.as_deref()
     }
 
-    fn dpop(&self) -> Option<&Self::DPoP> {
-        self.dpop.as_ref()
+    fn dpop(&self) -> &Self::DPoP {
+        &self.dpop
     }
 
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {
@@ -90,7 +90,7 @@ impl<
         refresh::RefreshGrant::builder()
             .client_id(self.client_id.clone())
             .client_auth(self.client_auth.clone())
-            .maybe_dpop(self.dpop.clone())
+            .dpop(self.dpop.clone())
             .token_endpoint_url(self.token_endpoint.clone())
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),

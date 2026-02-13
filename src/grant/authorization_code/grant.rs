@@ -3,10 +3,7 @@ use std::borrow::Cow;
 use crate::{
     EndpointUrl, IntoEndpointUrl,
     dpop::{AuthorizationServerDPoP, NoDPoP},
-    grant::authorization_code::{
-        grant::builder::{SetDpop, SetJar},
-        jar::{Jar, NoJar},
-    },
+    grant::authorization_code::jar::{Jar, NoJar},
 };
 use bon::Builder;
 
@@ -28,8 +25,9 @@ use crate::{
 ///
 /// ```rust, no_run
 /// use huskarl::server_metadata::AuthorizationServerMetadata;
-/// use huskarl::grant::authorization_code::AuthorizationCodeGrant;
+/// use huskarl::grant::authorization_code::{AuthorizationCodeGrant, NoJar};
 /// use huskarl::client_auth::NoAuth;
+/// use huskarl::dpop::NoDPoP;
 ///
 /// let metadata: AuthorizationServerMetadata = todo!();
 ///
@@ -38,26 +36,17 @@ use crate::{
 ///     .client_id("my_client_id")
 ///     .client_auth(NoAuth)
 ///     .redirect_uri("https://redirect_url")
+///     .dpop(NoDPoP)
+///     .jar(NoJar)
 ///     .build();
 /// ```
 #[derive(Debug, Clone, Builder)]
-#[builder(
-    start_fn(vis = "", name = "builder_internal"),
-    state_mod(name = "builder"),
-    generics(setters(name = "conv_{}"))
-)]
+#[builder(state_mod(name = "builder"))]
 pub struct AuthorizationCodeGrant<
     Auth: ClientAuthentication,
     D: AuthorizationServerDPoP = NoDPoP,
     J: Jar = NoJar,
 > {
-    /// The `DPoP` configuration.
-    #[builder(setters(vis = "", name = "dpop_internal"))]
-    pub(super) dpop: Option<D>,
-
-    #[builder(setters(vis = "", name = "jar_internal"))]
-    pub(super) jar: Option<J>,
-
     // -- User-supplied fields --
     /// The client ID.
     #[builder(into)]
@@ -65,6 +54,11 @@ pub struct AuthorizationCodeGrant<
 
     /// The client authentication method.
     pub(super) client_auth: Auth,
+
+    /// The `DPoP` configuration.
+    pub(super) dpop: D,
+
+    pub(super) jar: J,
 
     // -- Metadata fields --
     /// The URL of the token endpoint.
@@ -107,13 +101,9 @@ pub struct AuthorizationCodeGrant<
     pub(super) prefer_pushed_authorization_requests: bool,
 }
 
-impl<Auth: ClientAuthentication + 'static> AuthorizationCodeGrant<Auth> {
-    pub fn builder() -> AuthorizationCodeGrantBuilder<Auth, NoDPoP, NoJar> {
-        AuthorizationCodeGrant::<Auth, NoDPoP>::builder_internal()
-    }
-}
-
-impl<Auth: ClientAuthentication + 'static> AuthorizationCodeGrant<Auth, NoDPoP, NoJar> {
+impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, J: Jar + 'static>
+    AuthorizationCodeGrant<Auth, D, J>
+{
     /// Configure the flow from authorization server metadata.
     #[must_use]
     #[allow(clippy::type_complexity)]
@@ -122,8 +112,8 @@ impl<Auth: ClientAuthentication + 'static> AuthorizationCodeGrant<Auth, NoDPoP, 
     ) -> Option<
         AuthorizationCodeGrantBuilder<
             Auth,
-            NoDPoP,
-            NoJar,
+            D,
+            J,
             SetAuthorizationResponseIssParameterSupported<
                 SetRequirePushedAuthorizationRequests<
                     SetPushedAuthorizationRequestEndpoint<
@@ -168,26 +158,6 @@ impl<
     S: builder::State,
 > AuthorizationCodeGrantBuilder<Auth, D, J, S>
 {
-    pub fn dpop<D1: AuthorizationServerDPoP + 'static>(
-        self,
-        dpop: D1,
-    ) -> AuthorizationCodeGrantBuilder<Auth, D1, J, SetDpop<S>>
-    where
-        S::Dpop: builder::IsUnset,
-    {
-        self.conv_d().dpop_internal(dpop)
-    }
-
-    pub fn jar<J1: Jar + 'static>(
-        self,
-        jar: J1,
-    ) -> AuthorizationCodeGrantBuilder<Auth, D, J1, SetJar<S>>
-    where
-        S::Jar: builder::IsUnset,
-    {
-        self.conv_j().jar_internal(jar)
-    }
-
     /// Sets the token endpoint URL.
     ///
     /// Accepts any type that implements [`IntoEndpointUrl`], including

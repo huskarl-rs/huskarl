@@ -53,7 +53,9 @@ pub async fn complete_on_loopback<E: crate::Error + 'static>(
     // perform the token exchange, and redirect to a clean URL.
     let result = loop {
         let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
-        let path = read_request_path(&mut stream).await.context(ReadRequestSnafu)?;
+        let path = read_request_path(&mut stream)
+            .await
+            .context(ReadRequestSnafu)?;
 
         let Some(path) = path else {
             let _ = send_error_response(&mut stream, 400, "Bad Request").await;
@@ -61,8 +63,6 @@ pub async fn complete_on_loopback<E: crate::Error + 'static>(
         };
 
         // Only accept callbacks on the expected redirect URI path.
-        // This prevents a callback meant for a different grant from
-        // being consumed by this listener.
         let request_path = path.split('?').next().unwrap_or(&path);
         if request_path != expected_path {
             let _ = send_error_response(&mut stream, 404, "Not Found").await;
@@ -89,7 +89,9 @@ pub async fn complete_on_loopback<E: crate::Error + 'static>(
     // (e.g. favicon) before the redirect arrives.
     loop {
         let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
-        let path = read_request_path(&mut stream).await.context(ReadRequestSnafu)?;
+        let path = read_request_path(&mut stream)
+            .await
+            .context(ReadRequestSnafu)?;
 
         match path.as_deref() {
             Some("/success") => {
@@ -300,9 +302,11 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback::<MockError>(&listener, "http://127.0.0.1/callback", async |_input| {
-                Ok(ok_token_response())
-            })
+            complete_on_loopback::<MockError>(
+                &listener,
+                "http://127.0.0.1/callback",
+                async |_input| Ok(ok_token_response()),
+            )
             .await
         });
 
