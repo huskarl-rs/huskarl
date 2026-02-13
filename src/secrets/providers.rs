@@ -1,4 +1,4 @@
-use std::{convert::Infallible, ffi::OsString, sync::Arc};
+use std::{convert::Infallible, ffi::OsString};
 
 use snafu::prelude::*;
 
@@ -12,7 +12,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct EnvVarSecret<Output = SecretString> {
     /// The name of the value read from the environment.
-    value: Arc<Output>,
+    value: Output,
 }
 
 impl<O> EnvVarSecret<O> {
@@ -33,9 +33,7 @@ impl<O> EnvVarSecret<O> {
             .decode(encoded_value.as_bytes())
             .context(DecodeSnafu)?;
 
-        Ok(Self {
-            value: Arc::new(value),
-        })
+        Ok(Self { value })
     }
 }
 
@@ -56,7 +54,7 @@ impl<O: Clone + MaybeSendSync> Secret for EnvVarSecret<O> {
     type Error = Infallible;
 
     async fn get_secret_value(&self) -> Result<Self::Output, Self::Error> {
-        Ok(self.value.as_ref().clone())
+        Ok(self.value.clone())
     }
 }
 
