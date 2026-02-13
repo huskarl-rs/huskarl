@@ -13,7 +13,7 @@ use crate::{
     client_auth::ClientAuthentication,
     dpop::{AuthorizationServerDPoP, NoDPoP},
     grant::{
-        core::{OAuth2ExchangeGrant, RefreshableGrant},
+        core::{OAuth2ExchangeGrant, RefreshableGrant, mk_scopes},
         refresh::builder::{SetTokenEndpoint, SetTokenEndpointAuthMethodsSupported},
     },
     server_metadata::AuthorizationServerMetadata,
@@ -151,7 +151,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         RefreshGrantForm {
             grant_type: "refresh_token",
             refresh_token: params.refresh_token,
-            scope: params.scopes.and_then(crate::grant::core::mk_scopes),
+            scope: params.scope,
         }
     }
 }
@@ -175,8 +175,8 @@ pub struct RefreshGrantParameters {
     /// The refresh token to use in the refresh token request.
     refresh_token: RefreshToken,
     /// Scopes for downscoping (must be previously granted scopes).
-    #[builder(into)]
-    scopes: Option<Vec<String>>,
+    #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
+    scope: Option<String>,
 }
 
 /// Refresh grant body.

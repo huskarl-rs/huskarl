@@ -3,11 +3,14 @@
 #![warn(clippy::pedantic)]
 
 pub mod client_auth;
+pub mod crypto;
 pub mod dpop;
 mod endpoint_url;
 mod error;
 pub mod grant;
 pub mod http;
+pub mod jwk;
+pub mod jwt;
 pub mod platform;
 pub mod prelude;
 pub mod secrets;

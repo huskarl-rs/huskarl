@@ -178,7 +178,7 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
 /// Parameters when requesting a token using the client credentials grant.
 #[derive(Debug, Clone, Builder)]
 pub struct ClientCredentialsGrantParameters {
-    #[builder(required, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
+    #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
     scope: Option<String>,
 }
 
