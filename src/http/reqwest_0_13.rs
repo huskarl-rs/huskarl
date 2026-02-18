@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use super::{HttpClient, HttpResponse};
 
 use bytes::Bytes;
@@ -29,9 +31,37 @@ impl HttpClient for reqwest::Client {
             .body(body)
             .build()?;
 
-        let response = self.execute(reqwest_request).await?;
+        reqwest::Client::execute(&self, reqwest_request).await
+    }
+}
 
-        Ok(response)
+impl HttpClient for LazyLock<reqwest::Client> {
+    /// The response type is `reqwest::Response`.
+    type Response = reqwest::Response;
+    /// The error type is `reqwest::Error`.
+    type Error = reqwest::Error;
+
+    /// Executes an `http::Request` using the `reqwest::Client`.
+    ///
+    /// This method converts the generic `http::Request<Bytes>` into a `reqwest::Request`
+    /// and then sends it.
+    ///
+    /// # Arguments
+    ///
+    /// * `request`: The `http::Request` to be executed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` containing the `reqwest::Response` on success, or a `reqwest::Error` on failure.
+    async fn execute(&self, request: Request<Bytes>) -> Result<Self::Response, Self::Error> {
+        let (parts, body) = request.into_parts();
+        let reqwest_request = self
+            .request(parts.method, parts.uri.to_string())
+            .headers(parts.headers)
+            .body(body)
+            .build()?;
+
+        reqwest::Client::execute(&self, reqwest_request).await
     }
 }
 
