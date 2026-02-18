@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use serde::Serialize;
 use snafu::prelude::*;
 
+use crate::client_auth::AuthenticationParams;
 use crate::grant::refresh::RefreshGrant;
 use crate::{
     EndpointUrl,
@@ -57,6 +58,26 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns allowed authentication methods (formatted as in authorization server metadata).
     fn allowed_auth_methods(&self) -> Option<&[String]>;
 
+    fn authentication_params(
+        &self,
+    ) -> impl Future<
+        Output = Result<
+            AuthenticationParams<'_>,
+            <Self::ClientAuth as ClientAuthentication>::Error,
+        >,
+    > + MaybeSend {
+        async {
+            self.client_auth()
+                .authentication_params(
+                    self.client_id(),
+                    self.issuer(),
+                    self.token_endpoint().as_uri(),
+                    self.allowed_auth_methods(),
+                )
+                .await
+        }
+    }
+
     /// Exchange the parameters for an access token.
     #[allow(clippy::type_complexity)]
     fn exchange<C: HttpClient>(
@@ -75,17 +96,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         >,
     > + MaybeSend {
         async {
-            let auth_params = self
-                .client_auth()
-                .authentication_params(
-                    self.client_id(),
-                    self.issuer(),
-                    self.token_endpoint().as_uri(),
-                    self.allowed_auth_methods(),
-                )
-                .await
-                .context(AuthSnafu)?;
-
+            let auth_params = self.authentication_params().await.context(AuthSnafu)?;
             let form = self.build_form(params);
 
             let token_response = OAuth2FormRequest::builder()

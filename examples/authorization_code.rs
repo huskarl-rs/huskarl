@@ -43,7 +43,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         expires_in: _,
         pending_state,
     } = grant
-        .start(&http_client, StartInput::builder().scopes(["test"]).build())
+        .start(&http_client, StartInput::scopes(["test"]))
         .await
         .whatever_context("Getting authorization URL failed")?;
 

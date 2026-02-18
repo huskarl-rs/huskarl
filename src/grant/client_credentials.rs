@@ -72,6 +72,16 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
                     .clone(),
             )
     }
+
+    #[cfg(test)]
+    pub fn builder_from_httpmock(
+        server: &httpmock::MockServer,
+        prefix: &str,
+    ) -> ClientCredentialsGrantBuilder<Auth, D, SetTokenEndpoint<builder::Empty>> {
+        Self::builder()
+            .token_endpoint(server.url(format!("{prefix}/token")))
+            .expect("URL comes from httpmock, and only test code")
+    }
 }
 
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, S: builder::State>
@@ -165,10 +175,116 @@ pub struct ClientCredentialsGrantParameters {
     scope: Option<String>,
 }
 
+impl ClientCredentialsGrantParameters {
+    pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::builder().scopes(scopes).build()
+    }
+}
+
 /// Client credentials grant body.
 #[derive(Debug, Serialize)]
 pub struct ClientCredentialsGrantForm {
     grant_type: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::LazyLock;
+
+    use httpmock::MockServer;
+    use secrecy::ExposeSecret;
+    use serde_json::json;
+
+    use crate::{
+        client_auth::NoAuth,
+        crypto::signer::native::Es256PrivateKey,
+        dpop::{DPoP, NoDPoP},
+        grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
+        prelude::OAuth2ExchangeGrant,
+    };
+
+    static MOCK_SERVER: LazyLock<MockServer> = LazyLock::new(MockServer::start);
+    static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+
+    #[tokio::test]
+    async fn test_blah() {
+        use httpmock::prelude::*;
+
+        let grant = ClientCredentialsGrant::builder_from_httpmock(&MOCK_SERVER, "/blah")
+            .client_id("client")
+            .client_auth(NoAuth)
+            .dpop(NoDPoP)
+            .build();
+
+        let mock = MOCK_SERVER
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/blah/token")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header_missing("DPoP")
+                    .form_urlencoded_tuple("grant_type", "client_credentials")
+                    .form_urlencoded_tuple("client_id", "client");
+                then.status(200)
+                    .header("Content-Type", "application/json")
+                    .json_body(json!({
+                        "access_token": "access_token",
+                        "token_type": "Bearer",
+                    }));
+            })
+            .await;
+
+        let response = grant
+            .exchange(
+                &HTTP_CLIENT,
+                ClientCredentialsGrantParameters::builder().build(),
+            )
+            .await;
+
+        mock.assert();
+        let response = response.unwrap();
+        assert_eq!(response.token_type, "Bearer");
+        assert_eq!(response.access_token.expose_secret(), "access_token");
+    }
+
+    #[tokio::test]
+    async fn test_blah2() {
+        use httpmock::prelude::*;
+
+        let grant = ClientCredentialsGrant::builder_from_httpmock(&MOCK_SERVER, "/blah2")
+            .client_id("client")
+            .client_auth(NoAuth)
+            .dpop(DPoP::builder().signer(Es256PrivateKey::generate()).build())
+            .build();
+
+        let mock = MOCK_SERVER
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/blah2/token")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header_exists("DPoP")
+                    .form_urlencoded_tuple("grant_type", "client_credentials")
+                    .form_urlencoded_tuple("client_id", "client");
+                then.status(200)
+                    .header("Content-Type", "application/json")
+                    .json_body(json!({
+                        "access_token": "access_token",
+                        "token_type": "DPoP",
+                    }));
+            })
+            .await;
+
+        let response = grant
+            .exchange(
+                &HTTP_CLIENT,
+                ClientCredentialsGrantParameters::builder().build(),
+            )
+            .await;
+
+        mock.assert();
+        let response = response.unwrap();
+        assert_eq!(response.token_type, "DPoP");
+        assert_eq!(response.access_token.expose_secret(), "access_token");
+    }
 }

@@ -84,6 +84,17 @@ impl<
             .await
     }
 
+    /// Starts an authorization code flow.
+    ///
+    /// This generates the request for the authorization code flow (optionally a JAR request object). If
+    /// PAR is configured and chosen for use, the information is provided to the PAR endpoint, and the
+    /// resulting URL is returned as the one to which the user should be directed for authorization. If
+    /// PAR is not used, then the configured authorization endpoint is returned, with appropriate query
+    /// parameters for the request.
+    ///
+    /// # Errors
+    ///
+    /// May return an error if the configuration is invalid, or the PAR endpoint returns an error.
     pub async fn start<C: HttpClient>(
         &self,
         http_client: &C,
@@ -108,7 +119,8 @@ impl<
             self.deliver_via_par(http_client, &payload.rest, request_object.as_ref(), par_url)
                 .await?
         } else {
-            self.deliver_direct::<C>(&payload, request_object.as_ref())?
+            self.deliver_direct(&payload, request_object.as_ref())
+                .context(UrlSnafu)?
         };
 
         Ok(StartOutput {
@@ -122,15 +134,11 @@ impl<
         })
     }
 
-    #[allow(clippy::type_complexity)]
-    fn deliver_direct<C: HttpClient>(
+    fn deliver_direct(
         &self,
         payload: &AuthorizationPayloadWithClientId<'_>,
         request_object: Option<&SecretString>,
-    ) -> Result<
-        (Uri, Option<u64>),
-        StartError<Auth::Error, C::Error, <C::Response as HttpResponse>::Error, D::Error, J::Error>,
-    > {
+    ) -> Result<(Uri, Option<u64>), serde_html_form::ser::Error> {
         let uri = if let Some(request_jwt) = request_object {
             #[derive(Serialize)]
             struct JarRedirect<'a> {
@@ -143,10 +151,9 @@ impl<
                     client_id: self.client_id.as_ref(),
                     request: request_jwt.expose_secret(),
                 },
-            )
-            .context(UrlSnafu)?
+            )?
         } else {
-            add_payload_to_uri(&self.authorization_endpoint, payload).context(UrlSnafu)?
+            add_payload_to_uri(&self.authorization_endpoint, payload)?
         };
         Ok((uri, None))
     }
@@ -162,13 +169,7 @@ impl<
         StartError<Auth::Error, C::Error, <C::Response as HttpResponse>::Error, D::Error, J::Error>,
     > {
         let auth_params = self
-            .client_auth
-            .authentication_params(
-                self.client_id.as_ref(),
-                self.issuer.as_deref(),
-                self.token_endpoint.as_uri(),
-                self.token_endpoint_auth_methods_supported.as_deref(),
-            )
+            .authentication_params()
             .await
             .context(ClientAuthSnafu)?;
 
@@ -195,6 +196,12 @@ impl<
         ))
     }
 
+    /// Attempts to complete the authorization code flow.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if one is returned when sending a message to the token endpoint,
+    /// or if a check failed against the callback parameters.
     pub async fn complete<C: HttpClient>(
         &self,
         http_client: &C,

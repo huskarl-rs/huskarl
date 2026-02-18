@@ -121,7 +121,7 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
     /// On error status codes, attempts to parse the body as an `OAuth2` error.
     ///
     /// The main current use of this endpoint is the revocation endpoint, which is
-    /// not expected to require a DPoP nonce.
+    /// not expected to require a `DPoP` nonce.
     pub async fn execute_empty_response<C: HttpClient>(
         &self,
         http_client: &C,

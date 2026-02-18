@@ -33,6 +33,12 @@ pub struct StartInput {
     pub(super) scopes: Option<String>,
 }
 
+impl StartInput {
+    pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::builder().scopes(scopes).build()
+    }
+}
+
 impl<S: start_input_builder::IsComplete> StartInputBuilder<S> {
     pub fn build(self) -> StartInput {
         self.build_internal(generate_random_value())

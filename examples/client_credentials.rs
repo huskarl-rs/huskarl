@@ -33,9 +33,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     let token_response = grant
         .exchange(
             &http_client,
-            ClientCredentialsGrantParameters::builder()
-                .scopes(["test"])
-                .build(),
+            ClientCredentialsGrantParameters::scopes(["test"]),
         )
         .await
         .whatever_context("Failed to get token")?;

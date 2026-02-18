@@ -3,6 +3,12 @@ name = "huskarl"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
+description = "A security-first OAuth2 client library."
+repository = "https://github.com/huskarl-rs/huskarl"
+license = "MIT OR Apache-2.0"
+keywords = ["oauth2", "security", "authentication", "fapi"]
+categories = ["authentication", "web-programming::http-client"]
+readme = "README.md"
 
 [features]
 default = ["default-crypto-native", "crypto-webcrypto"]
@@ -126,3 +132,4 @@ web-time = { version = "1", default-features = false }
 huskarl = { path = ".", features = ["http-client-reqwest-0_13", "authorization-flow-loopback"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.13", features = ["cookies", "form", "json"] }
+httpmock = "0.8.3"
