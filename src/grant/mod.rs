@@ -7,4 +7,5 @@
 pub mod authorization_code;
 pub mod client_credentials;
 pub mod core;
+pub mod device_authorization;
 pub mod refresh;
