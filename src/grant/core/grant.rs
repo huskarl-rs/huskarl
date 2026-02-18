@@ -58,6 +58,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns allowed authentication methods (formatted as in authorization server metadata).
     fn allowed_auth_methods(&self) -> Option<&[String]>;
 
+    /// Returns the authentication parameters for this grant.
     fn authentication_params(
         &self,
     ) -> impl Future<
@@ -129,6 +130,7 @@ pub trait RefreshableGrant: MaybeSendSync {
     fn to_refresh_grant(&self) -> RefreshGrant<Self::ClientAuth, Self::DPoP>;
 }
 
+/// Errors that can occur when making a token request.
 #[derive(Debug, Snafu)]
 pub enum OAuth2ExchangeGrantError<
     HttpReqErr: crate::Error,
@@ -136,10 +138,14 @@ pub enum OAuth2ExchangeGrantError<
     AuthErr: crate::Error,
     DPoPErr: crate::Error,
 > {
+    /// There was a failure to get client authentication details.
     Auth {
+        /// The underlying error.
         source: AuthErr,
     },
+    /// There was a failure to submit the form.
     OAuth2Form {
+        /// The underlying error.
         source: OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>,
     },
 }

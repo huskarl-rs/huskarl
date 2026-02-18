@@ -1,6 +1,9 @@
+//! Implements an `OAuth2` client library.
+
 #![forbid(unsafe_code)]
 #![deny(clippy::panic)]
 #![warn(clippy::pedantic)]
+#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod client_auth;

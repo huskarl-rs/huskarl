@@ -13,34 +13,65 @@ use crate::{
     http::{HttpClient, HttpResponse},
 };
 
+/// Authorization server metadata.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AuthorizationServerMetadata {
+    /// The authorization server's issuer identifier.
     pub issuer: String,
+    /// The URL of the authorization server's authorization endpoint.
     pub authorization_endpoint: Option<EndpointUrl>,
-    /// Token endpoint. Required when supporting grants other than the implicit grant.
+    /// The URL of the authorization server's authorization endpoint.
+    ///
+    /// Required unless the only the implicit grant is supported.
     pub token_endpoint: EndpointUrl,
+    /// The URL of the authorization server's JWK Set.
     pub jwks_uri: Option<EndpointUrl>,
+    /// The URL of the authorization server's OAuth 2.0 Dynamic Client Registration endpoint.
     pub registration_endpoint: Option<EndpointUrl>,
+    /// Array containing a list of the OAuth 2.0 "scope" values that this authorization server supports.
     pub scopes_supported: Option<Vec<String>>,
+    /// Array containing a list of the OAuth 2.0 "`response_type`" values that this authorization server supports.
     pub response_types_supported: Vec<String>,
+    /// Array containing a list of the OAuth 2.0 "`response_mode`" values that this authorization server supports
     #[serde(default = "default_response_modes_supported")]
     pub response_modes_supported: Vec<String>,
+    /// Array containing a list of the OAuth 2.0 grant type values that this authorization server supports.
     #[serde(default = "default_grant_types_supported")]
     pub grant_types_supported: Vec<String>,
+    /// Array containing a list of client authentication methods supported by this token endpoint.
     #[serde(default = "default_auth_methods_supported")]
     pub token_endpoint_auth_methods_supported: Vec<String>,
+    /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the token endpoint
+    /// for the signature on the JWT used to authenticate the client at the token endpoint for the
+    /// "`private_key_jwt`" and "`client_secret_jwt`" authentication methods.
     pub token_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
+    /// URL of a page containing human-readable information that developers might want or need to know when using the authorization server.
     pub service_documentation: Option<String>,
+    /// Languages and scripts supported for the user interface.
     pub ui_locales_supported: Option<Vec<String>>,
+    /// URL that the authorization server provides to the person registering the client to read about the authorization server's requirements on how the client can use the data provided by the authorization server.
     pub op_policy_uri: Option<EndpointUrl>,
+    /// URL that the authorization server provides to the person registering the client to read about the authorization server's terms of service.
     pub op_tos_uri: Option<EndpointUrl>,
+    /// URL of the authorization server's OAuth 2.0 revocation endpoint.
     pub revocation_endpoint: Option<EndpointUrl>,
+    /// Array containing a list of client authentication methods supported by this revocation endpoint.
     #[serde(default = "default_auth_methods_supported")]
     pub revocation_endpoint_auth_methods_supported: Vec<String>,
+    /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the revocation endpoint for
+    /// the signature on the JWT [JWT] used to authenticate the client at the revocation endpoint for the
+    /// "`private_key_jwt`" and "`client_secret_jwt`" authentication methods.
     pub revocation_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
+    /// URL of the authorization server's OAuth 2.0 introspection endpoint.
     pub introspection_endpoint: Option<EndpointUrl>,
+    /// Array containing a list of client authentication methods supported by this introspection endpoint.
     pub introspection_endpoint_auth_methods_supported: Option<Vec<String>>,
+    /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the introspection
+    /// endpoint for the signature on the JWT [JWT] used to authenticate the client at the introspection endpoint
+    /// for the "`private_key_jwt`" and "`client_secret_jwt`" authentication methods.
     pub introspection_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
+    /// Array containing a list of Proof Key for Code Exchange (PKCE) [RFC7636] code challenge methods supported
+    /// by this authorization server.
     #[serde(default = "Vec::new")]
     pub code_challenge_methods_supported: Vec<String>,
     /**
@@ -57,19 +88,20 @@ pub struct AuthorizationServerMetadata {
      */
     // Specifies the URL of the pushed authorization request endpoint (RFC 9126 §5).
     pub pushed_authorization_request_endpoint: Option<EndpointUrl>,
-    // If true, indicates that pushed authorization requests are required (RFC 9126 §5).
+    /// If true, indicates that pushed authorization requests are required (RFC 9126 §5).
     #[serde(default)]
     pub require_pushed_authorization_requests: bool,
     /**
      * RFC 9207 - OAuth 2.0 Authorization Server Issuer Identification
      */
-    // Indicates support for an `iss` identifier in the authorization endpoint response (RFC 9207 §3).
+    /// Indicates support for an `iss` identifier in the authorization endpoint response (RFC 9207 §3).
     #[serde(default)]
     pub authorization_response_iss_parameter_supported: bool,
 }
 
 #[bon]
 impl AuthorizationServerMetadata {
+    /// Get the authorization server metadata for an issuer.
     #[builder]
     pub async fn from_issuer<C: HttpClient>(
         #[builder(start_fn, into)] issuer: String,
@@ -90,17 +122,20 @@ impl AuthorizationServerMetadata {
     }
 }
 
+/// Errors that may occur when attempting to fetch authorization server metadata.
 #[derive(Debug, Snafu)]
 pub enum AuthorizationServerMetadataFetchError<
     HttpErr: crate::Error + 'static,
     HttpRespErr: crate::Error + 'static,
 > {
+    /// Error when parsing the issuer as a URL.
     BadIssuer {
-        /// The underlying error when parsing the issuer as a URL.
+        /// The underlying error.
         source: http::Error,
     },
+    /// Error when attempting to make the HTTP request.
     Get {
-        /// The underlying error when attempting to make the HTTP request.
+        /// The underlying error.
         source: crate::http::GetError<HttpErr, HttpRespErr>,
     },
 }

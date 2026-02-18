@@ -21,10 +21,15 @@ use crate::crypto::signer::{HasPublicKey, JwsSigningKey, SigningKeyMetadata};
 use crate::jwk::{self, PublicJwk};
 use crate::secrets::Secret;
 
+/// RSA algorithm supported by this key.
 pub enum RsaAlgorithm {
+    /// Key supports RS256.
     Rs256,
+    /// Key supports PS256.
     Ps256,
+    /// Key supports PS384.
     Ps384,
+    /// Key supports PS512.
     Ps512,
 }
 
@@ -68,13 +73,18 @@ impl SigningKey {
     }
 }
 
+/// Errors that may occur when loading RSA private key.
 #[derive(Debug, Snafu)]
 pub enum RsaPrivateKeyLoadError<E: crate::Error> {
+    /// Failed to access secret information.
     Secret {
+        /// The underlying error.
         source: E,
     },
+    /// Failed to decode PKCS#8 key
     #[snafu(display("Failed to decode PKCS#8 key"))]
     KeyDecode {
+        /// The underlying error.
         source: rsa::pkcs8::Error,
     },
 }
@@ -85,7 +95,17 @@ struct RsaPrivateKeyInner {
     jwk: PublicJwk,
 }
 
-#[derive(Clone)]
+impl std::fmt::Debug for RsaPrivateKeyInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RsaPrivateKeyInner")
+            .field("key_metadata", &self.key_metadata)
+            .field("jwk", &self.jwk)
+            .finish_non_exhaustive()
+    }
+}
+
+/// An RSA private key.
+#[derive(Debug, Clone)]
 pub struct RsaPrivateKey {
     inner: Arc<RsaPrivateKeyInner>,
 }

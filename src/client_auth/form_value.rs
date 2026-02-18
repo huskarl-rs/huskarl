@@ -3,9 +3,12 @@ use std::borrow::Cow;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 
+/// The types of form values that can be encoded when sending to an authorization server.
 #[derive(Debug, Clone)]
 pub enum FormValue<'a> {
+    /// Represents a non-sensitive value (may be visible in logs, debug messages, etc.).
     NonSensitive(Cow<'a, str>),
+    /// Represents a sensitive value (debug information is hidden, value is zeroed on drop).
     Sensitive(Cow<'a, SecretString>),
 }
 

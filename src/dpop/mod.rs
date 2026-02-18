@@ -67,6 +67,7 @@ impl<D: AuthorizationServerDPoP> AuthorizationServerDPoP for Arc<D> {
     }
 }
 
+/// Proof implementation for `DPoP` when calling resource servers.
 pub trait ResourceServerDPoP: MaybeSendSync {
     /// The error type when signing proofs;
     type Error: crate::Error;

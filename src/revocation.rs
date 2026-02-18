@@ -50,11 +50,9 @@ impl RevocableToken for RefreshToken {
     }
 }
 
+/// Implementation of token revocation.
 #[derive(Debug, Clone, Builder)]
-#[builder(
-    start_fn(vis = "", name = "builder_internal"),
-    state_mod(name = "builder")
-)]
+#[builder(state_mod(name = "builder"))]
 pub struct TokenRevocation<Auth: ClientAuthentication + 'static> {
     // -- User-supplied fields --
     /// The client ID.
@@ -78,10 +76,9 @@ pub struct TokenRevocation<Auth: ClientAuthentication + 'static> {
 }
 
 impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
-    pub fn builder() -> TokenRevocationBuilder<Auth> {
-        TokenRevocation::<Auth>::builder_internal()
-    }
-
+    /// Fills builder parameters relevant to revocation from authorization server metadata.
+    ///
+    /// Returns an `Option` if the revocation endoint is not included in metadata.
     #[allow(clippy::type_complexity)]
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
@@ -189,9 +186,13 @@ struct RevocationForm<'a> {
 pub enum RevocationError<HttpReqErr: crate::Error, HttpRespErr: crate::Error, AuthErr: crate::Error>
 {
     /// An error occurred during client authentication.
-    Auth { source: AuthErr },
+    Auth {
+        /// The underlying error.
+        source: AuthErr,
+    },
     /// An error occurred during the revocation request.
     Revocation {
+        /// The underlying error.
         source: OAuth2FormError<HttpReqErr, HttpRespErr, Infallible>,
     },
 }

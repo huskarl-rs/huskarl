@@ -9,6 +9,7 @@ pub use std::time::{Duration, Instant, SystemTime};
 #[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))]
 pub use web_time::{Duration, Instant, SystemTime};
 
+/// Sleep implementation.
 #[cfg(not(any(
     doc,
     all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))
@@ -17,6 +18,7 @@ pub async fn sleep(duration: Duration) {
     tokio::time::sleep(duration).await;
 }
 
+/// Sleep implementation.
 #[cfg(any(
     doc,
     all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))

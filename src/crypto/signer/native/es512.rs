@@ -21,13 +21,18 @@ use crate::secrets::Secret;
 
 const ALGORITHM: &str = "ES512";
 
+/// Errors that may occur when loading ES512 private key.
 #[derive(Debug, Snafu)]
 pub enum Es512PrivateKeyLoadError<E: crate::Error> {
+    /// Failed to access secret information.
     Secret {
+        /// The underlying error.
         source: E,
     },
+    /// Failed to decode PKCS#8 key
     #[snafu(display("Failed to decode PKCS#8 key"))]
     KeyDecode {
+        /// The underlying error.
         source: p521::pkcs8::Error,
     },
     /// Signature error.
@@ -43,6 +48,7 @@ struct Es512PrivateKeyInner {
     jwk: jwk::PublicJwk,
 }
 
+/// An ES512 private key.
 #[derive(Clone)]
 pub struct Es512PrivateKey {
     inner: Arc<Es512PrivateKeyInner>,
@@ -81,6 +87,7 @@ impl From<SigningKey> for Es512PrivateKey {
 }
 
 impl Es512PrivateKey {
+    /// Generates an ES512 private key in memory.
     #[must_use]
     pub fn generate() -> Self {
         p521::ecdsa::SigningKey::generate().into()

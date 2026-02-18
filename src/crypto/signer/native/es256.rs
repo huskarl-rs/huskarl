@@ -20,13 +20,18 @@ use crate::secrets::Secret;
 
 const ALGORITHM: &str = "ES256";
 
+/// Errors that may occur when loading ES256 private key.
 #[derive(Debug, Snafu)]
 pub enum Es256PrivateKeyLoadError<E: crate::Error> {
+    /// Failed to access secret information.
     Secret {
+        /// The underlying error.
         source: E,
     },
+    /// Failed to decode PKCS#8 key
     #[snafu(display("Failed to decode PKCS#8 key"))]
     KeyDecode {
+        /// The underlying error.
         source: p256::pkcs8::Error,
     },
 }
@@ -37,6 +42,7 @@ struct Es256PrivateKeyInner {
     jwk: PublicJwk,
 }
 
+/// An ES256 private key.
 #[derive(Clone)]
 pub struct Es256PrivateKey {
     inner: Arc<Es256PrivateKeyInner>,
@@ -74,6 +80,7 @@ impl From<SigningKey> for Es256PrivateKey {
 }
 
 impl Es256PrivateKey {
+    /// Generates an ES256 private key in memory.
     #[must_use]
     pub fn generate() -> Self {
         p256::ecdsa::SigningKey::generate().into()

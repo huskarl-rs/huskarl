@@ -1,3 +1,21 @@
+//! Implements JWS signing keys using pure rust code.
+//!
+//! Currently, the following JWS algorithms are available:
+//!
+//! - Asymmetric (NIST elliptic curves)
+//!   - ES256
+//!   - ES384
+//!   - ES512
+//! - Symmetric (HMAC)
+//!   - HS256
+//!   - HS384
+//!   - HS512
+//! - Asymmetric (RSA)
+//!   - RS256
+//!   - PS256
+//!   - PS384
+//!   - PS512
+
 mod es256;
 mod es384;
 mod es512;

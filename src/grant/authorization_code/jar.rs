@@ -9,9 +9,12 @@ use crate::{
     prelude::JwsSigningKey,
 };
 
+/// Implementation for how to create a JAR (JWT-secured authorization request).
 pub trait Jar: MaybeSendSync {
+    /// The type of errors that can occur when attempting to create a JAR.
     type Error: crate::Error;
 
+    /// Generates the JAR request object.
     fn generate_request_object(
         &self,
         audience: &str,
@@ -19,6 +22,7 @@ pub trait Jar: MaybeSendSync {
     ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
 }
 
+/// An implementation of the Jar trait that indicates an inability to create a JAR request.
 #[derive(Debug, Clone, Copy)]
 pub struct NoJar;
 

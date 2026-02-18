@@ -20,13 +20,18 @@ use crate::secrets::Secret;
 
 const ALGORITHM: &str = "ES384";
 
+/// Errors that may occur when loading ES384 private key.
 #[derive(Debug, Snafu)]
 pub enum Es384PrivateKeyLoadError<E: crate::Error> {
+    /// Failed to access secret information.
     Secret {
+        /// The underlying error.
         source: E,
     },
+    /// Failed to decode PKCS#8 key
     #[snafu(display("Failed to decode PKCS#8 key"))]
     KeyDecode {
+        /// The underlying error.
         source: p384::pkcs8::Error,
     },
 }
@@ -37,6 +42,7 @@ struct Es384PrivateKeyInner {
     jwk: jwk::PublicJwk,
 }
 
+/// An ES384 private key.
 #[derive(Clone)]
 pub struct Es384PrivateKey {
     inner: Arc<Es384PrivateKeyInner>,
@@ -74,6 +80,7 @@ impl From<SigningKey> for Es384PrivateKey {
 }
 
 impl Es384PrivateKey {
+    /// Generates an ES384 private key in memory.
     #[must_use]
     pub fn generate() -> Self {
         p384::ecdsa::SigningKey::generate().into()

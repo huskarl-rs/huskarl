@@ -7,23 +7,47 @@ use url::Url;
 
 use crate::grant::{authorization_code::CompleteInput, core::TokenResponse};
 
+/// Errors that can occur when handling the authorization code callback with the loopback implementation.
 #[derive(Debug, Snafu)]
 pub enum LoopbackError<CompleteErr: crate::Error> {
+    ///
     #[snafu(display("Invalid redirect URI in callback state: {source}"))]
-    InvalidRedirectUri { source: url::ParseError },
+    InvalidRedirectUri {
+        /// The underlying error.
+        source: url::ParseError,
+    },
+    /// Failed to accept connection.
     #[snafu(display("Failed to accept connection: {source}"))]
-    Accept { source: std::io::Error },
+    Accept {
+        /// The underlying error.
+        source: std::io::Error,
+    },
+    /// Failed to read request.
     #[snafu(display("Failed to read request: {source}"))]
-    ReadRequest { source: std::io::Error },
+    ReadRequest {
+        /// The underlying error.
+        source: std::io::Error,
+    },
+    /// Authorization server returned error.
     #[snafu(display("Authorization server returned error: {error}"))]
     OAuthError {
+        /// The `error` field in the `OAuth2` error response.
         error: String,
+        /// The `error_description` field in the `OAuth2` error response.
         error_description: Option<String>,
     },
+    /// Missing required parameter.
     #[snafu(display("Missing required parameter: {param}"))]
-    MissingParameter { param: &'static str },
+    MissingParameter {
+        /// The missing parameter name.
+        param: &'static str,
+    },
+    /// Failed to complete authorization.
     #[snafu(display("Failed to complete authorization: {source}"))]
-    Complete { source: CompleteErr },
+    Complete {
+        /// The underlying error.
+        source: CompleteErr,
+    },
 }
 
 impl<CompleteErr: crate::Error + 'static> crate::Error for LoopbackError<CompleteErr> {

@@ -24,16 +24,21 @@ pub struct AuthorizationPayloadWithClientId<'a> {
     pub(super) rest: AuthorizationPayload<'a>,
 }
 
+/// The input required when beginning the authorization code flow.
 #[derive(Debug, Clone, Builder)]
 #[builder(finish_fn(vis = "", name = build_internal))]
 pub struct StartInput {
     #[builder(finish_fn)]
-    pub state: String,
+    pub(super) state: String,
     #[builder(required, with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
     pub(super) scopes: Option<String>,
 }
 
 impl StartInput {
+    /// Implements a simple complete input to the flow including just scopes.
+    ///
+    /// This is enough for most use cases; the builder exists as an extensible
+    /// API where arbitrary extra fields may be added in future.
     pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self::builder().scopes(scopes).build()
     }
@@ -55,6 +60,7 @@ pub struct StartOutput {
     pub pending_state: PendingState,
 }
 
+/// The information needed to complete an authorization code flow.
 #[derive(Debug, Clone, Builder)]
 pub struct CompleteInput {
     #[builder(into)]
@@ -65,10 +71,24 @@ pub struct CompleteInput {
     pub(super) iss: Option<String>,
 }
 
+/// The information needed to be stored from the initial flow setup, for use in the callback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingState {
+    /// The redirect URI.
+    ///
+    /// In OAuth 2.0, when this specified at the authorization endpoint, it also needs to be
+    /// sent to the token endpoint.
     pub redirect_uri: String,
+    /// The PKCE verifier.
+    ///
+    /// This value is calculated when creating the initial flow, and needs to be sent to the
+    /// token endpoint when PKCE is used.
     pub pkce_verifier: Option<String>,
+    /// The state parameter.
+    ///
+    /// The state value passed to the authorization endpoint.
+    ///
+    /// This value is checked for equality against the state value passed to the callback.
     pub state: String,
 }
 

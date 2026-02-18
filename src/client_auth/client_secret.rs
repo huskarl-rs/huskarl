@@ -9,12 +9,16 @@ use crate::{
     secrets::Secret,
 };
 
+/// Client Secret authentication (RFC 6749 §2.3.1)
+///
+///
 #[derive(Debug, Clone)]
 pub struct ClientSecret<Sec: Secret<Output = SecretString>> {
     client_secret: Sec,
 }
 
 impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
+    /// Creates a client secret which uses the underlying secret.
     pub fn new(secret: Sec) -> ClientSecret<Sec> {
         ClientSecret {
             client_secret: secret,
@@ -83,10 +87,21 @@ impl<Sec: Secret<Output = SecretString>> ClientAuthentication for ClientSecret<S
     }
 }
 
+/// Errors that may occur when calculating client credentials.
 #[derive(Debug, Snafu)]
 pub enum ClientSecretError<SecErr: crate::Error> {
-    FetchSecret { source: SecErr },
-    InvalidHeader { source: InvalidHeaderValue },
+    /// There was an error when fetching a secret.
+    #[snafu(display("Error fetching secret"))]
+    FetchSecret {
+        /// The underlying error.
+        source: SecErr,
+    },
+    /// The calculated header value was invalid.
+    #[snafu(display("Invalid header value"))]
+    InvalidHeader {
+        /// The underlying error.
+        source: InvalidHeaderValue,
+    },
 }
 
 impl<SecErr: crate::Error + 'static> crate::Error for ClientSecretError<SecErr> {

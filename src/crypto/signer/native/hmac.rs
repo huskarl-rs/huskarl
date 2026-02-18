@@ -14,10 +14,14 @@ use crate::{
     secrets::Secret,
 };
 
+/// Encodes which variant of HMAC is used by this key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HmacAlgorithm {
+    /// HS256 algorithm
     Hs256,
+    /// HS384 algorithm
     Hs384,
+    /// HS512 algorithm
     Hs512,
 }
 
@@ -37,7 +41,17 @@ struct HmacKeyInner {
     metadata: SigningKeyMetadata,
 }
 
-#[derive(Clone)]
+impl std::fmt::Debug for HmacKeyInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HmacKeyInner")
+            .field("algorithm", &self.algorithm)
+            .field("metadata", &self.metadata)
+            .finish_non_exhaustive()
+    }
+}
+
+/// An HMAC symmetric key.
+#[derive(Debug, Clone)]
 pub struct HmacKey {
     inner: Arc<HmacKeyInner>,
 }

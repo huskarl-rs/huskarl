@@ -50,6 +50,7 @@ pub struct PublicJwk {
 }
 
 impl PublicJwk {
+    /// Returns the JWK thumbprint for the key if it is a known type.
     #[must_use]
     pub fn thumbprint(&self) -> Option<String> {
         let canonical_form = match &self.key {

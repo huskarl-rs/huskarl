@@ -70,8 +70,14 @@ pub struct JwtBearer<Sgn: JwsSigningKey> {
 /// <https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc7523bis/>
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Audience {
+    /// If the issuer value is available, it will be used as the audience.
+    ///
+    /// This value usually comes from authorization server metadata, and
+    /// reduces issues with mix-up attacks.
     PreferIssuer,
+    /// Use the token endpoint, which is always available.
     PreferTokenEndpoint,
+    /// Use a custom audience value.
     Custom(Arc<str>),
 }
 

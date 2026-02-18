@@ -20,6 +20,15 @@ use crate::{
     token::RefreshToken,
 };
 
+/// An `OAuth2` refresh grant.
+///
+/// This grant is used to get a new access token, after receiving a
+/// refresh token from a previous request to the token endpoint.
+///
+/// It allows potential extension of access to resource servers
+/// after an access token expires, by asking the authorization server
+/// for a new token. This offers the opportunity for the authorization
+/// server to consider if continued access is appropriate.
 #[derive(Debug, Clone, Builder)]
 #[builder(state_mod(name = "builder"))]
 pub struct RefreshGrant<
@@ -53,6 +62,7 @@ pub struct RefreshGrant<
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     RefreshGrant<Auth, D>
 {
+    /// Configure the grant from authorization server metadata.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> RefreshGrantBuilder<
@@ -157,6 +167,17 @@ pub struct RefreshGrantParameters {
     /// Scopes for downscoping (must be previously granted scopes).
     #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
     scope: Option<String>,
+}
+
+impl RefreshGrantParameters {
+    /// Implements a simple set of parameters to the grant including just the refresh token.
+    ///
+    /// This is enough for most use cases; the builder exists as an extensible
+    /// API where arbitrary extra fields may be added in future.
+    #[must_use]
+    pub fn refresh_token(token: RefreshToken) -> Self {
+        Self::builder().refresh_token(token).build()
+    }
 }
 
 /// Refresh grant body.

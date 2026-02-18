@@ -56,6 +56,7 @@ pub struct ClientCredentialsGrant<Auth: ClientAuthentication, D: AuthorizationSe
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     ClientCredentialsGrant<Auth, D>
 {
+    /// Configure the grant from authorization server metadata.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> ClientCredentialsGrantBuilder<
@@ -73,6 +74,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
             )
     }
 
+    /// Create a client credentials builder from a `httpmock` `MockServer`.
     #[cfg(test)]
     pub fn builder_from_httpmock(
         server: &httpmock::MockServer,
@@ -176,6 +178,10 @@ pub struct ClientCredentialsGrantParameters {
 }
 
 impl ClientCredentialsGrantParameters {
+    /// Implements a simple set of parameters to the grant including just scopes.
+    ///
+    /// This is enough for most use cases; the builder exists as an extensible
+    /// API where arbitrary extra fields may be added in future.
     pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self::builder().scopes(scopes).build()
     }

@@ -11,8 +11,9 @@ use crate::{
     grant::{
         authorization_code::{
             error::{
-                ClientAuthSnafu, CompleteError, GrantSnafu, IssuerMismatchSnafu, JarSnafu,
-                MissingIssuerSnafu, ParSnafu, StartError, StateMismatchSnafu, UrlSnafu,
+                ClientAuthSnafu, CompleteError, EncodeUrlEncodedSnafu, GrantSnafu,
+                IssuerMismatchSnafu, JarSnafu, MissingIssuerSnafu, ParRequestSnafu, StartError,
+                StateMismatchSnafu,
             },
             exchange::AuthorizationCodeGrantParameters,
             grant::AuthorizationCodeGrant,
@@ -38,6 +39,11 @@ impl<
     J: Jar + 'static,
 > AuthorizationCodeGrant<Auth, D, J>
 {
+    /// Completes the authorization code flow on the provided listener, possibly returning a token response.
+    ///
+    /// A lightweight HTTP server is implemented on the listener, which is capable of handling
+    /// the authorization code callback at the redirect URI. This may be useful in various use
+    /// cases, especially that of command-line utilities.
     #[cfg(feature = "authorization-flow-loopback")]
     pub async fn complete_on_loopback<C: HttpClient>(
         &self,
@@ -120,7 +126,7 @@ impl<
                 .await?
         } else {
             self.deliver_direct(&payload, request_object.as_ref())
-                .context(UrlSnafu)?
+                .context(EncodeUrlEncodedSnafu)?
         };
 
         Ok(StartOutput {
@@ -183,7 +189,7 @@ impl<
         let par_response =
             par::make_par_call(http_client, par_url, auth_params, &par_body, self.dpop())
                 .await
-                .context(ParSnafu)?;
+                .context(ParRequestSnafu)?;
 
         let push_payload = par::AuthorizationPushPayload {
             client_id: self.client_id.as_ref(),
@@ -191,7 +197,8 @@ impl<
         };
 
         Ok((
-            add_payload_to_uri(&self.authorization_endpoint, push_payload).context(UrlSnafu)?,
+            add_payload_to_uri(&self.authorization_endpoint, push_payload)
+                .context(EncodeUrlEncodedSnafu)?,
             Some(par_response.expires_in),
         ))
     }

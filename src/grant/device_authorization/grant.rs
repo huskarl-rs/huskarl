@@ -101,7 +101,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         http_client: &C,
         start_input: StartInput,
     ) -> Result<
-        PendingState,
+        StartOutput,
         StartError<Auth::Error, C::Error, <C::Response as HttpResponse>::Error, D::Error>,
     > {
         let payload = DeviceAuthorizationRequest {
@@ -122,16 +122,20 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
             .await
             .context(FormSnafu)?;
 
-        Ok(PendingState {
-            user_code: response.user_code,
-            verification_uri: response.verification_uri,
-            verification_uri_complete: response.verification_uri_complete,
-            device_code: response.device_code,
-            expires_at: crate::platform::SystemTime::now()
-                .checked_add(Duration::from_secs(response.expires_in.into()))
-                .unwrap_or_else(crate::platform::SystemTime::now),
-            interval_secs: response.interval,
-        })
+        Ok(StartOutput::builder()
+            .expires_at(
+                crate::platform::SystemTime::now()
+                    .checked_add(Duration::from_secs(response.expires_in.into()))
+                    .unwrap_or_else(crate::platform::SystemTime::now),
+            )
+            .verification_uri(response.verification_uri)
+            .maybe_verification_uri_complete(response.verification_uri_complete)
+            .user_code(response.user_code)
+            .pending_state(PendingState {
+                device_code: response.device_code,
+                interval_secs: response.interval,
+            })
+            .build())
     }
 
     /// Poll pending state until there is a result or error, waiting an
@@ -338,33 +342,60 @@ struct DeviceAuthorizationRequest<'a> {
     scope: Option<&'a str>,
 }
 
-#[derive(Debug, Builder, Serialize, Deserialize)]
+#[derive(Debug, Builder)]
 #[builder(on(String, into))]
-pub struct PendingState {
+pub struct StartOutput {
     pub user_code: String,
     pub verification_uri: String,
     pub verification_uri_complete: Option<String>,
-    pub device_code: String,
     pub expires_at: crate::platform::SystemTime,
+    pub pending_state: PendingState,
+}
+
+#[derive(Debug, Builder, Serialize, Deserialize)]
+#[builder(on(String, into))]
+pub struct PendingState {
+    pub device_code: String,
     pub interval_secs: u32,
 }
 
+/// Errors that may occur during polling for a token.
 #[derive(Debug, Snafu)]
 pub enum PollError<ExchangeErr: crate::Error + 'static> {
+    /// Access was denied.
     AccessDenied,
+    /// The token expired.
     TokenExpired,
-    Exchange { source: ExchangeErr },
+    /// There was an error while attempting to exchange the code for a token.
+    Exchange {
+        /// The underlying error.
+        source: ExchangeErr,
+    },
 }
 
+/// The result of polling.
 pub enum PollResult {
+    /// The token is still pending.
     Pending,
+    /// Polling completed with a token response.
     Complete(Box<TokenResponse>),
 }
 
+/// The input to start the device authorization flow.
 #[derive(Debug, Clone, Builder)]
 pub struct StartInput {
     #[builder(required, with = |scopes: impl IntoIterator<Item = impl Into<String>>| crate::grant::core::mk_scopes(scopes))]
     scopes: Option<String>,
+}
+
+impl StartInput {
+    /// Implements a simple complete input to the flow including just scopes.
+    ///
+    /// This is enough for most use cases; the builder exists as an extensible
+    /// API where arbitrary extra fields may be added in future.
+    pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::builder().scopes(scopes).build()
+    }
 }
 
 #[derive(Debug, Snafu)]

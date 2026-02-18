@@ -23,20 +23,30 @@ where
     ExtraHeaders: Serialize + Clone,
     ExtraClaims: Serialize + Clone,
 {
+    /// The type (`typ`) of the JWT.
     #[builder(default = "JWT", into)]
     pub typ: Cow<'a, str>,
+    /// The issuer (`iss`) of the JWT.
     #[builder(into)]
     pub issuer: Option<Cow<'a, str>>,
+    /// The subject (`sub`) of the JWT.
     #[builder(into)]
     pub subject: Option<Cow<'a, str>>,
+    /// The audiences (`aud`) of the JWT.
     #[builder(default, into)]
     pub audiences: Vec<Cow<'a, str>>,
+    /// The number of seconds since the epoch (`iat`) when the JWT was issued.
     pub issued_at: Option<u64>,
+    /// The number of seconds since the epoch (`exp`) when the JWT will expire (or has expired).
     pub expiration: Option<u64>,
+    /// The number of seconds since the epoch (`nbf`) when the JWT will (or did) become valid.
     pub not_before: Option<u64>,
+    /// The unique identifier (`jti`) for this JWT, can be used to avoid replay attacks.
     #[builder(required, into, default = crate::uuid::uuid_v7())]
     pub jti: Option<String>,
+    /// Extra key/value pairs in the JWT protected header not included above.
     pub extra_headers: Option<ExtraHeaders>,
+    /// Extra key/value pairs in the JWT claims not included above.
     pub extra_claims: Option<ExtraClaims>,
 }
 
