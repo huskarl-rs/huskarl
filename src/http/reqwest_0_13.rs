@@ -31,7 +31,7 @@ impl HttpClient for reqwest::Client {
             .body(body)
             .build()?;
 
-        reqwest::Client::execute(&self, reqwest_request).await
+        reqwest::Client::execute(self, reqwest_request).await
     }
 }
 
@@ -61,7 +61,7 @@ impl HttpClient for LazyLock<reqwest::Client> {
             .body(body)
             .build()?;
 
-        reqwest::Client::execute(&self, reqwest_request).await
+        reqwest::Client::execute(self, reqwest_request).await
     }
 }
 

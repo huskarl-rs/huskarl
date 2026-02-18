@@ -44,6 +44,11 @@ impl<
     /// A lightweight HTTP server is implemented on the listener, which is capable of handling
     /// the authorization code callback at the redirect URI. This may be useful in various use
     /// cases, especially that of command-line utilities.
+    ///
+    /// # Errors
+    ///
+    /// Errors if there are issues with parsing callback URLs, HTTP read errors, errors handling the
+    /// callback, or errors requesting a token.
     #[cfg(feature = "authorization-flow-loopback")]
     pub async fn complete_on_loopback<C: HttpClient>(
         &self,
@@ -69,7 +74,7 @@ impl<
             listener,
             &pending_state.redirect_uri,
             async |complete_input| {
-                self.complete(http_client, &pending_state, complete_input)
+                self.complete(http_client, pending_state, complete_input)
                     .await
             },
         )

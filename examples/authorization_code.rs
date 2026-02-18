@@ -47,7 +47,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Getting authorization URL failed")?;
 
-    println!("Authorization URL: {}", authorization_url.to_string());
+    println!("Authorization URL: {}", authorization_url);
 
     let token_response = grant
         .complete_on_loopback(&http_client, &listener, &pending_state)

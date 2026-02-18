@@ -75,6 +75,10 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     }
 
     /// Create a client credentials builder from a `httpmock` `MockServer`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the token endpoint returned from httpmock is not a valid URL.
     #[cfg(test)]
     pub fn builder_from_httpmock(
         server: &httpmock::MockServer,

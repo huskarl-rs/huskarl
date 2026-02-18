@@ -1,3 +1,12 @@
+//! Implements JWS signing keys on WASM using the WebCrypto/Subtle API.
+//!
+//! Currently, the following JWS algorithms are available:
+//!
+//! - Asymmetric (NIST elliptic curves)
+//!   - ES256
+//!   - ES384
+//!   - ES512
+
 mod helpers;
 
 use bytes::Bytes;
@@ -20,6 +29,7 @@ use helpers::{
     AsymmetricKeyGenParams, KeyUsage, generate_asymmetric_key, get_public_jwk, sign_with_key,
 };
 
+/// Represents JavaScript errors.
 #[derive(Debug, Snafu)]
 #[snafu(display("{}", error.as_string().unwrap_or_default()))]
 pub struct JsError {
@@ -27,32 +37,40 @@ pub struct JsError {
 }
 
 impl JsError {
-    pub fn new(error: JsValue) -> Self {
+    /// Create a new `JsError` from a `JsValue`.
+    pub(crate) fn new(error: JsValue) -> Self {
         Self { error }
     }
 }
 
-struct EcDsaPrivateKeyInner {
+struct AsymmetricPrivateJwsKeyInner {
     crypto_key: CryptoKey,
     algorithm: JwsAlgorithm,
     key_metadata: SigningKeyMetadata,
     jwk: jwk::PublicJwk,
 }
 
+/// A non-exportable asymmetric private key used to create JWS signatures.
+///
+/// Keys used here are not extractable by JavaScript.
 #[derive(Clone)]
-pub struct EcDsaPrivateKey {
-    inner: Arc<EcDsaPrivateKeyInner>,
+pub struct AsymmetricPrivateJwsKey {
+    inner: Arc<AsymmetricPrivateJwsKeyInner>,
 }
 
+/// Algorithm supported by this key.
 #[derive(Serialize, Clone, Copy)]
 pub enum JwsAlgorithm {
+    /// ES256
     Es256,
+    /// ES384
     Es384,
+    /// ES512
     Es512,
 }
 
 impl JwsAlgorithm {
-    pub fn named_curve(&self) -> &'static str {
+    fn named_curve(&self) -> &'static str {
         match self {
             Self::Es256 => "P-256",
             Self::Es384 => "P-384",
@@ -60,7 +78,7 @@ impl JwsAlgorithm {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    fn name(&self) -> &'static str {
         match self {
             Self::Es256 => "ES256",
             Self::Es384 => "ES384",
@@ -68,7 +86,7 @@ impl JwsAlgorithm {
         }
     }
 
-    pub fn hash_algorithm(&self) -> &'static str {
+    fn hash_algorithm(&self) -> &'static str {
         match self {
             Self::Es256 => "SHA-256",
             Self::Es384 => "SHA-384",
@@ -77,13 +95,25 @@ impl JwsAlgorithm {
     }
 }
 
+/// Errors that can occur when generating a private key.
 #[derive(Debug, Snafu)]
 pub enum GenerateError {
-    Generate { source: helpers::GenerateKeyError },
-    GetPublicJwk { source: helpers::GetPublicJwkError },
+    /// An error occurred when attempting to generate the key.
+    #[snafu(display("Error generating key"))]
+    Generate {
+        /// The underlying error.
+        source: helpers::GenerateKeyError,
+    },
+    /// An error occurred when attempting to get the JWK for the key.
+    #[snafu(display("Error getting JWK for private key"))]
+    GetPublicJwk {
+        /// The underlying error.
+        source: helpers::GetPublicJwkError,
+    },
 }
 
-impl EcDsaPrivateKey {
+impl AsymmetricPrivateJwsKey {
+    /// Creates a non-extractable private key which can sign material using the specified JWS algorithm.
     #[must_use]
     pub async fn generate(
         crypto: &SubtleCrypto,
@@ -116,10 +146,21 @@ impl EcDsaPrivateKey {
     }
 }
 
+/// Errors that can occur when signing.
 #[derive(Debug, Snafu)]
 pub enum SignError {
-    NoCrypto { source: GetCryptoError },
-    Sign { source: helpers::SignError },
+    /// Unable to find webcrypto support in environment.
+    #[snafu(display("Failed to find WebCrypto support"))]
+    NoCrypto {
+        /// The underlying error.
+        source: GetCryptoError,
+    },
+    /// Error occurred when attempting to sign.
+    #[snafu(display("Signing failed"))]
+    Sign {
+        /// The underlying error.
+        source: helpers::SignError,
+    },
 }
 
 impl crate::Error for SignError {
@@ -128,7 +169,7 @@ impl crate::Error for SignError {
     }
 }
 
-impl JwsSigningKey for EcDsaPrivateKey {
+impl JwsSigningKey for AsymmetricPrivateJwsKey {
     type Error = SignError;
 
     fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
@@ -152,7 +193,7 @@ impl JwsSigningKey for EcDsaPrivateKey {
     }
 }
 
-impl HasPublicKey for EcDsaPrivateKey {
+impl HasPublicKey for AsymmetricPrivateJwsKey {
     fn public_key_jwk(&self) -> &jwk::PublicJwk {
         &self.inner.jwk
     }

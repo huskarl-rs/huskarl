@@ -10,7 +10,7 @@ use crate::grant::{authorization_code::CompleteInput, core::TokenResponse};
 /// Errors that can occur when handling the authorization code callback with the loopback implementation.
 #[derive(Debug, Snafu)]
 pub enum LoopbackError<CompleteErr: crate::Error> {
-    ///
+    /// Invalid redirect URI in callback.
     #[snafu(display("Invalid redirect URI in callback state: {source}"))]
     InvalidRedirectUri {
         /// The underlying error.
@@ -53,11 +53,10 @@ pub enum LoopbackError<CompleteErr: crate::Error> {
 impl<CompleteErr: crate::Error + 'static> crate::Error for LoopbackError<CompleteErr> {
     fn is_retryable(&self) -> bool {
         match self {
-            LoopbackError::InvalidRedirectUri { .. } => false,
-            LoopbackError::Accept { .. } => true,
-            LoopbackError::ReadRequest { .. } => true,
-            LoopbackError::OAuthError { .. } => false,
-            LoopbackError::MissingParameter { .. } => false,
+            LoopbackError::InvalidRedirectUri { .. }
+            | LoopbackError::OAuthError { .. }
+            | LoopbackError::MissingParameter { .. } => false,
+            LoopbackError::Accept { .. } | LoopbackError::ReadRequest { .. } => true,
             LoopbackError::Complete { source } => source.is_retryable(),
         }
     }
@@ -161,7 +160,7 @@ fn parse_callback_params<E: crate::Error + 'static>(
 ) -> Result<CompleteInput, LoopbackError<E>> {
     // Parse the URL to extract query parameters
     // This parse shouldn't fail since we control the format, but we handle it gracefully
-    let url = Url::parse(&format!("http://localhost{}", path_and_query))
+    let url = Url::parse(&format!("http://localhost{path_and_query}"))
         .expect("localhost URL with path should always parse");
 
     let mut code: Option<String> = None;
@@ -237,10 +236,7 @@ async fn send_error_response(
     status: u16,
     message: &str,
 ) -> Result<(), std::io::Error> {
-    let body = format!(
-        "<html><body><h1>Error {}</h1><p>{}</p></body></html>",
-        status, message
-    );
+    let body = format!("<html><body><h1>Error {status}</h1><p>{message}</p></body></html>");
     let response = format!(
         "HTTP/1.1 {} {}\r\n\
          Content-Type: text/html; charset=utf-8\r\n\
@@ -277,6 +273,11 @@ fn get_status_text(status: u16) -> &'static str {
 /// If the provided port is `0`, then the port will be chosen from available
 /// ports on the machine. This is only usable with authorization servers which
 /// allow the port value to vary for loopback redirect URLs.
+///
+/// # Errors
+///
+/// Returns an error if the function was unable to bind to the requested port
+/// on either IPv4 or IPv6 localhost.
 pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
     // Try IPv4 first (more commonly supported), fall back to IPv6
     let listener = match TcpListener::bind(format!("127.0.0.1:{port}")).await {

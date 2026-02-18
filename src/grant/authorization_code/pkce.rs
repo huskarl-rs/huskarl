@@ -1,7 +1,7 @@
 //! A helper for generating PKCE (Proof Key for Code Exchange) pairs.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::TryRng;
+use rand::TryRng as _;
 use sha2::{Digest, Sha256};
 
 /// The PKCE pair generated using the `S256` method of RFC 7636.
@@ -17,7 +17,9 @@ impl Pkce {
     #[must_use]
     pub fn generate_s256_pair() -> Self {
         let mut verifier_bytes = [0u8; 32];
-        rand::rng().try_fill_bytes(&mut verifier_bytes);
+        rand::rng()
+            .try_fill_bytes(&mut verifier_bytes)
+            .unwrap_or_else(|e: std::convert::Infallible| match e {});
         let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
 
         let mut hasher = Sha256::new();
@@ -42,7 +44,7 @@ mod tests {
     /// Per RFC 7636, the code verifier MUST have a minimum length of 43 characters
     /// and a maximum length of 128 characters.
     ///
-    /// Reference: https://tools.ietf.org/html/rfc7636#section-4.1
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.1>
     #[test]
     fn test_rfc7636_4_1_verifier_length_validation() {
         // Generate multiple PKCE pairs and verify length constraints
@@ -52,13 +54,11 @@ mod tests {
             let verifier_len = pkce.verifier.len();
             assert!(
                 verifier_len >= 43,
-                "code_verifier length {} must be at least 43 characters (RFC 7636 §4.1)",
-                verifier_len
+                "code_verifier length {verifier_len} must be at least 43 characters (RFC 7636 §4.1)"
             );
             assert!(
                 verifier_len <= 128,
-                "code_verifier length {} must be at most 128 characters (RFC 7636 §4.1)",
-                verifier_len
+                "code_verifier length {verifier_len} must be at most 128 characters (RFC 7636 §4.1)"
             );
         }
     }
@@ -68,7 +68,7 @@ mod tests {
     /// Per RFC 7636, the code verifier MUST use characters from the set
     /// [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~" (unreserved characters)
     ///
-    /// Reference: https://tools.ietf.org/html/rfc7636#section-4.1
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.1>
     #[test]
     fn test_rfc7636_4_1_verifier_charset_validation() {
         for _ in 0..10 {
@@ -79,8 +79,7 @@ mod tests {
             for ch in pkce.verifier.chars() {
                 assert!(
                     ch.is_ascii_alphanumeric() || ch == '-' || ch == '_',
-                    "code_verifier contains invalid character '{}' (RFC 7636 §4.1)",
-                    ch
+                    "code_verifier contains invalid character '{ch}' (RFC 7636 §4.1)"
                 );
             }
         }
@@ -91,7 +90,7 @@ mod tests {
     /// The code verifier MUST be generated using cryptographically secure
     /// random bytes to prevent attacks.
     ///
-    /// Reference: https://tools.ietf.org/html/rfc7636#section-4.1
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.1>
     #[test]
     fn test_rfc7636_4_1_verifier_randomness() {
         // Generate multiple verifiers and ensure they're all different
@@ -115,7 +114,7 @@ mod tests {
     /// This test documents what would constitute an invalid verifier
     /// according to RFC 7636.
     ///
-    /// Reference: https://tools.ietf.org/html/rfc7636#section-4.1
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.1>
     #[test]
     fn test_rfc7636_4_1_reject_invalid_verifier() {
         // Test that our implementation generates valid verifiers
@@ -147,8 +146,7 @@ mod tests {
         for invalid in invalid_chars {
             assert!(
                 invalid.contains(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_'),
-                "'{}' contains invalid characters",
-                invalid
+                "'{invalid}' contains invalid characters"
             );
         }
     }
@@ -156,9 +154,9 @@ mod tests {
     /// Tests RFC 7636 §4.2 - Code Challenge Method S256
     ///
     /// For the S256 method:
-    /// code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
+    /// `code_challenge` = `BASE64URL(SHA256(ASCII(code_verifier)))`
     ///
-    /// Reference: https://tools.ietf.org/html/rfc7636#section-4.2
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.2>
     #[test]
     fn test_rfc7636_4_2_challenge_s256_method() {
         let pkce = Pkce::generate_s256_pair();
@@ -179,7 +177,7 @@ mod tests {
     ///
     /// The code challenge MUST be BASE64URL encoded (without padding).
     ///
-    /// Reference: https://tools.ietf.org/html/rfc7636#section-4.2
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.2>
     #[test]
     fn test_rfc7636_4_2_challenge_base64url_encoding() {
         let pkce = Pkce::generate_s256_pair();
@@ -216,12 +214,12 @@ mod tests {
 
     /// Tests RFC 7636 §4.2 - Code Challenge plain method (discouraged)
     ///
-    /// The plain method sets code_challenge = code_verifier.
+    /// The plain method sets `code_challenge` = `code_verifier`.
     /// This method is NOT RECOMMENDED and should only be used if S256 is not possible.
     ///
     /// Note: Our implementation only supports S256 (the secure method).
     ///
-    /// Reference: https://tools.ietf.org/html/rfc7636#section-4.2
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.2>
     #[test]
     fn test_rfc7636_4_2_challenge_plain_method_not_used() {
         let pkce = Pkce::generate_s256_pair();

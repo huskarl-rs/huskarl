@@ -99,6 +99,8 @@ pub(super) fn generate_random_value() -> String {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     let mut random_bytes = [0u8; RANDOM_VALUE_BYTES];
-    rand::rng().try_fill_bytes(&mut random_bytes);
+    rand::rng()
+        .try_fill_bytes(&mut random_bytes)
+        .unwrap_or_else(|e: std::convert::Infallible| match e {});
     URL_SAFE_NO_PAD.encode(random_bytes)
 }

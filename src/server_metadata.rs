@@ -58,8 +58,8 @@ pub struct AuthorizationServerMetadata {
     /// Array containing a list of client authentication methods supported by this revocation endpoint.
     #[serde(default = "default_auth_methods_supported")]
     pub revocation_endpoint_auth_methods_supported: Vec<String>,
-    /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the revocation endpoint for
-    /// the signature on the JWT [JWT] used to authenticate the client at the revocation endpoint for the
+    /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the revocation
+    /// endpoint for the signature on the JWT used to authenticate the client at the revocation endpoint for the
     /// "`private_key_jwt`" and "`client_secret_jwt`" authentication methods.
     pub revocation_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
     /// URL of the authorization server's OAuth 2.0 introspection endpoint.
@@ -67,10 +67,10 @@ pub struct AuthorizationServerMetadata {
     /// Array containing a list of client authentication methods supported by this introspection endpoint.
     pub introspection_endpoint_auth_methods_supported: Option<Vec<String>>,
     /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the introspection
-    /// endpoint for the signature on the JWT [JWT] used to authenticate the client at the introspection endpoint
+    /// endpoint for the signature on the JWT used to authenticate the client at the introspection endpoint
     /// for the "`private_key_jwt`" and "`client_secret_jwt`" authentication methods.
     pub introspection_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
-    /// Array containing a list of Proof Key for Code Exchange (PKCE) [RFC7636] code challenge methods supported
+    /// Array containing a list of Proof Key for Code Exchange (PKCE) code challenge methods supported
     /// by this authorization server.
     #[serde(default = "Vec::new")]
     pub code_challenge_methods_supported: Vec<String>,

@@ -279,7 +279,7 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(result, Err(JwsSignerError::MismatchedKeyMetadata)))
+        assert!(matches!(result, Err(JwsSignerError::MismatchedKeyMetadata)));
     }
 
     #[tokio::test]
@@ -294,6 +294,6 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(result, Err(JwsSignerError::MismatchedKeyMetadata)))
+        assert!(matches!(result, Err(JwsSignerError::MismatchedKeyMetadata)));
     }
 }
