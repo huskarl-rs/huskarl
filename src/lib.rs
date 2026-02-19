@@ -38,5 +38,3 @@ pub mod _documentation {
 pub mod secrecy {
     pub use ::secrecy::{ExposeSecret, SecretBox, SecretString};
 }
-
-pub use bytes::Bytes;
