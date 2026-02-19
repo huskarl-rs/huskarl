@@ -45,6 +45,9 @@ use crate::{
 pub struct JwtBearer<Sgn: JwsSigningKey> {
     /// The signer of the JWT.
     signer: Sgn,
+    /// Sets the subject, if different to the issuer.
+    #[builder(into)]
+    subject: Option<String>,
     /// Sets the audience value for the bearer token.
     audience: Audience,
     /// The lifetime of the JWT (as set in the `exp` claim).
@@ -102,7 +105,7 @@ impl<Sgn: JwsSigningKey> ClientAuthentication for JwtBearer<Sgn> {
         let jwt = SimpleJwt::builder()
             .audience(audience)
             .issuer(client_id)
-            .subject(client_id)
+            .subject(self.subject.as_deref().unwrap_or(client_id))
             .issued_now_expires_after(self.expires_after)
             .build();
 
