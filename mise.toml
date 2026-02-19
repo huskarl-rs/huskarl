@@ -1,4 +1,3 @@
 [tools]
 "cargo:cargo-docs-rs" = "latest"
 "cargo:cargo-llvm-cov" = "latest"
-"cargo:cargo-nextest" = "latest"
