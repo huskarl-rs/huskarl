@@ -5,7 +5,7 @@ use p384;
 use p384_default as p384;
 
 use bytes::Bytes;
-use p384::ecdsa::{Signature, SigningKey, signature::Signer};
+use p384::ecdsa::{Signature, SigningKey, VerifyingKey, signature::Signer};
 use p384::elliptic_curve::Generate as _;
 use p384::pkcs8::DecodePrivateKey as _;
 use secrecy::{ExposeSecret as _, SecretBox, SecretString};
@@ -48,34 +48,35 @@ pub struct Es384PrivateKey {
     inner: Arc<Es384PrivateKeyInner>,
 }
 
-impl From<SigningKey> for Es384PrivateKey {
-    fn from(value: SigningKey) -> Self {
-        let encoded_point = value.verifying_key().to_sec1_point(false);
-        let key = jwk::EcPublicKey::builder()
-            .crv("P-384")
-            .x(encoded_point
-                .x()
-                .expect("uncompressed point always has x coordinate")
-                .to_vec())
-            .y(encoded_point
-                .y()
-                .expect("uncompressed point always has y coordinate")
-                .to_vec())
-            .build();
+fn convert(private_key: SigningKey, key_id: Option<&str>) -> Es384PrivateKey {
+    let verifying_key = VerifyingKey::from(&private_key);
+    let encoded_point = verifying_key.to_sec1_point(false);
+    let key = jwk::EcPublicKey::builder()
+        .crv("P-384")
+        .x(encoded_point
+            .x()
+            .expect("uncompressed point always has x coordinate")
+            .to_vec())
+        .y(encoded_point
+            .y()
+            .expect("uncompressed point always has y coordinate")
+            .to_vec())
+        .build();
 
-        Self {
-            inner: Arc::new(Es384PrivateKeyInner {
-                signing_key: value,
-                key_metadata: SigningKeyMetadata::builder()
-                    .jws_algorithm(ALGORITHM)
-                    .build(),
-                jwk: jwk::PublicJwk::builder()
-                    .algorithm(ALGORITHM)
-                    .key_use(jwk::KeyUse::Sign)
-                    .key(key)
-                    .build(),
-            }),
-        }
+    Es384PrivateKey {
+        inner: Arc::new(Es384PrivateKeyInner {
+            signing_key: private_key,
+            key_metadata: SigningKeyMetadata::builder()
+                .jws_algorithm(ALGORITHM)
+                .maybe_key_id(key_id)
+                .build(),
+            jwk: jwk::PublicJwk::builder()
+                .algorithm(ALGORITHM)
+                .maybe_kid(key_id)
+                .key_use(jwk::KeyUse::Sign)
+                .key(key)
+                .build(),
+        }),
     }
 }
 
@@ -83,7 +84,13 @@ impl Es384PrivateKey {
     /// Generates an ES384 private key in memory.
     #[must_use]
     pub fn generate() -> Self {
-        p384::ecdsa::SigningKey::generate().into()
+        convert(p384::ecdsa::SigningKey::generate(), None)
+    }
+
+    /// Generates an ES384 private key in memory.
+    #[must_use]
+    pub fn generate_with_key_id(key_id: &str) -> Self {
+        convert(p384::ecdsa::SigningKey::generate(), Some(key_id))
     }
 
     /// Loads the private key from a DER binary secret.
@@ -92,12 +99,20 @@ impl Es384PrivateKey {
     ///
     /// The secret was not a valid DER formatted secret, or the secret
     /// could not be accessed.
-    pub async fn load_pkcs8_der<S: Secret<Output = SecretBox<[u8]>>>(
+    pub async fn load_pkcs8_der<
+        S: Secret<Output = SecretBox<[u8]>>,
+        F: FnOnce(Option<&str>) -> Option<String>,
+    >(
         secret: S,
+        key_id_from_secret_identity: F,
     ) -> Result<Self, Es384PrivateKeyLoadError<S::Error>> {
-        let der = secret.get_secret_value().await.context(SecretSnafu)?;
-        let key = SigningKey::from_pkcs8_der(der.expose_secret()).context(KeyDecodeSnafu)?;
-        Ok(key.into())
+        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
+        let key = SigningKey::from_pkcs8_der(secret_output.value.expose_secret())
+            .context(KeyDecodeSnafu)?;
+        Ok(convert(
+            key,
+            key_id_from_secret_identity(secret_output.identity.as_deref()).as_deref(),
+        ))
     }
 
     /// Loads the private key from a PKCS#8 PEM secret.
@@ -106,12 +121,20 @@ impl Es384PrivateKey {
     ///
     /// The secret was not a valid PKCS#8 PEM formatted string, or
     /// the secret could not be accessed.
-    pub async fn load_pkcs8_pem<S: Secret<Output = SecretString>>(
+    pub async fn load_pkcs8_pem<
+        S: Secret<Output = SecretString>,
+        F: FnOnce(Option<&str>) -> Option<String>,
+    >(
         secret: S,
+        key_id_from_secret_identity: F,
     ) -> Result<Self, Es384PrivateKeyLoadError<S::Error>> {
-        let pem = secret.get_secret_value().await.context(SecretSnafu)?;
-        let key = SigningKey::from_pkcs8_pem(pem.expose_secret()).context(KeyDecodeSnafu)?;
-        Ok(key.into())
+        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
+        let key = SigningKey::from_pkcs8_pem(secret_output.value.expose_secret())
+            .context(KeyDecodeSnafu)?;
+        Ok(convert(
+            key,
+            key_id_from_secret_identity(secret_output.identity.as_deref()).as_deref(),
+        ))
     }
 }
 

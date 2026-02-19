@@ -110,7 +110,11 @@ pub struct RsaPrivateKey {
     inner: Arc<RsaPrivateKeyInner>,
 }
 
-fn convert(private_key: rsa::RsaPrivateKey, algorithm: &RsaAlgorithm) -> RsaPrivateKey {
+fn convert(
+    private_key: rsa::RsaPrivateKey,
+    algorithm: &RsaAlgorithm,
+    key_id: Option<&str>,
+) -> RsaPrivateKey {
     let public_key = jwk::RsaPublicKey::builder()
         .e(private_key.e_bytes())
         .n(private_key.n_bytes())
@@ -136,6 +140,7 @@ fn convert(private_key: rsa::RsaPrivateKey, algorithm: &RsaAlgorithm) -> RsaPriv
             signing_key,
             key_metadata: SigningKeyMetadata::builder()
                 .jws_algorithm(algorithm.as_ref())
+                .maybe_key_id(key_id)
                 .build(),
             jwk: PublicJwk::builder()
                 .algorithm(algorithm.as_ref())
@@ -152,10 +157,11 @@ impl RsaPrivateKey {
     /// # Errors
     ///
     /// Should not return an error during normal operation.
-    pub fn generate(algorithm: &RsaAlgorithm) -> Result<Self, rsa::Error> {
+    pub fn generate(algorithm: &RsaAlgorithm, key_id: Option<&str>) -> Result<Self, rsa::Error> {
         Ok(convert(
             rsa::RsaPrivateKey::new(&mut rand::rng(), 2048)?,
             algorithm,
+            key_id,
         ))
     }
 
@@ -165,14 +171,22 @@ impl RsaPrivateKey {
     ///
     /// The secret was not a valid DER formatted secret, or the secret
     /// could not be accessed.
-    pub async fn load_pkcs8_der<S: Secret<Output = SecretBox<[u8]>>>(
+    pub async fn load_pkcs8_der<
+        S: Secret<Output = SecretBox<[u8]>>,
+        F: FnOnce(Option<&str>) -> Option<String>,
+    >(
         secret: S,
         algorithm: &RsaAlgorithm,
+        key_id_from_secret_identity: F,
     ) -> Result<Self, RsaPrivateKeyLoadError<S::Error>> {
-        let der = secret.get_secret_value().await.context(SecretSnafu)?;
-        let key =
-            rsa::RsaPrivateKey::from_pkcs8_der(der.expose_secret()).context(KeyDecodeSnafu)?;
-        Ok(convert(key, algorithm))
+        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
+        let key = rsa::RsaPrivateKey::from_pkcs8_der(secret_output.value.expose_secret())
+            .context(KeyDecodeSnafu)?;
+        Ok(convert(
+            key,
+            algorithm,
+            key_id_from_secret_identity(secret_output.identity.as_deref()).as_deref(),
+        ))
     }
 
     /// Loads the private key from a PKCS#8 PEM secret.
@@ -181,14 +195,22 @@ impl RsaPrivateKey {
     ///
     /// The secret was not a valid PKCS#8 PEM formatted string, or
     /// the secret could not be accessed.
-    pub async fn load_pkcs8_pem<S: Secret<Output = SecretString>>(
+    pub async fn load_pkcs8_pem<
+        S: Secret<Output = SecretString>,
+        F: FnOnce(Option<&str>) -> Option<String>,
+    >(
         secret: S,
         algorithm: &RsaAlgorithm,
+        key_id_from_secret_identity: F,
     ) -> Result<Self, RsaPrivateKeyLoadError<S::Error>> {
-        let pem = secret.get_secret_value().await.context(SecretSnafu)?;
-        let key =
-            rsa::RsaPrivateKey::from_pkcs8_pem(pem.expose_secret()).context(KeyDecodeSnafu)?;
-        Ok(convert(key, algorithm))
+        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
+        let key = rsa::RsaPrivateKey::from_pkcs8_pem(secret_output.value.expose_secret())
+            .context(KeyDecodeSnafu)?;
+        Ok(convert(
+            key,
+            algorithm,
+            key_id_from_secret_identity(secret_output.identity.as_deref()).as_deref(),
+        ))
     }
 }
 

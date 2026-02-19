@@ -5,7 +5,7 @@ use snafu::prelude::*;
 use crate::{
     platform::MaybeSendSync,
     secrecy::SecretString,
-    secrets::{DecodingError, Secret, SecretDecoder, encodings::StringEncoding},
+    secrets::{DecodingError, Secret, SecretDecoder, SecretOutput, encodings::StringEncoding},
 };
 
 /// Retrieves secrets from environment variables with configurable encoding.
@@ -53,8 +53,11 @@ impl<O: Clone + MaybeSendSync> Secret for EnvVarSecret<O> {
     type Output = O;
     type Error = Infallible;
 
-    async fn get_secret_value(&self) -> Result<Self::Output, Self::Error> {
-        Ok(self.value.clone())
+    async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
+        Ok(SecretOutput {
+            value: self.value.clone(),
+            identity: None,
+        })
     }
 }
 

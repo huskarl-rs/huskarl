@@ -78,11 +78,12 @@ impl<Sec: Secret<Output = SecretString>> ClientAuthentication for ClientSecret<S
 
         match select_method(allowed_methods) {
             ClientSecretMethod::Basic => {
-                Self::basic_authentication_params(client_id, &client_secret)
+                Self::basic_authentication_params(client_id, &client_secret.value)
             }
-            ClientSecretMethod::Post => {
-                Ok(Self::post_authentication_params(client_id, client_secret))
-            }
+            ClientSecretMethod::Post => Ok(Self::post_authentication_params(
+                client_id,
+                client_secret.value,
+            )),
         }
     }
 }

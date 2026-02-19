@@ -62,19 +62,26 @@ impl HmacKey {
     /// # Errors
     ///
     /// The secret could not be accessed.
-    pub async fn load_bytes<S: Secret<Output = SecretBox<[u8]>>>(
+    pub async fn load_bytes<
+        S: Secret<Output = SecretBox<[u8]>>,
+        F: FnOnce(Option<&str>) -> Option<String>,
+    >(
         secret: S,
         algorithm: HmacAlgorithm,
+        key_id_from_secret_identity: F,
     ) -> Result<Self, S::Error> {
-        let slice = secret.get_secret_value().await?;
+        let secret_output = secret.get_secret_value().await?;
 
         let metadata = SigningKeyMetadata::builder()
             .jws_algorithm(algorithm.as_ref())
+            .maybe_key_id(key_id_from_secret_identity(
+                secret_output.identity.as_deref(),
+            ))
             .build();
 
         Ok(Self {
             inner: Arc::new(HmacKeyInner {
-                key: slice,
+                key: secret_output.value,
                 algorithm,
                 metadata,
             }),

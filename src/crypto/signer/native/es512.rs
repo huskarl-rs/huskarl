@@ -54,35 +54,35 @@ pub struct Es512PrivateKey {
     inner: Arc<Es512PrivateKeyInner>,
 }
 
-impl From<SigningKey> for Es512PrivateKey {
-    fn from(value: SigningKey) -> Self {
-        let verifying_key = VerifyingKey::from(&value);
-        let encoded_point = verifying_key.to_sec1_point(false);
-        let key = jwk::EcPublicKey::builder()
-            .crv("P-521")
-            .x(encoded_point
-                .x()
-                .expect("uncompressed point always has x coordinate")
-                .to_vec())
-            .y(encoded_point
-                .y()
-                .expect("uncompressed point always has y coordinate")
-                .to_vec())
-            .build();
+fn convert(private_key: SigningKey, key_id: Option<&str>) -> Es512PrivateKey {
+    let verifying_key = VerifyingKey::from(&private_key);
+    let encoded_point = verifying_key.to_sec1_point(false);
+    let key = jwk::EcPublicKey::builder()
+        .crv("P-521")
+        .x(encoded_point
+            .x()
+            .expect("uncompressed point always has x coordinate")
+            .to_vec())
+        .y(encoded_point
+            .y()
+            .expect("uncompressed point always has y coordinate")
+            .to_vec())
+        .build();
 
-        Self {
-            inner: Arc::new(Es512PrivateKeyInner {
-                signing_key: value,
-                key_metadata: SigningKeyMetadata::builder()
-                    .jws_algorithm(ALGORITHM)
-                    .build(),
-                jwk: jwk::PublicJwk::builder()
-                    .algorithm(ALGORITHM)
-                    .key_use(jwk::KeyUse::Sign)
-                    .key(key)
-                    .build(),
-            }),
-        }
+    Es512PrivateKey {
+        inner: Arc::new(Es512PrivateKeyInner {
+            signing_key: private_key,
+            key_metadata: SigningKeyMetadata::builder()
+                .jws_algorithm(ALGORITHM)
+                .maybe_key_id(key_id)
+                .build(),
+            jwk: jwk::PublicJwk::builder()
+                .algorithm(ALGORITHM)
+                .maybe_kid(key_id)
+                .key_use(jwk::KeyUse::Sign)
+                .key(key)
+                .build(),
+        }),
     }
 }
 
@@ -90,7 +90,13 @@ impl Es512PrivateKey {
     /// Generates an ES512 private key in memory.
     #[must_use]
     pub fn generate() -> Self {
-        p521::ecdsa::SigningKey::generate().into()
+        convert(p521::ecdsa::SigningKey::generate(), None)
+    }
+
+    /// Generates an ES512 private key in memory.
+    #[must_use]
+    pub fn generate_with_key_id(key_id: &str) -> Self {
+        convert(p521::ecdsa::SigningKey::generate(), Some(key_id))
     }
 
     /// Loads the private key from a DER binary secret.
@@ -99,12 +105,20 @@ impl Es512PrivateKey {
     ///
     /// The secret was not a valid DER formatted secret, or the secret
     /// could not be accessed.
-    pub async fn load_pkcs8_der<S: Secret<Output = SecretBox<[u8]>>>(
+    pub async fn load_pkcs8_der<
+        S: Secret<Output = SecretBox<[u8]>>,
+        F: FnOnce(Option<&str>) -> Option<String>,
+    >(
         secret: S,
+        key_id_from_secret_identity: F,
     ) -> Result<Self, Es512PrivateKeyLoadError<S::Error>> {
-        let der = secret.get_secret_value().await.context(SecretSnafu)?;
-        let key = SigningKey::from_pkcs8_der(der.expose_secret()).context(KeyDecodeSnafu)?;
-        Ok(key.into())
+        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
+        let key = SigningKey::from_pkcs8_der(secret_output.value.expose_secret())
+            .context(KeyDecodeSnafu)?;
+        Ok(convert(
+            key,
+            key_id_from_secret_identity(secret_output.identity.as_deref()).as_deref(),
+        ))
     }
 
     /// Loads the private key from a PKCS#8 PEM secret.
@@ -113,12 +127,20 @@ impl Es512PrivateKey {
     ///
     /// The secret was not a valid PKCS#8 PEM formatted string, or
     /// the secret could not be accessed.
-    pub async fn load_pkcs8_pem<S: Secret<Output = SecretString>>(
+    pub async fn load_pkcs8_pem<
+        S: Secret<Output = SecretString>,
+        F: FnOnce(Option<&str>) -> Option<String>,
+    >(
         secret: S,
+        key_id_from_secret_identity: F,
     ) -> Result<Self, Es512PrivateKeyLoadError<S::Error>> {
-        let pem = secret.get_secret_value().await.context(SecretSnafu)?;
-        let key = SigningKey::from_pkcs8_pem(pem.expose_secret()).context(KeyDecodeSnafu)?;
-        Ok(key.into())
+        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
+        let key = SigningKey::from_pkcs8_pem(secret_output.value.expose_secret())
+            .context(KeyDecodeSnafu)?;
+        Ok(convert(
+            key,
+            key_id_from_secret_identity(secret_output.identity.as_deref()).as_deref(),
+        ))
     }
 }
 
