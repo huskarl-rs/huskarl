@@ -1034,8 +1034,8 @@ dependencies = [
  "httpmock",
  "huskarl",
  "huskarl-core 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "huskarl-crypto-native 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "huskarl-crypto-webcrypto 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "huskarl-crypto-native",
+ "huskarl-crypto-webcrypto",
  "huskarl-macros 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "huskarl-reqwest",
  "huskarl-resource-server 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1114,25 +1114,6 @@ dependencies = [
 [[package]]
 name = "huskarl-crypto-native"
 version = "0.1.0"
-dependencies = [
- "ed25519-dalek",
- "hmac",
- "huskarl-core 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "p256",
- "p384",
- "pkcs8",
- "rand 0.10.0",
- "rsa",
- "secrecy",
- "sha2",
- "signature",
- "snafu",
- "subtle",
-]
-
-[[package]]
-name = "huskarl-crypto-native"
-version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "914262416d5e55bfe261637aa8a0ed9a727cfd595f6f88612565fd5b9610436b"
 dependencies = [
@@ -1149,20 +1130,6 @@ dependencies = [
  "signature",
  "snafu",
  "subtle",
-]
-
-[[package]]
-name = "huskarl-crypto-webcrypto"
-version = "0.1.0"
-dependencies = [
- "huskarl-core 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde",
- "serde-wasm-bindgen",
- "serde_bytes",
- "snafu",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -1233,8 +1200,8 @@ dependencies = [
  "http",
  "httpmock",
  "huskarl-core 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "huskarl-crypto-native 0.1.0",
- "huskarl-crypto-webcrypto 0.1.0",
+ "huskarl-crypto-native",
+ "huskarl-crypto-webcrypto",
  "huskarl-reqwest",
  "metrics",
  "serde",
@@ -1260,8 +1227,8 @@ dependencies = [
  "gloo-timers",
  "http",
  "huskarl-core 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "huskarl-crypto-native 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "huskarl-crypto-webcrypto 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "huskarl-crypto-native",
+ "huskarl-crypto-webcrypto",
  "serde",
  "serde_json",
  "sha2",
