@@ -72,6 +72,15 @@ jobs:
       - run: cargo +nightly update -Z minimal-versions
       - run: cargo build --workspace
 
+  semver:
+    name: Semver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+
   integration:
     name: Integration (Keycloak)
     runs-on: ubuntu-latest
