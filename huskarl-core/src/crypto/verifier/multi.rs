@@ -142,11 +142,13 @@ impl MultiKeyVerifier {
                 // NoMatchingKey means the verifier didn't attempt verification —
                 // it is the implicit fallback, not a result to prefer over others.
                 Err(VerifyError::NoMatchingKey) => {}
-                Err(e) => if e.is_retryable() {
-                    last_retryable = Some(e);
-                } else {
-                    last_non_retryable = Some(e);
-                },
+                Err(e) => {
+                    if e.is_retryable() {
+                        last_retryable = Some(e);
+                    } else {
+                        last_non_retryable = Some(e);
+                    }
+                }
             }
         }
 

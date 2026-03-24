@@ -48,7 +48,11 @@ impl<Sgn: JwsSigningKey + HasPublicKey + Clone> AuthorizationServerDPoP for DPoP
     }
 
     async fn proof(&self, method: &Method, uri: &Uri) -> Result<Option<SecretString>, Self::Error> {
-        let nonce = self.nonce.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+        let nonce = self
+            .nonce
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         sign_proof(&self.signer, method, uri, None, nonce).await
     }
 

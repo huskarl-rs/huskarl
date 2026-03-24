@@ -102,7 +102,10 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> RefreshingVerif
         let now = Instant::now();
 
         {
-            let ts = self.timestamps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let ts = self
+                .timestamps
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if now
                 .checked_duration_since(ts.last_refreshed)
                 .is_some_and(|elapsed| elapsed < self.ttl)
@@ -127,12 +130,18 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> RefreshingVerif
 
         if let Ok(new_verifier) = self.factory.call().await {
             self.verifier.store(Arc::new(new_verifier));
-            let mut ts = self.timestamps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut ts = self
+                .timestamps
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             ts.last_refreshed = Instant::now();
             ts.last_failed_refresh = None;
             true
         } else {
-            let mut ts = self.timestamps.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut ts = self
+                .timestamps
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             ts.last_failed_refresh = Some(Instant::now());
             false
         }
