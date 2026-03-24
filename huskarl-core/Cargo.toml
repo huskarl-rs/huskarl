@@ -31,7 +31,7 @@ hex = { version = "0.4", default-features = false, features = ["std"] }
 http = { version = "1", default-features = false, features = ["std"] }
 rand = { workspace = true }
 reqwest = { version = "0.13", default-features = false, optional = true }
-secrecy = { version = "0.10", default-features = false }
+secrecy = { version = "0.10.3", default-features = false }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true, default-features = false }

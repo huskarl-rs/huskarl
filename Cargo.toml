@@ -10,7 +10,6 @@ bon = { version = "3.9", default-features = false, features = [
   "implied-bounds",
 ] }
 form_urlencoded = { version = "1", default-features = false, features = ["std"] }
-secrecy = { version = "0.10", default-features = false }
 rand = { version = "0.10", default-features = false, features = ["std", "sys_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
