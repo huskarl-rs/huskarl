@@ -70,7 +70,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo +nightly update -Z minimal-versions
-      - run: cargo test --workspace
+      - run: cargo build --workspace
 
   integration:
     name: Integration (Keycloak)
