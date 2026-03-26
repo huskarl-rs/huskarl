@@ -9,13 +9,12 @@ use snafu::prelude::*;
 
 use crate::Error;
 use crate::crypto::signer::error::{MismatchedKeyMetadataSnafu, UnderlyingSnafu};
-use crate::jwk::PublicJwk;
 use crate::platform::{MaybeSend, MaybeSendSync};
 
 /// Key metadata.
 #[derive(Debug, Clone, Builder, PartialEq)]
 pub struct SigningKeyMetadata {
-    /// Returns the JWS algorithm identifier.
+    /// The JWS algorithm identifier.
     ///
     /// This is specifically for use in the JWT `alg` header parameter.
     ///
@@ -24,7 +23,7 @@ pub struct SigningKeyMetadata {
     /// polymorphic algorithm when needed.
     #[builder(into)]
     pub jws_algorithm: String,
-    /// Returns the key ID of the signer.
+    /// The key ID of the signer.
     ///
     /// This is specifically for use in the JWT `kid` header parameter.
     ///
@@ -82,12 +81,6 @@ pub trait JwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
             }
         }
     }
-}
-
-/// Trait for asymmetric keys that provides its public key in JWK (RFC 7517) format.
-pub trait HasPublicKey: MaybeSendSync {
-    /// Returns the public key for this asymmetric key as a JSON Web Key.
-    fn public_key_jwk(&self) -> &PublicJwk;
 }
 
 #[cfg(all(
