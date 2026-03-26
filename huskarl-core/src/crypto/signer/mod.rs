@@ -1,10 +1,9 @@
 //! Cryptographic signing key traits.
 
+mod asymmetric;
 mod error;
-mod r#trait;
+mod symmetric;
 
+pub use asymmetric::boxed::BoxedAsymmetricJwsSigningKey;
 pub use error::JwsSignerError;
-pub use r#trait::{
-    BoxedAsymmetricJwsSigningKey, BoxedJwsSigningKey, HasPublicKey, JwsSigningKey,
-    SigningKeyMetadata,
-};
+pub use symmetric::{HasPublicKey, JwsSigningKey, SigningKeyMetadata, boxed::BoxedJwsSigningKey};
