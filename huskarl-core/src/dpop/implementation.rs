@@ -11,7 +11,7 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    crypto::signer::{BoxedAsymmetricJwsSigningKey, HasPublicKey, JwsSigningKey},
+    crypto::signer::{AsymmetricJwsSigningKey, BoxedAsymmetricJwsSigningKey, JwsSigningKey},
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     jwt::{JwsSerializationError, Jwt},
     secrets::SecretString,
@@ -23,16 +23,16 @@ type Origin = (Option<Scheme>, Option<String>, Option<u16>);
 
 /// This respresents a grant with the ability to create DPoP-bound tokens and sign requests with them.
 #[derive(Debug, Clone, Builder)]
-pub struct DPoP<Sgn: JwsSigningKey + HasPublicKey = BoxedAsymmetricJwsSigningKey> {
+pub struct DPoP<Sgn: AsymmetricJwsSigningKey = BoxedAsymmetricJwsSigningKey> {
     signer: Sgn,
-    #[builder(skip = signer.public_key_jwk().thumbprint())]
+    #[builder(skip = signer.asymmetric_key_metadata().thumbprint())]
     jwk_thumbprint: Option<String>,
     #[builder(skip)]
     nonce: Arc<Mutex<Option<Arc<String>>>>,
 }
 
-impl<Sgn: JwsSigningKey + HasPublicKey + Clone> AuthorizationServerDPoP for DPoP<Sgn> {
-    type Error = JwsSerializationError<<Sgn as JwsSigningKey>::Error>;
+impl<Sgn: AsymmetricJwsSigningKey> AuthorizationServerDPoP for DPoP<Sgn> {
+    type Error = JwsSerializationError<<Sgn as AsymmetricJwsSigningKey>::Error>;
     type ResourceServerDPoP = ResourceDPoP<Sgn>;
 
     fn jwk_thumbprint(&self) -> Option<&str> {
@@ -63,14 +63,14 @@ impl<Sgn: JwsSigningKey + HasPublicKey + Clone> AuthorizationServerDPoP for DPoP
 
 /// This respresents the ability to create proofs for resource servers from DPoP-bound access tokens.
 #[derive(Debug, Clone, Builder)]
-pub struct ResourceDPoP<Sgn: JwsSigningKey + HasPublicKey> {
+pub struct ResourceDPoP<Sgn: AsymmetricJwsSigningKey> {
     signer: Sgn,
     #[builder(default)]
     nonces: Arc<RwLock<HashMap<Origin, Arc<String>>>>,
 }
 
-impl<Sgn: JwsSigningKey + HasPublicKey> ResourceServerDPoP for ResourceDPoP<Sgn> {
-    type Error = JwsSerializationError<<Sgn as JwsSigningKey>::Error>;
+impl<Sgn: AsymmetricJwsSigningKey> ResourceServerDPoP for ResourceDPoP<Sgn> {
+    type Error = JwsSerializationError<Sgn::Error>;
 
     fn update_nonce(&self, uri: &Uri, nonce: String) {
         let origin = origin_from_uri(uri);
@@ -105,7 +105,7 @@ fn origin_from_uri(uri: &Uri) -> Origin {
     )
 }
 
-async fn sign_proof<Sgn: JwsSigningKey + HasPublicKey>(
+async fn sign_proof<Sgn: AsymmetricJwsSigningKey>(
     signer: &Sgn,
     htm: &Method,
     htu: &Uri,
@@ -134,7 +134,7 @@ async fn sign_proof<Sgn: JwsSigningKey + HasPublicKey>(
     let jwt = Jwt::builder()
         .typ("dpop+jwt")
         .issued_now_expires_after(Duration::from_secs(60))
-        .jwk(signer.public_key_jwk().clone())
+        .jwk(signer.asymmetric_key_metadata().public_key.clone())
         .extra_claims(extra_claims)
         .build();
 

@@ -2,8 +2,7 @@ use std::{borrow::Cow, pin::Pin, sync::Arc};
 
 use crate::{
     BoxedError,
-    crypto::signer::{HasPublicKey, JwsSigningKey, SigningKeyMetadata},
-    jwk::PublicJwk,
+    crypto::signer::asymmetric::{AsymmetricJwsSigningKey, AsymmetricSigningKeyMetadata},
     platform::{MaybeSendFuture, MaybeSendSync},
 };
 
@@ -14,18 +13,18 @@ pub struct BoxedAsymmetricJwsSigningKey {
 }
 
 impl BoxedAsymmetricJwsSigningKey {
-    /// Create a boxed signing key from a non-boxed.
-    pub fn new<Sgn: JwsSigningKey + HasPublicKey + std::fmt::Debug + 'static>(signer: Sgn) -> Self {
+    /// Create a boxed asymmetric signing key from a non-boxed.
+    pub fn new<Sgn: AsymmetricJwsSigningKey + 'static>(signer: Sgn) -> Self {
         Self {
             inner: Arc::new(signer),
         }
     }
 }
 
-/// Boxed trait for signing keys that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
+/// Boxed trait for asymmetric signing keys that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
 trait DynAsymmetricJwsSigningKey: std::fmt::Debug + MaybeSendSync {
-    /// Returns metadata about the key used by this signer.
-    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata>;
+    /// Returns metadata about the asymmetric key used by this signer.
+    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata>;
 
     /// Asynchronously signs the given input data and returns the signature.
     ///
@@ -35,49 +34,37 @@ trait DynAsymmetricJwsSigningKey: std::fmt::Debug + MaybeSendSync {
     /// # Errors
     ///
     /// Returns an error if the signing operation fails.
-    fn sign_unchecked<'a>(
+    fn sign_asymmetric_unchecked<'a>(
         &'a self,
         input: &'a [u8],
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>>;
-
-    fn public_key_jwk(&self) -> &PublicJwk;
 }
 
-impl<Sgn: std::fmt::Debug + JwsSigningKey + HasPublicKey> DynAsymmetricJwsSigningKey for Sgn {
-    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
-        self.key_metadata()
+impl<Sgn: AsymmetricJwsSigningKey> DynAsymmetricJwsSigningKey for Sgn {
+    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata> {
+        self.asymmetric_key_metadata()
     }
 
-    fn sign_unchecked<'a>(
+    fn sign_asymmetric_unchecked<'a>(
         &'a self,
         input: &'a [u8],
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>> {
         Box::pin(async {
-            self.sign_unchecked(input)
+            self.sign_asymmetric_unchecked(input)
                 .await
                 .map_err(BoxedError::from_err)
         })
     }
-
-    fn public_key_jwk(&self) -> &PublicJwk {
-        self.public_key_jwk()
-    }
 }
 
-impl JwsSigningKey for BoxedAsymmetricJwsSigningKey {
+impl AsymmetricJwsSigningKey for BoxedAsymmetricJwsSigningKey {
     type Error = BoxedError;
 
-    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
-        self.inner.key_metadata()
+    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata> {
+        self.inner.asymmetric_key_metadata()
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        self.inner.sign_unchecked(input).await
-    }
-}
-
-impl HasPublicKey for BoxedAsymmetricJwsSigningKey {
-    fn public_key_jwk(&self) -> &PublicJwk {
-        self.inner.public_key_jwk()
+    async fn sign_asymmetric_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
+        self.inner.sign_asymmetric_unchecked(input).await
     }
 }
