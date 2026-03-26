@@ -51,7 +51,7 @@ pub struct JwtBearer<Sgn: JwsSigningKey> {
     /// Sets the audience value for the bearer token.
     audience: Audience,
     /// The lifetime of the JWT (as set in the `exp` claim).
-    #[builder(default = Duration::from_secs(60))]
+    #[builder(default = Duration::from_mins(1))]
     expires_after: Duration,
 }
 

@@ -133,7 +133,7 @@ async fn sign_proof<Sgn: AsymmetricJwsSigningKey>(
 
     let jwt = Jwt::builder()
         .typ("dpop+jwt")
-        .issued_now_expires_after(Duration::from_secs(60))
+        .issued_now_expires_after(Duration::from_mins(1))
         .jwk(signer.asymmetric_key_metadata().public_key.clone())
         .extra_claims(extra_claims)
         .build();
