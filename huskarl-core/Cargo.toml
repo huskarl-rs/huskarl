@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-core"
-version = "0.2.0-pre.0"
+version = "0.2.0-pre.1"
 edition = "2024"
 rust-version = "1.92"
 description = "Base library for huskarl (OAuth2 client) ecosystem."
@@ -39,22 +39,23 @@ snafu = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 url = { workspace = true, optional = true }
 
-### Dependencies available on all platforms except WASM-not-WASI
-[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
+### Dependencies available on native and WASI (not browser WASM)
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 tokio = { version = "1", default-features = false, features = ["time"] }
 
-### Dependencies available on WASM-not-WASI
-[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
+### Dependencies available on browser WASM (wasm32-unknown-unknown)
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
 gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false, features = ["serde"] }
 
 [dev-dependencies]
 
-[target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
-[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dev-dependencies]
+### Integration tests require multi-threaded runtime and network access.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
 httpmock = "0.8.3"
