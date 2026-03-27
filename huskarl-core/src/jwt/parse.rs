@@ -80,8 +80,8 @@ mod tests {
     use crate::jwt::{ParsedJws, parse_compact_jws};
 
     /// Tests example from
-    #[tokio::test]
-    async fn test_rfc_7519_example() {
+    #[test]
+    fn test_rfc_7519_example() {
         #[derive(Debug, Clone, Deserialize, PartialEq)]
         struct TestClaims {
             #[serde(rename = "http://example.com/is_root")]

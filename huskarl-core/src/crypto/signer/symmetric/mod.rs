@@ -83,10 +83,7 @@ pub trait JwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
     }
 }
 
-#[cfg(all(
-    test,
-    not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))
-))]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use std::{borrow::Cow, convert::Infallible};
 
