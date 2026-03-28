@@ -130,7 +130,7 @@ impl<
         /// validator configured, [`IntrospectionCallError::UnexpectedJwtResponse`] is returned.
         ///
         /// [`JwtValidator`]: crate::core::token::validator::JwtValidator
-        #[builder(default = JwksSource::builder().http_client(http_client.clone()).build())]
+        #[builder(default = Arc::new(JwksSource::builder().http_client(http_client.clone()).build()))]
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
         /// The HTTP header to extract the access token from.
         ///

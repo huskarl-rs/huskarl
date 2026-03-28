@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use base64::prelude::*;
+use huskarl_core::secrets::SecretString;
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, prelude::*};
@@ -14,12 +15,9 @@ use crate::{
     core::{
         crypto::verifier::{CreateVerifierError, JwsVerifierPlatform},
         dpop::{hash_access_token_for_dpop, normalize_uri_for_dpop},
+        jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator},
         jwt::{ConfirmationClaim, JwsParseError, parse_compact_jws},
         platform::Duration,
-        token::{
-            AccessToken,
-            validator::{ClaimCheck, JwtValidationError, JwtValidator},
-        },
     },
     validator::{
         error::{
@@ -62,7 +60,7 @@ pub(crate) fn check_mtls_binding(
 pub(crate) async fn check_token_binding(
     token_type: TokenType,
     cnf: Option<&ConfirmationClaim>,
-    access_token: &AccessToken,
+    access_token: &SecretString,
     dpop_binding_checker: &DPoPBindingChecker,
     require_mtls: bool,
     headers: &http::HeaderMap,
@@ -145,7 +143,7 @@ impl DPoPBindingChecker {
     pub(crate) async fn check(
         &self,
         cnf: Option<&ConfirmationClaim>,
-        access_token: &AccessToken,
+        access_token: &SecretString,
         dpop_proof: &str,
         method: &http::Method,
         uri: &http::Uri,
@@ -182,7 +180,7 @@ impl DPoPBindingChecker {
             .await
             .context(InvalidProofSnafu)?;
 
-        let access_token_hash = hash_access_token_for_dpop(access_token);
+        let access_token_hash = hash_access_token_for_dpop(access_token.expose_secret());
 
         match (
             validated_proof.claims.as_ref().and_then(|c| c.htm.as_ref()),

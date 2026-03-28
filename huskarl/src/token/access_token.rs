@@ -1,9 +1,9 @@
+use crate::core::{
+    platform::{Duration, SystemTime},
+    secrets::SecretString,
+};
 use http::HeaderValue;
 use http::header::InvalidHeaderValue;
-
-use crate::platform::{Duration, SystemTime};
-
-use crate::secrets::SecretString;
 
 /// Represents an access token, either a `DPoP` token or a `Bearer` token.
 #[derive(Debug, Clone)]
@@ -15,12 +15,12 @@ pub enum AccessToken {
 }
 
 impl AccessToken {
-    /// Exposes the token as a [`str`].
+    /// Exposes the token as a [`SecretString`].
     #[must_use]
-    pub fn expose_token(&self) -> &str {
+    pub fn token(&self) -> &SecretString {
         match self {
-            AccessToken::Dpop(token) => token.expose_token(),
-            AccessToken::Bearer(token) => token.expose_token(),
+            AccessToken::Dpop(token) => &token.token,
+            AccessToken::Bearer(token) => &token.token,
         }
     }
 
@@ -117,10 +117,10 @@ impl DpopAccessToken {
         &self.jkt
     }
 
-    /// Exposes the token as a [`str`].
+    /// Returns the token as a [`SecretString`].
     #[must_use]
-    pub fn expose_token(&self) -> &str {
-        self.token.expose_secret()
+    pub fn token(&self) -> &SecretString {
+        &self.token
     }
 
     /// Exposes the token as a [`HeaderValue`], suitable for use in an `Authorization` header.

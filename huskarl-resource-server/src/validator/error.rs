@@ -1,5 +1,5 @@
 use http::header::ToStrError;
-use huskarl_core::token::validator::JwtValidationError;
+use huskarl_core::jwt::validator::JwtValidationError;
 use snafu::prelude::*;
 
 use crate::{

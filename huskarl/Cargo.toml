@@ -29,8 +29,8 @@ authorization-flow-loopback = ["dep:url", "tokio/net", "tokio/io-util"]
 url = ["huskarl-core/url"]
 
 [dependencies]
-huskarl-core = { version = "0.1" }
-huskarl-macros = { version = "0.1" }
+huskarl-core = { workspace = true }
+huskarl-macros = { workspace = true }
 
 arc-swap = "1"
 base64 = { version = "0.22", default-features = false, features = ["std"] }
@@ -50,26 +50,38 @@ url = { workspace = true, optional = true }
 
 ### Dependencies available on all platforms except WASM-not-WASI
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
-huskarl-crypto-native = { version = "0.1", optional = true }
+huskarl-crypto-native = { workspace = true, optional = true }
 
 ### Dependencies available on WASM-not-WASI
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
-huskarl-crypto-webcrypto = { version = "0.1", optional = true }
+huskarl-crypto-webcrypto = { workspace = true, optional = true }
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
 gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false }
 
+[[example]]
+name = "authorization_code"
+required-features = ["authorization-flow-loopback"]
+
+[[example]]
+name = "basic_dpop"
+required-features = ["authorization-flow-loopback"]
+
+[[example]]
+name = "client_credentials"
+required-features = ["authorization-flow-loopback"]
+
 [dev-dependencies]
-#huskarl = { version = "0.1", default-features = true }
-huskarl-crypto-native = { version = "0.1" }
-huskarl-resource-server = { version = "0.1", default-features = true }
+huskarl = { workspace = true, default-features = true }
+huskarl-crypto-native = { workspace = true }
+huskarl-resource-server = { workspace = true, default-features = true }
 
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
-[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dev-dependencies]
-huskarl = { path = ".", features = ["authorization-flow-loopback"] }
-huskarl-reqwest = { version = "0.1", features = ["rustls-tls"] }
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+huskarl = { workspace = true, features = ["authorization-flow-loopback"] }
+huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
 huskarl-testkit = { path = "../integration/huskarl-testkit" }
 pem = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

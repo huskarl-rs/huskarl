@@ -50,7 +50,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     println!(
         "Access token: {}",
-        token_response.access_token.expose_token()
+        token_response.access_token().token().expose_secret()
     );
 
     Ok(())

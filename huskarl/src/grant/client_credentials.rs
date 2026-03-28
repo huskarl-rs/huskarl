@@ -107,11 +107,12 @@ pub struct ClientCredentialsGrantForm {
     resource: Option<Vec<String>>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use std::sync::LazyLock;
 
     use httpmock::MockServer;
+    use crate::token::AccessToken;
     use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
     use huskarl_reqwest::ReqwestClient;
     use serde_json::json;
@@ -192,8 +193,12 @@ mod tests {
 
         mock.assert();
         let response = response.unwrap();
-        assert_eq!(response.token_type, "Bearer");
-        assert_eq!(response.access_token.expose_token(), "access_token");
+
+        assert!(matches!(response.access_token(), AccessToken::Bearer(_)));
+        assert_eq!(
+            response.access_token().token().expose_secret(),
+            "access_token"
+        );
     }
 
     #[tokio::test]
@@ -239,7 +244,11 @@ mod tests {
 
         mock.assert();
         let response = response.unwrap();
-        assert_eq!(response.token_type, "DPoP");
-        assert_eq!(response.access_token.expose_token(), "access_token");
+
+        assert!(matches!(response.access_token(), AccessToken::Dpop(_)));
+        assert_eq!(
+            response.access_token().token().expose_secret(),
+            "access_token"
+        );
     }
 }

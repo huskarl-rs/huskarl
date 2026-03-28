@@ -5,6 +5,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, StatusCode};
 use huskarl_core::jwt::ConfirmationClaim;
+use huskarl_core::secrets::SecretString;
 use serde::Deserialize;
 use serde::Deserializer;
 use snafu::OptionExt as _;
@@ -15,9 +16,8 @@ use crate::core::EndpointUrl;
 use crate::core::client_auth::{ClientAuthentication, FormValue};
 use crate::core::crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform};
 use crate::core::http::{HttpClient, HttpResponse};
+use crate::core::jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator};
 use crate::core::platform::{Duration, SystemTime};
-use crate::core::token::AccessToken;
-use crate::core::token::validator::{ClaimCheck, JwtValidationError, JwtValidator};
 use crate::error::Rfc6750ErrorCode;
 use crate::validator::ValidatedRequest;
 
@@ -133,7 +133,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
     pub async fn introspect<C: HttpClient, Claims: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         http_client: &C,
-        access_token: &AccessToken,
+        access_token: &SecretString,
     ) -> Result<
         ValidatedRequest<Claims>,
         IntrospectionCallError<Auth::Error, C::Error, C::ResponseError>,
@@ -154,7 +154,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
         //    (form_urlencoded::Serializer is not Send due to an internal encoding Fn)
         let (body, auth_headers) = {
             let mut serializer = form_urlencoded::Serializer::new(String::new());
-            serializer.append_pair("token", access_token.expose_token());
+            serializer.append_pair("token", access_token.expose_secret());
             serializer.append_pair("token_type_hint", "access_token");
             if let Some(form_params) = &auth_params.form_params {
                 for (key, value) in form_params {

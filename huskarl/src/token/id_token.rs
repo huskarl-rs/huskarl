@@ -6,10 +6,10 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, prelude::*};
 
-use crate::{
+use crate::core::{
     crypto::verifier::BoxedJwsVerifier,
+    jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt},
     platform::{Duration, SystemTime},
-    token::validator::{ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt},
 };
 
 /// An `OpenID` Connect ID token.
@@ -19,7 +19,7 @@ pub struct IdToken(String);
 impl IdToken {
     /// Exposes the token as a string.
     #[must_use]
-    pub fn expose_token(&self) -> &str {
+    pub fn token(&self) -> &str {
         self.0.as_str()
     }
 }
@@ -162,7 +162,7 @@ impl IdTokenValidator {
             .build();
 
         let validated_jwt = jwt_validator
-            .validate::<IdTokenClaims<E>>(id_token.expose_token())
+            .validate::<IdTokenClaims<E>>(id_token.token())
             .await
             .context(JwtSnafu)?;
 

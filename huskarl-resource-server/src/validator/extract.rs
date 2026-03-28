@@ -1,5 +1,5 @@
 use http::{HeaderMap, HeaderName, header::ToStrError};
-use huskarl_core::token::AccessToken;
+use huskarl_core::secrets::SecretString;
 use snafu::prelude::*;
 
 use crate::error::Rfc6750ErrorCode;
@@ -13,7 +13,7 @@ pub enum TokenType {
 pub fn extract_token(
     headers: &HeaderMap,
     token_header: &HeaderName,
-) -> Result<Option<(TokenType, AccessToken)>, TokenExtractError> {
+) -> Result<Option<(TokenType, SecretString)>, TokenExtractError> {
     // 1. Extract token string from the configured header
     let Some(token_header) = headers
         .get(token_header)
@@ -38,7 +38,7 @@ pub fn extract_token(
         UnsupportedTokenTypeSnafu { token_type }.fail()?
     };
 
-    let access_token = AccessToken::from(token_value);
+    let access_token = SecretString::new(token_value.to_string());
     Ok(Some((token_type, access_token)))
 }
 

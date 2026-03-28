@@ -11,8 +11,7 @@ pub mod rfc9068;
 pub use observe::{OnValidate, ValidationOutcome};
 
 use huskarl_core::{
-    jwt::ConfirmationClaim, platform::MaybeSend, platform::SystemTime,
-    token::validator::ValidatedJwt,
+    jwt::ConfirmationClaim, jwt::validator::ValidatedJwt, platform::MaybeSend, platform::SystemTime,
 };
 
 /// A trait for validators that authenticate and validate access tokens from HTTP requests.

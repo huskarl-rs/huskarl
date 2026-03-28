@@ -4,8 +4,7 @@ use snafu::prelude::*;
 use crate::{
     core::{
         EndpointUrl,
-        client_auth::AuthenticationParams,
-        client_auth::ClientAuthentication,
+        client_auth::{AuthenticationParams, ClientAuthentication},
         dpop::AuthorizationServerDPoP,
         http::HttpClient,
         platform::{MaybeSend, MaybeSendSync},
@@ -14,7 +13,7 @@ use crate::{
         core::{
             ExchangeError,
             form::{OAuth2FormError, OAuth2FormRequest},
-            token_response::TokenResponse,
+            token_response::{InvalidTokenResponse, RawTokenResponse, TokenResponse},
         },
         refresh::RefreshGrant,
     },
@@ -48,6 +47,13 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
 
     /// Returns the configured client auth.
     fn client_auth(&self) -> &Self::ClientAuth;
+
+    /// Returns the bound DPoP thumbprint for the session.
+    ///
+    /// Often bound for authorization code grants or refresh grants.
+    fn bound_dpop_jkt(_params: &Self::Parameters) -> Option<&str> {
+        None
+    }
 
     /// Returns the token endpoint URL.
     fn token_endpoint(&self) -> &EndpointUrl;
@@ -98,13 +104,16 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     }
 
     /// Exchange the parameters for an access token.
-    #[allow(clippy::type_complexity)]
     fn exchange<C: HttpClient>(
         &self,
         http_client: &C,
         params: Self::Parameters,
     ) -> impl Future<Output = Result<TokenResponse, ExchangeError<C, Self>>> + MaybeSend {
-        async {
+        async move {
+            let dpop_jkt = Self::bound_dpop_jkt(&params)
+                .map(ToString::to_string)
+                .or_else(|| self.dpop().get_current_thumbprint());
+
             let effective_endpoint = self.effective_token_endpoint(http_client.uses_mtls());
             let auth_params = self
                 .client_auth()
@@ -118,9 +127,10 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .context(AuthSnafu)?;
             let form = self.build_form(params);
 
-            let token_response = OAuth2FormRequest::builder()
+            let raw_token_response: RawTokenResponse = OAuth2FormRequest::builder()
                 .auth_params(auth_params)
                 .dpop(self.dpop())
+                .maybe_dpop_jkt(dpop_jkt.as_deref())
                 .form(&form)
                 .uri(effective_endpoint.as_uri())
                 .build()
@@ -128,7 +138,9 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .await
                 .context(OAuth2FormSnafu)?;
 
-            Ok(token_response)
+            raw_token_response
+                .into_token_response(dpop_jkt, crate::core::platform::SystemTime::now())
+                .context(InvalidTokenResponseSnafu)
         }
     }
 
@@ -154,6 +166,11 @@ pub enum OAuth2ExchangeGrantError<
         /// The underlying error.
         source: OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>,
     },
+    /// The token response was not valid.
+    InvalidTokenResponse {
+        /// The underlying error.
+        source: InvalidTokenResponse,
+    },
 }
 
 impl<
@@ -167,6 +184,7 @@ impl<
         match self {
             Self::Auth { source } => source.is_retryable(),
             Self::OAuth2Form { source } => source.is_retryable(),
+            Self::InvalidTokenResponse { source } => source.is_retryable(),
         }
     }
 }

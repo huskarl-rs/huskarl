@@ -4,7 +4,6 @@ use snafu::Snafu;
 use crate::{
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     secrets::SecretString,
-    token::DpopAccessToken,
 };
 
 /// This represents a grant without the ability to use `DPoP` to constrain tokens.
@@ -58,7 +57,8 @@ impl ResourceServerDPoP for NoDPoP {
         &self,
         _method: &Method,
         _uri: &Uri,
-        _access_token: &DpopAccessToken,
+        _access_token: &SecretString,
+        _dpop_jkt: &str,
     ) -> Result<Option<SecretString>, Self::Error> {
         Err(DPoPNotConfigured)
     }

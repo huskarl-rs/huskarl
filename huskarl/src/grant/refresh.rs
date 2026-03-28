@@ -7,8 +7,9 @@ use bon::Builder;
 use serde::Serialize;
 
 use crate::{
-    core::{server_metadata::AuthorizationServerMetadata, token::RefreshToken},
+    core::server_metadata::AuthorizationServerMetadata,
     grant::core::{OAuth2ExchangeGrant, mk_scopes},
+    token::RefreshToken,
 };
 
 /// An `OAuth2` refresh grant.
@@ -51,6 +52,10 @@ impl<
 
     fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
         self.clone()
+    }
+
+    fn bound_dpop_jkt(params: &Self::Parameters) -> Option<&str> {
+        params.refresh_token.dpop_jkt()
     }
 
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {

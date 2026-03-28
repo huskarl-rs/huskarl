@@ -7,8 +7,12 @@ mod in_memory;
 
 use std::sync::{Arc, PoisonError};
 
-use crate::core::{dpop::ResourceServerDPoP, http::HttpClient, platform::MaybeSend};
-use huskarl_core::{platform::MaybeSendSync, token::RefreshToken};
+use crate::{
+    core::{
+        dpop::ResourceServerDPoP, http::HttpClient, platform::MaybeSend, platform::MaybeSendSync,
+    },
+    token::RefreshToken,
+};
 use snafu::prelude::*;
 use std::sync::RwLock;
 
@@ -26,31 +30,19 @@ pub trait TokenCache {
     /// Use [`NoDPoP`](crate::core::dpop::NoDPoP) when the grant does not use `DPoP`.
     type DPoP: ResourceServerDPoP;
 
-    /// Retrieves a token from the cache, refreshing it if necessary and possible.
-    fn get_token<C: HttpClient>(
-        &self,
-        http_client: &C,
-    ) -> impl Future<Output = Result<Arc<TokenResponse>, GetTokenError<Self::Error<C>>>> + MaybeSend;
-
-    /// Retrieves the full token response from the cache, refreshing it if necessary and possible.
-    ///
-    /// This is useful when you need to inspect fields beyond the access token itself,
-    /// such as provider-specific extensions returned by the token endpoint.
+    /// Retrieves the token response from the cache, refreshing it if necessary and possible.
     fn get_token_response<C: HttpClient>(
         &self,
         http_client: &C,
-    ) -> impl Future<Output = Result<Arc<TokenResponse>, GetTokenError<Self::Error<C>>>> + MaybeSend
-    {
-        self.get_token(http_client)
-    }
+    ) -> impl Future<Output = Result<Arc<TokenResponse>, GetTokenError<Self::Error<C>>>> + MaybeSend;
 
     /// Returns a reference to the resource server `DPoP` proof implementation.
     fn resource_server_dpop(&self) -> &Self::DPoP;
 
     /// Primes the cache with a valid [`TokenResponse`].
-    fn prime(&self, response: TokenResponse) -> impl Future<Output = ()> + MaybeSend;
+    fn prime(&self, response: Arc<TokenResponse>) -> impl Future<Output = ()> + MaybeSend;
 
-    /// Invalidates the cache, forcing a refresh on the next [`TokenCache::get_token`] call.
+    /// Invalidates the cache, forcing a refresh on the next [`TokenCache::get_token_response`] call.
     fn invalidate(&self);
 }
 

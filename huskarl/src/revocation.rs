@@ -4,22 +4,19 @@
 //! authorization server's revocation endpoint.
 
 use std::borrow::Cow;
-use std::convert::Infallible;
 
 use bon::Builder;
+use huskarl_core::dpop::DPoPNotConfigured;
 use serde::Serialize;
 use snafu::prelude::*;
 
 use crate::{
     core::{
-        EndpointUrl, IntoEndpointUrl,
-        client_auth::ClientAuthentication,
-        dpop::NoDPoP,
-        http::HttpClient,
-        server_metadata::AuthorizationServerMetadata,
-        token::{AccessToken, RefreshToken},
+        EndpointUrl, IntoEndpointUrl, client_auth::ClientAuthentication, dpop::NoDPoP,
+        http::HttpClient, server_metadata::AuthorizationServerMetadata,
     },
     grant::core::form::{OAuth2FormError, OAuth2FormRequest},
+    token::{AccessToken, RefreshToken},
 };
 
 /// A token that can be revoked.
@@ -33,7 +30,7 @@ pub trait RevocableToken {
 
 impl RevocableToken for AccessToken {
     fn token_value(&self) -> &str {
-        self.expose_token()
+        self.token().expose_secret()
     }
 
     fn token_type_hint(&self) -> &'static str {
@@ -43,7 +40,7 @@ impl RevocableToken for AccessToken {
 
 impl RevocableToken for RefreshToken {
     fn token_value(&self) -> &str {
-        self.expose_token()
+        self.token().expose_secret()
     }
 
     fn token_type_hint(&self) -> &'static str {
@@ -213,7 +210,7 @@ pub enum RevocationError<
     /// An error occurred during the revocation request.
     Revocation {
         /// The underlying error.
-        source: OAuth2FormError<HttpReqErr, HttpRespErr, Infallible>,
+        source: OAuth2FormError<HttpReqErr, HttpRespErr, DPoPNotConfigured>,
     },
 }
 

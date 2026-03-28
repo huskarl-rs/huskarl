@@ -5,7 +5,7 @@
 //! parsing shared across grants.
 
 mod grant;
-mod token_response;
+pub(crate) mod token_response;
 
 pub(crate) mod form;
 

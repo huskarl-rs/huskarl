@@ -15,7 +15,6 @@ use http::{Method, Uri};
 use crate::{
     platform::{MaybeSend, MaybeSendSync},
     secrets::SecretString,
-    token::DpopAccessToken,
 };
 
 pub use implementation::{
@@ -91,6 +90,7 @@ pub trait ResourceServerDPoP: MaybeSendSync {
         &self,
         method: &Method,
         uri: &Uri,
-        access_token: &DpopAccessToken,
+        access_token: &SecretString,
+        dpop_jkt: &str,
     ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
 }

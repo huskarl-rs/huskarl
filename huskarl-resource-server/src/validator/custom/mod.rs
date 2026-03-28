@@ -5,9 +5,9 @@ use http::HeaderName;
 use huskarl_core::{
     BoxedError, EndpointUrl,
     crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+    jwt::validator::{ClaimCheck, JwtValidator},
     platform::MaybeSendSync,
     server_metadata::AuthorizationServerMetadata,
-    token::validator::{ClaimCheck, JwtValidator},
 };
 use serde::Deserialize;
 

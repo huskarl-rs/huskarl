@@ -1,6 +1,6 @@
 use snafu::Snafu;
 
-use crate::{core::token::id_token::IdTokenValidationError, grant::core::form::OAuth2FormError};
+use crate::{grant::core::form::OAuth2FormError, token::id_token::IdTokenValidationError};
 
 /// An error that occurs when attempting to start an authorization code flow.
 #[derive(Debug, Snafu)]
