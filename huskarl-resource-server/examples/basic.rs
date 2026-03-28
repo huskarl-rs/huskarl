@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use http::{HeaderValue, Method, header::AUTHORIZATION};
 use huskarl_core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata};
 use huskarl_reqwest::ReqwestClient;
@@ -19,11 +21,11 @@ pub async fn main() {
         .unwrap();
 
     let validator = Rfc9068Validator::builder_from_metadata(&authorization_server_metadata)
-        .jws_verifier_factory(
+        .jws_verifier_factory(Arc::new(
             JwksSource::builder()
                 .http_client(http_client.clone())
                 .build(),
-        )
+        ))
         .audience("api://client")
         .build()
         .await

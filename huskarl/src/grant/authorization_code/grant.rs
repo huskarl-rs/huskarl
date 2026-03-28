@@ -262,6 +262,9 @@ impl<
 /// Parameters passed to each token request.
 #[derive(Debug, Clone, Builder)]
 pub struct AuthorizationCodeGrantParameters {
+    /// The bound DPoP JWT thumbprint, if any has already been computed.
+    #[builder(into)]
+    pub dpop_jkt: Option<String>,
     /// The temporary authorization code received from the redirect callback.
     #[builder(into)]
     pub code: String,
@@ -296,6 +299,10 @@ impl<
     type ClientAuth = Auth;
     type DPoP = D;
     type Form<'a> = AuthorizationCodeGrantForm<'a>;
+
+    fn bound_dpop_jkt(params: &Self::Parameters) -> Option<&str> {
+        params.dpop_jkt.as_deref()
+    }
 
     fn to_refresh_grant(&self) -> refresh::RefreshGrant<Self::ClientAuth, Self::DPoP> {
         refresh::RefreshGrant::builder()

@@ -1,9 +1,8 @@
 use bon::Builder;
-use huskarl_core::token::IdToken;
 use rand::TryRng as _;
 use serde::{Deserialize, Serialize};
 
-use crate::{core::platform::Duration, grant::core::mk_scopes};
+use crate::{core::platform::Duration, grant::core::mk_scopes, token::IdToken};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthorizationPayload<'a> {
@@ -15,7 +14,7 @@ pub struct AuthorizationPayload<'a> {
     pub(super) code_challenge: Option<&'a str>,
     pub(super) code_challenge_method: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) dpop_jkt: Option<&'a str>,
+    pub(super) dpop_jkt: Option<String>,
     pub(super) nonce: &'a str,
     pub(super) display: Option<&'a Display>,
     pub(super) prompt: Option<&'a Prompt>,
@@ -161,6 +160,10 @@ pub struct PendingState {
     ///
     /// This value is checked for equality against the nonce claim in any returned ID token.
     pub nonce: String,
+    /// The DPoP JWT thumbprint.
+    ///
+    /// The thumbprint of the DPoP key bound to the request.
+    pub dpop_jkt: Option<String>,
 }
 
 const RANDOM_VALUE_BYTES: usize = 32;

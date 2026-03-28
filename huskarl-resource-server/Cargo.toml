@@ -17,7 +17,7 @@ default = ["default-jws-verifier-platform"]
 default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypto-webcrypto"]
 
 [dependencies]
-huskarl-core = { version = "0.1" }
+huskarl-core = { workspace = true }
 
 bon = { workspace = true }
 bytes = { version = "1", default-features = false }
@@ -33,22 +33,22 @@ base64 = { version = "0.22", default-features = false, features = ["std"] }
 ### Dependencies available on all platforms except WASM-not-WASI
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
 tokio = { version = "1", default-features = false, features = ["time"] }
-huskarl-crypto-native = { version = "0.1", optional = true }
+huskarl-crypto-native = { workspace = true, optional = true }
 
 ### Dependencies available on WASM-not-WASI
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
-huskarl-crypto-webcrypto = { version = "0.1", optional = true }
+huskarl-crypto-webcrypto = { workspace = true, optional = true }
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
 gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false }
 
 [dev-dependencies]
-huskarl-reqwest = { version = "0.1" }
 metrics = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
-[target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dev-dependencies]
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+huskarl-reqwest = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 httpmock = "0.8.3"

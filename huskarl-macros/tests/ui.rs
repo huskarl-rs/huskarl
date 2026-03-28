@@ -1,3 +1,5 @@
+#![cfg(not(target_family = "wasm"))]
+
 #[test]
 fn ui() {
     let t = trybuild::TestCases::new();

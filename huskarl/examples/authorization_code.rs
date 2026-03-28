@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
@@ -47,11 +49,11 @@ pub async fn main() -> Result<(), snafu::Whatever> {
                 .build(),
         )
         .jar(NoJar)
-        .jws_verifier_factory(
+        .jws_verifier_factory(Arc::new(
             JwksSource::builder()
                 .http_client(http_client.clone())
                 .build(),
-        )
+        ))
         .build()
         .await
         .whatever_context("Failed to build grant")?;
@@ -85,15 +87,15 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         )
         .build();
 
-    authorizer.prime(token_response).await;
+    authorizer.prime(Arc::new(token_response)).await;
 
     let resource_server_validator = Rfc9068Validator::builder_from_metadata(&metadata)
         .audience("api://default")
-        .jws_verifier_factory(
+        .jws_verifier_factory(Arc::new(
             JwksSource::builder()
                 .http_client(http_client.clone())
                 .build(),
-        )
+        ))
         .build()
         .await
         .whatever_context("Failed to build resource server validator")?;

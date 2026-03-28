@@ -24,7 +24,6 @@ pub mod platform;
 pub mod prelude;
 pub mod secrets;
 pub mod server_metadata;
-pub mod token;
 
 pub use endpoint_url::{EndpointUrl, IntoEndpointUrl};
 pub use error::{BoxedError, Error};

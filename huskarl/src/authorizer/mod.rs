@@ -4,6 +4,8 @@
 //! required `DPoP` headers, refreshing tokens as necessary using the
 //! underlying `OAuth2` grant.
 
+use std::sync::Arc;
+
 use bon::Builder;
 use http::{
     HeaderMap, HeaderName, Method, Uri,
@@ -15,6 +17,7 @@ use crate::{
     cache::{GetTokenError, TokenCache},
     core::{dpop::ResourceServerDPoP, http::HttpClient},
     grant::core::TokenResponse,
+    token::AccessToken,
 };
 
 /// An authorizer for `OAuth2` grants.
@@ -51,9 +54,9 @@ pub enum AuthorizerError<TcErr: crate::core::Error + 'static, DPoPErr: crate::co
         /// The underlying `DPoP` error.
         source: DPoPErr,
     },
-    /// The token could not be used as it was not a valid token value.
-    InvalidTokenValue,
     /// A `DPoP` token was received, but no `DPoP` configuration for the proof was present.
+    ///
+    /// This indicates a logic bug in the codebase.
     #[snafu(display("Received DPoP token but no DPoP configuration present"))]
     UnexpectedDPoPToken,
     /// The token could not be used as it was not a valid header value.
@@ -70,9 +73,7 @@ impl<TcErr: crate::core::Error + 'static, DPoPErr: crate::core::Error + 'static>
         match self {
             Self::TokenCache { source } => source.is_retryable(),
             Self::DPoP { source } => source.is_retryable(),
-            Self::InvalidTokenValue | Self::UnexpectedDPoPToken | Self::InvalidHeader { .. } => {
-                false
-            }
+            Self::UnexpectedDPoPToken | Self::InvalidHeader { .. } => false,
         }
     }
 }
@@ -97,45 +98,48 @@ impl<T: TokenCache> HttpAuthorizer<T> {
     > {
         let token = self
             .cache
-            .get_token(http_client)
+            .get_token_response(http_client)
             .await
             .context(TokenCacheSnafu)?;
 
-        ensure!(
-            is_header_safe(token.access_token.expose_token()),
-            InvalidTokenValueSnafu
-        );
-
         let mut headers = HeaderMap::new();
 
-        if token.token_type.eq_ignore_ascii_case("dpop") {
-            if let Some(proof) = self
-                .cache
-                .resource_server_dpop()
-                .proof(method, uri, &token.access_token)
-                .await
-                .context(DPoPSnafu)?
-            {
-                headers.insert(
-                    "DPoP",
-                    proof.expose_secret().parse().context(InvalidHeaderSnafu)?,
-                );
+        match token.access_token() {
+            AccessToken::Dpop(dpop_access_token) => {
+                if let Some(proof) = self
+                    .cache
+                    .resource_server_dpop()
+                    .proof(
+                        method,
+                        uri,
+                        dpop_access_token.token(),
+                        dpop_access_token.jkt(),
+                    )
+                    .await
+                    .context(DPoPSnafu)?
+                {
+                    headers.insert(
+                        "DPoP",
+                        proof.expose_secret().parse().context(InvalidHeaderSnafu)?,
+                    );
+                    headers.insert(
+                        &self.authorization_header,
+                        dpop_access_token
+                            .expose_header_value()
+                            .context(InvalidHeaderSnafu)?,
+                    );
+                } else {
+                    return UnexpectedDPoPTokenSnafu.fail();
+                }
+            }
+            AccessToken::Bearer(bearer_access_token) => {
                 headers.insert(
                     &self.authorization_header,
-                    format!("DPoP {}", token.access_token.expose_token())
-                        .parse()
+                    bearer_access_token
+                        .expose_header_value()
                         .context(InvalidHeaderSnafu)?,
                 );
-            } else {
-                return UnexpectedDPoPTokenSnafu.fail();
             }
-        } else {
-            headers.insert(
-                &self.authorization_header,
-                format!("Bearer {}", token.access_token.expose_token())
-                    .parse()
-                    .context(InvalidHeaderSnafu)?,
-            );
         }
 
         Ok(headers)
@@ -147,7 +151,7 @@ impl<T: TokenCache> HttpAuthorizer<T> {
     }
 
     /// Primes the cache with an existing token response, e.g. after an initial authorization code exchange.
-    pub async fn prime(&self, response: TokenResponse) {
+    pub async fn prime(&self, response: Arc<TokenResponse>) {
         self.cache.prime(response).await;
     }
 
@@ -175,13 +179,6 @@ impl<T: TokenCache> HttpAuthorizer<T> {
             self.cache.resource_server_dpop().update_nonce(uri, nonce);
         }
     }
-}
-
-fn is_header_safe(token: &str) -> bool {
-    !token.is_empty()
-        && token
-            .bytes()
-            .all(|b| b == b'\t' || (0x20..0x7F).contains(&b))
 }
 
 /// Allows users to extract the `DPoP` nonce from a set of headers.

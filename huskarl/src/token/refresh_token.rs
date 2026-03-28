@@ -1,6 +1,5 @@
+use huskarl_core::secrets::SecretString;
 use serde::{Deserialize, Serialize};
-
-use crate::secrets::SecretString;
 
 /// An `OAuth2` refresh token.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,10 +17,10 @@ impl RefreshToken {
 }
 
 impl RefreshToken {
-    /// Exposes the token as a string.
+    /// Reeturns the token as a [`SecretString`].
     #[must_use]
-    pub fn expose_token(&self) -> &str {
-        self.token.expose_secret()
+    pub fn token(&self) -> &SecretString {
+        &self.token
     }
 
     /// Returns the `DPoP` JWT thumbprint, if present.

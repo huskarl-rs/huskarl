@@ -1,4 +1,5 @@
 use http::Method;
+use huskarl::token::AccessToken;
 use huskarl::{
     core::{
         client_auth::ClientSecret,
@@ -54,17 +55,23 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Failed to get token")?;
 
-    let access_token = token_response.access_token;
+    let access_token = token_response.access_token();
 
-    println!("Access token: {}", access_token.expose_token());
+    println!("Access token: {}", access_token.token().expose_secret());
 
     let resource_server_dpop = grant.dpop().to_resource_server_dpop();
+
+    let AccessToken::Dpop(dpop_token) = access_token else {
+        println!("Expected response to be a DPoP token");
+        return Ok(());
+    };
 
     let dpop_proof = resource_server_dpop
         .proof(
             &Method::GET,
             &"https://blah/".parse().unwrap(),
-            &access_token,
+            dpop_token.token(),
+            dpop_token.jkt(),
         )
         .await
         .whatever_context("Failed to create DPoP proof")?;

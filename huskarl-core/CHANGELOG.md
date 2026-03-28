@@ -7,14 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Additions
-
-- Adds `AsymmetricJwsSigningKey` trait. Provides a blanket implementation for `JwsSigningKey`.
-- Added `to_jws_compact_with_thumbprint` to generate JWTs matching DPoP JKT.
-
 ### Removals
 
 - Removes `HasPublicKey` trait.
+- Moved the token module to `huskarl`.
 
 ### Changes
 
@@ -23,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Split out use side of `JwsSigningKey` into `JwsSigner`, update boxed trait.
 - Allow asymmetric signers to have secondary as well as primary signing keys (useful for DPoP key rotation).
 - Generating DPoP proofs requires a known thumbprint to be provided.
+- Moved validation from the token module to the jwt module.
+- Moved the token module to `huskarl`.
 
 ## [0.1.0] - 2026-03-24
 

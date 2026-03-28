@@ -6,7 +6,7 @@ mod grant;
 mod jar;
 #[cfg(all(
     feature = "authorization-flow-loopback",
-    not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))
+    not(target_family = "wasm")
 ))]
 mod loopback;
 mod par;
@@ -21,7 +21,7 @@ pub use grant::{
 pub use jar::{Jar, NoJar};
 #[cfg(all(
     feature = "authorization-flow-loopback",
-    not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))
+    not(target_family = "wasm")
 ))]
 pub use loopback::{
     CallbackRenderer, CallbackResponse, ErrorContext, LoopbackError, SuccessContext, bind_loopback,

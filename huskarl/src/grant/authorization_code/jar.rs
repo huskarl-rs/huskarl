@@ -1,8 +1,9 @@
 use std::{convert::Infallible, time::Duration};
 
+use huskarl_core::crypto::signer::{JwsSigner, JwsSignerSelector};
+
 use crate::{
     core::{
-        crypto::signer::JwsSigningKey,
         jwt::{JwsSerializationError, Jwt},
         platform::{MaybeSend, MaybeSendSync},
         secrets::SecretString,
@@ -39,8 +40,8 @@ impl Jar for NoJar {
     }
 }
 
-impl<S: JwsSigningKey> Jar for S {
-    type Error = JwsSerializationError<<S as JwsSigningKey>::Error>;
+impl<S: JwsSignerSelector> Jar for S {
+    type Error = JwsSerializationError<<S::Signer as JwsSigner>::Error>;
 
     async fn generate_request_object(
         &self,
@@ -53,7 +54,7 @@ impl<S: JwsSigningKey> Jar for S {
             .issued_now_expires_after(Duration::from_mins(1))
             .extra_claims(authorization_payload)
             .build()
-            .to_jws_compact(self)
+            .to_jws_compact(&self.select_signer())
             .await
             .map(Some)
     }

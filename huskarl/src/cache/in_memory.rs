@@ -64,7 +64,7 @@ where
         &self.resource_server_dpop
     }
 
-    async fn get_token<C: HttpClient>(
+    async fn get_token_response<C: HttpClient>(
         &self,
         http_client: &C,
     ) -> Result<Arc<TokenResponse>, GetTokenError<Self::Error<C>>> {
@@ -72,7 +72,9 @@ where
         let mut best_error: Option<Self::Error<C>> = None;
 
         if let Some(cached_token) = maybe_cached_token
-            && !cached_token.is_expired(self.default_expires_in, self.expires_margin)
+            && !cached_token
+                .access_token()
+                .is_expired(self.default_expires_in, self.expires_margin)
         {
             return Ok(cached_token);
         }
@@ -82,7 +84,9 @@ where
         let maybe_cached_token = self.cached.load_full();
 
         if let Some(cached_token) = maybe_cached_token
-            && !cached_token.is_expired(self.default_expires_in, self.expires_margin)
+            && !cached_token
+                .access_token()
+                .is_expired(self.default_expires_in, self.expires_margin)
         {
             return Ok(cached_token);
         }
@@ -141,13 +145,13 @@ where
         }
     }
 
-    async fn prime(&self, response: TokenResponse) {
-        if let Some(refresh_token) = &response.refresh_token {
+    async fn prime(&self, response: Arc<TokenResponse>) {
+        if let Some(refresh_token) = response.refresh_token() {
             self.refresh_store.set(refresh_token).await;
             self.has_refresh_token_cached.store(true, Ordering::Relaxed);
         }
 
-        self.cached.store(Some(Arc::new(response)));
+        self.cached.store(Some(response));
     }
 
     fn invalidate(&self) {
@@ -159,20 +163,6 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> InMemoryTokenCache<G, S> {
     /// Returns a reference to the underlying grant.
     pub fn grant(&self) -> &G {
         &self.grant
-    }
-
-    /// Returns the effective expiry time and current validity of the cached access token.
-    ///
-    /// Returns `(expires_at, is_valid)` where `expires_at` is `received_at + expires_in - margin`
-    /// and `is_valid` is whether `now < expires_at`. Returns `None` if there is no cached token.
-    ///
-    /// The margin used here is the same as the one used by [`TokenCache::get_token`], so `is_valid` and
-    /// `get_token`'s cache check agree on whether a refresh is needed.
-    pub fn token_expiry(&self) -> Option<(crate::core::platform::SystemTime, bool)> {
-        let token = self.cached.load_full()?;
-        let expiry = token.effective_expiry(self.default_expires_in, self.expires_margin);
-        let is_valid = crate::core::platform::SystemTime::now() < expiry;
-        Some((expiry, is_valid))
     }
 
     /// Returns `true` if grant parameters were supplied, enabling fresh token exchanges.
@@ -211,7 +201,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> InMemoryTokenCache<G, S> {
     async fn store_token_response(&self, token: Arc<TokenResponse>) {
         self.cached.store(Some(token.clone()));
 
-        if let Some(refresh_token) = token.refresh_token.as_ref() {
+        if let Some(refresh_token) = token.refresh_token().as_ref() {
             self.refresh_store.set(refresh_token).await;
             self.has_refresh_token_cached.store(true, Ordering::Relaxed);
         } else {

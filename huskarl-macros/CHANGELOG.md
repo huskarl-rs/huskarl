@@ -7,18 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Additions
-
-- Adds `AsymmetricJwsSigningKey` trait. Provides a blanket implementation for `JwsSigningKey`.
-
-### Removals
-
-- Removes `HasPublicKey` trait.
-
-### Changes
-
-- DPoP uses `AsymmetricJwsSigningKey` as a bound instead of `HasPublicKey`
-
 ## [0.1.0] - 2026-03-24
 
 - Initial implementation.

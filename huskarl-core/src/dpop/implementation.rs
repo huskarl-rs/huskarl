@@ -18,7 +18,6 @@ use crate::{
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     jwt::{JwsSerializationError, Jwt},
     secrets::SecretString,
-    token::DpopAccessToken,
 };
 
 // Used internally to track the origin value for a Uri (nonces are matched by origin).
@@ -112,7 +111,8 @@ impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> 
         &self,
         method: &Method,
         uri: &Uri,
-        access_token: &DpopAccessToken,
+        access_token: &SecretString,
+        dpop_jkt: &str,
     ) -> Result<Option<SecretString>, Self::Error> {
         let origin = origin_from_uri(uri);
         // See comment in `update_nonce` for why poison recovery is intentional here.
@@ -125,10 +125,17 @@ impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> 
 
         let signer = self
             .signer
-            .select_asymmetric_signer_by_thumbprint(access_token.jkt())
+            .select_asymmetric_signer_by_thumbprint(dpop_jkt)
             .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
 
-        sign_proof(&signer, method, uri, Some(access_token), nonce).await
+        sign_proof(
+            &signer,
+            method,
+            uri,
+            Some(access_token.expose_secret()),
+            nonce,
+        )
+        .await
     }
 }
 
@@ -144,7 +151,7 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
     signer: &Sgn,
     htm: &Method,
     htu: &Uri,
-    access_token: Option<&DpopAccessToken>,
+    token: Option<&str>,
     nonce: Option<Arc<String>>,
 ) -> Result<Option<SecretString>, JwsSerializationError<Sgn::Error>> {
     #[derive(Debug, Clone, Serialize)]
@@ -162,7 +169,7 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
         htu: normalize_uri_for_dpop(htu)
             .map_err(|source| JwsSerializationError::NormalizeUri { source })?
             .to_string(),
-        ath: access_token.map(hash_access_token_for_dpop),
+        ath: token.map(hash_access_token_for_dpop),
         nonce,
     };
 
@@ -196,9 +203,9 @@ pub fn normalize_uri_for_dpop(uri: &Uri) -> Result<Uri, http::Error> {
 
 /// Computes the SHA-256 `ath` hash of an access token for inclusion in a `DPoP` proof.
 #[must_use]
-pub fn hash_access_token_for_dpop(access_token: &DpopAccessToken) -> String {
+pub fn hash_access_token_for_dpop(access_token: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(access_token.expose_token().as_bytes());
+    hasher.update(access_token.as_bytes());
     let hash_digest = hasher.finalize();
     BASE64_URL_SAFE_NO_PAD.encode(hash_digest)
 }

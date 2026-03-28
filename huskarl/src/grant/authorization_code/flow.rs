@@ -6,16 +6,9 @@ use subtle::ConstantTimeEq;
 
 use crate::{
     core::{
-        EndpointUrl,
-        client_auth::ClientAuthentication,
-        dpop::AuthorizationServerDPoP,
-        http::HttpClient,
-        platform::MaybeSendSync,
+        EndpointUrl, client_auth::ClientAuthentication, dpop::AuthorizationServerDPoP,
+        http::HttpClient, jwt::validator::ValidatedJwt, platform::MaybeSendSync,
         secrets::SecretString,
-        token::{
-            id_token::{IdTokenClaims, IdTokenValidator},
-            validator::ValidatedJwt,
-        },
     },
     grant::{
         authorization_code::{
@@ -37,12 +30,10 @@ use crate::{
         },
         core::{ExchangeError, OAuth2ExchangeGrant, TokenResponse},
     },
+    token::id_token::{IdTokenClaims, IdTokenValidator},
 };
 
-#[cfg(all(
-    feature = "authorization-flow-loopback",
-    not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))
-))]
+#[cfg(all(feature = "authorization-flow-loopback", not(target_family = "wasm")))]
 use crate::grant::authorization_code::{LoopbackError, loopback};
 
 impl<
@@ -65,10 +56,7 @@ impl<
     ///
     /// Note that if an ID token is returned by the authorization server, this indicates that an
     /// OIDC flow was requested in the authorization request, and the ID token will be validated.
-    #[cfg(all(
-        feature = "authorization-flow-loopback",
-        not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))
-    ))]
+    #[cfg(all(feature = "authorization-flow-loopback", not(target_family = "wasm")))]
     pub async fn complete_on_loopback<C: HttpClient>(
         &self,
         http_client: &C,
@@ -91,10 +79,7 @@ impl<
     ///
     /// Errors if there are issues with parsing callback URLs, HTTP read errors, errors handling the
     /// callback, or errors requesting a token, or if the ID token cannot be validated.
-    #[cfg(all(
-        feature = "authorization-flow-loopback",
-        not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))
-    ))]
+    #[cfg(all(feature = "authorization-flow-loopback", not(target_family = "wasm")))]
     pub async fn complete_on_loopback_oidc<C: HttpClient>(
         &self,
         http_client: &C,
@@ -164,7 +149,10 @@ impl<
             None
         };
 
-        let payload = build_authorization_payload(self, &start_input, pkce.as_ref());
+        let dpop_jkt = self.dpop.get_current_thumbprint();
+
+        let payload =
+            build_authorization_payload(self, &start_input, pkce.as_ref(), dpop_jkt.clone());
 
         let request_object = self
             .request_object(payload.clone())
@@ -191,6 +179,7 @@ impl<
                 pkce_verifier: pkce.map(|p| p.verifier),
                 state: start_input.state,
                 nonce: start_input.nonce,
+                dpop_jkt,
             },
         })
     }
@@ -321,6 +310,7 @@ impl<
             .exchange(
                 http_client,
                 AuthorizationCodeGrantParameters {
+                    dpop_jkt: pending_state.dpop_jkt.clone(),
                     code: complete_input.code.clone(),
                     pkce_verifier: pending_state.pkce_verifier.clone(),
                     resource: complete_input.resource.clone(),
@@ -363,7 +353,7 @@ impl<
 
         let token = token_or_error?;
 
-        if let Some(id_token) = &token.id_token {
+        if let Some(id_token) = &token.id_token() {
             let verifier = self
                 .jws_verifier
                 .as_ref()
@@ -402,6 +392,7 @@ fn build_authorization_payload<
     grant: &'a AuthorizationCodeGrant<Auth, DPoP, J, IdClaims>,
     start_input: &'a StartInput,
     pkce: Option<&'a Pkce>,
+    dpop_jkt: Option<String>,
 ) -> AuthorizationPayloadWithClientId<'a> {
     AuthorizationPayloadWithClientId {
         client_id: &grant.client_id,
@@ -412,7 +403,7 @@ fn build_authorization_payload<
             state: &start_input.state,
             code_challenge: pkce.map(|p| p.challenge.as_ref()),
             code_challenge_method: pkce.map(|p| p.method),
-            dpop_jkt: grant.dpop.jwk_thumbprint(),
+            dpop_jkt,
             nonce: &start_input.nonce,
             display: start_input.display.as_ref(),
             prompt: start_input.prompt.as_ref(),

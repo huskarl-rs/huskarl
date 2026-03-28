@@ -52,7 +52,7 @@ let token_response = grant
 
 println!(
     "Access token: {}",
-    token_response.access_token.expose_token()
+    token_response.access_token().token().expose_secret()
 );
 # }
 ```
@@ -71,6 +71,7 @@ pub mod cache;
 pub mod grant;
 pub mod prelude;
 pub mod revocation;
+pub mod token;
 
 use std::sync::Arc;
 

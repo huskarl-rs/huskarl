@@ -17,6 +17,7 @@ pub struct OAuth2FormRequest<'a, F: Serialize, D: AuthorizationServerDPoP = NoDP
     form: &'a F,
     auth_params: AuthenticationParams<'a>,
     dpop: &'a D,
+    dpop_jkt: Option<&'a str>,
 }
 
 impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
@@ -41,7 +42,7 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
 
         if let Some(proof) = self
             .dpop
-            .proof(&parts.method, &parts.uri)
+            .proof(&parts.method, &parts.uri, self.dpop_jkt)
             .await
             .context(DPoPSignSnafu)?
         {

@@ -1,7 +1,11 @@
+#![cfg(not(target_family = "wasm"))]
+
+use std::sync::Arc;
+
 use httpmock::prelude::*;
 use huskarl_core::{
     IntoEndpointUrl,
-    crypto::signer::HasPublicKey,
+    crypto::signer::AsymmetricJwsSigner,
     jwk::{JwksSource, PublicJwks},
     jwt::Jwt,
 };
@@ -15,7 +19,7 @@ async fn test_rfc9068_validator() {
 
     // 1. Generate key pair
     let private_key = PrivateKey::generate(GenerateAlgorithm::Es256);
-    let public_jwk = private_key.public_key_jwk().clone();
+    let public_jwk = private_key.public_key_jwk().into_owned();
     let jwks = PublicJwks {
         keys: vec![public_jwk],
     };
@@ -43,11 +47,11 @@ async fn test_rfc9068_validator() {
         .issuer(issuer.clone())
         .audience("api://resource")
         .jwks_uri(jwks_uri)
-        .jws_verifier_factory(
+        .jws_verifier_factory(Arc::new(
             JwksSource::builder()
                 .http_client(http_client.clone())
                 .build(),
-        )
+        ))
         .build()
         .await
         .unwrap();

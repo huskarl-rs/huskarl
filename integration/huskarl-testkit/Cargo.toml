@@ -8,9 +8,9 @@ publish = false
 name = "huskarl_testkit"
 
 [dependencies]
-huskarl-core = { version = "0.1" }
+huskarl-core = { version = "0.2.0-pre.1", path = "../../huskarl-core" }
 reqwest = { version = "0.13", features = ["json", "form"] }
 serde = { workspace = true }
 bon = { workspace = true }
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", default-features = false, features = ["rt"] }
 uuid = { version = "1", features = ["v4"] }

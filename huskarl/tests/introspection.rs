@@ -1,3 +1,5 @@
+#![cfg(not(target_family = "wasm"))]
+
 use std::collections::HashMap;
 
 use http::Method;

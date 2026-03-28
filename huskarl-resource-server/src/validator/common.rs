@@ -1,5 +1,5 @@
 use http::HeaderName;
-use huskarl_core::token::validator::JwtValidator;
+use huskarl_core::jwt::validator::JwtValidator;
 use serde::Deserialize;
 use snafu::prelude::*;
 
@@ -36,7 +36,7 @@ impl ValidatorInner {
 
         let validated = self
             .token_validator
-            .validate::<Claims>(access_token.expose_token())
+            .validate::<Claims>(access_token.expose_secret())
             .await
             .context(InvalidJwtSnafu)?;
 

@@ -9,11 +9,9 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    core::{
-        platform::MaybeSendSync,
-        token::{id_token::IdTokenClaims, validator::ValidatedJwt},
-    },
+    core::{jwt::validator::ValidatedJwt, platform::MaybeSendSync},
     grant::{authorization_code::CompleteInput, core::TokenResponse},
+    token::id_token::IdTokenClaims,
 };
 
 /// Errors that can occur when handling the authorization code callback with the loopback implementation.
@@ -447,13 +445,10 @@ pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
     Ok(listener)
 }
 
-#[cfg(all(
-    test,
-    not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))
-))]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests {
     use super::*;
-    use huskarl_core::token::id_token::IdTokenClaims;
+    use crate::token::{AccessToken, id_token::IdTokenClaims};
     use tokio::net::TcpStream;
 
     #[derive(Debug, snafu::Snafu)]
@@ -468,10 +463,12 @@ mod tests {
 
     fn ok_token_response() -> (TokenResponse, Option<ValidatedJwt<IdTokenClaims>>) {
         (
-            TokenResponse::builder()
-                .access_token("test-token")
+            crate::grant::core::token_response::RawTokenResponse::builder()
+                .access_token(crate::core::secrets::SecretString::new("test-token".to_string()))
                 .token_type("Bearer")
-                .build(),
+                .build()
+                .into_token_response(None, crate::core::platform::SystemTime::now())
+                .unwrap(),
             None,
         )
     }
@@ -507,8 +504,15 @@ mod tests {
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
         let (token_response, id_token) = handle.await.unwrap().unwrap();
-        assert_eq!(token_response.token_type, "Bearer");
-        assert_eq!(token_response.access_token.expose_token(), "test-token");
+
+        assert!(matches!(
+            token_response.access_token(),
+            AccessToken::Bearer(_)
+        ));
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
         assert!(id_token.is_none());
     }
 
@@ -538,7 +542,10 @@ mod tests {
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
         let (token_response, _) = handle.await.unwrap().unwrap();
-        assert_eq!(token_response.token_type, "Bearer");
+        assert!(matches!(
+            token_response.access_token(),
+            AccessToken::Bearer(_)
+        ));
     }
 
     #[tokio::test]
@@ -619,7 +626,10 @@ mod tests {
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
         let (token_response, _) = handle.await.unwrap().unwrap();
-        assert_eq!(token_response.access_token.expose_token(), "test-token");
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
     }
 
     #[tokio::test]

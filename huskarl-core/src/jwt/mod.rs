@@ -7,6 +7,7 @@
 mod builder;
 mod parse;
 mod structure;
+pub mod validator;
 
 pub use builder::{JwsSerializationError, Jwt, JwtBuilder};
 pub use parse::{JwsParseError, ParsedJws, parse_compact_jws};

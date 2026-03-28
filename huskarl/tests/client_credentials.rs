@@ -1,3 +1,7 @@
+#![cfg(not(target_family = "wasm"))]
+
+use std::sync::Arc;
+
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
@@ -46,7 +50,9 @@ async fn client_credentials_exchange() {
 
     let validator = CustomValidator::builder_from_metadata(&server_metadata)
         .audience("huskarl-rs")
-        .jws_verifier_factory(JwksSource::builder().http_client(http.clone()).build())
+        .jws_verifier_factory(Arc::new(
+            JwksSource::builder().http_client(http.clone()).build(),
+        ))
         .rules(AccessTokenValidationRules::builder().build())
         .build()
         .await
