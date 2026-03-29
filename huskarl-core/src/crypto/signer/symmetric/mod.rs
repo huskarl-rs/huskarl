@@ -41,7 +41,12 @@ pub trait JwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
     /// Returns the key metadata for this signer.
     fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata>;
 
-    /// Asynchronously signs the given input data and returns the signature.
+    /// Asynchronously signs the given input data and returns the raw signature bytes.
+    ///
+    /// This is an implementation method — callers should use [`JwsSigner::sign`] instead,
+    /// which validates that the caller's expected key metadata matches the key before signing.
+    /// This prevents writing an incorrect `alg` or `kid` into a JWT header if the key has
+    /// been rotated since the header was prepared.
     ///
     /// # Errors
     ///

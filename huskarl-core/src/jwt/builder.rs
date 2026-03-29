@@ -6,7 +6,7 @@ use serde::Serialize;
 use snafu::prelude::*;
 
 use crate::{
-    crypto::signer::{JwsSigner, JwsSignerError, JwsSigningKey},
+    crypto::signer::{JwsSigner, JwsSignerError},
     jwk::PublicJwk,
     jwt::{
         builder::jwt_builder::{SetExtraClaims, SetExtraHeaders},
@@ -269,7 +269,7 @@ where
     /// # Errors
     ///
     /// Returns an error if the JWT could not be serialized to JSON, or signing failed.
-    pub async fn to_jws_compact<Sgn: JwsSigningKey>(
+    pub async fn to_jws_compact<Sgn: JwsSigner>(
         &self,
         signer: &Sgn,
     ) -> Result<SecretString, JwsSerializationError<Sgn::Error>> {

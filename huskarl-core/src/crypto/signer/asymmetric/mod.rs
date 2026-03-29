@@ -4,10 +4,7 @@ use snafu::prelude::*;
 
 use crate::{
     Error,
-    crypto::signer::{
-        JwsSigningKey, SigningKeyMetadata,
-        error::{MismatchedKeyMetadataSnafu, UnderlyingSnafu},
-    },
+    crypto::signer::{JwsSigner, JwsSigningKey, SigningKeyMetadata},
     jwk::PublicJwk,
     platform::{MaybeSend, MaybeSendSync},
 };
@@ -32,69 +29,133 @@ impl AsymmetricSigningKeyMetadata {
     }
 }
 
-/// Trait for asymmetric signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
+/// Trait for asymmetric signing keys that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
 pub trait AsymmetricJwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
     /// The error type returned by this signer's operations.
     type Error: Error + 'static;
 
-    /// Returns the key metadata for this signer.
-    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata>;
+    /// The key type used by this signer.
+    ///
+    /// The key type is chosen by the trait implementor, and is used to match the key returned by
+    /// [`Self::key_and_metadata_by_thumbprint`], to the value passed to [`Self::sign_with_key`]; it identifies the
+    /// key to use for signing.
+    type Key;
 
-    /// Asynchronously signs the given input data and returns the signature.
+    /// Returns the primary key and metadata for this signer.
+    fn primary_key_metadata(&self) -> &AsymmetricSigningKeyMetadata;
+
+    /// Asynchronously signs the given input data using the primary key and returns the raw signature bytes.
     ///
-    /// This should not be called directly, as it does not verify that the metadata
-    /// match the values signed (which could happen due to key updates).
+    /// This is an implementation method — callers should use [`JwsSigner::sign`] instead,
+    /// which validates that the caller's expected key metadata matches the key before signing.
+    /// This prevents writing an incorrect `alg` or `kid` into a JWT header if the key has
+    /// been rotated since the header was prepared.
     ///
-    /// Generally implementations should implement this function, and users will
-    /// call `sign_asymmetric`.
+    /// To sign with a specific non-primary key (e.g. during key rotation), implement
+    /// [`Self::key_and_metadata_by_thumbprint`] and [`Self::sign_with_key`], and call
+    /// [`AsymmetricJwsSigner::sign_by_thumbprint`].
     ///
     /// # Errors
     ///
     /// Returns an error if the signing operation fails.
-    fn sign_asymmetric_unchecked(
+    fn sign_unchecked(
         &self,
         input: &[u8],
     ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
 
-    /// Asynchronously signs the given input data, after verifying the caller's expected key metadata.
+    /// Returns the key and metadata for the given JWK thumbprint, if one is available.
     ///
-    /// The metadata must match the values signed. For example, if a key was rotated,
-    /// then either the key ID or algorithm (or both) could have changed, and this will be
-    /// detected by the `sign` implementation. In that case, the caller should retry the operation
-    /// (this is already done internally in the `OAuth2` exchange code).
+    /// If the implementation is aware of a key with the given thumbprint, it will return a reference
+    /// to the key and its metadata. Otherwise, it will return `None`. This includes the primary key.
+    fn key_and_metadata_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<(&Self::Key, &AsymmetricSigningKeyMetadata)>;
+
+    /// Asynchronously signs the given input data using the provided key and returns the signature.
     ///
     /// # Errors
     ///
-    /// Returns [`super::JwsSignerError::MismatchedKeyMetadata`] if the key metadata is mismatched, or
-    /// [`super::JwsSignerError::UnderlyingError`] if the signing operation fails.
-    fn sign_asymmetric(
+    /// Returns an error if the signing operation fails, or if the key is not recognized by this signer.
+    fn sign_with_key(
+        &self,
+        key: &Self::Key,
+        input: &[u8],
+    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
+}
+
+/// Trait for asymmetric signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
+pub trait AsymmetricJwsSigner: JwsSigner {
+    /// Returns the key metadata for this signer.
+    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata>;
+
+    /// Returns the key metadata for the given JWK thumbprint, if one is available.
+    fn key_metadata_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<Cow<'_, AsymmetricSigningKeyMetadata>>;
+
+    /// Asynchronously signs the given input data using the key identified by the given JWK thumbprint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SignByThumbprintError::KeyNotFound`] if the key metadata is mismatched, or
+    /// [`SignByThumbprintError::Sign`] if the signing operation fails.
+    fn sign_by_thumbprint(
         &self,
         input: &[u8],
-        key_metadata: &AsymmetricSigningKeyMetadata,
-    ) -> impl Future<Output = Result<Vec<u8>, super::JwsSignerError<Self::Error>>> + MaybeSend {
-        async move {
-            if &*self.asymmetric_key_metadata() == key_metadata {
-                self.sign_asymmetric_unchecked(input)
-                    .await
-                    .context(UnderlyingSnafu)
-            } else {
-                MismatchedKeyMetadataSnafu.fail()
-            }
-        }
-    }
+        thumbprint: &str,
+    ) -> impl Future<Output = Result<Vec<u8>, SignByThumbprintError<Self::Error>>> + MaybeSend;
 }
 
 impl<T: AsymmetricJwsSigningKey> JwsSigningKey for T {
     type Error = T::Error;
 
     fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
-        match AsymmetricJwsSigningKey::asymmetric_key_metadata(self) {
-            Cow::Borrowed(m) => Cow::Borrowed(&m.key_metadata),
-            Cow::Owned(m) => Cow::Owned(m.key_metadata),
-        }
+        Cow::Borrowed(&self.primary_key_metadata().key_metadata)
     }
 
     async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        self.sign_asymmetric_unchecked(input).await
+        AsymmetricJwsSigningKey::sign_unchecked(self, input).await
     }
+}
+
+impl<T: AsymmetricJwsSigningKey> AsymmetricJwsSigner for T {
+    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata> {
+        Cow::Borrowed(self.primary_key_metadata())
+    }
+
+    fn key_metadata_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<Cow<'_, AsymmetricSigningKeyMetadata>> {
+        let (_, metadata) = self.key_and_metadata_by_thumbprint(thumbprint)?;
+        Some(Cow::Borrowed(metadata))
+    }
+
+    async fn sign_by_thumbprint(
+        &self,
+        input: &[u8],
+        thumbprint: &str,
+    ) -> Result<Vec<u8>, SignByThumbprintError<Self::Error>> {
+        let Some((key, _)) = self.key_and_metadata_by_thumbprint(thumbprint) else {
+            return KeyNotFoundSnafu.fail();
+        };
+
+        self.sign_with_key(key, input).await.context(SignSnafu)
+    }
+}
+
+/// Error type for [`AsymmetricJwsSigner::sign_by_thumbprint`].
+///
+/// This error is returned when the key is not found or the signing operation fails.
+#[derive(Debug, Snafu, Clone)]
+pub enum SignByThumbprintError<E: crate::Error> {
+    /// The key corresponding to the thumbprint was not found.
+    KeyNotFound,
+    /// The signing operation failed.
+    Sign {
+        /// The underlying error.
+        source: E,
+    },
 }
