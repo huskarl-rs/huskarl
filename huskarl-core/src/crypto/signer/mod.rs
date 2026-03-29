@@ -7,5 +7,5 @@ mod symmetric;
 pub use asymmetric::boxed::BoxedAsymmetricJwsSigningKey;
 pub use asymmetric::{AsymmetricJwsSigningKey, AsymmetricSigningKeyMetadata};
 pub use error::JwsSignerError;
-pub use symmetric::boxed::BoxedJwsSigningKey;
-pub use symmetric::{JwsSigningKey, SigningKeyMetadata};
+pub use symmetric::boxed::BoxedJwsSigner;
+pub use symmetric::{JwsSigner, JwsSigningKey, SigningKeyMetadata};

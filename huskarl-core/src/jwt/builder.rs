@@ -6,7 +6,7 @@ use serde::Serialize;
 use snafu::prelude::*;
 
 use crate::{
-    crypto::signer::{JwsSignerError, JwsSigningKey},
+    crypto::signer::{JwsSigner, JwsSignerError, JwsSigningKey},
     jwk::PublicJwk,
     jwt::{
         builder::jwt_builder::{SetExtraClaims, SetExtraHeaders},
@@ -193,7 +193,7 @@ where
     ExtraHeaders: Serialize + Clone,
     ExtraClaims: Serialize + Clone,
 {
-    async fn attempt_to_jws_compact<Sgn: JwsSigningKey>(
+    async fn attempt_to_jws_compact<Sgn: JwsSigner>(
         &self,
         signer: &Sgn,
     ) -> Result<SecretString, JwsSerializationError<Sgn::Error>> {

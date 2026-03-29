@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - DPoP uses `AsymmetricJwsSigningKey` as a bound instead of `HasPublicKey`.
 - Improves matching of wasm targets with actual ability.
+- Split out use side of `JwsSigningKey` into `JwsSigner`, update boxed trait.
 
 ## [0.1.0] - 2026-03-24
 

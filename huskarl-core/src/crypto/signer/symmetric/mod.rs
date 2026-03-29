@@ -33,7 +33,7 @@ pub struct SigningKeyMetadata {
     pub key_id: Option<String>,
 }
 
-/// Trait for signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
+/// Trait for signing implementations that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
 pub trait JwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
     /// The error type returned by this signer's operations.
     type Error: Error + 'static;
@@ -43,12 +43,6 @@ pub trait JwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
 
     /// Asynchronously signs the given input data and returns the signature.
     ///
-    /// This should not be called directly, as it does not verify that the metadata
-    /// match the values signed (which could happen due to key updates).
-    ///
-    /// Generally implementations should implement this function, and users will
-    /// call `sign`.
-    ///
     /// # Errors
     ///
     /// Returns an error if the signing operation fails.
@@ -56,6 +50,15 @@ pub trait JwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
         &self,
         input: &[u8],
     ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
+}
+
+/// Trait for using signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
+pub trait JwsSigner: std::fmt::Debug + Clone + MaybeSendSync {
+    /// The error type returned by this signer's operations.
+    type Error: Error + 'static;
+
+    /// Returns the key metadata for this signer.
+    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata>;
 
     /// Asynchronously signs the given input data, after verifying the caller's expected key metadata.
     ///
@@ -72,13 +75,25 @@ pub trait JwsSigningKey: std::fmt::Debug + Clone + MaybeSendSync {
         &self,
         input: &[u8],
         key_metadata: &SigningKeyMetadata,
-    ) -> impl Future<Output = Result<Vec<u8>, super::JwsSignerError<Self::Error>>> + MaybeSend {
-        async move {
-            if &*self.key_metadata() == key_metadata {
-                self.sign_unchecked(input).await.context(UnderlyingSnafu)
-            } else {
-                MismatchedKeyMetadataSnafu.fail()
-            }
+    ) -> impl Future<Output = Result<Vec<u8>, super::JwsSignerError<Self::Error>>> + MaybeSend;
+}
+
+impl<T: JwsSigningKey> JwsSigner for T {
+    type Error = T::Error;
+
+    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
+        self.key_metadata()
+    }
+
+    async fn sign(
+        &self,
+        input: &[u8],
+        key_metadata: &SigningKeyMetadata,
+    ) -> Result<Vec<u8>, super::JwsSignerError<Self::Error>> {
+        if &*self.key_metadata() == key_metadata {
+            self.sign_unchecked(input).await.context(UnderlyingSnafu)
+        } else {
+            MismatchedKeyMetadataSnafu.fail()
         }
     }
 }
