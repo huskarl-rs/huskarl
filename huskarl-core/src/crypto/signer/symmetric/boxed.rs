@@ -2,69 +2,77 @@ use std::{borrow::Cow, pin::Pin, sync::Arc};
 
 use crate::{
     BoxedError,
-    crypto::signer::{JwsSigningKey, SigningKeyMetadata},
+    crypto::signer::{JwsSigner, JwsSignerError, SigningKeyMetadata},
     platform::{MaybeSendFuture, MaybeSendSync},
 };
 
 /// Boxed JWS Signer.
 #[derive(Debug, Clone)]
-pub struct BoxedJwsSigningKey {
-    inner: Arc<dyn DynJwsSigningKey>,
+pub struct BoxedJwsSigner {
+    inner: Arc<dyn DynJwsSigner>,
 }
 
-impl BoxedJwsSigningKey {
-    /// Create a boxed signing key from a non-boxed.
-    pub fn new<Sgn: JwsSigningKey + 'static>(signer: Sgn) -> Self {
+impl BoxedJwsSigner {
+    /// Create a boxed signer from a non-boxed.
+    pub fn new<Sgn: JwsSigner + 'static>(signer: Sgn) -> Self {
         Self {
             inner: Arc::new(signer),
         }
     }
 }
 
-/// Boxed trait for signing keys that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
-trait DynJwsSigningKey: std::fmt::Debug + MaybeSendSync {
+/// Boxed trait for signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
+trait DynJwsSigner: std::fmt::Debug + MaybeSendSync {
     /// Returns metadata about the key used by this signer.
     fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata>;
 
     /// Asynchronously signs the given input data and returns the signature.
     ///
-    /// This should not be called directly, as it does not verify that the algorithm
-    /// and key ID match the values signed (which could happen due to key updates).
-    ///
     /// # Errors
     ///
     /// Returns an error if the signing operation fails.
-    fn sign_unchecked<'a>(
+    #[allow(clippy::type_complexity)]
+    fn sign<'a>(
         &'a self,
         input: &'a [u8],
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>>;
+        key_metadata: &'a SigningKeyMetadata,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, JwsSignerError<BoxedError>>> + 'a>>;
 }
 
-impl<Sgn: JwsSigningKey> DynJwsSigningKey for Sgn {
+impl<Sgn: JwsSigner> DynJwsSigner for Sgn {
     fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
         self.key_metadata()
     }
 
-    fn sign_unchecked<'a>(
+    fn sign<'a>(
         &'a self,
         input: &'a [u8],
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>> {
+        key_metadata: &'a SigningKeyMetadata,
+    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, JwsSignerError<BoxedError>>> + 'a>>
+    {
         Box::pin(async {
-            self.sign_unchecked(input)
-                .await
-                .map_err(BoxedError::from_err)
+            self.sign(input, key_metadata).await.map_err(|e| match e {
+                JwsSignerError::MismatchedKeyMetadata => JwsSignerError::MismatchedKeyMetadata,
+                JwsSignerError::UnderlyingError { source } => JwsSignerError::UnderlyingError {
+                    source: BoxedError::from_err(source),
+                },
+            })
         })
     }
 }
 
-impl JwsSigningKey for BoxedJwsSigningKey {
+impl JwsSigner for BoxedJwsSigner {
     type Error = BoxedError;
 
     fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
         self.inner.key_metadata()
     }
 
-    async fn sign_unchecked(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        self.inner.sign_unchecked(input).await
+    async fn sign(
+        &self,
+        input: &[u8],
+        key_metadata: &SigningKeyMetadata,
+    ) -> Result<Vec<u8>, JwsSignerError<Self::Error>> {
+        self.inner.sign(input, key_metadata).await
     }
 }
