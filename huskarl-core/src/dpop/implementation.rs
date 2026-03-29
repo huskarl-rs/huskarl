@@ -11,7 +11,7 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    crypto::signer::{AsymmetricJwsSigningKey, BoxedAsymmetricJwsSigningKey, JwsSigningKey},
+    crypto::signer::{AsymmetricJwsSigner, BoxedAsymmetricJwsSigner},
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     jwt::{JwsSerializationError, Jwt},
     secrets::SecretString,
@@ -23,7 +23,7 @@ type Origin = (Option<Scheme>, Option<String>, Option<u16>);
 
 /// This respresents a grant with the ability to create DPoP-bound tokens and sign requests with them.
 #[derive(Debug, Clone, Builder)]
-pub struct DPoP<Sgn: AsymmetricJwsSigningKey = BoxedAsymmetricJwsSigningKey> {
+pub struct DPoP<Sgn: AsymmetricJwsSigner = BoxedAsymmetricJwsSigner> {
     signer: Sgn,
     #[builder(skip = signer.asymmetric_key_metadata().thumbprint())]
     jwk_thumbprint: Option<String>,
@@ -31,8 +31,8 @@ pub struct DPoP<Sgn: AsymmetricJwsSigningKey = BoxedAsymmetricJwsSigningKey> {
     nonce: Arc<Mutex<Option<Arc<String>>>>,
 }
 
-impl<Sgn: AsymmetricJwsSigningKey> AuthorizationServerDPoP for DPoP<Sgn> {
-    type Error = JwsSerializationError<<Sgn as AsymmetricJwsSigningKey>::Error>;
+impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
+    type Error = JwsSerializationError<Sgn::Error>;
     type ResourceServerDPoP = ResourceDPoP<Sgn>;
 
     fn jwk_thumbprint(&self) -> Option<&str> {
@@ -63,13 +63,13 @@ impl<Sgn: AsymmetricJwsSigningKey> AuthorizationServerDPoP for DPoP<Sgn> {
 
 /// This respresents the ability to create proofs for resource servers from DPoP-bound access tokens.
 #[derive(Debug, Clone, Builder)]
-pub struct ResourceDPoP<Sgn: AsymmetricJwsSigningKey> {
+pub struct ResourceDPoP<Sgn: AsymmetricJwsSigner> {
     signer: Sgn,
     #[builder(default)]
     nonces: Arc<RwLock<HashMap<Origin, Arc<String>>>>,
 }
 
-impl<Sgn: AsymmetricJwsSigningKey> ResourceServerDPoP for ResourceDPoP<Sgn> {
+impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
     type Error = JwsSerializationError<Sgn::Error>;
 
     fn update_nonce(&self, uri: &Uri, nonce: String) {
@@ -105,13 +105,13 @@ fn origin_from_uri(uri: &Uri) -> Origin {
     )
 }
 
-async fn sign_proof<Sgn: AsymmetricJwsSigningKey>(
+async fn sign_proof<Sgn: AsymmetricJwsSigner>(
     signer: &Sgn,
     htm: &Method,
     htu: &Uri,
     access_token: Option<&AccessToken>,
     nonce: Option<Arc<String>>,
-) -> Result<Option<SecretString>, JwsSerializationError<<Sgn as JwsSigningKey>::Error>> {
+) -> Result<Option<SecretString>, JwsSerializationError<Sgn::Error>> {
     #[derive(Debug, Clone, Serialize)]
     struct DPoPClaims<'a> {
         htm: &'a str,
