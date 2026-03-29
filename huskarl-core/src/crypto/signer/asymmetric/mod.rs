@@ -99,7 +99,7 @@ pub trait AsymmetricJwsSigner: JwsSigner {
     ///
     /// # Errors
     ///
-    /// Returns [`SignByThumbprintError::KeyNotFound`] if the key metadata is mismatched, or
+    /// Returns [`SignByThumbprintError::KeyNotFound`] if no key with the given thumbprint is known, or
     /// [`SignByThumbprintError::Sign`] if the signing operation fails.
     fn sign_by_thumbprint(
         &self,
@@ -158,4 +158,13 @@ pub enum SignByThumbprintError<E: crate::Error> {
         /// The underlying error.
         source: E,
     },
+}
+
+impl<E: crate::Error> crate::Error for SignByThumbprintError<E> {
+    fn is_retryable(&self) -> bool {
+        match self {
+            SignByThumbprintError::KeyNotFound => false,
+            SignByThumbprintError::Sign { source } => source.is_retryable(),
+        }
+    }
 }

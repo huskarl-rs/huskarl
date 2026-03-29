@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Additions
 
 - Adds `AsymmetricJwsSigningKey` trait. Provides a blanket implementation for `JwsSigningKey`.
+- Added `to_jws_compact_with_thumbprint` to generate JWTs matching DPoP JKT.
 
 ### Removals
 
