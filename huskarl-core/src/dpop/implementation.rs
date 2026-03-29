@@ -40,6 +40,10 @@ impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
     }
 
     fn update_nonce(&self, nonce: String) {
+        // If the lock is poisoned (a thread panicked while holding it), we recover
+        // the guard and proceed. A stale nonce just causes the server to reject the
+        // next DPoP proof and return a fresh nonce, so the worst case is one extra
+        // round-trip rather than a hard failure.
         let _ = self
             .nonce
             .lock()
@@ -48,6 +52,7 @@ impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
     }
 
     async fn proof(&self, method: &Method, uri: &Uri) -> Result<Option<SecretString>, Self::Error> {
+        // See comment in `update_nonce` for why poison recovery is intentional here.
         let nonce = self
             .nonce
             .lock()
@@ -74,6 +79,10 @@ impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
 
     fn update_nonce(&self, uri: &Uri, nonce: String) {
         let origin = origin_from_uri(uri);
+        // If the lock is poisoned (a thread panicked while holding it), we recover
+        // the guard and proceed. A stale nonce just causes the server to reject the
+        // next DPoP proof and return a fresh nonce, so the worst case is one extra
+        // round-trip rather than a hard failure.
         self.nonces
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -87,6 +96,7 @@ impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
         access_token: &AccessToken,
     ) -> Result<Option<SecretString>, Self::Error> {
         let origin = origin_from_uri(uri);
+        // See comment in `update_nonce` for why poison recovery is intentional here.
         let nonce = self
             .nonces
             .read()

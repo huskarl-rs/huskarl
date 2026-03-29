@@ -3,6 +3,7 @@
 "cargo:cargo-docs-rs" = "latest"
 "cargo:cargo-geiger" = "latest"
 "cargo:cargo-llvm-cov" = "latest"
+"cargo:cargo-msrv" = "latest"
 "cargo:cargo-reedme" = "latest"
 "cargo:cargo-semver-checks" = "latest"
 "cargo:cargo-vet" = "latest"

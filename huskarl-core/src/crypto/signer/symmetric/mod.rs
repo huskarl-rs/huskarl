@@ -8,6 +8,7 @@ use bon::Builder;
 use snafu::prelude::*;
 
 use crate::Error;
+use crate::crypto::signer::JwsSignerError;
 use crate::crypto::signer::error::{MismatchedKeyMetadataSnafu, UnderlyingSnafu};
 use crate::platform::{MaybeSend, MaybeSendSync};
 
@@ -80,7 +81,7 @@ pub trait JwsSigner: std::fmt::Debug + Clone + MaybeSendSync {
         &self,
         input: &[u8],
         key_metadata: &SigningKeyMetadata,
-    ) -> impl Future<Output = Result<Vec<u8>, super::JwsSignerError<Self::Error>>> + MaybeSend;
+    ) -> impl Future<Output = Result<Vec<u8>, JwsSignerError<Self::Error>>> + MaybeSend;
 }
 
 impl<T: JwsSigningKey> JwsSigner for T {
