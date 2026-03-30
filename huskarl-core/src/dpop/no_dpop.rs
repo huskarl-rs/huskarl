@@ -26,6 +26,7 @@ impl AuthorizationServerDPoP for NoDPoP {
         &self,
         _method: &Method,
         _uri: &Uri,
+        _dpop_jkt: &str,
     ) -> Result<Option<SecretString>, Self::Error> {
         Ok(None)
     }
@@ -45,6 +46,7 @@ impl ResourceServerDPoP for NoDPoP {
         _method: &Method,
         _uri: &Uri,
         _access_token: &AccessToken,
+        _dpop_jkt: &str,
     ) -> Result<Option<SecretString>, Self::Error> {
         Ok(None)
     }

@@ -42,6 +42,7 @@ pub trait AuthorizationServerDPoP: Clone + MaybeSendSync {
         &self,
         method: &Method,
         uri: &Uri,
+        dpop_jkt: &str,
     ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
 
     /// Returns the corresponding resource server variant.
@@ -61,8 +62,13 @@ impl<D: AuthorizationServerDPoP> AuthorizationServerDPoP for Arc<D> {
         self.as_ref().update_nonce(nonce);
     }
 
-    async fn proof(&self, method: &Method, uri: &Uri) -> Result<Option<SecretString>, Self::Error> {
-        self.as_ref().proof(method, uri).await
+    async fn proof(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        dpop_jkt: &str,
+    ) -> Result<Option<SecretString>, Self::Error> {
+        self.as_ref().proof(method, uri, dpop_jkt).await
     }
 
     fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
@@ -84,5 +90,6 @@ pub trait ResourceServerDPoP: MaybeSendSync {
         method: &Method,
         uri: &Uri,
         access_token: &AccessToken,
+        dpop_jkt: &str,
     ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
 }

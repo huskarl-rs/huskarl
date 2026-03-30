@@ -51,14 +51,19 @@ impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
             .insert(Arc::new(nonce));
     }
 
-    async fn proof(&self, method: &Method, uri: &Uri) -> Result<Option<SecretString>, Self::Error> {
+    async fn proof(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        dpop_jkt: &str,
+    ) -> Result<Option<SecretString>, Self::Error> {
         // See comment in `update_nonce` for why poison recovery is intentional here.
         let nonce = self
             .nonce
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        sign_proof(&self.signer, method, uri, None, nonce).await
+        sign_proof(&self.signer, method, uri, None, nonce, dpop_jkt).await
     }
 
     fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
@@ -94,6 +99,7 @@ impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
         method: &Method,
         uri: &Uri,
         access_token: &AccessToken,
+        dpop_jkt: &str,
     ) -> Result<Option<SecretString>, Self::Error> {
         let origin = origin_from_uri(uri);
         // See comment in `update_nonce` for why poison recovery is intentional here.
@@ -103,7 +109,15 @@ impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&origin)
             .cloned();
-        sign_proof(&self.signer, method, uri, Some(access_token), nonce).await
+        sign_proof(
+            &self.signer,
+            method,
+            uri,
+            Some(access_token),
+            nonce,
+            dpop_jkt,
+        )
+        .await
     }
 }
 
@@ -121,6 +135,7 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
     htu: &Uri,
     access_token: Option<&AccessToken>,
     nonce: Option<Arc<String>>,
+    dpop_jkt: &str,
 ) -> Result<Option<SecretString>, JwsSerializationError<Sgn::Error>> {
     #[derive(Debug, Clone, Serialize)]
     struct DPoPClaims<'a> {
@@ -141,14 +156,20 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
         nonce,
     };
 
+    let metadata = signer
+        .key_metadata_by_thumbprint(dpop_jkt)
+        .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
+
     let jwt = Jwt::builder()
         .typ("dpop+jwt")
         .issued_now_expires_after(Duration::from_mins(1))
-        .jwk(signer.asymmetric_key_metadata().public_key.clone())
+        .jwk(metadata.public_key.clone())
         .extra_claims(extra_claims)
         .build();
 
-    jwt.to_jws_compact(signer).await.map(Some)
+    jwt.to_jws_compact_with_thumbprint(signer, dpop_jkt)
+        .await
+        .map(Some)
 }
 
 /// Normalizes a URI for inclusion in a `DPoP` proof by stripping query and fragment components.
