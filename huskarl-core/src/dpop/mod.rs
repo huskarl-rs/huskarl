@@ -15,14 +15,14 @@ use http::{Method, Uri};
 use crate::{
     platform::{MaybeSend, MaybeSendSync},
     secrets::SecretString,
-    token::AccessToken,
+    token::DpopAccessToken,
 };
 
 pub use implementation::{
     DPoP, DPoPBuilder, ResourceDPoP, ResourceDPoPBuilder, hash_access_token_for_dpop,
     normalize_uri_for_dpop,
 };
-pub use no_dpop::NoDPoP;
+pub use no_dpop::{DPoPNotConfigured, NoDPoP};
 
 /// Proof implementation for `DPoP`.
 pub trait AuthorizationServerDPoP: Clone + MaybeSendSync {
@@ -31,18 +31,20 @@ pub trait AuthorizationServerDPoP: Clone + MaybeSendSync {
     /// The type of the corresponding resource server variant.
     type ResourceServerDPoP: ResourceServerDPoP;
 
-    /// Returns the JWK thumbprint for the public key.
-    fn jwk_thumbprint(&self) -> Option<&str>;
-
     /// Set the current `DPoP` nonce value.
     fn update_nonce(&self, nonce: String);
+
+    /// Returns a signer to use with the [`Self::proof`] call.
+    ///
+    /// If a thumbprint has already been bound to the session, pass it here.
+    fn get_current_thumbprint(&self) -> Option<String>;
 
     /// Create a `DPoP` proof for the token endpoint.
     fn proof(
         &self,
         method: &Method,
         uri: &Uri,
-        dpop_jkt: &str,
+        dpop_jkt: Option<&str>,
     ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
 
     /// Returns the corresponding resource server variant.
@@ -54,19 +56,19 @@ impl<D: AuthorizationServerDPoP> AuthorizationServerDPoP for Arc<D> {
 
     type ResourceServerDPoP = D::ResourceServerDPoP;
 
-    fn jwk_thumbprint(&self) -> Option<&str> {
-        self.as_ref().jwk_thumbprint()
-    }
-
     fn update_nonce(&self, nonce: String) {
         self.as_ref().update_nonce(nonce);
+    }
+
+    fn get_current_thumbprint(&self) -> Option<String> {
+        self.as_ref().get_current_thumbprint()
     }
 
     async fn proof(
         &self,
         method: &Method,
         uri: &Uri,
-        dpop_jkt: &str,
+        dpop_jkt: Option<&str>,
     ) -> Result<Option<SecretString>, Self::Error> {
         self.as_ref().proof(method, uri, dpop_jkt).await
     }
@@ -89,7 +91,6 @@ pub trait ResourceServerDPoP: MaybeSendSync {
         &self,
         method: &Method,
         uri: &Uri,
-        access_token: &AccessToken,
-        dpop_jkt: &str,
+        access_token: &DpopAccessToken,
     ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
 }

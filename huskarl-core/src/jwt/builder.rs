@@ -6,9 +6,7 @@ use serde::Serialize;
 use snafu::prelude::*;
 
 use crate::{
-    crypto::signer::{
-        AsymmetricJwsSigner, JwsSigner, JwsSignerError, SignByThumbprintError, SigningKeyMetadata,
-    },
+    crypto::signer::JwsSigner,
     jwk::PublicJwk,
     jwt::{
         builder::jwt_builder::{SetExtraClaims, SetExtraHeaders},
@@ -180,17 +178,16 @@ pub enum JwsSerializationError<SgnErr: crate::Error + 'static = Infallible> {
         /// The underlying signing error.
         source: SgnErr,
     },
-    /// Key metadata mismatched on both the initial attempt and after an internal retry.
-    ///
-    /// This indicates a bug in the [`JwsSigner`] implementation: the signer returned
-    /// [`JwsSignerError::MismatchedKeyMetadata`] twice in a row, suggesting its key
-    /// metadata is in an inconsistent or continuously-rotating state.
-    MismatchedKeyData,
     /// Failed to normalize the URI for use in a `DPoP` proof.
     NormalizeUri {
         /// The underlying HTTP error.
         source: http::Error,
     },
+    /// No JWK thumbprint provided for proof.
+    ///
+    /// This indicates a logic error; the caller should provide a thumbprint
+    /// when `DPoP` is configured.
+    NoThumbprint,
     /// No matching key was found for the given thumbprint.
     NoMatchingKeyForThumbprint,
 }
@@ -201,7 +198,7 @@ impl<SgnErr: crate::Error> crate::Error for JwsSerializationError<SgnErr> {
             JwsSerializationError::GenerateSigningInput { .. }
             | JwsSerializationError::NormalizeUri { .. }
             | JwsSerializationError::NoMatchingKeyForThumbprint
-            | JwsSerializationError::MismatchedKeyData => false,
+            | JwsSerializationError::NoThumbprint => false,
             JwsSerializationError::Sign { source } => source.is_retryable(),
         }
     }
@@ -212,33 +209,9 @@ where
     ExtraHeaders: Serialize + Clone,
     ExtraClaims: Serialize + Clone,
 {
-    async fn attempt_to_jws_compact<Sgn: JwsSigner>(
-        &self,
-        signer: &Sgn,
-    ) -> Result<SecretString, JwsSerializationError<Sgn::Error>> {
-        let key_metadata = signer.key_metadata();
-
-        let signing_input = self
-            .generate_jwt_signing_input(&key_metadata)
-            .context(GenerateSigningInputSnafu)?;
-
-        let signature = signer
-            .sign(signing_input.as_bytes(), &key_metadata)
-            .await
-            .map_err(|err| match err {
-                JwsSignerError::MismatchedKeyMetadata => JwsSerializationError::MismatchedKeyData,
-                JwsSignerError::UnderlyingError { source } => {
-                    JwsSerializationError::Sign { source }
-                }
-            })?;
-
-        let signature_b64 = BASE64_URL_SAFE_NO_PAD.encode(&signature);
-        let result = [signing_input, signature_b64].join(".");
-
-        Ok(SecretString::new(result))
-    }
-
     /// Creates a string using the JWS compact serialization.
+    ///
+    /// The key must already have been selected by the caller.
     ///
     /// # Errors
     ///
@@ -247,45 +220,14 @@ where
         &self,
         signer: &Sgn,
     ) -> Result<SecretString, JwsSerializationError<Sgn::Error>> {
-        match self.attempt_to_jws_compact(signer).await {
-            Ok(jws) => Ok(jws),
-            // The signer may refresh its key metadata (e.g. after a key rotation) and
-            // return `MismatchedKeyMetadata` to signal that the caller should retry
-            // with fresh metadata. We retry once; a second mismatch is a bug.
-            Err(JwsSerializationError::MismatchedKeyData) => {
-                self.attempt_to_jws_compact(signer).await
-            }
-            other => other,
-        }
-    }
-
-    /// Creates a string using the JWS compact serialization, signing with a key identified by its thumbprint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the JWT could not be serialized to JSON, or signing failed.
-    pub async fn to_jws_compact_with_thumbprint<Sgn: AsymmetricJwsSigner>(
-        &self,
-        signer: &Sgn,
-        thumbprint: &str,
-    ) -> Result<SecretString, JwsSerializationError<Sgn::Error>> {
-        let key_metadata = signer
-            .key_metadata_by_thumbprint(thumbprint)
-            .ok_or(NoMatchingKeyForThumbprintSnafu.build())?;
-
         let signing_input = self
-            .generate_jwt_signing_input(&key_metadata.key_metadata)
+            .generate_jwt_signing_input(&signer.jws_algorithm(), signer.key_id().as_deref())
             .context(GenerateSigningInputSnafu)?;
 
         let signature = signer
-            .sign_by_thumbprint(signing_input.as_bytes(), thumbprint)
+            .sign(signing_input.as_bytes())
             .await
-            .map_err(|err| match err {
-                SignByThumbprintError::KeyNotFound => {
-                    JwsSerializationError::NoMatchingKeyForThumbprint
-                }
-                SignByThumbprintError::Sign { source } => JwsSerializationError::Sign { source },
-            })?;
+            .context(SignSnafu)?;
 
         let signature_b64 = BASE64_URL_SAFE_NO_PAD.encode(&signature);
         let result = [signing_input, signature_b64].join(".");
@@ -295,12 +237,13 @@ where
 
     fn generate_jwt_signing_input(
         &self,
-        key_metadata: &SigningKeyMetadata,
+        alg: &str,
+        kid: Option<&str>,
     ) -> Result<String, JwsSigningInputError> {
         let jwt_header = JwtHeader {
-            alg: Cow::Borrowed(&key_metadata.jws_algorithm),
+            alg: Cow::Borrowed(alg),
             typ: Some(Cow::Borrowed(&self.typ)),
-            kid: key_metadata.key_id.as_deref().map(Cow::Borrowed),
+            kid: kid.map(Cow::Borrowed),
             crit: Vec::new(),
             jwk: self.jwk.clone(),
             extra_headers: self.extra_headers.as_ref().map(Cow::Borrowed),

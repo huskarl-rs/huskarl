@@ -1,34 +1,47 @@
-use std::convert::Infallible;
-
 use http::{Method, Uri};
+use snafu::Snafu;
 
 use crate::{
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     secrets::SecretString,
-    token::AccessToken,
+    token::DpopAccessToken,
 };
 
 /// This represents a grant without the ability to use `DPoP` to constrain tokens.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoDPoP;
 
+/// This represents a situation where a `DPoP` proof is required, but the server is not configured to use `DPoP`.
+#[derive(Debug, Clone, Copy, Default, Snafu)]
+pub struct DPoPNotConfigured;
+
+impl crate::Error for DPoPNotConfigured {
+    fn is_retryable(&self) -> bool {
+        false
+    }
+}
+
 impl AuthorizationServerDPoP for NoDPoP {
-    type Error = Infallible;
+    type Error = DPoPNotConfigured;
     type ResourceServerDPoP = NoDPoP;
 
-    fn jwk_thumbprint(&self) -> Option<&str> {
+    fn update_nonce(&self, _nonce: String) {}
+
+    fn get_current_thumbprint(&self) -> Option<String> {
         None
     }
-
-    fn update_nonce(&self, _nonce: String) {}
 
     async fn proof(
         &self,
         _method: &Method,
         _uri: &Uri,
-        _dpop_jkt: &str,
+        dpop_jkt: Option<&str>,
     ) -> Result<Option<SecretString>, Self::Error> {
-        Ok(None)
+        if dpop_jkt.is_some() {
+            Err(DPoPNotConfigured)
+        } else {
+            Ok(None)
+        }
     }
 
     fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
@@ -37,7 +50,7 @@ impl AuthorizationServerDPoP for NoDPoP {
 }
 
 impl ResourceServerDPoP for NoDPoP {
-    type Error = Infallible;
+    type Error = DPoPNotConfigured;
 
     fn update_nonce(&self, _uri: &Uri, _nonce: String) {}
 
@@ -45,9 +58,8 @@ impl ResourceServerDPoP for NoDPoP {
         &self,
         _method: &Method,
         _uri: &Uri,
-        _access_token: &AccessToken,
-        _dpop_jkt: &str,
+        _access_token: &DpopAccessToken,
     ) -> Result<Option<SecretString>, Self::Error> {
-        Ok(None)
+        Err(DPoPNotConfigured)
     }
 }
