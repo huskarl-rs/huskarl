@@ -11,11 +11,14 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    crypto::signer::{AsymmetricJwsSigner, BoxedAsymmetricJwsSigner},
+    crypto::signer::{
+        AsymmetricJwsSigner, AsymmetricJwsSignerSelector, BoxedAsymmetricJwsSignerSelector,
+        JwsSigner,
+    },
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     jwt::{JwsSerializationError, Jwt},
     secrets::SecretString,
-    token::AccessToken,
+    token::DpopAccessToken,
 };
 
 // Used internally to track the origin value for a Uri (nonces are matched by origin).
@@ -23,21 +26,15 @@ type Origin = (Option<Scheme>, Option<String>, Option<u16>);
 
 /// This respresents a grant with the ability to create DPoP-bound tokens and sign requests with them.
 #[derive(Debug, Clone, Builder)]
-pub struct DPoP<Sgn: AsymmetricJwsSigner = BoxedAsymmetricJwsSigner> {
+pub struct DPoP<Sgn: AsymmetricJwsSignerSelector = BoxedAsymmetricJwsSignerSelector> {
     signer: Sgn,
-    #[builder(skip = signer.asymmetric_key_metadata().thumbprint())]
-    jwk_thumbprint: Option<String>,
     #[builder(skip)]
     nonce: Arc<Mutex<Option<Arc<String>>>>,
 }
 
-impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
-    type Error = JwsSerializationError<Sgn::Error>;
+impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
+    type Error = JwsSerializationError<<Sgn::AsymmetricSigner as JwsSigner>::Error>;
     type ResourceServerDPoP = ResourceDPoP<Sgn>;
-
-    fn jwk_thumbprint(&self) -> Option<&str> {
-        self.jwk_thumbprint.as_deref()
-    }
 
     fn update_nonce(&self, nonce: String) {
         // If the lock is poisoned (a thread panicked while holding it), we recover
@@ -51,11 +48,18 @@ impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
             .insert(Arc::new(nonce));
     }
 
+    fn get_current_thumbprint(&self) -> Option<String> {
+        self.signer
+            .select_asymmetric_signer()
+            .public_key_jwk()
+            .thumbprint()
+    }
+
     async fn proof(
         &self,
         method: &Method,
         uri: &Uri,
-        dpop_jkt: &str,
+        dpop_jkt: Option<&str>,
     ) -> Result<Option<SecretString>, Self::Error> {
         // See comment in `update_nonce` for why poison recovery is intentional here.
         let nonce = self
@@ -63,7 +67,17 @@ impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        sign_proof(&self.signer, method, uri, None, nonce, dpop_jkt).await
+
+        let Some(dpop_jkt) = dpop_jkt else {
+            return Err(JwsSerializationError::NoThumbprint);
+        };
+
+        let signer = self
+            .signer
+            .select_asymmetric_signer_by_thumbprint(dpop_jkt)
+            .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
+
+        sign_proof(&signer, method, uri, None, nonce).await
     }
 
     fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
@@ -73,14 +87,14 @@ impl<Sgn: AsymmetricJwsSigner> AuthorizationServerDPoP for DPoP<Sgn> {
 
 /// This respresents the ability to create proofs for resource servers from DPoP-bound access tokens.
 #[derive(Debug, Clone, Builder)]
-pub struct ResourceDPoP<Sgn: AsymmetricJwsSigner> {
+pub struct ResourceDPoP<Sgn: AsymmetricJwsSignerSelector> {
     signer: Sgn,
     #[builder(default)]
     nonces: Arc<RwLock<HashMap<Origin, Arc<String>>>>,
 }
 
-impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
-    type Error = JwsSerializationError<Sgn::Error>;
+impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> {
+    type Error = JwsSerializationError<<Sgn::AsymmetricSigner as JwsSigner>::Error>;
 
     fn update_nonce(&self, uri: &Uri, nonce: String) {
         let origin = origin_from_uri(uri);
@@ -98,8 +112,7 @@ impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
         &self,
         method: &Method,
         uri: &Uri,
-        access_token: &AccessToken,
-        dpop_jkt: &str,
+        access_token: &DpopAccessToken,
     ) -> Result<Option<SecretString>, Self::Error> {
         let origin = origin_from_uri(uri);
         // See comment in `update_nonce` for why poison recovery is intentional here.
@@ -109,15 +122,13 @@ impl<Sgn: AsymmetricJwsSigner> ResourceServerDPoP for ResourceDPoP<Sgn> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&origin)
             .cloned();
-        sign_proof(
-            &self.signer,
-            method,
-            uri,
-            Some(access_token),
-            nonce,
-            dpop_jkt,
-        )
-        .await
+
+        let signer = self
+            .signer
+            .select_asymmetric_signer_by_thumbprint(access_token.jkt())
+            .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
+
+        sign_proof(&signer, method, uri, Some(access_token), nonce).await
     }
 }
 
@@ -133,9 +144,8 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
     signer: &Sgn,
     htm: &Method,
     htu: &Uri,
-    access_token: Option<&AccessToken>,
+    access_token: Option<&DpopAccessToken>,
     nonce: Option<Arc<String>>,
-    dpop_jkt: &str,
 ) -> Result<Option<SecretString>, JwsSerializationError<Sgn::Error>> {
     #[derive(Debug, Clone, Serialize)]
     struct DPoPClaims<'a> {
@@ -156,20 +166,14 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
         nonce,
     };
 
-    let metadata = signer
-        .key_metadata_by_thumbprint(dpop_jkt)
-        .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
-
     let jwt = Jwt::builder()
         .typ("dpop+jwt")
         .issued_now_expires_after(Duration::from_mins(1))
-        .jwk(metadata.public_key.clone())
+        .jwk(signer.public_key_jwk().into_owned())
         .extra_claims(extra_claims)
         .build();
 
-    jwt.to_jws_compact_with_thumbprint(signer, dpop_jkt)
-        .await
-        .map(Some)
+    jwt.to_jws_compact(signer).await.map(Some)
 }
 
 /// Normalizes a URI for inclusion in a `DPoP` proof by stripping query and fragment components.
@@ -192,7 +196,7 @@ pub fn normalize_uri_for_dpop(uri: &Uri) -> Result<Uri, http::Error> {
 
 /// Computes the SHA-256 `ath` hash of an access token for inclusion in a `DPoP` proof.
 #[must_use]
-pub fn hash_access_token_for_dpop(access_token: &AccessToken) -> String {
+pub fn hash_access_token_for_dpop(access_token: &DpopAccessToken) -> String {
     let mut hasher = Sha256::new();
     hasher.update(access_token.expose_token().as_bytes());
     let hash_digest = hasher.finalize();

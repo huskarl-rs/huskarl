@@ -24,21 +24,10 @@ use crate::{
 ///
 /// If you need a custom stack — for example to mix a JWKS source with KMS or enclave keys —
 /// compose the lower-level types directly and apply [`RetryingVerifier`] once at the top.
-#[derive(Builder, Debug, Clone, Copy)]
-#[builder(finish_fn(vis = "", name = "build_internal"))]
-pub struct JwksSource<C: HttpClient> {
+#[derive(Builder, Debug, Clone)]
+pub struct JwksSource<C: HttpClient + Clone + 'static> {
     /// The HTTP client used to fetch the JWKS.
     http_client: C,
-}
-
-impl<C: HttpClient, S: jwks_source_builder::State> JwksSourceBuilder<C, S> {
-    /// Builds the factory, wrapped in an `Arc`.
-    pub fn build(self) -> Arc<JwksSource<C>>
-    where
-        S: jwks_source_builder::IsComplete,
-    {
-        Arc::new(self.build_internal())
-    }
 }
 
 impl<C: HttpClient + Clone + 'static> JwsVerifierFactory for JwksSource<C> {

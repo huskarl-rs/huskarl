@@ -5,7 +5,7 @@ use http::Uri;
 
 use crate::{
     client_auth::{AuthenticationParams, ClientAuthentication},
-    crypto::signer::JwsSigningKey,
+    crypto::signer::{JwsSigner, JwsSignerSelector},
     jwt::{JwsSerializationError, Jwt},
 };
 
@@ -42,7 +42,7 @@ use crate::{
 /// Benefits:
 ///  - simpler setup when a shared secret is acceptable
 #[derive(Debug, Clone, Builder)]
-pub struct JwtBearer<Sgn: JwsSigningKey> {
+pub struct JwtBearer<Sgn: JwsSignerSelector> {
     /// The signer of the JWT.
     signer: Sgn,
     /// Sets the subject, if different to the issuer.
@@ -84,8 +84,8 @@ pub enum Audience {
     Custom(Arc<str>),
 }
 
-impl<Sgn: JwsSigningKey> ClientAuthentication for JwtBearer<Sgn> {
-    type Error = JwsSerializationError<Sgn::Error>;
+impl<Sgn: JwsSignerSelector> ClientAuthentication for JwtBearer<Sgn> {
+    type Error = JwsSerializationError<<Sgn::Signer as JwsSigner>::Error>;
 
     async fn authentication_params<'a>(
         &'a self,
@@ -113,7 +113,7 @@ impl<Sgn: JwsSigningKey> ClientAuthentication for JwtBearer<Sgn> {
             .form_params(bon::map! {
                 "client_id": client_id,
                 "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                "client_assertion": jwt.to_jws_compact(&self.signer).await?
+                "client_assertion": jwt.to_jws_compact(&self.signer.select_signer()).await?
             })
             .build())
     }

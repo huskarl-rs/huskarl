@@ -1,13 +1,70 @@
-use std::{borrow::Cow, pin::Pin, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 
 use crate::{
     BoxedError,
     crypto::signer::{
-        JwsSigner, JwsSignerError, SigningKeyMetadata,
-        asymmetric::{AsymmetricJwsSigner, AsymmetricSigningKeyMetadata, SignByThumbprintError},
+        JwsSigner,
+        asymmetric::{AsymmetricJwsSigner, AsymmetricJwsSignerSelector},
+        symmetric::boxed::DynJwsSigner,
     },
-    platform::{MaybeSendFuture, MaybeSendSync},
+    jwk::PublicJwk,
+    platform::MaybeSendSync,
 };
+
+/// Boxed JWS signer selector for asymmetric keys.
+#[derive(Debug, Clone)]
+pub struct BoxedAsymmetricJwsSignerSelector {
+    inner: Arc<dyn DynAsymmetricJwsSignerSelector>,
+}
+
+impl BoxedAsymmetricJwsSignerSelector {
+    /// Create a boxed signer selector from a non-boxed.
+    pub fn new<Sgn: AsymmetricJwsSignerSelector + 'static>(signer: Sgn) -> Self {
+        Self {
+            inner: Arc::new(signer),
+        }
+    }
+}
+
+pub(in crate::crypto::signer) trait DynAsymmetricJwsSignerSelector:
+    std::fmt::Debug + MaybeSendSync
+{
+    fn select_asymmetric_signer(&self) -> BoxedAsymmetricJwsSigner;
+    fn select_asymmetric_signer_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<BoxedAsymmetricJwsSigner>;
+}
+
+impl<Sgn: AsymmetricJwsSignerSelector + 'static> DynAsymmetricJwsSignerSelector for Sgn {
+    fn select_asymmetric_signer(&self) -> BoxedAsymmetricJwsSigner {
+        BoxedAsymmetricJwsSigner::new(self.select_asymmetric_signer())
+    }
+
+    fn select_asymmetric_signer_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<BoxedAsymmetricJwsSigner> {
+        self.select_asymmetric_signer_by_thumbprint(thumbprint)
+            .map(BoxedAsymmetricJwsSigner::new)
+    }
+}
+
+impl AsymmetricJwsSignerSelector for BoxedAsymmetricJwsSignerSelector {
+    type AsymmetricSigner = BoxedAsymmetricJwsSigner;
+
+    fn select_asymmetric_signer(&self) -> Self::AsymmetricSigner {
+        self.inner.select_asymmetric_signer()
+    }
+
+    fn select_asymmetric_signer_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<Self::AsymmetricSigner> {
+        self.inner
+            .select_asymmetric_signer_by_thumbprint(thumbprint)
+    }
+}
 
 /// Boxed JWS Signer for asymmetric keys.
 #[derive(Debug, Clone)]
@@ -25,121 +82,35 @@ impl BoxedAsymmetricJwsSigner {
 }
 
 /// Boxed trait for asymmetric signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
-#[allow(clippy::type_complexity)]
-trait DynAsymmetricJwsSigner: std::fmt::Debug + MaybeSendSync {
-    // JwsSigner methods
-    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata>;
-
-    fn sign<'a>(
-        &'a self,
-        input: &'a [u8],
-        key_metadata: &'a SigningKeyMetadata,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, JwsSignerError<BoxedError>>> + 'a>>;
-
+trait DynAsymmetricJwsSigner: DynJwsSigner {
     // AsymmetricJwsSigner methods
-    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata>;
-
-    fn key_metadata_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Cow<'_, AsymmetricSigningKeyMetadata>>;
-
-    fn sign_by_thumbprint<'a>(
-        &'a self,
-        input: &'a [u8],
-        thumbprint: &'a str,
-    ) -> Pin<
-        Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, SignByThumbprintError<BoxedError>>> + 'a>,
-    >;
+    fn public_key_jwk(&self) -> Cow<'_, PublicJwk>;
 }
 
-impl<Sgn: AsymmetricJwsSigner> DynAsymmetricJwsSigner for Sgn {
-    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
-        JwsSigner::key_metadata(self)
-    }
-
-    fn sign<'a>(
-        &'a self,
-        input: &'a [u8],
-        key_metadata: &'a SigningKeyMetadata,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, JwsSignerError<BoxedError>>> + 'a>>
-    {
-        Box::pin(async {
-            JwsSigner::sign(self, input, key_metadata)
-                .await
-                .map_err(|e| match e {
-                    JwsSignerError::MismatchedKeyMetadata => JwsSignerError::MismatchedKeyMetadata,
-                    JwsSignerError::UnderlyingError { source } => JwsSignerError::UnderlyingError {
-                        source: BoxedError::from_err(source),
-                    },
-                })
-        })
-    }
-
-    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata> {
-        AsymmetricJwsSigner::asymmetric_key_metadata(self)
-    }
-
-    fn key_metadata_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Cow<'_, AsymmetricSigningKeyMetadata>> {
-        AsymmetricJwsSigner::key_metadata_by_thumbprint(self, thumbprint)
-    }
-
-    fn sign_by_thumbprint<'a>(
-        &'a self,
-        input: &'a [u8],
-        thumbprint: &'a str,
-    ) -> Pin<
-        Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, SignByThumbprintError<BoxedError>>> + 'a>,
-    > {
-        Box::pin(async move {
-            AsymmetricJwsSigner::sign_by_thumbprint(self, input, thumbprint)
-                .await
-                .map_err(|e| match e {
-                    SignByThumbprintError::KeyNotFound => SignByThumbprintError::KeyNotFound,
-                    SignByThumbprintError::Sign { source } => SignByThumbprintError::Sign {
-                        source: BoxedError::from_err(source),
-                    },
-                })
-        })
+impl<Sgn: AsymmetricJwsSigner + DynJwsSigner> DynAsymmetricJwsSigner for Sgn {
+    fn public_key_jwk(&self) -> Cow<'_, PublicJwk> {
+        self.public_key_jwk()
     }
 }
 
 impl AsymmetricJwsSigner for BoxedAsymmetricJwsSigner {
-    fn asymmetric_key_metadata(&self) -> Cow<'_, AsymmetricSigningKeyMetadata> {
-        self.inner.asymmetric_key_metadata()
-    }
-
-    fn key_metadata_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Cow<'_, AsymmetricSigningKeyMetadata>> {
-        self.inner.key_metadata_by_thumbprint(thumbprint)
-    }
-
-    async fn sign_by_thumbprint(
-        &self,
-        input: &[u8],
-        thumbprint: &str,
-    ) -> Result<Vec<u8>, SignByThumbprintError<Self::Error>> {
-        self.inner.sign_by_thumbprint(input, thumbprint).await
+    fn public_key_jwk(&self) -> Cow<'_, PublicJwk> {
+        self.inner.public_key_jwk()
     }
 }
 
 impl JwsSigner for BoxedAsymmetricJwsSigner {
     type Error = BoxedError;
 
-    fn key_metadata(&self) -> Cow<'_, SigningKeyMetadata> {
-        self.inner.key_metadata()
+    fn jws_algorithm(&self) -> Cow<'_, str> {
+        self.inner.jws_algorithm()
     }
 
-    async fn sign(
-        &self,
-        input: &[u8],
-        key_metadata: &SigningKeyMetadata,
-    ) -> Result<Vec<u8>, JwsSignerError<Self::Error>> {
-        self.inner.sign(input, key_metadata).await
+    fn key_id(&self) -> Option<Cow<'_, str>> {
+        self.inner.key_id()
+    }
+
+    async fn sign(&self, input: &[u8]) -> Result<Vec<u8>, Self::Error> {
+        self.inner.sign(input).await
     }
 }
