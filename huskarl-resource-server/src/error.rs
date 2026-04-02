@@ -4,8 +4,35 @@
 //! `Bearer` (RFC 6750) and `DPoP` (RFC 9449) authentication schemes.
 //! The `error_uri` attribute is supported as a parameter to
 //! [`crate::validator::metadata::ValidatorMetadata::challenges`].
+//!
+//! [`TokenValidationError`] classifies a validation failure as either a client-side
+//! error (include RFC 6750 error details in the response) or a server-side error
+//! (respond with a status code, no error details).
 
 use crate::TokenType;
+
+/// Classifies a token validation failure for HTTP response generation.
+///
+/// Returned by [`ToRfc6750Error::token_error`].
+#[derive(Debug, Clone)]
+pub enum TokenValidationError {
+    /// A client-side error. Include RFC 6750 error details in the `WWW-Authenticate` response.
+    Client(TokenErrorCode),
+    /// A server-side error. Respond with this status code and no `WWW-Authenticate` header,
+    /// since the failure is not caused by the client's token or request.
+    Server(http::StatusCode),
+}
+
+impl TokenValidationError {
+    /// The HTTP status code to use for this error.
+    #[must_use]
+    pub fn suggested_status(&self) -> http::StatusCode {
+        match self {
+            Self::Client(code) => code.suggested_status(),
+            Self::Server(status) => *status,
+        }
+    }
+}
 
 /// RFC 6750 §3.1 error codes for resource server responses.
 ///
@@ -52,20 +79,23 @@ impl TokenErrorCode {
     }
 }
 
-/// A trait for errors that can be converted into an RFC 6750-style error response.
+/// A trait for errors that can be classified into an RFC 6750-style error response.
 pub trait ToRfc6750Error {
     /// Returns the attempted authentication scheme, if known.
     fn attempted_scheme(&self) -> Option<TokenType>;
 
-    /// Returns the RFC 6750 §3.1 error code for this error, or `None` for
-    /// server-side failures where the resource server should respond with HTTP
-    /// 5xx and omit the error code from the `WWW-Authenticate` header.
-    fn error_code(&self) -> Option<TokenErrorCode>;
+    /// Classifies this error as a client-side or server-side failure.
+    ///
+    /// - [`TokenValidationError::Client`]: a problem with the client's token or request.
+    ///   Include RFC 6750 error details in the `WWW-Authenticate` response.
+    /// - [`TokenValidationError::Server`]: a server-side failure (e.g. unreachable introspection
+    ///   endpoint). Respond with the given status code and no `WWW-Authenticate` header.
+    fn token_error(&self) -> TokenValidationError;
 
     /// Returns a human-readable description of the error for the `error_description` parameter.
+    ///
+    /// Only included in the response for [`TokenValidationError::Client`] errors.
     fn error_description(&self) -> Option<String>;
-
-
 }
 
 impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
@@ -73,8 +103,8 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
         None
     }
 
-    fn error_code(&self) -> Option<TokenErrorCode> {
-        Some(TokenErrorCode::InvalidToken)
+    fn token_error(&self) -> TokenValidationError {
+        TokenValidationError::Client(TokenErrorCode::InvalidToken)
     }
 
     fn error_description(&self) -> Option<String> {

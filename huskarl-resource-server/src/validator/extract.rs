@@ -2,7 +2,7 @@ use http::{HeaderMap, HeaderName, header::ToStrError};
 use huskarl_core::secrets::SecretString;
 use snafu::prelude::*;
 
-use crate::error::{ToRfc6750Error, TokenErrorCode};
+use crate::error::{ToRfc6750Error, TokenErrorCode, TokenValidationError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
@@ -71,8 +71,8 @@ impl ToRfc6750Error for TokenExtractError {
         }
     }
 
-    fn error_code(&self) -> Option<TokenErrorCode> {
-        Some(TokenErrorCode::InvalidRequest)
+    fn token_error(&self) -> TokenValidationError {
+        TokenValidationError::Client(TokenErrorCode::InvalidRequest)
     }
 
     fn error_description(&self) -> Option<String> {

@@ -39,16 +39,21 @@ pub struct ValidatorMetadata {
 }
 
 use crate::TokenType;
-use crate::error::ToRfc6750Error;
+use crate::error::{ToRfc6750Error, TokenValidationError};
 
 impl ValidatorMetadata {
     /// Returns the `WWW-Authenticate` challenges for a request.
     ///
     /// If `error` is `None`, returns unauthenticated challenges for all supported
-    /// schemes. If `error` is `Some` and the attempted scheme can be determined,
-    /// only that scheme's challenge includes error details; other schemes are
+    /// schemes. If `error` is `Some` and the error is a [`TokenValidationError::Client`],
+    /// the attempted scheme's challenge includes error details; other schemes are
     /// returned as unauthenticated challenges. If the attempted scheme is ambiguous,
     /// both challenges include error details, as permitted by RFC 9449 §7.1.
+    ///
+    /// If `error` is `Some` and the error is a [`TokenValidationError::Server`], returns
+    /// an empty `Vec` — server-side failures (e.g. unreachable introspection endpoint) use
+    /// a 5xx status code and no `WWW-Authenticate` header, since re-authenticating would
+    /// not resolve the failure.
     ///
     /// If both Bearer and DPoP are supported, challenges for both are returned, as
     /// recommended by RFC 9449 §7.1. Per RFC 7235, the challenges may be sent as
@@ -86,11 +91,21 @@ impl ValidatorMetadata {
             || self.dpop_bound_access_tokens_required == Some(true);
         let bearer_allowed = !self.dpop_bound_access_tokens_required.unwrap_or(false);
 
+        // For server errors (5xx), omit WWW-Authenticate entirely — including it would
+        // mislead clients into thinking re-authenticating would resolve the failure.
+        if error.is_some_and(|e| matches!(e.token_error(), TokenValidationError::Server(_))) {
+            return Vec::new();
+        }
+
+        let is_client_error = error.is_some_and(|e| {
+            matches!(e.token_error(), TokenValidationError::Client(_))
+        });
+
         let include_in_dpop = dpop_supported
-            && error.is_some()
+            && is_client_error
             && (attempted_scheme.is_none() || attempted_scheme == Some(TokenType::DPoP));
         let include_in_bearer = bearer_allowed
-            && error.is_some()
+            && is_client_error
             && (attempted_scheme.is_none() || attempted_scheme == Some(TokenType::Bearer));
 
         if bearer_allowed {
@@ -105,7 +120,7 @@ impl ValidatorMetadata {
 
             if include_in_bearer
                 && let Some(e) = error
-                && let Some(code) = e.error_code()
+                && let TokenValidationError::Client(code) = e.token_error()
             {
                 bearer_parts.push(format!(r#"error="{}""#, code.as_str()));
                 if let Some(desc) = e.error_description() {
@@ -136,7 +151,7 @@ impl ValidatorMetadata {
 
             if include_in_dpop
                 && let Some(e) = error
-                && let Some(code) = e.error_code()
+                && let TokenValidationError::Client(code) = e.token_error()
             {
                 dpop_parts.push(format!(r#"error="{}""#, code.as_str()));
                 if let Some(desc) = e.error_description() {

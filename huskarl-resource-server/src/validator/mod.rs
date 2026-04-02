@@ -11,8 +11,11 @@ pub mod rfc9068;
 pub use observe::{OnValidate, ValidationOutcome};
 
 use huskarl_core::{
-    jwt::ConfirmationClaim, jwt::validator::ValidatedJwt, platform::MaybeSend, platform::SystemTime,
+    jwt::ConfirmationClaim, jwt::validator::ValidatedJwt, platform::MaybeSend,
+    platform::MaybeSendSync, platform::SystemTime,
 };
+
+use crate::error::ToRfc6750Error;
 
 /// A trait for validators that authenticate and validate access tokens from HTTP requests.
 ///
@@ -21,9 +24,9 @@ use huskarl_core::{
 ///
 /// Returns `Ok(None)` when no authentication header is present (unauthenticated request),
 /// `Ok(Some(_))` when a valid token is found, and `Err(_)` when a token is present but invalid.
-pub trait AccessTokenValidator {
-    type Claims;
-    type Error;
+pub trait AccessTokenValidator: MaybeSendSync {
+    type Claims: MaybeSendSync;
+    type Error: ToRfc6750Error;
 
     fn validate_request(
         &self,

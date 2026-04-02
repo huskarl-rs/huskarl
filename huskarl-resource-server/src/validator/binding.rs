@@ -291,12 +291,15 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
         Some(TokenType::DPoP)
     }
 
-    fn error_code(&self) -> Option<crate::error::TokenErrorCode> {
+    fn token_error(&self) -> crate::error::TokenValidationError {
+        use crate::error::{TokenErrorCode, TokenValidationError};
         match self {
             // The token itself lacks a DPoP key binding — token-level failure.
-            Self::MissingThumbprintBinding => Some(crate::error::TokenErrorCode::InvalidToken),
+            Self::MissingThumbprintBinding => {
+                TokenValidationError::Client(TokenErrorCode::InvalidToken)
+            }
             // All other variants correspond to §4.3 proof validation criteria.
-            _ => Some(crate::error::TokenErrorCode::InvalidDPoPProof),
+            _ => TokenValidationError::Client(TokenErrorCode::InvalidDPoPProof),
         }
     }
 
@@ -334,8 +337,8 @@ impl crate::error::ToRfc6750Error for MtlsBindingError {
         None
     }
 
-    fn error_code(&self) -> Option<crate::error::TokenErrorCode> {
-        Some(crate::error::TokenErrorCode::InvalidToken)
+    fn token_error(&self) -> crate::error::TokenValidationError {
+        crate::error::TokenValidationError::Client(crate::error::TokenErrorCode::InvalidToken)
     }
 
     fn error_description(&self) -> Option<String> {

@@ -4,7 +4,7 @@ use snafu::prelude::*;
 
 use crate::{
     TokenType,
-    error::{ToRfc6750Error, TokenErrorCode},
+    error::{ToRfc6750Error, TokenValidationError},
     introspection::IntrospectionCallError,
     validator::error::TokenBindingError,
     validator::extract::TokenExtractError,
@@ -46,11 +46,11 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
         }
     }
 
-    fn error_code(&self) -> Option<TokenErrorCode> {
+    fn token_error(&self) -> TokenValidationError {
         match self {
-            Self::Extract { source } => source.error_code(),
-            Self::Binding { source, .. } => source.error_code(),
-            Self::Call { source, .. } => source.error(),
+            Self::Extract { source } => source.token_error(),
+            Self::Binding { source, .. } => source.token_error(),
+            Self::Call { source, .. } => source.token_error(),
         }
     }
 

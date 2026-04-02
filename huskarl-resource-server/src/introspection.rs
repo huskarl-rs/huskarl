@@ -18,7 +18,6 @@ use crate::core::crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform};
 use crate::core::http::{HttpClient, HttpResponse};
 use crate::core::jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator};
 use crate::core::platform::{Duration, SystemTime};
-use crate::error::TokenErrorCode;
 use crate::validator::ValidatedRequest;
 
 /// Performs a raw RFC 7662 token introspection call.
@@ -429,25 +428,29 @@ pub enum IntrospectionCallError<
 impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crate::core::Error>
     IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>
 {
-    /// Returns the RFC 6750 §3.1 error code for this error, if applicable.
+    /// Classifies this error as a client-side or server-side failure.
     ///
-    /// Returns `None` for server-side failures (unreachable AS, misconfigured client
-    /// credentials, malformed AS response) — the resource server should respond with
-    /// HTTP 5xx and omit the error code from the `WWW-Authenticate` header, since
-    /// the problem is not with the client's request or token.
-    pub fn error(&self) -> Option<TokenErrorCode> {
+    /// Only [`Self::TokenInactive`] is a client error. All other variants represent
+    /// server-side failures (unreachable AS, misconfigured credentials, malformed response)
+    /// that should result in a 5xx response with no RFC 6750 error details.
+    pub fn token_error(&self) -> crate::error::TokenValidationError {
+        use crate::error::{TokenErrorCode, TokenValidationError};
         match self {
-            Self::TokenInactive => Some(TokenErrorCode::InvalidToken),
+            Self::TokenInactive => TokenValidationError::Client(TokenErrorCode::InvalidToken),
             Self::ClientAuth { .. }
             | Self::HttpRequest { .. }
             | Self::HttpResponseBody { .. }
-            | Self::BadStatus { .. }
-            | Self::ParseJsonResponse { .. }
+            | Self::BadStatus { .. } => {
+                TokenValidationError::Server(http::StatusCode::SERVICE_UNAVAILABLE)
+            }
+            Self::ParseJsonResponse { .. }
             | Self::UnexpectedJwtResponse
             | Self::JwtResponse { .. }
             | Self::MalformedJwtResponseBody
             | Self::MissingIntrospectionClaim
-            | Self::InvalidTimestamp { .. } => None,
+            | Self::InvalidTimestamp { .. } => {
+                TokenValidationError::Server(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     }
 

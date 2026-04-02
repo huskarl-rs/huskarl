@@ -4,7 +4,7 @@ use snafu::prelude::*;
 
 use crate::{
     TokenType,
-    error::{ToRfc6750Error, TokenErrorCode},
+    error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
     validator::{
         binding::{DPoPBindingError, MtlsBindingError},
         extract::TokenExtractError,
@@ -54,16 +54,18 @@ impl ToRfc6750Error for TokenBindingError {
         }
     }
 
-    fn error_code(&self) -> Option<TokenErrorCode> {
+    fn token_error(&self) -> TokenValidationError {
         match self {
             Self::MissingDPoPHeader | Self::DPoPHeaderNotString { .. } => {
-                Some(TokenErrorCode::InvalidRequest)
+                TokenValidationError::Client(TokenErrorCode::InvalidRequest)
             }
             Self::DpopRequiredForBoundToken
             | Self::DpopRequired
             | Self::UnsupportedCnfMethod { .. }
-            | Self::MtlsBinding { .. } => Some(TokenErrorCode::InvalidToken),
-            Self::DPoPBinding { source } => source.error_code(),
+            | Self::MtlsBinding { .. } => {
+                TokenValidationError::Client(TokenErrorCode::InvalidToken)
+            }
+            Self::DPoPBinding { source } => source.token_error(),
         }
     }
 
@@ -111,11 +113,11 @@ impl ToRfc6750Error for ValidateHeadersError {
         }
     }
 
-    fn error_code(&self) -> Option<TokenErrorCode> {
+    fn token_error(&self) -> TokenValidationError {
         match self {
-            Self::Extract { source } => source.error_code(),
-            Self::Binding { source, .. } => source.error_code(),
-            Self::InvalidJwt { source, .. } => source.error_code(),
+            Self::Extract { source } => source.token_error(),
+            Self::Binding { source, .. } => source.token_error(),
+            Self::InvalidJwt { source, .. } => source.token_error(),
         }
     }
 

@@ -11,6 +11,7 @@ pub mod error;
 
 pub use error::IntrospectionValidateError;
 use huskarl_core::jwk::JwksSource;
+use huskarl_core::server_metadata::AuthorizationServerMetadata;
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -30,6 +31,9 @@ use crate::validator::binding::DPoPBindingChecker;
 use crate::validator::binding::check_token_binding;
 use crate::validator::extract::extract_token;
 use crate::validator::introspection::error::{BindingSnafu, CallSnafu, ExtractSnafu};
+use crate::validator::introspection::introspection_validator_builder::SetIntrospectionEndpoint;
+use crate::validator::introspection::introspection_validator_builder::SetIssuer;
+use crate::validator::introspection::introspection_validator_builder::SetJwksUri;
 use crate::validator::introspection::introspection_validator_builder::State;
 use crate::validator::{
     AccessTokenValidator, ValidatedRequest,
@@ -198,6 +202,31 @@ impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static>
     /// to specify a custom claims type. The default is `()` (no extra claims).
     pub fn builder() -> IntrospectionValidatorBuilder<Auth, C, ()> {
         IntrospectionValidator::builder_internal()
+    }
+}
+
+impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static>
+    IntrospectionValidator<Auth, C, ()>
+{
+    /// Configure the validator from authorization server metadata.
+    ///
+    /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Validation
+    /// rules are implemented by the authorization server. Call
+    /// `.with_claims::<MyClaims>()` to use a custom claims type.
+    pub fn builder_from_metadata(
+        metadata: &AuthorizationServerMetadata,
+    ) -> Option<
+        IntrospectionValidatorBuilder<Auth, C, (), SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>>,
+    > {
+        metadata
+            .introspection_endpoint
+            .as_ref()
+            .map(|introspection_endpoint| {
+                Self::builder()
+                    .issuer(metadata.issuer.clone())
+                    .introspection_endpoint(introspection_endpoint.clone())
+                    .maybe_jwks_uri(metadata.jwks_uri.clone())
+            })
     }
 }
 
