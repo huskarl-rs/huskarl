@@ -116,32 +116,50 @@ fn normalize_typ(typ: &str) -> &str {
 }
 
 fn check_str_claim(
+    claim: &'static str,
     check: &ClaimCheck,
     value: Option<&str>,
-    missing: impl FnOnce() -> JwtValidationError,
-    mismatch: impl FnOnce(String, &str) -> JwtValidationError,
 ) -> Result<(), JwtValidationError> {
     match check {
         ClaimCheck::Present => {
             if value.is_none() {
-                return Err(missing());
+                return Err(RequiredClaimMissingSnafu { claim }.build());
             }
         }
         ClaimCheck::RequiredValue(v) => match value {
             Some(val) if val == v.as_str() => {}
-            Some(val) => return Err(mismatch(v.clone(), val)),
-            None => return Err(missing()),
+            Some(val) => {
+                return Err(ClaimMismatchSnafu {
+                    claim,
+                    expected: v.clone(),
+                    actual: val,
+                }
+                .build());
+            }
+            None => return Err(RequiredClaimMissingSnafu { claim }.build()),
         },
         ClaimCheck::RequireAny(vs) => match value {
             Some(val) if vs.iter().any(|x| val == x.as_str()) => {}
-            Some(val) => return Err(mismatch(vs.join(", "), val)),
-            None => return Err(missing()),
+            Some(val) => {
+                return Err(ClaimMismatchSnafu {
+                    claim,
+                    expected: vs.join(", "),
+                    actual: val,
+                }
+                .build());
+            }
+            None => return Err(RequiredClaimMissingSnafu { claim }.build()),
         },
         ClaimCheck::IfPresent(v) => {
             if let Some(val) = value
                 && val != v.as_str()
             {
-                return Err(mismatch(v.clone(), val));
+                return Err(ClaimMismatchSnafu {
+                    claim,
+                    expected: v.clone(),
+                    actual: val,
+                }
+                .build());
             }
         }
         ClaimCheck::NoCheck => {}
@@ -200,19 +218,29 @@ impl JwtValidator {
             ),
             ClaimCheck::RequiredValue(v) => ensure!(
                 parsed_jwt.claims.aud.contains(v),
-                AudienceMismatchSnafu { expected: v }
+                ClaimMismatchSnafu {
+                    claim: "aud",
+                    expected: v.clone(),
+                    actual: parsed_jwt.claims.aud.join(", "),
+                }
             ),
             ClaimCheck::RequireAny(vs) => ensure!(
                 vs.iter().any(|v| parsed_jwt.claims.aud.contains(v)),
-                AudienceMismatchSnafu {
-                    expected: vs.join(", ")
+                ClaimMismatchSnafu {
+                    claim: "aud",
+                    expected: vs.join(", "),
+                    actual: parsed_jwt.claims.aud.join(", "),
                 }
             ),
             ClaimCheck::IfPresent(v) => {
                 if !parsed_jwt.claims.aud.is_empty() {
                     ensure!(
                         parsed_jwt.claims.aud.contains(v),
-                        AudienceMismatchSnafu { expected: v }
+                        ClaimMismatchSnafu {
+                            claim: "aud",
+                            expected: v.clone(),
+                            actual: parsed_jwt.claims.aud.join(", "),
+                        }
                     );
                 }
             }
@@ -299,19 +327,8 @@ impl JwtValidator {
             ClaimCheck::NoCheck => {}
         }
 
-        check_str_claim(
-            &self.iss,
-            parsed_jwt.claims.iss.as_deref(),
-            || RequiredClaimMissingSnafu { claim: "iss" }.build(),
-            |expected, actual| IssuerMismatchSnafu { expected, actual }.build(),
-        )?;
-
-        check_str_claim(
-            &self.sub,
-            parsed_jwt.claims.sub.as_deref(),
-            || RequiredClaimMissingSnafu { claim: "sub" }.build(),
-            |expected, actual| SubjectMismatchSnafu { expected, actual }.build(),
-        )?;
+        check_str_claim("iss", &self.iss, parsed_jwt.claims.iss.as_deref())?;
+        check_str_claim("sub", &self.sub, parsed_jwt.claims.sub.as_deref())?;
 
         if let Some(exp) = parsed_jwt.claims.exp {
             let expiration = SystemTime::UNIX_EPOCH + Duration::from_secs(exp);
@@ -473,24 +490,14 @@ pub enum JwtValidationError {
         /// The type of the JWT.
         typ: Option<String>,
     },
-    /// The issuer claim did not match the expected issuer.
-    IssuerMismatch {
-        /// The expected issuer.
+    /// A claim did not match the expected value.
+    ClaimMismatch {
+        /// The claim name.
+        claim: &'static str,
+        /// The expected value.
         expected: String,
-        /// The actual issuer.
+        /// The actual value.
         actual: String,
-    },
-    /// The subject claim did not match the expected subject.
-    SubjectMismatch {
-        /// The expected subject.
-        expected: String,
-        /// The actual subject.
-        actual: String,
-    },
-    /// The audience claim does not contain the expected value.
-    AudienceMismatch {
-        /// The expected audience value.
-        expected: String,
     },
     /// A required claim is missing from the JWT.
     RequiredClaimMissing {

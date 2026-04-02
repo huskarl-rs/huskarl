@@ -54,21 +54,25 @@ pub struct TokenResponse {
 
 impl TokenResponse {
     /// Returns the access token from the token response.
+    #[must_use]
     pub fn access_token(&self) -> &AccessToken {
         &self.access_token
     }
 
     /// Returns the refresh token from the token response.
+    #[must_use]
     pub fn refresh_token(&self) -> Option<&RefreshToken> {
         self.refresh_token.as_ref()
     }
 
     /// Returns the ID token from the token response.
+    #[must_use]
     pub fn id_token(&self) -> Option<&IdToken> {
         self.raw.id_token.as_ref()
     }
 
     /// Returns the token response.
+    #[must_use]
     pub fn raw_token_response(&self) -> &RawTokenResponse {
         &self.raw
     }
@@ -142,9 +146,7 @@ impl RawTokenResponse {
     }
 
     fn build_refresh_token(&self, token_type: ResolvedTokenType) -> Option<RefreshToken> {
-        let Some(refresh_token) = self.refresh_token.as_ref() else {
-            return None;
-        };
+        let refresh_token = self.refresh_token.as_ref()?;
 
         let result = match token_type {
             ResolvedTokenType::DPoP { jkt } => RefreshToken::new(refresh_token.clone(), Some(jkt)),
@@ -164,6 +166,8 @@ pub enum InvalidTokenResponse {
 }
 
 impl InvalidTokenResponse {
+    #[must_use]
+    #[allow(clippy::unused_self)]
     pub fn is_retryable(&self) -> bool {
         false
     }

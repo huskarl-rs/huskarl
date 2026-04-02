@@ -2,7 +2,7 @@ mod binding;
 mod common;
 pub mod custom;
 pub mod error;
-mod extract;
+pub mod extract;
 pub mod introspection;
 pub mod metadata;
 pub mod observe;

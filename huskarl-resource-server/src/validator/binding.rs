@@ -12,6 +12,7 @@ use sha2::{Digest as _, Sha256};
 use snafu::{ensure, prelude::*};
 
 use crate::{
+    TokenType,
     core::{
         crypto::verifier::{CreateVerifierError, JwsVerifierPlatform},
         dpop::{hash_access_token_for_dpop, normalize_uri_for_dpop},
@@ -19,13 +20,10 @@ use crate::{
         jwt::{ConfirmationClaim, JwsParseError, parse_compact_jws},
         platform::Duration,
     },
-    validator::{
-        error::{
-            DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DpopRequiredForBoundTokenSnafu,
-            DpopRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
-            UnsupportedCnfMethodSnafu,
-        },
-        extract::TokenType,
+    validator::error::{
+        DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DpopRequiredForBoundTokenSnafu,
+        DpopRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
+        UnsupportedCnfMethodSnafu,
     },
 };
 
@@ -187,13 +185,14 @@ impl DPoPBindingChecker {
             validated_proof.claims.as_ref().and_then(|c| c.htu.as_ref()),
             validated_proof.claims.as_ref().and_then(|c| c.ath.as_ref()),
         ) {
-            (None, _, _) => return HttpMethodMissingSnafu.fail(),
-            (_, None, _) => return HttpUrlMissingSnafu.fail(),
-            (_, _, None) => return AccessTokenHashMissingSnafu.fail(),
+            (None, _, _) => return MissingProofClaimSnafu { claim: "htm" }.fail(),
+            (_, None, _) => return MissingProofClaimSnafu { claim: "htu" }.fail(),
+            (_, _, None) => return MissingProofClaimSnafu { claim: "ath" }.fail(),
             (Some(htm), Some(htu), Some(ath)) => {
                 ensure!(
                     htm == method.as_str(),
-                    HttpMethodMismatchSnafu {
+                    ProofClaimMismatchSnafu {
+                        claim: "htm",
                         expected: method.as_str(),
                         actual: htm,
                     }
@@ -202,14 +201,16 @@ impl DPoPBindingChecker {
                     *htu == normalize_uri_for_dpop(uri)
                         .context(MalformedUrlSnafu)?
                         .to_string(),
-                    HttpUrlMismatchSnafu {
+                    ProofClaimMismatchSnafu {
+                        claim: "htu",
                         expected: uri.to_string(),
                         actual: htu,
                     }
                 );
                 ensure!(
                     *ath == access_token_hash,
-                    AccessTokenHashMismatchSnafu {
+                    ProofClaimMismatchSnafu {
+                        claim: "ath",
                         expected: &access_token_hash,
                         actual: ath,
                     }
@@ -245,7 +246,7 @@ pub enum DPoPBindingError {
     /// The DPoP proof key algorithm does not support thumbprint computation.
     #[snafu(display("No thumbprint for DPoP proof key"))]
     NoThumbprintForKey,
-    /// The DPoP proof key thumbprint does not match the token's `cnf.jkt`.
+    /// The DPoP key thumbprint does not match the token's `cnf.jkt`.
     #[snafu(display("DPoP key thumbprint does not match token binding"))]
     ThumbprintMismatch,
     /// Failed to create a verifier from the embedded JWK.
@@ -267,22 +268,88 @@ pub enum DPoPBindingError {
     /// and is rejected to prevent SSRF and key substitution attacks.
     #[snafu(display("DPoP proof JWK contains unsupported x5u parameter"))]
     JwkX5u,
-    /// The DPoP proof is missing the `htm` claim.
-    #[snafu(display("DPoP proof is missing the HTTP method claim (htm)"))]
-    HttpMethodMissing,
-    /// The DPoP proof is missing the `htu` claim.
-    #[snafu(display("DPoP proof is missing the HTTP URL claim (htu)"))]
-    HttpUrlMissing,
-    /// The DPoP proof is missing the `ath` claim.
-    #[snafu(display("DPoP proof is missing the access token hash claim (ath)"))]
-    AccessTokenHashMissing,
-    /// The `htm` claim does not match the request method.
-    #[snafu(display("HTTP method mismatch: expected {expected}, got {actual}"))]
-    HttpMethodMismatch { expected: String, actual: String },
-    /// The `htu` claim does not match the request URL.
-    #[snafu(display("HTTP URL mismatch: expected {expected}, got {actual}"))]
-    HttpUrlMismatch { expected: String, actual: String },
-    /// The `ath` claim does not match the hash of the access token.
-    #[snafu(display("Access token hash mismatch"))]
-    AccessTokenHashMismatch { expected: String, actual: String },
+    /// The DPoP proof is missing a required claim.
+    #[snafu(display("DPoP proof is missing the required claim '{claim}'"))]
+    MissingProofClaim {
+        /// The missing claim name.
+        claim: &'static str,
+    },
+    /// A claim in the DPoP proof does not match the expected value.
+    #[snafu(display("DPoP proof claim '{claim}' mismatch: expected {expected}, got {actual}"))]
+    ProofClaimMismatch {
+        /// The claim name.
+        claim: &'static str,
+        /// The expected value.
+        expected: String,
+        /// The actual value.
+        actual: String,
+    },
+}
+
+impl crate::error::ToRfc6750Error for DPoPBindingError {
+    fn attempted_scheme(&self) -> Option<TokenType> {
+        Some(TokenType::DPoP)
+    }
+
+    fn error_code(&self) -> Option<crate::error::TokenErrorCode> {
+        match self {
+            // The token itself lacks a DPoP key binding — token-level failure.
+            Self::MissingThumbprintBinding => Some(crate::error::TokenErrorCode::InvalidToken),
+            // All other variants correspond to §4.3 proof validation criteria.
+            _ => Some(crate::error::TokenErrorCode::InvalidDPoPProof),
+        }
+    }
+
+    fn error_description(&self) -> Option<String> {
+        match self {
+            Self::MissingThumbprintBinding => {
+                Some("The access token has no DPoP key thumbprint binding".to_string())
+            }
+            Self::NoThumbprintForKey => Some("The DPoP proof key is invalid".to_string()),
+            Self::ThumbprintMismatch => {
+                Some("The DPoP key thumbprint does not match the token binding".to_string())
+            }
+            Self::CreateVerifier { .. } => Some("The DPoP proof signature is invalid".to_string()),
+            Self::BadFormat { .. } => Some("The DPoP proof is malformed".to_string()),
+            Self::MalformedUrl { .. } => {
+                Some("The DPoP proof has a malformed HTTP URL".to_string())
+            }
+            Self::InvalidProof { source } => source.error_description(),
+            Self::MissingJwkHeader => Some("The DPoP proof is missing the JWK header".to_string()),
+            Self::JwkX5u => {
+                Some("The DPoP proof JWK contains an unsupported x5u parameter".to_string())
+            }
+            Self::MissingProofClaim { claim } => Some(format!(
+                "The DPoP proof is missing the required '{claim}' claim"
+            )),
+            Self::ProofClaimMismatch { claim, .. } => {
+                Some(format!("The DPoP proof '{claim}' claim is invalid"))
+            }
+        }
+    }
+}
+
+impl crate::error::ToRfc6750Error for MtlsBindingError {
+    fn attempted_scheme(&self) -> Option<TokenType> {
+        None
+    }
+
+    fn error_code(&self) -> Option<crate::error::TokenErrorCode> {
+        Some(crate::error::TokenErrorCode::InvalidToken)
+    }
+
+    fn error_description(&self) -> Option<String> {
+        match self {
+            Self::CertBoundTokenWithoutCert => Some(
+                "The access token is certificate-bound but no client certificate was presented"
+                    .to_string(),
+            ),
+            Self::CertThumbprintMismatch => Some(
+                "The client certificate thumbprint does not match the token binding".to_string(),
+            ),
+            Self::MtlsRequired => {
+                Some("The protected resource requires a client certificate".to_string())
+            }
+        }
+    }
 }

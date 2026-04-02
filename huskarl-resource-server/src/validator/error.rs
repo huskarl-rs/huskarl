@@ -3,7 +3,8 @@ use huskarl_core::jwt::validator::JwtValidationError;
 use snafu::prelude::*;
 
 use crate::{
-    error::Rfc6750ErrorCode,
+    TokenType,
+    error::{ToRfc6750Error, TokenErrorCode},
     validator::{
         binding::{DPoPBindingError, MtlsBindingError},
         extract::TokenExtractError,
@@ -40,18 +41,45 @@ pub enum TokenBindingError {
     MtlsBinding { source: MtlsBindingError },
 }
 
-impl TokenBindingError {
-    /// Returns the RFC 6750 §3.1 error code for this error.
-    pub fn rfc6750_error_code(&self) -> Rfc6750ErrorCode {
+impl ToRfc6750Error for TokenBindingError {
+    fn attempted_scheme(&self) -> Option<TokenType> {
+        match self {
+            Self::MissingDPoPHeader
+            | Self::DPoPHeaderNotString { .. }
+            | Self::DPoPBinding { .. } => Some(TokenType::DPoP),
+            Self::DpopRequiredForBoundToken
+            | Self::DpopRequired
+            | Self::UnsupportedCnfMethod { .. }
+            | Self::MtlsBinding { .. } => None,
+        }
+    }
+
+    fn error_code(&self) -> Option<TokenErrorCode> {
         match self {
             Self::MissingDPoPHeader | Self::DPoPHeaderNotString { .. } => {
-                Rfc6750ErrorCode::InvalidRequest
+                Some(TokenErrorCode::InvalidRequest)
             }
             Self::DpopRequiredForBoundToken
             | Self::DpopRequired
             | Self::UnsupportedCnfMethod { .. }
-            | Self::DPoPBinding { .. }
-            | Self::MtlsBinding { .. } => Rfc6750ErrorCode::InvalidToken,
+            | Self::MtlsBinding { .. } => Some(TokenErrorCode::InvalidToken),
+            Self::DPoPBinding { source } => source.error_code(),
+        }
+    }
+
+    fn error_description(&self) -> Option<String> {
+        match self {
+            Self::MissingDPoPHeader => Some("The DPoP header is missing".to_string()),
+            Self::DPoPHeaderNotString { .. } => {
+                Some("The DPoP header value is invalid".to_string())
+            }
+            Self::DpopRequiredForBoundToken => Some("The access token is DPoP-bound".to_string()),
+            Self::DpopRequired => Some("DPoP is required to access this resource".to_string()),
+            Self::UnsupportedCnfMethod { .. } => {
+                Some("The access token confirmation method is not supported".to_string())
+            }
+            Self::DPoPBinding { source } => source.error_description(),
+            Self::MtlsBinding { source } => source.error_description(),
         }
     }
 }
@@ -63,22 +91,39 @@ pub enum ValidateHeadersError {
     #[snafu(display("Token presentation error"))]
     Extract { source: TokenExtractError },
     #[snafu(display("Token binding error"))]
-    Binding { source: TokenBindingError },
+    Binding {
+        token_type: TokenType,
+        source: TokenBindingError,
+    },
     /// The token is not a valid JWT.
-    InvalidJwt { source: JwtValidationError },
+    InvalidJwt {
+        token_type: TokenType,
+        source: JwtValidationError,
+    },
 }
 
-impl ValidateHeadersError {
-    /// Returns the RFC 6750 §3.1 error code for this error.
-    ///
-    /// If `validate_request` returns `Ok(None)`, the client provided no
-    /// authentication. Per RFC 6750, respond with HTTP 401 and
-    /// `WWW-Authenticate: Bearer` but without an error code.
-    pub fn rfc6750_error_code(&self) -> Rfc6750ErrorCode {
+impl ToRfc6750Error for ValidateHeadersError {
+    fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
-            Self::Extract { source } => source.rfc6750_error_code(),
-            Self::Binding { source } => source.rfc6750_error_code(),
-            Self::InvalidJwt { .. } => Rfc6750ErrorCode::InvalidToken,
+            Self::Extract { source } => source.attempted_scheme(),
+            Self::Binding { token_type, .. } => Some(*token_type),
+            Self::InvalidJwt { token_type, .. } => Some(*token_type),
+        }
+    }
+
+    fn error_code(&self) -> Option<TokenErrorCode> {
+        match self {
+            Self::Extract { source } => source.error_code(),
+            Self::Binding { source, .. } => source.error_code(),
+            Self::InvalidJwt { source, .. } => source.error_code(),
+        }
+    }
+
+    fn error_description(&self) -> Option<String> {
+        match self {
+            Self::Extract { source } => source.error_description(),
+            Self::Binding { source, .. } => source.error_description(),
+            Self::InvalidJwt { source, .. } => source.error_description(),
         }
     }
 }

@@ -464,7 +464,9 @@ mod tests {
     fn ok_token_response() -> (TokenResponse, Option<ValidatedJwt<IdTokenClaims>>) {
         (
             crate::grant::core::token_response::RawTokenResponse::builder()
-                .access_token(crate::core::secrets::SecretString::new("test-token".to_string()))
+                .access_token(crate::core::secrets::SecretString::new(
+                    "test-token".to_string(),
+                ))
                 .token_type("Bearer")
                 .build()
                 .into_token_response(None, crate::core::platform::SystemTime::now())

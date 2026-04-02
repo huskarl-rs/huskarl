@@ -2,9 +2,9 @@ use http::{HeaderMap, HeaderName, header::ToStrError};
 use huskarl_core::secrets::SecretString;
 use snafu::prelude::*;
 
-use crate::error::Rfc6750ErrorCode;
+use crate::error::{ToRfc6750Error, TokenErrorCode};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
     Bearer,
     DPoP,
@@ -55,9 +55,37 @@ pub enum TokenExtractError {
     UnsupportedTokenType { token_type: String },
 }
 
-impl TokenExtractError {
-    /// Returns the RFC 6750 §3.1 error code for this error.
-    pub fn rfc6750_error_code(&self) -> Rfc6750ErrorCode {
-        Rfc6750ErrorCode::InvalidRequest
+impl ToRfc6750Error for TokenExtractError {
+    fn attempted_scheme(&self) -> Option<TokenType> {
+        match self {
+            TokenExtractError::UnsupportedTokenType { token_type } => {
+                if token_type.eq_ignore_ascii_case("dpop") {
+                    Some(TokenType::DPoP)
+                } else if token_type.eq_ignore_ascii_case("bearer") {
+                    Some(TokenType::Bearer)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn error_code(&self) -> Option<TokenErrorCode> {
+        Some(TokenErrorCode::InvalidRequest)
+    }
+
+    fn error_description(&self) -> Option<String> {
+        match self {
+            TokenExtractError::TokenNotString { .. } => {
+                Some("The access token header value is not a valid string".to_string())
+            }
+            TokenExtractError::InvalidTokenHeaderFormat => {
+                Some("The access token header format is invalid".to_string())
+            }
+            TokenExtractError::UnsupportedTokenType { .. } => {
+                Some("The access token type is unsupported".to_string())
+            }
+        }
     }
 }

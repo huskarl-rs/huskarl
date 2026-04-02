@@ -2,10 +2,13 @@
 
 use snafu::prelude::*;
 
-use crate::error::Rfc6750ErrorCode;
-use crate::introspection::IntrospectionCallError;
-use crate::validator::error::TokenBindingError;
-use crate::validator::extract::TokenExtractError;
+use crate::{
+    TokenType,
+    error::{ToRfc6750Error, TokenErrorCode},
+    introspection::IntrospectionCallError,
+    validator::error::TokenBindingError,
+    validator::extract::TokenExtractError,
+};
 
 /// Error returned by [`super::IntrospectionValidator::validate_request`].
 #[derive(Debug, Snafu)]
@@ -20,27 +23,42 @@ pub enum IntrospectionValidateError<
     Extract { source: TokenExtractError },
     /// Sender-constraint binding check failed.
     #[snafu(display("Token binding error"))]
-    Binding { source: TokenBindingError },
+    Binding {
+        token_type: TokenType,
+        source: TokenBindingError,
+    },
     /// The introspection call failed.
     #[snafu(display("Introspection call error"))]
     Call {
+        token_type: TokenType,
         source: IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>,
     },
 }
 
 impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crate::core::Error>
-    IntrospectionValidateError<AuthErr, HttpErr, HttpRespErr>
+    ToRfc6750Error for IntrospectionValidateError<AuthErr, HttpErr, HttpRespErr>
 {
-    /// Returns the RFC 6750 §3.1 error code for this error, if applicable.
-    ///
-    /// Returns `None` for server-side failures where the resource server should respond
-    /// with HTTP 5xx and omit the error code from `WWW-Authenticate`. See
-    /// [`IntrospectionCallError::rfc6750_error_code`] for details.
-    pub fn rfc6750_error_code(&self) -> Option<Rfc6750ErrorCode> {
+    fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
-            Self::Extract { source } => Some(source.rfc6750_error_code()),
-            Self::Binding { source } => Some(source.rfc6750_error_code()),
-            Self::Call { source } => source.rfc6750_error_code(),
+            Self::Extract { source } => source.attempted_scheme(),
+            Self::Binding { token_type, .. } => Some(*token_type),
+            Self::Call { token_type, .. } => Some(*token_type),
+        }
+    }
+
+    fn error_code(&self) -> Option<TokenErrorCode> {
+        match self {
+            Self::Extract { source } => source.error_code(),
+            Self::Binding { source, .. } => source.error_code(),
+            Self::Call { source, .. } => source.error(),
+        }
+    }
+
+    fn error_description(&self) -> Option<String> {
+        match self {
+            Self::Extract { source } => source.error_description(),
+            Self::Binding { source, .. } => source.error_description(),
+            Self::Call { source, .. } => source.error_description(),
         }
     }
 }

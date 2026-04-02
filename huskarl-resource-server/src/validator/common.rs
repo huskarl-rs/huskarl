@@ -38,7 +38,7 @@ impl ValidatorInner {
             .token_validator
             .validate::<Claims>(access_token.expose_secret())
             .await
-            .context(InvalidJwtSnafu)?;
+            .context(InvalidJwtSnafu { token_type })?;
 
         check_token_binding(
             token_type,
@@ -52,7 +52,7 @@ impl ValidatorInner {
             client_cert_der,
         )
         .await
-        .context(BindingSnafu)?;
+        .context(BindingSnafu { token_type })?;
 
         Ok(Some(validated.into()))
     }

@@ -18,6 +18,7 @@ use std::sync::Arc;
 pub use huskarl_core as core;
 
 pub use crate::core::jwt::ConfirmationClaim;
+pub use validator::extract::TokenType;
 pub use validator::introspection::{IntrospectionValidateError, IntrospectionValidator};
 pub use validator::{AccessTokenValidator, OnValidate, ValidatedRequest, ValidationOutcome};
 

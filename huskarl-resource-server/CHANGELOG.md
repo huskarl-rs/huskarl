@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changes
 
 - Breaking: Update to huskarl-core 0.2.
+- Improve the information used to generate www-authenticate headers
 
 ## [0.1.0] - 2026-03-24
 

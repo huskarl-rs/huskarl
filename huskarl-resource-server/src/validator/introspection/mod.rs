@@ -250,7 +250,7 @@ impl<Auth: ClientAuthentication, C: HttpClient, Claims: for<'de> Deserialize<'de
                 Ok(None) => ValidationOutcome::NoToken,
                 Err(IntrospectionValidateError::Extract { .. }) => ValidationOutcome::ExtractError,
                 Err(IntrospectionValidateError::Binding { .. }) => ValidationOutcome::BindingError,
-                Err(IntrospectionValidateError::Call { source }) => {
+                Err(IntrospectionValidateError::Call { source, .. }) => {
                     if matches!(source, IntrospectionCallError::TokenInactive) {
                         ValidationOutcome::InvalidToken
                     } else {
@@ -290,7 +290,7 @@ impl<Auth: ClientAuthentication, C: HttpClient, Claims: for<'de> Deserialize<'de
             .token_introspection
             .introspect::<_, Claims>(&self.http_client, &access_token)
             .await
-            .context(CallSnafu)?;
+            .context(CallSnafu { token_type })?;
 
         // 3. Binding check
         check_token_binding(
@@ -305,7 +305,7 @@ impl<Auth: ClientAuthentication, C: HttpClient, Claims: for<'de> Deserialize<'de
             client_cert_der,
         )
         .await
-        .context(BindingSnafu)?;
+        .context(BindingSnafu { token_type })?;
 
         Ok(Some(validated))
     }

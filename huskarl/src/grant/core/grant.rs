@@ -48,7 +48,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns the configured client auth.
     fn client_auth(&self) -> &Self::ClientAuth;
 
-    /// Returns the bound DPoP thumbprint for the session.
+    /// Returns the bound `DPoP` thumbprint for the session.
     ///
     /// Often bound for authorization code grants or refresh grants.
     fn bound_dpop_jkt(_params: &Self::Parameters) -> Option<&str> {

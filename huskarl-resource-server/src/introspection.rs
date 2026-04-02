@@ -18,7 +18,7 @@ use crate::core::crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform};
 use crate::core::http::{HttpClient, HttpResponse};
 use crate::core::jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator};
 use crate::core::platform::{Duration, SystemTime};
-use crate::error::Rfc6750ErrorCode;
+use crate::error::TokenErrorCode;
 use crate::validator::ValidatedRequest;
 
 /// Performs a raw RFC 7662 token introspection call.
@@ -435,9 +435,26 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
     /// credentials, malformed AS response) — the resource server should respond with
     /// HTTP 5xx and omit the error code from the `WWW-Authenticate` header, since
     /// the problem is not with the client's request or token.
-    pub fn rfc6750_error_code(&self) -> Option<Rfc6750ErrorCode> {
+    pub fn error(&self) -> Option<TokenErrorCode> {
         match self {
-            Self::TokenInactive => Some(Rfc6750ErrorCode::InvalidToken),
+            Self::TokenInactive => Some(TokenErrorCode::InvalidToken),
+            Self::ClientAuth { .. }
+            | Self::HttpRequest { .. }
+            | Self::HttpResponseBody { .. }
+            | Self::BadStatus { .. }
+            | Self::ParseJsonResponse { .. }
+            | Self::UnexpectedJwtResponse
+            | Self::JwtResponse { .. }
+            | Self::MalformedJwtResponseBody
+            | Self::MissingIntrospectionClaim
+            | Self::InvalidTimestamp { .. } => None,
+        }
+    }
+
+    /// Returns a human-readable description of the error for the RFC 6750 `error_description` parameter, if applicable.
+    pub fn error_description(&self) -> Option<String> {
+        match self {
+            Self::TokenInactive => Some("The access token is revoked".to_string()),
             Self::ClientAuth { .. }
             | Self::HttpRequest { .. }
             | Self::HttpResponseBody { .. }

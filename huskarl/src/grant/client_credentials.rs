@@ -111,8 +111,8 @@ pub struct ClientCredentialsGrantForm {
 mod tests {
     use std::sync::LazyLock;
 
-    use httpmock::MockServer;
     use crate::token::AccessToken;
+    use httpmock::MockServer;
     use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
     use huskarl_reqwest::ReqwestClient;
     use serde_json::json;

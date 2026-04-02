@@ -160,9 +160,9 @@ pub struct PendingState {
     ///
     /// This value is checked for equality against the nonce claim in any returned ID token.
     pub nonce: String,
-    /// The DPoP JWT thumbprint.
+    /// The `DPoP` JWT thumbprint.
     ///
-    /// The thumbprint of the DPoP key bound to the request.
+    /// The thumbprint of the `DPoP` key bound to the request.
     pub dpop_jkt: Option<String>,
 }
 

@@ -38,6 +38,143 @@ pub struct ValidatorMetadata {
     pub bearer_methods_supported: Option<Vec<&'static str>>,
 }
 
+use crate::TokenType;
+use crate::error::ToRfc6750Error;
+
+impl ValidatorMetadata {
+    /// Returns the `WWW-Authenticate` challenges for a request.
+    ///
+    /// If `error` is `None`, returns unauthenticated challenges for all supported
+    /// schemes. If `error` is `Some` and the attempted scheme can be determined,
+    /// only that scheme's challenge includes error details; other schemes are
+    /// returned as unauthenticated challenges. If the attempted scheme is ambiguous,
+    /// both challenges include error details, as permitted by RFC 9449 §7.1.
+    ///
+    /// If both Bearer and DPoP are supported, challenges for both are returned, as
+    /// recommended by RFC 9449 §7.1. Per RFC 7235, the challenges may be sent as
+    /// separate `WWW-Authenticate` headers or joined with `, ` on a single header —
+    /// both forms are equivalent.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use huskarl_resource_server::validator::metadata::ValidatorMetadata;
+    /// let metadata = ValidatorMetadata {
+    ///     authorization_servers: None,
+    ///     dpop_signing_alg_values_supported: Some(vec!["ES256".to_string()]),
+    ///     dpop_bound_access_tokens_required: Some(false),
+    ///     resource: None,
+    ///     bearer_methods_supported: None,
+    /// };
+    /// let challenges = metadata.challenges(None, Some("example"), Some("read write"), None);
+    /// assert_eq!(challenges.len(), 2);
+    /// assert_eq!(challenges[0], r#"Bearer realm="example", scope="read write""#);
+    /// assert_eq!(challenges[1], r#"DPoP realm="example", scope="read write", algs="ES256""#);
+    /// ```
+    #[must_use]
+    pub fn challenges(
+        &self,
+        error: Option<&dyn ToRfc6750Error>,
+        realm: Option<&str>,
+        scope: Option<&str>,
+        error_uri: Option<&str>,
+    ) -> Vec<String> {
+        let mut challenges = Vec::new();
+        let attempted_scheme = error.and_then(|e| e.attempted_scheme());
+
+        let dpop_supported = self.dpop_signing_alg_values_supported.is_some()
+            || self.dpop_bound_access_tokens_required == Some(true);
+        let bearer_allowed = !self.dpop_bound_access_tokens_required.unwrap_or(false);
+
+        let include_in_dpop = dpop_supported
+            && error.is_some()
+            && (attempted_scheme.is_none() || attempted_scheme == Some(TokenType::DPoP));
+        let include_in_bearer = bearer_allowed
+            && error.is_some()
+            && (attempted_scheme.is_none() || attempted_scheme == Some(TokenType::Bearer));
+
+        if bearer_allowed {
+            let mut bearer_parts = Vec::new();
+            if let Some(realm) = realm {
+                bearer_parts.push(format!(r#"realm="{realm}""#));
+            }
+
+            if let Some(scope) = scope {
+                bearer_parts.push(format!(r#"scope="{scope}""#));
+            }
+
+            if include_in_bearer
+                && let Some(e) = error
+                && let Some(code) = e.error_code()
+            {
+                bearer_parts.push(format!(r#"error="{}""#, code.as_str()));
+                if let Some(desc) = e.error_description() {
+                    bearer_parts.push(format!(r#"error_description="{desc}""#));
+                }
+                if let Some(uri) = error_uri {
+                    bearer_parts.push(format!(r#"error_uri="{uri}""#));
+                }
+            }
+
+            let mut bearer = "Bearer".to_string();
+            if !bearer_parts.is_empty() {
+                bearer.push(' ');
+                bearer.push_str(&bearer_parts.join(", "));
+            }
+            challenges.push(bearer);
+        }
+
+        if dpop_supported {
+            let mut dpop_parts = Vec::new();
+            if let Some(realm) = realm {
+                dpop_parts.push(format!(r#"realm="{realm}""#));
+            }
+
+            if let Some(scope) = scope {
+                dpop_parts.push(format!(r#"scope="{scope}""#));
+            }
+
+            if include_in_dpop
+                && let Some(e) = error
+                && let Some(code) = e.error_code()
+            {
+                dpop_parts.push(format!(r#"error="{}""#, code.as_str()));
+                if let Some(desc) = e.error_description() {
+                    dpop_parts.push(format!(r#"error_description="{desc}""#));
+                }
+                if let Some(uri) = error_uri {
+                    dpop_parts.push(format!(r#"error_uri="{uri}""#));
+                }
+            }
+
+            if let Some(algs) = &self.dpop_signing_alg_values_supported {
+                dpop_parts.push(format!(r#"algs="{}""#, algs.join(" ")));
+            }
+
+            let mut dpop = "DPoP".to_string();
+            if !dpop_parts.is_empty() {
+                dpop.push(' ');
+                dpop.push_str(&dpop_parts.join(", "));
+            }
+            challenges.push(dpop);
+        }
+
+        challenges
+    }
+
+    /// Returns the `WWW-Authenticate` header values for an unauthenticated request.
+    ///
+    /// Equivalent to calling [`Self::challenges(None, realm, scope, None)`].
+    #[must_use]
+    pub fn unauthenticated_challenges(
+        &self,
+        realm: Option<&str>,
+        scope: Option<&str>,
+    ) -> Vec<String> {
+        self.challenges(None, realm, scope, None)
+    }
+}
+
 /// A trait for validators that can describe their configuration.
 ///
 /// The returned [`ValidatorMetadata`] can be used to populate a Protected Resource

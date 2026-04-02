@@ -4,10 +4,7 @@ mod error;
 mod flow;
 mod grant;
 mod jar;
-#[cfg(all(
-    feature = "authorization-flow-loopback",
-    not(target_family = "wasm")
-))]
+#[cfg(all(feature = "authorization-flow-loopback", not(target_family = "wasm")))]
 mod loopback;
 mod par;
 mod types;
@@ -19,10 +16,7 @@ pub use grant::{
     AuthorizationCodeGrant, AuthorizationCodeGrantBuilder, AuthorizationCodeGrantParameters,
 };
 pub use jar::{Jar, NoJar};
-#[cfg(all(
-    feature = "authorization-flow-loopback",
-    not(target_family = "wasm")
-))]
+#[cfg(all(feature = "authorization-flow-loopback", not(target_family = "wasm")))]
 pub use loopback::{
     CallbackRenderer, CallbackResponse, ErrorContext, LoopbackError, SuccessContext, bind_loopback,
 };

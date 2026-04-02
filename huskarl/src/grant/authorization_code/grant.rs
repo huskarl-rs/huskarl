@@ -262,7 +262,7 @@ impl<
 /// Parameters passed to each token request.
 #[derive(Debug, Clone, Builder)]
 pub struct AuthorizationCodeGrantParameters {
-    /// The bound DPoP JWT thumbprint, if any has already been computed.
+    /// The bound `DPoP` JWT thumbprint, if any has already been computed.
     #[builder(into)]
     pub dpop_jkt: Option<String>,
     /// The temporary authorization code received from the redirect callback.
