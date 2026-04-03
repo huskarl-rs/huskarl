@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Additions
+
+- Adds AEAD encryption/decryption traits (initially planned for DPoP nonces).
+
 ### Removals
 
 - Removes `HasPublicKey` trait.

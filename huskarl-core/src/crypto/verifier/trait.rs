@@ -4,7 +4,10 @@ use std::{pin::Pin, sync::Arc};
 
 use crate::{
     BoxedError, EndpointUrl,
-    crypto::verifier::error::{CreateVerifierError, VerifyError},
+    crypto::{
+        KeyMatchStrength,
+        verifier::error::{CreateVerifierError, VerifyError},
+    },
     jwk::PublicJwk,
     platform::{MaybeSend, MaybeSendFuture, MaybeSendSync},
 };
@@ -95,20 +98,6 @@ pub struct KeyMatch<'a> {
     pub alg: &'a str,
     /// The key ID (`kid`) from the JWS header.
     pub kid: Option<&'a str>,
-}
-
-/// States how well a particular JWS verifier matched the key selection criteria.
-///
-/// This can be used when combining multiple verifier sources which may or may not be
-/// able to handle particular keys, to know where to route the actual verification
-/// request.
-#[derive(Debug, PartialEq, Eq)]
-pub enum KeyMatchStrength {
-    /// Both the algorithm and the key ID match exactly.
-    ByKeyId,
-    /// The algorithm matches but the key ID was not used for matching — either
-    /// the JWT has no kid, or this verifier has no kid registered.
-    ByAlgorithm,
 }
 
 /// Trait for verifying RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.

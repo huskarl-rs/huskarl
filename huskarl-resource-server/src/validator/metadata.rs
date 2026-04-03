@@ -97,9 +97,8 @@ impl ValidatorMetadata {
             return Vec::new();
         }
 
-        let is_client_error = error.is_some_and(|e| {
-            matches!(e.token_error(), TokenValidationError::Client(_))
-        });
+        let is_client_error =
+            error.is_some_and(|e| matches!(e.token_error(), TokenValidationError::Client(_)));
 
         let include_in_dpop = dpop_supported
             && is_client_error

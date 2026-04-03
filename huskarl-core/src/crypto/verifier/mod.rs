@@ -14,7 +14,5 @@ pub use metrics_verifier::MetricsJwsVerifier;
 pub use multi::{MultiKeyVerifier, MultiKeyVerifierError};
 pub use refreshing::RefreshingVerifier;
 pub use retrying::RetryingVerifier;
-pub use r#trait::{
-    BoxedJwsVerifier, JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform, KeyMatch,
-    KeyMatchStrength,
-};
+pub use crate::crypto::KeyMatchStrength;
+pub use r#trait::{BoxedJwsVerifier, JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform, KeyMatch};
