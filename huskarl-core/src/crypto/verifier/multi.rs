@@ -3,9 +3,12 @@ use snafu::prelude::*;
 
 use crate::{
     BoxedError,
-    crypto::verifier::{
-        BoxedJwsVerifier, CreateVerifierError, JwsVerifier, JwsVerifierPlatform, KeyMatch,
-        KeyMatchStrength, VerifyError,
+    crypto::{
+        KeyMatchStrength,
+        verifier::{
+            BoxedJwsVerifier, CreateVerifierError, JwsVerifier, JwsVerifierPlatform, KeyMatch,
+            VerifyError,
+        },
     },
     error::Error as _,
     jwk::PublicJwks,

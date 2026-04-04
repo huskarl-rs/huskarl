@@ -8,8 +8,7 @@ mod refreshing;
 mod retrying;
 mod r#trait;
 
-pub use crate::crypto::KeyMatchStrength;
-pub use error::{CreateVerifierError, NoMatchingKeySnafu, SignatureMismatchSnafu, VerifyError};
+pub use error::{CreateVerifierError, VerifyError};
 #[cfg(feature = "metrics")]
 pub use metrics_verifier::MetricsJwsVerifier;
 pub use multi::{MultiKeyVerifier, MultiKeyVerifierError};

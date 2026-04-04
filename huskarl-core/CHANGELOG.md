@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Additions
 
 - Adds AEAD encryption/decryption traits (initially planned for DPoP nonces).
+- Adds JTI cache trait, and adds a parameter for this to JwtValidator.
 
 ### Removals
 

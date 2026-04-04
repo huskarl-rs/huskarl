@@ -7,7 +7,10 @@ use arc_swap::ArcSwap;
 
 use crate::{
     BoxedError,
-    crypto::verifier::{JwsVerifier, KeyMatch, KeyMatchStrength, VerifyError},
+    crypto::{
+        KeyMatchStrength,
+        verifier::{JwsVerifier, KeyMatch, VerifyError},
+    },
     platform::{Duration, Instant, MaybeSendFuture, MaybeSendSync},
 };
 

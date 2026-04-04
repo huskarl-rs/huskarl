@@ -4,7 +4,7 @@ use crate::BoxedError;
 
 /// Errors that could occur during verification.
 #[derive(Debug, Snafu)]
-#[snafu(visibility(pub))]
+#[snafu(visibility(pub(crate)))]
 pub enum VerifyError<E: crate::Error> {
     /// No key matched the requested algorithm/kid pair.
     #[snafu(display("no matching key"))]

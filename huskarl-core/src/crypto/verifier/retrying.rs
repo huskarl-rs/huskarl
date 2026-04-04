@@ -1,5 +1,8 @@
 use crate::{
-    crypto::verifier::{JwsVerifier, KeyMatch, KeyMatchStrength, VerifyError},
+    crypto::{
+        KeyMatchStrength,
+        verifier::{JwsVerifier, KeyMatch, VerifyError},
+    },
     platform::MaybeSendSync,
 };
 
