@@ -445,7 +445,13 @@ pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
     Ok(listener)
 }
 
-#[cfg(all(test, any(not(target_family = "wasm"), all(target_arch = "wasm32", target_os = "wasi", target_env = "p2"))))]
+#[cfg(all(
+    test,
+    any(
+        not(target_family = "wasm"),
+        all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
+    )
+))]
 mod tests {
     use super::*;
     use crate::token::{AccessToken, id_token::IdTokenClaims};

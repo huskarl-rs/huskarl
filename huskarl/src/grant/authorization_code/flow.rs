@@ -33,7 +33,13 @@ use crate::{
     token::id_token::{IdTokenClaims, IdTokenValidator},
 };
 
-#[cfg(all(feature = "authorization-flow-loopback", any(not(target_family = "wasm"), all(target_arch = "wasm32", target_os = "wasi", target_env = "p2"))))]
+#[cfg(all(
+    feature = "authorization-flow-loopback",
+    any(
+        not(target_family = "wasm"),
+        all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
+    )
+))]
 use crate::grant::authorization_code::{LoopbackError, loopback};
 
 impl<
@@ -56,7 +62,13 @@ impl<
     ///
     /// Note that if an ID token is returned by the authorization server, this indicates that an
     /// OIDC flow was requested in the authorization request, and the ID token will be validated.
-    #[cfg(all(feature = "authorization-flow-loopback", any(not(target_family = "wasm"), all(target_arch = "wasm32", target_os = "wasi", target_env = "p2"))))]
+    #[cfg(all(
+        feature = "authorization-flow-loopback",
+        any(
+            not(target_family = "wasm"),
+            all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
+        )
+    ))]
     pub async fn complete_on_loopback<C: HttpClient>(
         &self,
         http_client: &C,
@@ -79,7 +91,13 @@ impl<
     ///
     /// Errors if there are issues with parsing callback URLs, HTTP read errors, errors handling the
     /// callback, or errors requesting a token, or if the ID token cannot be validated.
-    #[cfg(all(feature = "authorization-flow-loopback", any(not(target_family = "wasm"), all(target_arch = "wasm32", target_os = "wasi", target_env = "p2"))))]
+    #[cfg(all(
+        feature = "authorization-flow-loopback",
+        any(
+            not(target_family = "wasm"),
+            all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
+        )
+    ))]
     pub async fn complete_on_loopback_oidc<C: HttpClient>(
         &self,
         http_client: &C,
