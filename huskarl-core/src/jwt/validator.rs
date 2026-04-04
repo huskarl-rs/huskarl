@@ -5,7 +5,10 @@ use std::collections::HashSet;
 use crate::{
     BoxedError,
     crypto::verifier::{JwsVerifier, KeyMatch, VerifyError},
-    jwt::{ConfirmationClaim, JwsParseError, ParsedJws, parse_compact_jws},
+    jwt::{
+        BoxedJtiUniquenessChecker, ConfirmationClaim, JtiUniquenessChecker, JwsParseError,
+        ParsedJws, parse_compact_jws,
+    },
     platform::{Duration, SystemTime},
 };
 
@@ -82,6 +85,8 @@ pub struct JwtValidator {
     /// The `jti` claim is required.
     #[builder(default)]
     require_jti: bool,
+    /// Implementation of a JTI checker to check for uniqueness.
+    jti_checker: Option<BoxedJtiUniquenessChecker>,
     /// Maximum token age to validate against.
     max_token_age: Option<Duration>,
     #[builder(default)]
@@ -265,6 +270,18 @@ impl JwtValidator {
             ensure!(
                 parsed_jwt.claims.jti.is_some(),
                 RequiredClaimMissingSnafu { claim: "jti" }
+            );
+        }
+
+        if let Some(jti) = parsed_jwt.claims.jti.as_deref()
+            && let Some(jti_checker) = self.jti_checker.as_ref()
+        {
+            ensure!(
+                !jti_checker
+                    .check_and_mark_seen(jti)
+                    .await
+                    .context(JtiCheckSnafu)?,
+                JtiNotUniqueSnafu
             );
         }
 
@@ -503,5 +520,12 @@ pub enum JwtValidationError {
     RequiredClaimMissing {
         /// The missing claim.
         claim: &'static str,
+    },
+    /// The JTI was required to be unique, but was previously marked as seen.
+    JtiNotUnique,
+    /// There was an internal failure when attempting to check for JTI uniqueness.
+    JtiCheck {
+        /// The underlying error.
+        source: BoxedError,
     },
 }

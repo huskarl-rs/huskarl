@@ -6,41 +6,63 @@ use snafu::prelude::*;
 use crate::{
     ValidatedRequest,
     validator::{
+        ValidationResult,
         binding::{DPoPBindingChecker, check_token_binding},
+        dpop_nonce::DpopNonceChecker,
         error::{BindingSnafu, ExtractSnafu, InvalidJwtSnafu, ValidateHeadersError},
         extract::extract_token,
     },
 };
 
-pub(super) struct ValidatorInner {
+pub(super) struct ValidatorInner<N: DpopNonceChecker> {
     pub token_validator: JwtValidator,
-    pub dpop_binding_checker: DPoPBindingChecker,
+    pub dpop_binding_checker: DPoPBindingChecker<N>,
     pub token_header: HeaderName,
     /// If `true`, tokens without a `cnf.x5t#S256` certificate binding are rejected.
     pub require_mtls: bool,
 }
 
-impl ValidatorInner {
+impl<N: DpopNonceChecker> ValidatorInner<N> {
     pub async fn validate_request<Claims: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         headers: &http::HeaderMap,
         http_method: &http::Method,
         http_uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
-    ) -> Result<Option<ValidatedRequest<Claims>>, ValidateHeadersError> {
-        let Some((token_type, access_token)) =
-            extract_token(headers, &self.token_header).context(ExtractSnafu)?
-        else {
-            return Ok(None);
+    ) -> ValidationResult<Claims, ValidateHeadersError> {
+        let extract_result = extract_token(headers, &self.token_header).context(ExtractSnafu);
+        let (token_type, access_token) = match extract_result {
+            Err(e) => {
+                return ValidationResult {
+                    outcome: Err(e),
+                    dpop_nonce: None,
+                };
+            }
+            Ok(None) => {
+                return ValidationResult {
+                    outcome: Ok(None),
+                    dpop_nonce: None,
+                };
+            }
+            Ok(Some(v)) => v,
         };
 
-        let validated = self
+        let validated = match self
             .token_validator
             .validate::<Claims>(access_token.expose_secret())
             .await
-            .context(InvalidJwtSnafu { token_type })?;
+            .context(InvalidJwtSnafu { token_type })
+        {
+            Err(e) => {
+                return ValidationResult {
+                    outcome: Err(e),
+                    dpop_nonce: None,
+                };
+            }
+            Ok(v) => v,
+        };
 
-        check_token_binding(
+        let (dpop_nonce, binding_result) = check_token_binding(
             token_type,
             validated.cnf.as_ref(),
             &access_token,
@@ -51,9 +73,15 @@ impl ValidatorInner {
             http_uri,
             client_cert_der,
         )
-        .await
-        .context(BindingSnafu { token_type })?;
+        .await;
 
-        Ok(Some(validated.into()))
+        let outcome = binding_result
+            .context(BindingSnafu { token_type })
+            .map(|()| Some(ValidatedRequest::from(validated)));
+
+        ValidationResult {
+            outcome,
+            dpop_nonce,
+        }
     }
 }

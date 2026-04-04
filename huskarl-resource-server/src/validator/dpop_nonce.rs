@@ -1,0 +1,100 @@
+use std::convert::Infallible;
+
+use bon::Builder;
+use huskarl_core::{
+    crypto::cipher::{AeadEncryptor, AeadSealer, AeadUnsealer},
+    platform::{Duration, MaybeSend, MaybeSendSync, SystemTime},
+};
+
+/// The outcome of a DPoP nonce check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NonceCheck {
+    /// The nonce is valid and fresh — no action needed.
+    Valid,
+    /// The nonce is valid but approaching expiry — include the new nonce in the response
+    /// so the client can use it on the next request.
+    ValidWithNewNonce(String),
+    /// The nonce is missing, invalid, or expired. Reject the request with
+    /// `use_dpop_nonce` and include the provided nonce in the response.
+    Invalid(String),
+}
+
+pub trait DpopNonceChecker: MaybeSendSync {
+    type Error: crate::core::Error;
+
+    fn check_nonce(
+        &self,
+        nonce: Option<&str>,
+    ) -> impl Future<Output = Result<NonceCheck, Self::Error>> + MaybeSend;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoNonceCheck;
+
+impl DpopNonceChecker for NoNonceCheck {
+    type Error = Infallible;
+
+    async fn check_nonce(&self, _nonce: Option<&str>) -> Result<NonceCheck, Self::Error> {
+        Ok(NonceCheck::Valid)
+    }
+}
+
+#[derive(Debug, Builder)]
+pub struct SealedTimestampNonce<S: AeadSealer + AeadUnsealer> {
+    sealer: S,
+    /// The maximum age of a valid nonce. Defaults to 1 hour.
+    #[builder(into, default = Duration::from_secs(3600))]
+    nonce_lifetime: Duration,
+    /// How far before expiry a still-valid nonce triggers proactive rotation.
+    /// Defaults to 15 minutes.
+    #[builder(into, default = Duration::from_secs(900))]
+    renewal_window: Duration,
+    #[builder(into, default = b"dpop-nonce")]
+    aad: Vec<u8>,
+}
+
+impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
+    async fn generate_nonce(&self) -> Result<String, <S as AeadEncryptor>::Error> {
+        use base64::prelude::*;
+        let current_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .to_be_bytes();
+        let sealed_bytes = self.sealer.seal(&current_time, &self.aad).await?;
+        Ok(BASE64_STANDARD.encode(sealed_bytes))
+    }
+
+    async fn nonce_age_secs(&self, nonce: Option<&str>) -> Option<u64> {
+        use base64::prelude::*;
+        let nonce_bytes = BASE64_STANDARD.decode(nonce?).ok()?;
+        let unsealed_bytes = self.sealer.unseal(&nonce_bytes, &self.aad).await.ok()?;
+        let timestamp_bytes = <[u8; 8]>::try_from(unsealed_bytes).ok()?;
+        let nonce_issued_at = u64::from_be_bytes(timestamp_bytes);
+        let current_secs = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        Some(current_secs.saturating_sub(nonce_issued_at))
+    }
+}
+
+impl<S: AeadSealer + AeadUnsealer> DpopNonceChecker for SealedTimestampNonce<S> {
+    type Error = <S as AeadEncryptor>::Error;
+
+    async fn check_nonce(&self, nonce: Option<&str>) -> Result<NonceCheck, Self::Error> {
+        let lifetime = self.nonce_lifetime.as_secs();
+        let renewal_threshold = lifetime.saturating_sub(self.renewal_window.as_secs());
+
+        match self.nonce_age_secs(nonce).await {
+            Some(age) if age <= lifetime => {
+                if age >= renewal_threshold {
+                    Ok(NonceCheck::ValidWithNewNonce(self.generate_nonce().await?))
+                } else {
+                    Ok(NonceCheck::Valid)
+                }
+            }
+            _ => Ok(NonceCheck::Invalid(self.generate_nonce().await?)),
+        }
+    }
+}

@@ -11,7 +11,10 @@ use huskarl::{
 };
 use huskarl_core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata};
 use huskarl_reqwest::{ReqwestClient, mtls::MtlsPem};
-use huskarl_resource_server::validator::custom::{AccessTokenValidationRules, CustomValidator};
+use huskarl_resource_server::validator::{
+    custom::{AccessTokenValidationRules, CustomValidator},
+    dpop_nonce::NoNonceCheck,
+};
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
 fn certs_dir() -> std::path::PathBuf {
@@ -85,6 +88,7 @@ async fn client_credentials_mtls_binding() {
             JwksSource::builder().http_client(http.clone()).build(),
         ))
         .rules(AccessTokenValidationRules::builder().build())
+        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .expect("create validator");
@@ -117,6 +121,7 @@ async fn client_credentials_mtls_binding() {
                 Some(&client_cert_der),
             )
             .await
+            .outcome
             .unwrap()
             .is_some()
     );

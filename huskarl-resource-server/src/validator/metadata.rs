@@ -6,6 +6,11 @@ use serde::Serialize;
 /// input to a Protected Resource Metadata document (RFC 9728).
 #[derive(Debug, Clone, Serialize)]
 pub struct ValidatorMetadata {
+    /// The realm identifying the protection space (RFC 6750 §3).
+    ///
+    /// Included as `realm="..."` in `WWW-Authenticate` challenges when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub realm: Option<String>,
     /// The authorization server(s) this validator trusts, by issuer URI.
     ///
     /// `None` if not known or if the authorization server does not have an issuer URI.
@@ -39,7 +44,7 @@ pub struct ValidatorMetadata {
 }
 
 use crate::TokenType;
-use crate::error::{ToRfc6750Error, TokenValidationError};
+use crate::error::{ToRfc6750Error, TokenValidationError, escape_quoted};
 
 impl ValidatorMetadata {
     /// Returns the `WWW-Authenticate` challenges for a request.
@@ -65,13 +70,14 @@ impl ValidatorMetadata {
     /// ```
     /// # use huskarl_resource_server::validator::metadata::ValidatorMetadata;
     /// let metadata = ValidatorMetadata {
+    ///     realm: Some("example".to_string()),
     ///     authorization_servers: None,
     ///     dpop_signing_alg_values_supported: Some(vec!["ES256".to_string()]),
     ///     dpop_bound_access_tokens_required: Some(false),
     ///     resource: None,
     ///     bearer_methods_supported: None,
     /// };
-    /// let challenges = metadata.challenges(None, Some("example"), Some("read write"), None);
+    /// let challenges = metadata.challenges(None, Some("read write"), None);
     /// assert_eq!(challenges.len(), 2);
     /// assert_eq!(challenges[0], r#"Bearer realm="example", scope="read write""#);
     /// assert_eq!(challenges[1], r#"DPoP realm="example", scope="read write", algs="ES256""#);
@@ -80,7 +86,6 @@ impl ValidatorMetadata {
     pub fn challenges(
         &self,
         error: Option<&dyn ToRfc6750Error>,
-        realm: Option<&str>,
         scope: Option<&str>,
         error_uri: Option<&str>,
     ) -> Vec<String> {
@@ -109,12 +114,12 @@ impl ValidatorMetadata {
 
         if bearer_allowed {
             let mut bearer_parts = Vec::new();
-            if let Some(realm) = realm {
-                bearer_parts.push(format!(r#"realm="{realm}""#));
+            if let Some(realm) = self.realm.as_deref() {
+                bearer_parts.push(format!(r#"realm="{}""#, escape_quoted(realm)));
             }
 
             if let Some(scope) = scope {
-                bearer_parts.push(format!(r#"scope="{scope}""#));
+                bearer_parts.push(format!(r#"scope="{}""#, escape_quoted(scope)));
             }
 
             if include_in_bearer
@@ -123,11 +128,12 @@ impl ValidatorMetadata {
             {
                 bearer_parts.push(format!(r#"error="{}""#, code.as_str()));
                 if let Some(desc) = e.error_description() {
-                    bearer_parts.push(format!(r#"error_description="{desc}""#));
+                    bearer_parts.push(format!(r#"error_description="{}""#, escape_quoted(&desc)));
                 }
                 if let Some(uri) = error_uri {
-                    bearer_parts.push(format!(r#"error_uri="{uri}""#));
+                    bearer_parts.push(format!(r#"error_uri="{}""#, escape_quoted(uri)));
                 }
+                bearer_parts.extend(e.extra_params().into_iter().map(|p| p.format()));
             }
 
             let mut bearer = "Bearer".to_string();
@@ -140,12 +146,12 @@ impl ValidatorMetadata {
 
         if dpop_supported {
             let mut dpop_parts = Vec::new();
-            if let Some(realm) = realm {
-                dpop_parts.push(format!(r#"realm="{realm}""#));
+            if let Some(realm) = self.realm.as_deref() {
+                dpop_parts.push(format!(r#"realm="{}""#, escape_quoted(realm)));
             }
 
             if let Some(scope) = scope {
-                dpop_parts.push(format!(r#"scope="{scope}""#));
+                dpop_parts.push(format!(r#"scope="{}""#, escape_quoted(scope)));
             }
 
             if include_in_dpop
@@ -154,11 +160,12 @@ impl ValidatorMetadata {
             {
                 dpop_parts.push(format!(r#"error="{}""#, code.as_str()));
                 if let Some(desc) = e.error_description() {
-                    dpop_parts.push(format!(r#"error_description="{desc}""#));
+                    dpop_parts.push(format!(r#"error_description="{}""#, escape_quoted(&desc)));
                 }
                 if let Some(uri) = error_uri {
-                    dpop_parts.push(format!(r#"error_uri="{uri}""#));
+                    dpop_parts.push(format!(r#"error_uri="{}""#, escape_quoted(uri)));
                 }
+                dpop_parts.extend(e.extra_params().into_iter().map(|p| p.format()));
             }
 
             if let Some(algs) = &self.dpop_signing_alg_values_supported {
@@ -178,14 +185,10 @@ impl ValidatorMetadata {
 
     /// Returns the `WWW-Authenticate` header values for an unauthenticated request.
     ///
-    /// Equivalent to calling [`Self::challenges(None, realm, scope, None)`].
+    /// Equivalent to calling [`Self::challenges(None, scope, None)`].
     #[must_use]
-    pub fn unauthenticated_challenges(
-        &self,
-        realm: Option<&str>,
-        scope: Option<&str>,
-    ) -> Vec<String> {
-        self.challenges(None, realm, scope, None)
+    pub fn unauthenticated_challenges(&self, scope: Option<&str>) -> Vec<String> {
+        self.challenges(None, scope, None)
     }
 }
 

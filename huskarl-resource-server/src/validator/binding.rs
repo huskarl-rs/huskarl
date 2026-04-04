@@ -6,7 +6,8 @@
 use std::sync::Arc;
 
 use base64::prelude::*;
-use huskarl_core::secrets::SecretString;
+use http::StatusCode;
+use huskarl_core::{BoxedError, jwt::BoxedJtiUniquenessChecker, secrets::SecretString};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, prelude::*};
@@ -16,14 +17,19 @@ use crate::{
     core::{
         crypto::verifier::{CreateVerifierError, JwsVerifierPlatform},
         dpop::{hash_access_token_for_dpop, normalize_uri_for_dpop},
-        jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator},
-        jwt::{ConfirmationClaim, JwsParseError, parse_compact_jws},
+        jwt::{
+            ConfirmationClaim, JwsParseError, parse_compact_jws,
+            validator::{ClaimCheck, JwtValidationError, JwtValidator},
+        },
         platform::Duration,
     },
-    validator::error::{
-        DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DpopRequiredForBoundTokenSnafu,
-        DpopRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
-        UnsupportedCnfMethodSnafu,
+    validator::{
+        dpop_nonce::{DpopNonceChecker, NonceCheck},
+        error::{
+            DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DpopRequiredForBoundTokenSnafu,
+            DpopRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
+            UnsupportedCnfMethodSnafu,
+        },
     },
 };
 
@@ -54,55 +60,79 @@ pub(crate) fn check_mtls_binding(
 /// Checks unsupported `cnf` methods (`jwe`, `jku`), then performs
 /// token-type-specific binding (Bearer: rejects DPoP-bound tokens; DPoP: validates
 /// the proof), then validates any mTLS certificate binding.
+/// Returns the DPoP nonce to include in the response (if any) alongside the binding result.
+///
+/// The nonce is `Some` when the nonce checker issued a fresh nonce (either proactively on
+/// [`NonceCheck::ValidWithNewNonce`] or as a required retry on [`NonceCheck::Invalid`]).
+/// It is present even when the binding result is `Err`, so callers can always set the
+/// `DPoP-Nonce` response header regardless of outcome.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn check_token_binding(
+pub(crate) async fn check_token_binding<N: DpopNonceChecker>(
     token_type: TokenType,
     cnf: Option<&ConfirmationClaim>,
     access_token: &SecretString,
-    dpop_binding_checker: &DPoPBindingChecker,
+    dpop_binding_checker: &DPoPBindingChecker<N>,
     require_mtls: bool,
     headers: &http::HeaderMap,
     http_method: &http::Method,
     http_uri: &http::Uri,
     client_cert_der: Option<&[u8]>,
-) -> Result<(), TokenBindingError> {
+) -> (Option<String>, Result<(), TokenBindingError>) {
     if let Some(cnf) = cnf {
         if cnf.jwe.is_some() {
-            UnsupportedCnfMethodSnafu { method: "jwe" }.fail()?;
+            return (None, UnsupportedCnfMethodSnafu { method: "jwe" }.fail());
         }
         if cnf.jku.is_some() {
-            UnsupportedCnfMethodSnafu { method: "jku" }.fail()?;
+            return (None, UnsupportedCnfMethodSnafu { method: "jku" }.fail());
         }
     }
 
-    match token_type {
+    let dpop_nonce = match token_type {
         TokenType::Bearer => {
             // RFC 9449 §7.1: a token with a DPoP key binding (cnf.jkt) MUST NOT be
             // accepted as a Bearer token — doing so would defeat the binding entirely.
             if cnf.and_then(|c| c.jkt.as_ref()).is_some() {
-                DpopRequiredForBoundTokenSnafu.fail()?;
+                return (None, DpopRequiredForBoundTokenSnafu.fail());
             }
             if dpop_binding_checker.required {
-                DpopRequiredSnafu.fail()?;
+                return (None, DpopRequiredSnafu.fail());
             }
+            None
         }
         TokenType::DPoP => {
-            let dpop_proof = headers
+            let dpop_proof = match headers
                 .get("DPoP")
                 .map(|hv| hv.to_str().context(DPoPHeaderNotStringSnafu))
-                .transpose()?
-                .context(MissingDPoPHeaderSnafu)?;
+                .transpose()
+                .and_then(|opt| opt.context(MissingDPoPHeaderSnafu))
+            {
+                Ok(proof) => proof,
+                Err(e) => return (None, Err(e)),
+            };
 
-            dpop_binding_checker
+            match dpop_binding_checker
                 .check(cnf, access_token, dpop_proof, http_method, http_uri)
                 .await
-                .context(DPoPBindingSnafu)?;
+            {
+                Ok(nonce) => nonce,
+                Err(e) => {
+                    let nonce = if let DPoPBindingError::NonceRequired { ref nonce } = e {
+                        Some(nonce.clone())
+                    } else {
+                        None
+                    };
+                    return (nonce, Err(e).context(DPoPBindingSnafu));
+                }
+            }
         }
+    };
+
+    if let Err(e) = check_mtls_binding(cnf, client_cert_der, require_mtls).context(MtlsBindingSnafu)
+    {
+        return (dpop_nonce, Err(e));
     }
 
-    check_mtls_binding(cnf, client_cert_der, require_mtls).context(MtlsBindingSnafu)?;
-
-    Ok(())
+    (dpop_nonce, Ok(()))
 }
 
 fn cert_thumbprint(der: &[u8]) -> String {
@@ -128,8 +158,10 @@ pub enum MtlsBindingError {
 ///
 /// Verifies the DPoP proof signature, checks the `htm`/`htu`/`ath` claims
 /// against the request, and confirms the proof key matches the `cnf.jkt`
-/// thumbprint in the token.
-pub(crate) struct DPoPBindingChecker {
+/// thumbprint in the token. Also validates the provided DPoP nonce.
+pub(crate) struct DPoPBindingChecker<N: DpopNonceChecker> {
+    pub(crate) dpop_nonce_checker: N,
+    pub(crate) dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
     pub(crate) max_proof_age: Duration,
     pub(crate) jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
     pub(crate) allowed_signing_algorithms: Option<Vec<String>>,
@@ -137,7 +169,7 @@ pub(crate) struct DPoPBindingChecker {
     pub(crate) required: bool,
 }
 
-impl DPoPBindingChecker {
+impl<N: DpopNonceChecker> DPoPBindingChecker<N> {
     pub(crate) async fn check(
         &self,
         cnf: Option<&ConfirmationClaim>,
@@ -145,7 +177,7 @@ impl DPoPBindingChecker {
         dpop_proof: &str,
         method: &http::Method,
         uri: &http::Uri,
-    ) -> Result<(), DPoPBindingError> {
+    ) -> Result<Option<String>, DPoPBindingError> {
         let parsed_proof =
             parse_compact_jws::<(), DPoPClaims>(dpop_proof).context(BadFormatSnafu)?;
 
@@ -170,13 +202,33 @@ impl DPoPBindingChecker {
             .typ(ClaimCheck::required_value("dpop+jwt"))
             .maybe_allowed_algorithms(self.allowed_signing_algorithms.clone())
             .max_token_age(self.max_proof_age)
-            .require_jti(true)
+            .require_jti(self.dpop_jti_checker.is_some())
+            .maybe_jti_checker(self.dpop_jti_checker.clone())
             .build();
 
         let validated_proof = dpop_validator
             .validate_parsed_jws(parsed_proof)
             .await
             .context(InvalidProofSnafu)?;
+
+        let proof_nonce = validated_proof
+            .claims
+            .as_ref()
+            .and_then(|p| p.nonce.as_deref());
+
+        let nonce_check = self
+            .dpop_nonce_checker
+            .check_nonce(proof_nonce)
+            .await
+            .map_err(|e| DPoPBindingError::NonceCheckFailed {
+                source: BoxedError::from_err(e),
+            })?;
+
+        let new_nonce = match nonce_check {
+            NonceCheck::Valid => None,
+            NonceCheck::ValidWithNewNonce(n) => Some(n),
+            NonceCheck::Invalid(n) => return NonceRequiredSnafu { nonce: n }.fail(),
+        };
 
         let access_token_hash = hash_access_token_for_dpop(access_token.expose_secret());
 
@@ -224,7 +276,7 @@ impl DPoPBindingChecker {
             (Some(jkt), Some(tp)) => ensure!(*jkt == tp, ThumbprintMismatchSnafu),
         }
 
-        Ok(())
+        Ok(new_nonce)
     }
 }
 
@@ -233,7 +285,6 @@ struct DPoPClaims {
     htm: Option<String>,
     htu: Option<String>,
     ath: Option<String>,
-    #[allow(dead_code)]
     nonce: Option<String>,
 }
 
@@ -268,6 +319,12 @@ pub enum DPoPBindingError {
     /// and is rejected to prevent SSRF and key substitution attacks.
     #[snafu(display("DPoP proof JWK contains unsupported x5u parameter"))]
     JwkX5u,
+    /// The nonce checker returned an error (server-side failure).
+    #[snafu(display("DPoP nonce check failed"))]
+    NonceCheckFailed { source: BoxedError },
+    /// The DPoP proof nonce is missing or invalid. The client must retry with the provided nonce.
+    #[snafu(display("A DPoP nonce is required"))]
+    NonceRequired { nonce: String },
     /// The DPoP proof is missing a required claim.
     #[snafu(display("DPoP proof is missing the required claim '{claim}'"))]
     MissingProofClaim {
@@ -294,6 +351,15 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
     fn token_error(&self) -> crate::error::TokenValidationError {
         use crate::error::{TokenErrorCode, TokenValidationError};
         match self {
+            Self::NonceCheckFailed { .. } => {
+                TokenValidationError::Server(StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            Self::InvalidProof {
+                source: crate::core::jwt::validator::JwtValidationError::JtiCheck { .. },
+            } => TokenValidationError::Server(StatusCode::INTERNAL_SERVER_ERROR),
+            Self::NonceRequired { .. } => {
+                TokenValidationError::Client(TokenErrorCode::UseDPoPNonce)
+            }
             // The token itself lacks a DPoP key binding — token-level failure.
             Self::MissingThumbprintBinding => {
                 TokenValidationError::Client(TokenErrorCode::InvalidToken)
@@ -317,11 +383,48 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
             Self::MalformedUrl { .. } => {
                 Some("The DPoP proof has a malformed HTTP URL".to_string())
             }
-            Self::InvalidProof { source } => source.error_description(),
+            Self::InvalidProof { source } => {
+                use crate::core::jwt::validator::JwtValidationError as E;
+                match source {
+                    E::Parse { .. } => Some("The DPoP proof is malformed".to_string()),
+                    E::Signature { .. } => {
+                        Some("The DPoP proof signature is invalid".to_string())
+                    }
+                    E::UnsignedToken => Some("The DPoP proof is unsigned".to_string()),
+                    E::DisallowedAlgorithm { .. } => {
+                        Some("The DPoP proof uses an unsupported signature algorithm".to_string())
+                    }
+                    E::UnrecognizedCriticalHeader { .. } => Some(
+                        "The DPoP proof contains unrecognized critical header parameters"
+                            .to_string(),
+                    ),
+                    E::Expired { .. } => Some("The DPoP proof has expired".to_string()),
+                    E::NotYetValid { .. } => Some("The DPoP proof is not yet valid".to_string()),
+                    E::IssuedInFuture { .. } => {
+                        Some("The DPoP proof was issued in the future".to_string())
+                    }
+                    E::TokenTooOld { .. } => Some("The DPoP proof is too old".to_string()),
+                    E::InvalidTokenType { .. } => {
+                        Some("The DPoP proof has an invalid typ header".to_string())
+                    }
+                    E::ClaimMismatch { claim, .. } => {
+                        Some(format!("The DPoP proof '{claim}' claim is invalid"))
+                    }
+                    E::RequiredClaimMissing { claim } => Some(format!(
+                        "The DPoP proof is missing the required '{claim}' claim"
+                    )),
+                    E::JtiNotUnique => {
+                        Some("The DPoP proof jti has already been used".to_string())
+                    }
+                    E::JtiCheck { .. } => None,
+                }
+            }
             Self::MissingJwkHeader => Some("The DPoP proof is missing the JWK header".to_string()),
             Self::JwkX5u => {
                 Some("The DPoP proof JWK contains an unsupported x5u parameter".to_string())
             }
+            Self::NonceCheckFailed { .. } => None,
+            Self::NonceRequired { .. } => Some("A DPoP nonce is required".to_string()),
             Self::MissingProofClaim { claim } => Some(format!(
                 "The DPoP proof is missing the required '{claim}' claim"
             )),

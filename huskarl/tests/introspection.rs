@@ -11,7 +11,7 @@ use huskarl::{
 };
 use huskarl_core::server_metadata::AuthorizationServerMetadata;
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::IntrospectionValidator;
+use huskarl_resource_server::{IntrospectionValidator, validator::dpop_nonce::NoNonceCheck};
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
 /// Introspection of a client-credentials access token against a real Keycloak.
@@ -82,6 +82,7 @@ async fn introspection_validates_active_token() {
         .introspection_endpoint(introspection_endpoint)
         .client_auth(ClientSecret::new(PlainSecret::new(&client.secret)))
         .http_client(http.clone())
+        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .expect("create introspection validator");
@@ -89,6 +90,7 @@ async fn introspection_validates_active_token() {
     let validated = validator
         .validate_request(&headers, &request_method, &request_uri, None)
         .await
+        .outcome
         .expect("introspection should succeed")
         .expect("token should be present and active");
 

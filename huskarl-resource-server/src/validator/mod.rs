@@ -1,6 +1,7 @@
 mod binding;
 mod common;
 pub mod custom;
+pub mod dpop_nonce;
 pub mod error;
 pub mod extract;
 pub mod introspection;
@@ -22,8 +23,9 @@ use crate::error::ToRfc6750Error;
 /// Implementations handle token extraction from request headers, JWT validation,
 /// and sender-constraint binding checks (DPoP, mTLS).
 ///
-/// Returns `Ok(None)` when no authentication header is present (unauthenticated request),
-/// `Ok(Some(_))` when a valid token is found, and `Err(_)` when a token is present but invalid.
+/// The `outcome` field of [`ValidationResult`] is `Ok(None)` when no authentication header is
+/// present (unauthenticated request), `Ok(Some(_))` when a valid token is found, and `Err(_)`
+/// when a token is present but invalid.
 pub trait AccessTokenValidator: MaybeSendSync {
     type Claims: MaybeSendSync;
     type Error: ToRfc6750Error;
@@ -34,7 +36,16 @@ pub trait AccessTokenValidator: MaybeSendSync {
         method: &http::Method,
         uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
-    ) -> impl Future<Output = Result<Option<ValidatedRequest<Self::Claims>>, Self::Error>> + MaybeSend;
+    ) -> impl Future<Output = ValidationResult<Self::Claims, Self::Error>> + MaybeSend;
+}
+
+/// The result of an [`AccessTokenValidator::validate_request`] call.
+#[derive(Debug)]
+pub struct ValidationResult<C, E> {
+    /// The outcome of the validation.
+    pub outcome: Result<Option<ValidatedRequest<C>>, E>,
+    /// A DPoP nonce to include in the response `DPoP-Nonce` header, if any.
+    pub dpop_nonce: Option<String>,
 }
 
 /// A validated access token request, containing the parsed claims and other metadata.

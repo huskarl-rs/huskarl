@@ -11,21 +11,19 @@ that can be used to make authenticated requests to resource servers.
 
 ### Client Credentials Grant
 
-```
+```rust
 # use huskarl::prelude::*;
+# use huskarl::core::http::HttpClient;
 # use huskarl::core::secrets::{EnvVarSecret, encodings::StringEncoding};
 # use huskarl::core::server_metadata::AuthorizationServerMetadata;
 # use huskarl::grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters};
 # use huskarl::core::client_auth::ClientSecret;
 # use huskarl::core::dpop::NoDPoP;
-# use huskarl_reqwest::ReqwestClient;
-# use huskarl_reqwest::mtls::NoMtls;
 #
-# async fn test() {
+# async fn example(http_client: impl HttpClient) {
 # let issuer = "https://issuer";
 # let client_id = "client_id";
 # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding).unwrap();
-# let http_client = ReqwestClient::builder().mtls(NoMtls).build().await.unwrap();
 #
 let metadata = AuthorizationServerMetadata::builder()
     .http_client(&http_client)

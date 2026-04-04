@@ -5,18 +5,23 @@ use http::HeaderName;
 use huskarl_core::{
     BoxedError, EndpointUrl,
     crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-    jwt::validator::{ClaimCheck, JwtValidator},
+    jwt::{
+        BoxedJtiUniquenessChecker,
+        validator::{ClaimCheck, JwtValidator},
+    },
     platform::MaybeSendSync,
     server_metadata::AuthorizationServerMetadata,
 };
 use serde::Deserialize;
 
 use crate::{
-    AccessTokenValidator, ValidatedRequest,
+    AccessTokenValidator,
     validator::{
+        ValidationResult,
         binding::DPoPBindingChecker,
         common::ValidatorInner,
         custom::custom_validator_builder::{SetAuthorizationServer, SetJwksUri},
+        dpop_nonce::DpopNonceChecker,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
         observe::{OnValidate, ValidationOutcome},
@@ -28,8 +33,8 @@ use crate::{
 /// Use [`AccessTokenValidationRules`] to configure which claims are required and how
 /// they are validated. For RFC 9068-compliant authorization servers, prefer
 /// [`crate::validator::rfc9068::Rfc9068Validator`].
-pub struct CustomValidator<Claims = HashMap<String, serde_json::Value>> {
-    inner: ValidatorInner,
+pub struct CustomValidator<N: DpopNonceChecker, Claims = HashMap<String, serde_json::Value>> {
+    inner: ValidatorInner<N>,
     authorization_server: Option<String>,
     audience: Option<String>,
     on_validate: Option<Arc<dyn OnValidate>>,
@@ -37,7 +42,9 @@ pub struct CustomValidator<Claims = HashMap<String, serde_json::Value>> {
 }
 
 #[bon::bon]
-impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims> {
+impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
+    CustomValidator<N, Claims>
+{
     /// Creates a new [`CustomValidator`].
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
@@ -85,6 +92,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         jwks_uri: Option<EndpointUrl>,
         /// Factory for creating JWS verifiers for access token signature verification.
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
+        token_jti_checker: Option<BoxedJtiUniquenessChecker>,
+        /// DPoP nonce checker.
+        dpop_nonce_checker: N,
+        /// DPoP JTI uniqueness checker.
+        dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
         /// Cryptographic platform for JWS verification.
         ///
         /// Used for both access token and DPoP proof verification. When the
@@ -120,12 +132,15 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
             .require_iat(rules.require_iat)
             .sub(rules.sub)
             .require_jti(rules.require_jti)
+            .maybe_jti_checker(token_jti_checker)
             .build();
 
         Ok(Self {
             inner: ValidatorInner {
                 token_validator,
                 dpop_binding_checker: DPoPBindingChecker {
+                    dpop_nonce_checker,
+                    dpop_jti_checker,
                     max_proof_age: max_dpop_proof_age,
                     jws_verifier_platform,
                     allowed_signing_algorithms: allowed_dpop_signing_algorithms,
@@ -142,28 +157,31 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
     }
 }
 
-impl CustomValidator<HashMap<String, serde_json::Value>> {
+impl<N: DpopNonceChecker> CustomValidator<N, ()> {
     /// Creates a builder for [`CustomValidator`].
     ///
     /// Call [`.with_claims::<T>()`][CustomValidatorBuilder::with_claims] on the builder
-    /// to specify a custom claims type. The default is `HashMap<String, serde_json::Value>`.
-    pub fn builder() -> CustomValidatorBuilder<HashMap<String, serde_json::Value>> {
+    /// to specify a custom claims type. The default is `()` (no extra claims).
+    pub fn builder() -> CustomValidatorBuilder<N, ()> {
         CustomValidator::builder_internal()
     }
 }
 
-impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_builder::State>
-    CustomValidatorBuilder<Claims, S>
+impl<
+    N: DpopNonceChecker,
+    Claims: for<'de> Deserialize<'de> + Clone + 'static,
+    S: custom_validator_builder::State,
+> CustomValidatorBuilder<N, Claims, S>
 {
     /// Sets the claims type for the validator.
     pub fn with_claims<Claims1: for<'de> Deserialize<'de> + Clone + 'static>(
         self,
-    ) -> CustomValidatorBuilder<Claims1, S> {
+    ) -> CustomValidatorBuilder<N, Claims1, S> {
         self.with_claims_internal()
     }
 }
 
-impl CustomValidator {
+impl<N: DpopNonceChecker> CustomValidator<N, ()> {
     /// Configure the validator from authorization server metadata.
     ///
     /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Issuer
@@ -173,18 +191,15 @@ impl CustomValidator {
     /// claims type.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> CustomValidatorBuilder<
-        HashMap<String, serde_json::Value>,
-        SetJwksUri<SetAuthorizationServer>,
-    > {
+    ) -> CustomValidatorBuilder<N, (), SetJwksUri<SetAuthorizationServer>> {
         Self::builder()
             .authorization_server(metadata.issuer.clone())
             .maybe_jwks_uri(metadata.jwks_uri.clone())
     }
 }
 
-impl<Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static> AccessTokenValidator
-    for CustomValidator<Claims>
+impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static>
+    AccessTokenValidator for CustomValidator<N, Claims>
 {
     type Claims = Claims;
     type Error = ValidateHeadersError;
@@ -195,18 +210,21 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static> Access
         method: &http::Method,
         uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
-    ) -> Result<Option<ValidatedRequest<Self::Claims>>, Self::Error> {
+    ) -> ValidationResult<Self::Claims, Self::Error> {
         self.validate_request(headers, method, uri, client_cert_der)
             .await
     }
 }
 
-impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims> {
+impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
+    CustomValidator<N, Claims>
+{
     /// Returns metadata describing how this validator is configured.
     ///
     /// See [`ProvideValidatorMetadata`] for use in generic contexts.
     pub fn validator_metadata(&self) -> ValidatorMetadata {
         ValidatorMetadata {
+            realm: None,
             authorization_servers: self.authorization_server.as_ref().map(|s| vec![s.clone()]),
             dpop_signing_alg_values_supported: self
                 .inner
@@ -219,7 +237,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         }
     }
 
-    /// Validates the request headers, returning a [`ValidatedRequest`] if a valid token is found,
+    /// Validates the request headers, returning a [`super::ValidatedRequest`] if a valid token is found,
     /// or `None` if no authentication was provided.
     pub async fn validate_request(
         &self,
@@ -227,29 +245,29 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         http_method: &http::Method,
         http_uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
-    ) -> Result<Option<ValidatedRequest<Claims>>, ValidateHeadersError> {
+    ) -> ValidationResult<Claims, ValidateHeadersError> {
         let result = self
             .inner
             .validate_request(headers, http_method, http_uri, client_cert_der)
             .await;
 
         if let Some(cb) = &self.on_validate {
-            let outcome = match &result {
+            let validation_outcome = match &result.outcome {
                 Ok(Some(_)) => ValidationOutcome::Success,
                 Ok(None) => ValidationOutcome::NoToken,
                 Err(ValidateHeadersError::Extract { .. }) => ValidationOutcome::ExtractError,
                 Err(ValidateHeadersError::InvalidJwt { .. }) => ValidationOutcome::InvalidToken,
                 Err(ValidateHeadersError::Binding { .. }) => ValidationOutcome::BindingError,
             };
-            cb.on_validate(outcome, self.audience.as_deref().unwrap_or(""));
+            cb.on_validate(validation_outcome, self.audience.as_deref().unwrap_or(""));
         }
 
         result
     }
 }
 
-impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> ProvideValidatorMetadata
-    for CustomValidator<Claims>
+impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
+    ProvideValidatorMetadata for CustomValidator<N, Claims>
 {
     fn validator_metadata(&self) -> ValidatorMetadata {
         self.validator_metadata()

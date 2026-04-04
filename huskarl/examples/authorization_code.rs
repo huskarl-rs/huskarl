@@ -12,7 +12,7 @@ use huskarl::{
 use huskarl_core::jwk::JwksSource;
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
+use huskarl_resource_server::validator::{dpop_nonce::NoNonceCheck, rfc9068::Rfc9068Validator};
 use snafu::prelude::*;
 
 #[snafu::report]
@@ -96,6 +96,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
                 .http_client(http_client.clone())
                 .build(),
         ))
+        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .whatever_context("Failed to build resource server validator")?;
@@ -113,6 +114,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     let validation_response = resource_server_validator
         .validate_request(&headers, &Method::GET, &resource_server_url, None)
         .await
+        .outcome
         .whatever_context("Token failed to validate")?;
 
     println!("Validated token (if any): {:?}", validation_response);

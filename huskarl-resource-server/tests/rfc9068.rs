@@ -11,7 +11,7 @@ use huskarl_core::{
 };
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
+use huskarl_resource_server::validator::{dpop_nonce::NoNonceCheck, rfc9068::Rfc9068Validator};
 
 #[tokio::test]
 async fn test_rfc9068_validator() {
@@ -43,7 +43,6 @@ async fn test_rfc9068_validator() {
         .unwrap();
 
     let validator = Rfc9068Validator::builder()
-        .with_extra::<()>()
         .issuer(issuer.clone())
         .audience("api://resource")
         .jwks_uri(jwks_uri)
@@ -52,6 +51,7 @@ async fn test_rfc9068_validator() {
                 .http_client(http_client.clone())
                 .build(),
         ))
+        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .unwrap();
@@ -94,10 +94,12 @@ async fn test_rfc9068_validator() {
             &"https://api.example.com/data".parse().unwrap(),
             None,
         )
-        .await
-        .unwrap();
+        .await;
 
-    let validated = result.expect("Token should be valid");
+    let validated = result
+        .outcome
+        .expect("Token should be valid")
+        .expect("Token should be present");
     assert_eq!(validated.issuer.as_deref().unwrap(), issuer);
     assert_eq!(validated.subject.as_deref().unwrap(), "user-123");
     assert_eq!(validated.audience, vec!["api://resource".to_string()]);

@@ -11,6 +11,45 @@
 
 use crate::TokenType;
 
+/// Escapes a value for use in an HTTP quoted-string (RFC 9110 §5.6.4).
+///
+/// Backslashes and double-quotes must be escaped with a leading backslash.
+pub(crate) fn escape_quoted(s: &str) -> std::borrow::Cow<'_, str> {
+    if s.contains('"') || s.contains('\\') {
+        std::borrow::Cow::Owned(s.replace('\\', r"\\").replace('"', r#"\""#))
+    } else {
+        std::borrow::Cow::Borrowed(s)
+    }
+}
+
+/// A parameter for a `WWW-Authenticate` challenge.
+///
+/// Used as the return type of [`ToRfc6750Error::extra_params`] to ensure values
+/// are correctly formatted and escaped in the challenge header.
+#[derive(Debug, Clone)]
+pub enum ChallengeParam {
+    /// A quoted-string parameter: `key="value"`.
+    ///
+    /// The value is automatically escaped per RFC 9110 §5.6.4 — backslashes
+    /// and double-quotes are prefixed with a backslash.
+    Quoted(&'static str, String),
+    /// An unquoted token parameter: `key=value`.
+    ///
+    /// The value must be a valid HTTP token (ASCII, no whitespace or delimiters).
+    Token(&'static str, String),
+}
+
+impl ChallengeParam {
+    /// Formats this parameter as a `key=value` or `key="escaped-value"` string.
+    #[must_use]
+    pub fn format(&self) -> String {
+        match self {
+            Self::Quoted(key, value) => format!(r#"{}="{}""#, key, escape_quoted(value)),
+            Self::Token(key, value) => format!("{}={}", key, value),
+        }
+    }
+}
+
 /// Classifies a token validation failure for HTTP response generation.
 ///
 /// Returned by [`ToRfc6750Error::token_error`].
@@ -36,9 +75,10 @@ impl TokenValidationError {
 
 /// RFC 6750 §3.1 error codes for resource server responses.
 ///
-/// `InsufficientScope` is not returned by this library — it is an application-level
-/// decision based on the scopes in the validated token. It is included here so
-/// callers can use a single type when building `WWW-Authenticate` error responses.
+/// Most variants are returned directly by this library's validators. [`Self::InsufficientScope`]
+/// and [`Self::InsufficientUserAuthentication`] are application-level decisions — use
+/// [`InsufficientScope`] and [`InsufficientUserAuthentication`] respectively to build
+/// `WWW-Authenticate` responses for those cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenErrorCode {
     /// The request is malformed. Respond with HTTP 400.
@@ -51,6 +91,9 @@ pub enum TokenErrorCode {
     InvalidDPoPProof,
     /// A `DPoP` nonce is required. Respond with HTTP 401 (RFC 9449).
     UseDPoPNonce,
+    /// The token was obtained with insufficient user authentication strength.
+    /// Respond with HTTP 401 (RFC 9470).
+    InsufficientUserAuthentication,
 }
 
 impl TokenErrorCode {
@@ -63,6 +106,7 @@ impl TokenErrorCode {
             Self::InsufficientScope => "insufficient_scope",
             Self::InvalidDPoPProof => "invalid_dpop_proof",
             Self::UseDPoPNonce => "use_dpop_nonce",
+            Self::InsufficientUserAuthentication => "insufficient_user_authentication",
         }
     }
 
@@ -71,11 +115,74 @@ impl TokenErrorCode {
     pub fn suggested_status(&self) -> http::StatusCode {
         match self {
             Self::InvalidRequest => http::StatusCode::BAD_REQUEST,
-            Self::InvalidToken | Self::InvalidDPoPProof | Self::UseDPoPNonce => {
-                http::StatusCode::UNAUTHORIZED
-            }
+            Self::InvalidToken
+            | Self::InvalidDPoPProof
+            | Self::UseDPoPNonce
+            | Self::InsufficientUserAuthentication => http::StatusCode::UNAUTHORIZED,
             Self::InsufficientScope => http::StatusCode::FORBIDDEN,
         }
+    }
+}
+
+/// An application-level error for tokens that lack the required scope.
+///
+/// Implements [`ToRfc6750Error`] so it can be passed to
+/// [`crate::validator::metadata::ValidatorMetadata::challenges`] when building
+/// a `WWW-Authenticate` response for an insufficient-scope rejection.
+#[derive(Debug, Clone, Default)]
+pub struct InsufficientScope;
+
+impl ToRfc6750Error for InsufficientScope {
+    fn attempted_scheme(&self) -> Option<TokenType> {
+        None
+    }
+
+    fn token_error(&self) -> TokenValidationError {
+        TokenValidationError::Client(TokenErrorCode::InsufficientScope)
+    }
+
+    fn error_description(&self) -> Option<String> {
+        Some("The access token has insufficient scope for the requested resource".to_string())
+    }
+}
+
+/// An application-level error for tokens obtained with insufficient authentication strength.
+///
+/// Implements [`ToRfc6750Error`] so it can be passed to
+/// [`crate::validator::metadata::ValidatorMetadata::challenges`] when building
+/// a `WWW-Authenticate` response per RFC 9470 (Step Up Authentication Challenge Protocol).
+///
+/// Set `acr_values` and/or `max_age` to include the corresponding RFC 9470 challenge parameters.
+#[derive(Debug, Clone, Default)]
+pub struct InsufficientUserAuthentication {
+    /// The required Authentication Context Class Reference values (RFC 9470 §2).
+    pub acr_values: Option<String>,
+    /// The maximum acceptable authentication age in seconds (RFC 9470 §2).
+    pub max_age: Option<u64>,
+}
+
+impl ToRfc6750Error for InsufficientUserAuthentication {
+    fn attempted_scheme(&self) -> Option<TokenType> {
+        None
+    }
+
+    fn token_error(&self) -> TokenValidationError {
+        TokenValidationError::Client(TokenErrorCode::InsufficientUserAuthentication)
+    }
+
+    fn error_description(&self) -> Option<String> {
+        Some("A higher authentication level is required to access this resource".to_string())
+    }
+
+    fn extra_params(&self) -> Vec<ChallengeParam> {
+        let mut params = Vec::new();
+        if let Some(acr) = &self.acr_values {
+            params.push(ChallengeParam::Quoted("acr_values", acr.clone()));
+        }
+        if let Some(max_age) = self.max_age {
+            params.push(ChallengeParam::Token("max_age", max_age.to_string()));
+        }
+        params
     }
 }
 
@@ -96,6 +203,15 @@ pub trait ToRfc6750Error {
     ///
     /// Only included in the response for [`TokenValidationError::Client`] errors.
     fn error_description(&self) -> Option<String>;
+
+    /// Returns additional challenge parameters to include in the `WWW-Authenticate` response.
+    ///
+    /// Only included for [`TokenValidationError::Client`] errors. Use [`ChallengeParam::Quoted`]
+    /// for string values (escaping is handled automatically) and [`ChallengeParam::Token`] for
+    /// unquoted values such as integers.
+    fn extra_params(&self) -> Vec<ChallengeParam> {
+        Vec::new()
+    }
 }
 
 impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
@@ -132,6 +248,10 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
             E::RequiredClaimMissing { claim } => Some(format!(
                 "The access token is missing the required '{claim}' claim"
             )),
+            E::JtiNotUnique => {
+                Some("The access token 'jti' claim value was previously seen".to_string())
+            }
+            E::JtiCheck { .. } => None,
         }
     }
 }

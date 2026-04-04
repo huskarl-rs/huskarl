@@ -1,12 +1,18 @@
-use std::sync::Arc;
+use huskarl_resource_server::validator::dpop_nonce::NoNonceCheck;
 
-use http::{HeaderValue, Method, header::AUTHORIZATION};
-use huskarl_core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata};
-use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
+#[cfg(target_family = "wasm")]
+fn main() {}
 
+#[cfg(not(target_family = "wasm"))]
 #[tokio::main]
 pub async fn main() {
+    use std::sync::Arc;
+
+    use http::{HeaderValue, Method, header::AUTHORIZATION};
+    use huskarl_core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata};
+    use huskarl_reqwest::ReqwestClient;
+    use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
+
     let http_client = ReqwestClient::builder()
         .mtls(huskarl_reqwest::mtls::NoMtls)
         .build()
@@ -27,6 +33,7 @@ pub async fn main() {
                 .build(),
         ))
         .audience("api://client")
+        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .unwrap();
