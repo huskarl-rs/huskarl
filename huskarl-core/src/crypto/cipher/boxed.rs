@@ -4,7 +4,7 @@ use crate::{
     BoxedError,
     crypto::{
         KeyMatchStrength,
-        cipher::{AeadDecryptor, AeadEncryptor, AeadKey, AeadOutput, CipherMatch},
+        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch},
     },
     platform::{MaybeSendFuture, MaybeSendSync},
 };
@@ -31,16 +31,6 @@ impl Clone for BoxedAeadEncryptor {
     }
 }
 
-impl AeadKey for BoxedAeadEncryptor {
-    fn iv_length(&self) -> usize {
-        self.inner.iv_length()
-    }
-
-    fn tag_length(&self) -> usize {
-        self.inner.tag_length()
-    }
-}
-
 impl AeadEncryptor for BoxedAeadEncryptor {
     type Error = BoxedError;
 
@@ -52,25 +42,17 @@ impl AeadEncryptor for BoxedAeadEncryptor {
         self.inner.key_id()
     }
 
-    async fn encrypt_with_iv(
-        &self,
-        iv: &[u8],
-        plaintext: &[u8],
-        aad: &[u8],
-    ) -> Result<AeadOutput, Self::Error> {
-        self.inner.encrypt_with_iv(iv, plaintext, aad).await
+    async fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> Result<AeadOutput, Self::Error> {
+        self.inner.encrypt(plaintext, aad).await
     }
 }
 
 trait DynAeadEncryptor: MaybeSendSync {
     fn enc_algorithm(&self) -> Cow<'_, str>;
     fn key_id(&self) -> Option<Cow<'_, str>>;
-    fn iv_length(&self) -> usize;
-    fn tag_length(&self) -> usize;
 
-    fn encrypt_with_iv<'a>(
+    fn encrypt<'a>(
         &'a self,
-        iv: &'a [u8],
         plaintext: &'a [u8],
         aad: &'a [u8],
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<AeadOutput, BoxedError>> + 'a>>;
@@ -85,22 +67,13 @@ impl<E: AeadEncryptor> DynAeadEncryptor for E {
         AeadEncryptor::key_id(self)
     }
 
-    fn iv_length(&self) -> usize {
-        AeadKey::iv_length(self)
-    }
-
-    fn tag_length(&self) -> usize {
-        AeadKey::tag_length(self)
-    }
-
-    fn encrypt_with_iv<'a>(
+    fn encrypt<'a>(
         &'a self,
-        iv: &'a [u8],
         plaintext: &'a [u8],
         aad: &'a [u8],
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<AeadOutput, BoxedError>> + 'a>> {
         Box::pin(async move {
-            self.encrypt_with_iv(iv, plaintext, aad)
+            self.encrypt(plaintext, aad)
                 .await
                 .map_err(BoxedError::from_err)
         })
@@ -129,42 +102,40 @@ impl Clone for BoxedAeadDecryptor {
     }
 }
 
-impl AeadKey for BoxedAeadDecryptor {
-    fn iv_length(&self) -> usize {
-        self.inner.iv_length()
+impl AeadDecryptor for BoxedAeadDecryptor {
+    type Error = BoxedError;
+
+    fn nonce_length(&self) -> usize {
+        self.inner.nonce_length()
     }
 
     fn tag_length(&self) -> usize {
         self.inner.tag_length()
     }
-}
-
-impl AeadDecryptor for BoxedAeadDecryptor {
-    type Error = BoxedError;
 
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.inner.cipher_match(m)
     }
 
-    async fn decrypt_with_iv(
+    async fn decrypt(
         &self,
-        iv: &[u8],
+        nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, Self::Error> {
-        self.inner.decrypt_with_iv(iv, ciphertext, tag, aad).await
+        self.inner.decrypt(nonce, ciphertext, tag, aad).await
     }
 }
 
 trait DynAeadDecryptor: MaybeSendSync {
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength>;
-    fn iv_length(&self) -> usize;
+    fn nonce_length(&self) -> usize;
     fn tag_length(&self) -> usize;
 
-    fn decrypt_with_iv<'a>(
+    fn decrypt<'a>(
         &'a self,
-        iv: &'a [u8],
+        nonce: &'a [u8],
         ciphertext: &'a [u8],
         tag: &'a [u8],
         aad: &'a [u8],
@@ -176,23 +147,23 @@ impl<D: AeadDecryptor> DynAeadDecryptor for D {
         AeadDecryptor::cipher_match(self, m)
     }
 
-    fn iv_length(&self) -> usize {
-        AeadKey::iv_length(self)
+    fn nonce_length(&self) -> usize {
+        AeadDecryptor::nonce_length(self)
     }
 
     fn tag_length(&self) -> usize {
-        AeadKey::tag_length(self)
+        AeadDecryptor::tag_length(self)
     }
 
-    fn decrypt_with_iv<'a>(
+    fn decrypt<'a>(
         &'a self,
-        iv: &'a [u8],
+        nonce: &'a [u8],
         ciphertext: &'a [u8],
         tag: &'a [u8],
         aad: &'a [u8],
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>> {
         Box::pin(async move {
-            self.decrypt_with_iv(iv, ciphertext, tag, aad)
+            self.decrypt(nonce, ciphertext, tag, aad)
                 .await
                 .map_err(BoxedError::from_err)
         })

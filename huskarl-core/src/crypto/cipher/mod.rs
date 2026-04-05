@@ -16,8 +16,10 @@ use crate::{
     platform::{MaybeSend, MaybeSendSync},
 };
 
-/// The output from [`AeadEncryptor::encrypt_with_iv`]
+/// The output from [`AeadEncryptor::encrypt`]
 pub struct AeadOutput {
+    /// The nonce (IV) used to encrypt.
+    pub nonce: Vec<u8>,
     /// The ciphertext resulting from the encryption.
     pub ciphertext: Vec<u8>,
     /// The authentication tag resulting from the encryption.
@@ -33,23 +35,8 @@ pub struct CipherMatch<'a> {
     pub kid: Option<&'a str>,
 }
 
-/// Shared parameters for an AEAD key, independent of direction.
-///
-/// Both [`AeadEncryptor`] and [`AeadDecryptor`] require this, ensuring that
-/// IV and tag lengths are defined once and consistent across both directions.
-pub trait AeadKey: MaybeSendSync {
-    /// Returns the required IV length in bytes.
-    fn iv_length(&self) -> usize;
-
-    /// Returns the authentication tag length in bytes.
-    fn tag_length(&self) -> usize;
-}
-
 /// Trait for AEAD encryption.
-///
-/// Exposes the algorithm identifier and key ID so that callers can construct
-/// JWE headers or bundle metadata without needing a separate key description.
-pub trait AeadEncryptor: AeadKey {
+pub trait AeadEncryptor: MaybeSendSync {
     /// The error type returned by encryption operations.
     type Error: crate::Error;
 
@@ -59,14 +46,13 @@ pub trait AeadEncryptor: AeadKey {
     /// Returns the key ID for this encryptor, if any.
     fn key_id(&self) -> Option<Cow<'_, str>>;
 
-    /// Asynchronously encrypts the given plaintext with the provided IV and associated data.
+    /// Asynchronously encrypts the given plaintext with the associated data.
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the encryption operation fails.
-    fn encrypt_with_iv(
+    fn encrypt(
         &self,
-        iv: &[u8],
         plaintext: &[u8],
         aad: &[u8],
     ) -> impl Future<Output = Result<AeadOutput, Self::Error>> + MaybeSend;
@@ -76,9 +62,15 @@ pub trait AeadEncryptor: AeadKey {
 ///
 /// Exposes key selection via [`cipher_match`](Self::cipher_match) so that
 /// multi-key types can dispatch to the correct decryptor.
-pub trait AeadDecryptor: AeadKey {
+pub trait AeadDecryptor: MaybeSendSync {
     /// The error type returned by decryption operations.
     type Error: crate::Error;
+
+    /// Returns the nonce length in bytes.
+    fn nonce_length(&self) -> usize;
+
+    /// Returns the authentication tag length in bytes.
+    fn tag_length(&self) -> usize;
 
     /// Returns how well this decryptor matches the given selection criteria.
     ///
@@ -92,14 +84,14 @@ pub trait AeadDecryptor: AeadKey {
     ///   this decryptor have a `kid` but they differ.
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength>;
 
-    /// Asynchronously decrypts the given ciphertext with the provided IV, tag, and associated data.
+    /// Asynchronously decrypts the given ciphertext with the provided nonce, tag, and associated data.
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the decryption operation fails or if the data was tampered with.
-    fn decrypt_with_iv(
+    fn decrypt(
         &self,
-        iv: &[u8],
+        nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
         aad: &[u8],
@@ -149,16 +141,6 @@ impl<E: AeadEncryptor> AeadV1Sealer<E> {
     }
 }
 
-impl<E: AeadEncryptor> AeadKey for AeadV1Sealer<E> {
-    fn iv_length(&self) -> usize {
-        self.0.iv_length()
-    }
-
-    fn tag_length(&self) -> usize {
-        self.0.tag_length()
-    }
-}
-
 impl<E: AeadEncryptor> AeadEncryptor for AeadV1Sealer<E> {
     type Error = E::Error;
 
@@ -170,29 +152,19 @@ impl<E: AeadEncryptor> AeadEncryptor for AeadV1Sealer<E> {
         self.0.key_id()
     }
 
-    async fn encrypt_with_iv(
-        &self,
-        iv: &[u8],
-        plaintext: &[u8],
-        aad: &[u8],
-    ) -> Result<AeadOutput, Self::Error> {
-        self.0.encrypt_with_iv(iv, plaintext, aad).await
+    async fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> Result<AeadOutput, Self::Error> {
+        self.0.encrypt(plaintext, aad).await
     }
 }
 
 impl<E: AeadEncryptor> AeadSealer for AeadV1Sealer<E> {
     async fn seal(&self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        let iv_len = self.iv_length();
-        let tag_len = self.tag_length();
+        let output = self.encrypt(plaintext, aad).await?;
 
-        let mut iv = vec![0u8; iv_len];
-        rand::fill(&mut iv);
-
-        let output = self.encrypt_with_iv(&iv, plaintext, aad).await?;
-
-        let mut bundle = Vec::with_capacity(1 + iv_len + output.ciphertext.len() + tag_len);
+        let mut bundle =
+            Vec::with_capacity(1 + output.nonce.len() + output.ciphertext.len() + output.tag.len());
         bundle.push(0x01);
-        bundle.extend_from_slice(&iv);
+        bundle.extend_from_slice(&output.nonce);
         bundle.extend_from_slice(&output.ciphertext);
         bundle.extend_from_slice(&output.tag);
 
@@ -210,32 +182,30 @@ impl<D: AeadDecryptor> AeadV1Unsealer<D> {
     }
 }
 
-impl<D: AeadDecryptor> AeadKey for AeadV1Unsealer<D> {
-    fn iv_length(&self) -> usize {
-        self.0.iv_length()
+impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
+    type Error = UnsealError<D::Error>;
+
+    fn nonce_length(&self) -> usize {
+        self.0.nonce_length()
     }
 
     fn tag_length(&self) -> usize {
         self.0.tag_length()
     }
-}
-
-impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
-    type Error = UnsealError<D::Error>;
 
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.0.cipher_match(m)
     }
 
-    async fn decrypt_with_iv(
+    async fn decrypt(
         &self,
-        iv: &[u8],
+        nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, Self::Error> {
         self.0
-            .decrypt_with_iv(iv, ciphertext, tag, aad)
+            .decrypt(nonce, ciphertext, tag, aad)
             .await
             .map_err(Into::into)
     }
@@ -243,18 +213,18 @@ impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
 
 impl<D: AeadDecryptor> AeadUnsealer for AeadV1Unsealer<D> {
     async fn unseal(&self, bundle: &[u8], aad: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        let iv_len = self.iv_length();
+        let nonce_len = self.nonce_length();
         let tag_len = self.tag_length();
 
         ensure!(
-            bundle.len() >= 1 + iv_len + tag_len && bundle[0] == 0x01,
+            bundle.len() >= 1 + nonce_len + tag_len && bundle[0] == 0x01,
             InvalidBundleSnafu
         );
 
-        let iv = &bundle[1..1 + iv_len];
+        let nonce = &bundle[1..1 + nonce_len];
         let tag = &bundle[bundle.len() - tag_len..];
-        let ciphertext = &bundle[1 + iv_len..bundle.len() - tag_len];
+        let ciphertext = &bundle[1 + nonce_len..bundle.len() - tag_len];
 
-        self.decrypt_with_iv(iv, ciphertext, tag, aad).await
+        self.decrypt(nonce, ciphertext, tag, aad).await
     }
 }
