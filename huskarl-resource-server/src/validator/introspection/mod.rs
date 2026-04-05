@@ -229,6 +229,7 @@ impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static, N: DpopNonceCh
     /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Validation
     /// rules are implemented by the authorization server. Call
     /// `.with_claims::<MyClaims>()` to use a custom claims type.
+    #[allow(clippy::type_complexity)]
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> Option<
