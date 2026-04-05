@@ -221,7 +221,7 @@ impl<D: AeadDecryptor> AeadUnsealer for AeadV1Unsealer<D> {
             InvalidBundleSnafu
         );
 
-        let nonce = &bundle[1..1 + nonce_len];
+        let nonce = &bundle[1..=nonce_len];
         let tag = &bundle[bundle.len() - tag_len..];
         let ciphertext = &bundle[1 + nonce_len..bundle.len() - tag_len];
 

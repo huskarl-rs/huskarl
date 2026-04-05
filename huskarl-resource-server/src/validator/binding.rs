@@ -387,9 +387,7 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
                 use crate::core::jwt::validator::JwtValidationError as E;
                 match source {
                     E::Parse { .. } => Some("The DPoP proof is malformed".to_string()),
-                    E::Signature { .. } => {
-                        Some("The DPoP proof signature is invalid".to_string())
-                    }
+                    E::Signature { .. } => Some("The DPoP proof signature is invalid".to_string()),
                     E::UnsignedToken => Some("The DPoP proof is unsigned".to_string()),
                     E::DisallowedAlgorithm { .. } => {
                         Some("The DPoP proof uses an unsupported signature algorithm".to_string())
@@ -413,9 +411,7 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
                     E::RequiredClaimMissing { claim } => Some(format!(
                         "The DPoP proof is missing the required '{claim}' claim"
                     )),
-                    E::JtiNotUnique => {
-                        Some("The DPoP proof jti has already been used".to_string())
-                    }
+                    E::JtiNotUnique => Some("The DPoP proof jti has already been used".to_string()),
                     E::JtiCheck { .. } => None,
                 }
             }
