@@ -5,7 +5,7 @@ exclude = ["integration"]
 
 [workspace.dependencies]
 huskarl = { version = "0.2.0-pre.0", path = "./huskarl" }
-huskarl-core = { version = "0.2.0-pre.2", path = "./huskarl-core" }
+huskarl-core = { version = "0.2.0", path = "./huskarl-core" }
 huskarl-macros = { version = "0.1", path = "./huskarl-macros" }
 huskarl-resource-server = { version = "0.2.0-pre.0", path = "./huskarl-resource-server" }
 huskarl-reqwest = { version = "0.2.0-pre.0", path = "../huskarl-reqwest" }
