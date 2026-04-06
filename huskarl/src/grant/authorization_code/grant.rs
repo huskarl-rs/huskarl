@@ -187,7 +187,7 @@ impl<
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, J: Jar + 'static>
     AuthorizationCodeGrant<Auth, D, J, ()>
 {
-    /// Configure the flow from authorization server metadata.
+    /// Configure the grant from authorization server metadata.
     #[must_use]
     #[allow(clippy::type_complexity)]
     pub fn builder_from_metadata(
@@ -307,6 +307,7 @@ impl<
     fn to_refresh_grant(&self) -> refresh::RefreshGrant<Self::ClientAuth, Self::DPoP> {
         refresh::RefreshGrant::builder()
             .client_id(self.client_id.clone())
+            .maybe_issuer(self.issuer.clone())
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.token_endpoint.clone())

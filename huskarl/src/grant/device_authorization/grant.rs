@@ -71,11 +71,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
                     )
             })
     }
-}
 
-impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
-    DeviceAuthorizationGrant<Auth, D>
-{
     /// Begin a device authorization request.
     ///
     /// This sends a request to the device authorization endpoint. The endpoint
@@ -208,15 +204,15 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
 }
 
 /// Parameters passed to each token request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
 pub struct DeviceAuthorizationGrantParameters {
     /// The device verification code, `device_code`, from the device authorization response.
     pub device_code: String,
 }
 
-/// Authorization code grant body.
+/// Device authorization grant body.
 #[derive(Debug, Serialize)]
-pub struct Form {
+pub struct DeviceAuthorizationGrantForm {
     /// Must be set to `urn:ietf:params:oauth:grant-type:device_code` (RFC 8628 §3.4).
     grant_type: &'static str,
     /// The device verification code, `device_code`, from the authorization response (RFC 8628 §3.4).
@@ -230,7 +226,7 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
     type Parameters = DeviceAuthorizationGrantParameters;
     type ClientAuth = Auth;
     type DPoP = D;
-    type Form<'a> = Form;
+    type Form<'a> = DeviceAuthorizationGrantForm;
 
     fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
         RefreshGrant::builder()
@@ -247,7 +243,7 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
     }
 
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {
-        Self::Form {
+        DeviceAuthorizationGrantForm {
             grant_type: "urn:ietf:params:oauth:grant-type:device_code",
             device_code: params.device_code,
         }
