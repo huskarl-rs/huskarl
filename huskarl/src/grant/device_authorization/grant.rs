@@ -142,12 +142,13 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         &self,
         http_client: &C,
         pending_state: &mut PendingState,
+        resource: Option<Vec<String>>,
     ) -> Result<TokenResponse, PollError<ExchangeError<C, Self>>> {
         loop {
             sleep(Duration::from_secs(pending_state.interval_secs.into())).await;
 
             if let PollResult::Complete(token_response) =
-                self.poll(http_client, pending_state).await?
+                self.poll(http_client, pending_state, resource.clone()).await?
             {
                 return Ok(*token_response);
             }
@@ -165,12 +166,14 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         &self,
         http_client: &C,
         pending_state: &mut PendingState,
+        resource: Option<Vec<String>>,
     ) -> Result<PollResult, PollError<ExchangeError<C, Self>>> {
         let token_or_err = self
             .exchange(
                 http_client,
                 super::grant::DeviceAuthorizationGrantParameters {
                     device_code: pending_state.device_code.clone(),
+                    resource,
                 },
             )
             .await;
@@ -208,6 +211,8 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
 pub struct DeviceAuthorizationGrantParameters {
     /// The device verification code, `device_code`, from the device authorization response.
     pub device_code: String,
+    /// The target resource(s) for the access token.
+    pub resource: Option<Vec<String>>,
 }
 
 /// Device authorization grant body.
@@ -217,6 +222,8 @@ pub struct DeviceAuthorizationGrantForm {
     grant_type: &'static str,
     /// The device verification code, `device_code`, from the authorization response (RFC 8628 §3.4).
     device_code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<Vec<String>>,
 }
 
 #[huskarl_macros::grant_impl]
@@ -246,6 +253,7 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
         DeviceAuthorizationGrantForm {
             grant_type: "urn:ietf:params:oauth:grant-type:device_code",
             device_code: params.device_code,
+            resource: params.resource,
         }
     }
 }
