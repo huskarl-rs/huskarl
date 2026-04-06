@@ -9,6 +9,8 @@
 //! error (include RFC 6750 error details in the response) or a server-side error
 //! (respond with a status code, no error details).
 
+use huskarl_core::platform::MaybeSendSync;
+
 use crate::TokenType;
 
 /// Escapes a value for use in an HTTP quoted-string (RFC 9110 §5.6.4).
@@ -187,7 +189,7 @@ impl ToRfc6750Error for InsufficientUserAuthentication {
 }
 
 /// A trait for errors that can be classified into an RFC 6750-style error response.
-pub trait ToRfc6750Error {
+pub trait ToRfc6750Error: MaybeSendSync {
     /// Returns the attempted authentication scheme, if known.
     fn attempted_scheme(&self) -> Option<TokenType>;
 
