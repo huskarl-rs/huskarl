@@ -147,8 +147,9 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         loop {
             sleep(Duration::from_secs(pending_state.interval_secs.into())).await;
 
-            if let PollResult::Complete(token_response) =
-                self.poll(http_client, pending_state, resource.clone()).await?
+            if let PollResult::Complete(token_response) = self
+                .poll(http_client, pending_state, resource.clone())
+                .await?
             {
                 return Ok(*token_response);
             }

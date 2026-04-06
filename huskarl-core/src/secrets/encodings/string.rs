@@ -13,6 +13,6 @@ impl SecretDecoder for StringEncoding {
 
     fn decode(&self, bytes: &[u8]) -> Result<Self::Output, DecodingError> {
         let s = std::str::from_utf8(bytes).context(InvalidUtf8Snafu)?;
-        Ok(SecretString::new(s.trim().to_string()))
+        Ok(SecretString::new(s.trim()))
     }
 }

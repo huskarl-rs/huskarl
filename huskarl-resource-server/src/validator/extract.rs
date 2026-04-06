@@ -38,7 +38,7 @@ pub fn extract_token(
         UnsupportedTokenTypeSnafu { token_type }.fail()?
     };
 
-    let access_token = SecretString::new(token_value.to_string());
+    let access_token = SecretString::new(token_value);
     Ok(Some((token_type, access_token)))
 }
 
