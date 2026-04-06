@@ -1,6 +1,6 @@
 [package]
 name = "huskarl"
-version = "0.2.0-pre.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.92"
 description = '''
@@ -72,7 +72,7 @@ name = "client_credentials"
 required-features = ["authorization-flow-loopback"]
 
 [dev-dependencies]
-huskarl = { workspace = true, default-features = true }
+huskarl = { path = ".", default-features = true }
 huskarl-crypto-native = { workspace = true }
 huskarl-resource-server = { workspace = true, default-features = true }
 
@@ -80,7 +80,7 @@ huskarl-resource-server = { workspace = true, default-features = true }
 wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-huskarl = { workspace = true, features = ["authorization-flow-loopback"] }
+huskarl = { path = ".", features = ["authorization-flow-loopback"] }
 huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
 huskarl-testkit = { path = "../integration/huskarl-testkit" }
 pem = "3"
