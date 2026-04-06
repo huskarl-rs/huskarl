@@ -172,3 +172,178 @@ impl InvalidTokenResponse {
         false
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        core::platform::{Duration, SystemTime},
+        grant::core::token_response::InvalidTokenResponse,
+    };
+
+    use http::HeaderValue;
+    use huskarl_core::secrets::SecretString;
+
+    use crate::grant::core::token_response::RawTokenResponse;
+
+    #[test]
+    fn parse_rfc6749_token_response() {
+        let token_response_str = r###"
+{
+  "access_token":"2YotnFZFEjr1zCsicMWpAA",
+  "token_type":"example",
+  "expires_in":3600,
+  "refresh_token":"tGzv3JOkF0XG5Qx2TlKWIA",
+  "example_parameter":"example_value"
+}
+            "###;
+
+        let raw_token_response: RawTokenResponse =
+            serde_json::from_str(token_response_str).expect("Basic token parsing succeeds");
+
+        assert_eq!(
+            raw_token_response.access_token.expose_secret(),
+            "2YotnFZFEjr1zCsicMWpAA"
+        );
+        assert_eq!(raw_token_response.token_type, "example");
+        assert_eq!(raw_token_response.expires_in, Some(3600));
+        assert_eq!(
+            raw_token_response
+                .refresh_token
+                .as_ref()
+                .map(|t| t.expose_secret()),
+            Some("tGzv3JOkF0XG5Qx2TlKWIA")
+        );
+        assert_eq!(
+            raw_token_response.get_extra("example_parameter"),
+            Some(&serde_json::Value::String("example_value".into()))
+        );
+    }
+
+    #[test]
+    fn parse_token_response_with_string_expires_in() {
+        let token_response_str = r###"
+{
+  "access_token":"2YotnFZFEjr1zCsicMWpAA",
+  "token_type":"example",
+  "expires_in":"3600",
+  "refresh_token":"tGzv3JOkF0XG5Qx2TlKWIA",
+  "example_parameter":"example_value"
+}
+            "###;
+
+        let raw_token_response: RawTokenResponse =
+            serde_json::from_str(token_response_str).expect("Basic token parsing succeeds");
+
+        assert_eq!(
+            raw_token_response.access_token.expose_secret(),
+            "2YotnFZFEjr1zCsicMWpAA"
+        );
+        assert_eq!(raw_token_response.token_type, "example");
+        assert_eq!(raw_token_response.expires_in, Some(3600));
+        assert_eq!(
+            raw_token_response
+                .refresh_token
+                .as_ref()
+                .map(|t| t.expose_secret()),
+            Some("tGzv3JOkF0XG5Qx2TlKWIA")
+        );
+        assert_eq!(
+            raw_token_response.get_extra("example_parameter"),
+            Some(&serde_json::Value::String("example_value".into()))
+        );
+    }
+
+    #[test]
+    fn test_invalid_token() {
+        let token_type = "N_A".to_string();
+
+        let raw_token_response = RawTokenResponse::builder()
+            .access_token(SecretString::new("2YotnFZFEjr1zCsicMWpAA"))
+            .token_type(&token_type)
+            .build();
+
+        let token_response = raw_token_response.into_token_response(
+            None,
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_hours(1_000_000))
+                .unwrap(),
+        );
+
+        let err_token_response = token_response.err().expect("Token response is invalid");
+
+        assert!(matches!(
+            err_token_response,
+            InvalidTokenResponse::InvalidTokenType { token_type: _ }
+        ));
+    }
+
+    #[test]
+    fn test_bearer_token() {
+        let raw_token_response = RawTokenResponse::builder()
+            .access_token(SecretString::new("2YotnFZFEjr1zCsicMWpAA"))
+            .token_type("BeaRer")
+            .build();
+
+        let token_response = raw_token_response
+            .into_token_response(
+                None,
+                SystemTime::UNIX_EPOCH
+                    .checked_add(Duration::from_hours(1_000_000))
+                    .unwrap(),
+            )
+            .expect("valid TokenResponse");
+
+        let access_token = token_response.access_token();
+        assert_eq!(access_token.dpop_jkt(), None);
+        assert_eq!(
+            access_token.expose_header_value().unwrap(),
+            HeaderValue::from_static("Bearer 2YotnFZFEjr1zCsicMWpAA")
+        );
+    }
+
+    #[test]
+    fn test_dpop_token() {
+        let raw_token_response = RawTokenResponse::builder()
+            .access_token(SecretString::new("2YotnFZFEjr1zCsicMWpAA"))
+            .token_type("DpOp")
+            .build();
+
+        let token_response = raw_token_response
+            .into_token_response(
+                Some("dpop_jkt".into()),
+                SystemTime::UNIX_EPOCH
+                    .checked_add(Duration::from_hours(1_000_000))
+                    .unwrap(),
+            )
+            .expect("valid TokenResponse");
+
+        let access_token = token_response.access_token();
+        assert_eq!(access_token.dpop_jkt(), Some("dpop_jkt"));
+        assert_eq!(
+            access_token.expose_header_value().unwrap(),
+            HeaderValue::from_static("DPoP 2YotnFZFEjr1zCsicMWpAA")
+        );
+    }
+
+    #[test]
+    fn test_dpop_token_no_dpop_jkt() {
+        let raw_token_response = RawTokenResponse::builder()
+            .access_token(SecretString::new("2YotnFZFEjr1zCsicMWpAA"))
+            .token_type("DPoP")
+            .build();
+
+        let token_response = raw_token_response.into_token_response(
+            None,
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_hours(1_000_000))
+                .unwrap(),
+        );
+
+        let err_token_response = token_response.err().expect("No dpop_jkt for DPoP token");
+
+        assert!(matches!(
+            err_token_response,
+            InvalidTokenResponse::NoDpopThumbprint
+        ));
+    }
+}

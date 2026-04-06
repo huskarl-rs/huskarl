@@ -44,8 +44,8 @@ impl Serialize for SecretString {
 impl SecretString {
     /// Creates a new `SecretString`.
     #[must_use]
-    pub fn new(secret: String) -> Self {
-        SecretString(secret.into())
+    pub fn new(secret: impl AsRef<str>) -> Self {
+        SecretString(secret.as_ref().into())
     }
 
     /// Exposes the secret string value.
