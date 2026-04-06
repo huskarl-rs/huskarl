@@ -1,5 +1,5 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 members = ["huskarl", "huskarl-core", "huskarl-macros", "huskarl-resource-server"]
 exclude = ["integration"]
 
