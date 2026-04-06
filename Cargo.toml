@@ -5,9 +5,9 @@ exclude = ["integration"]
 
 [workspace.dependencies]
 huskarl = { version = "0.2.0-pre.0", path = "./huskarl" }
-huskarl-core = { version = "0.2.0", path = "./huskarl-core" }
+huskarl-core = { version = "0.2", path = "./huskarl-core" }
 huskarl-macros = { version = "0.1", path = "./huskarl-macros" }
-huskarl-resource-server = { version = "0.2.0-pre.0", path = "./huskarl-resource-server" }
+huskarl-resource-server = { version = "0.2", path = "./huskarl-resource-server" }
 huskarl-reqwest = { version = "0.2.0-pre.0", path = "../huskarl-reqwest" }
 huskarl-crypto-native = { version = "0.2.0-pre.0", path = "../huskarl-crypto-native" }
 huskarl-crypto-webcrypto = { version = "0.2.0-pre.0", path = "../huskarl-crypto-webcrypto" }
@@ -21,7 +21,7 @@ form_urlencoded = { version = "1", default-features = false, features = ["std"] 
 rand = { version = "0.10", default-features = false, features = ["std", "sys_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }
-sha2 = { version = "0.11.0-rc.5", default-features = false }
+sha2 = { version = "0.11", default-features = false }
 snafu = { version = "0.9", default-features = false, features = ["rust_1_81", "std"] }
-metrics = { version = "0.24.2", default-features = false }
+metrics = { version = "0.24", default-features = false }
 url = { version = "2", default-features = false }

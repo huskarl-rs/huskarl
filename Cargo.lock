@@ -1150,7 +1150,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-native"
-version = "0.2.0-pre.1"
+version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "ed25519-dalek",
@@ -1170,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-webcrypto"
-version = "0.2.0-pre.1"
+version = "0.2.0"
 dependencies = [
  "huskarl-core",
  "serde",
@@ -1210,7 +1210,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.2.0-pre.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "bon",
