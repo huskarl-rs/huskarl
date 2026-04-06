@@ -23,4 +23,20 @@ Currently this crate helps to handle the first of these; validating access token
 then provides the context from those access tokens which let the server implement the
 rest of the authorization checking.
 
+## Example with RFC 9068 token validation:
+
+```rust
+use std::sync::Arc;
+use huskarl_resource_server::core::jwk::JwksSource;
+use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
+use huskarl_resource_server::validator::dpop_nonce::NoNonceCheck;
+
+let validator = Rfc9068Validator::builder()
+  .issuer("https://issuer")
+  .audience("audience")
+  .dpop_nonce_checker(NoNonceCheck)
+  .jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client).build()))
+  .build();
+```
+
 <!-- cargo-reedme: end -->

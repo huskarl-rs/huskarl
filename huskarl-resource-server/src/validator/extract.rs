@@ -1,15 +1,24 @@
+//! Access token extraction from HTTP headers.
+
+use crate::core::secrets::SecretString;
 use http::{HeaderMap, HeaderName, header::ToStrError};
-use huskarl_core::secrets::SecretString;
 use snafu::prelude::*;
 
 use crate::error::{ToRfc6750Error, TokenErrorCode, TokenValidationError};
 
+/// The scheme used to present an access token in an HTTP request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
+    /// A Bearer token (`Authorization: Bearer <token>`), as defined in RFC 6750.
     Bearer,
+    /// A DPoP-bound token (`Authorization: DPoP <token>`), as defined in RFC 9449.
     DPoP,
 }
 
+/// Extracts the access token type and value from an HTTP header.
+///
+/// Returns `None` if the header is absent, or an error if the header is malformed
+/// or uses an unsupported scheme.
 pub fn extract_token(
     headers: &HeaderMap,
     token_header: &HeaderName,
@@ -46,13 +55,19 @@ pub fn extract_token(
 #[derive(Debug, Snafu)]
 pub enum TokenExtractError {
     /// The token header value is not valid UTF-8.
-    TokenNotString { source: ToStrError },
+    TokenNotString {
+        /// The underlying string conversion error.
+        source: ToStrError,
+    },
     /// The token header is not in `<scheme> <token>` format.
     InvalidTokenHeaderFormat,
     /// The token scheme is not supported.
     ///
     /// Currently `Bearer` and `DPoP` are supported.
-    UnsupportedTokenType { token_type: String },
+    UnsupportedTokenType {
+        /// The unrecognised token type scheme.
+        token_type: String,
+    },
 }
 
 impl ToRfc6750Error for TokenExtractError {

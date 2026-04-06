@@ -51,7 +51,7 @@ let token_response = grant
 
 println!(
     "Access token: {}",
-    token_response.access_token.expose_token()
+    token_response.access_token().token().expose_secret()
 );
 ```
 

@@ -1,5 +1,5 @@
+use crate::core::jwt::validator::JwtValidator;
 use http::HeaderName;
-use huskarl_core::jwt::validator::JwtValidator;
 use serde::Deserialize;
 use snafu::prelude::*;
 

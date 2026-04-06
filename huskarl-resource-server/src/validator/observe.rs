@@ -1,3 +1,5 @@
+//! Token validation observation hooks.
+
 use crate::core::platform::MaybeSendSync;
 
 /// The outcome of a token validation attempt.

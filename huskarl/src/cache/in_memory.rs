@@ -3,9 +3,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use crate::core::http::HttpClient;
 use arc_swap::ArcSwapOption;
 use bon::Builder;
-use huskarl_core::http::HttpClient;
 
 use crate::{
     cache::{GetTokenError, RefreshTokenStore, TokenCache},
@@ -24,7 +24,7 @@ pub struct InMemoryTokenCache<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     pub(crate) grant: G,
     grant_parameters: Option<G::Parameters>,
     refresh_store: S,
-    /// How early to consider a token expired. Shared between [`Self::get_token`] and [`Self::token_expiry`].
+    /// How early to consider a token expired. Used by [`Self::get_token_response`].
     #[builder(default = Duration::from_secs(30))]
     expires_margin: Duration,
     #[builder(skip = grant.dpop().to_resource_server_dpop())]

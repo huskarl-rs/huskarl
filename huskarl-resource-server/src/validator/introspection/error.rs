@@ -20,17 +20,24 @@ pub enum IntrospectionValidateError<
 > {
     /// Failed to extract the access token from the request headers.
     #[snafu(display("Token presentation error"))]
-    Extract { source: TokenExtractError },
+    Extract {
+        /// The underlying token extraction error.
+        source: TokenExtractError,
+    },
     /// Sender-constraint binding check failed.
     #[snafu(display("Token binding error"))]
     Binding {
+        /// The token type that was presented.
         token_type: TokenType,
+        /// The underlying binding error.
         source: TokenBindingError,
     },
     /// The introspection call failed.
     #[snafu(display("Introspection call error"))]
     Call {
+        /// The token type that was presented.
         token_type: TokenType,
+        /// The underlying introspection call error.
         source: IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>,
     },
 }

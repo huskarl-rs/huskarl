@@ -6,12 +6,13 @@ use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
     cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
-    core::{client_auth::ClientSecret, dpop::NoDPoP},
+    core::{client_auth::ClientSecret, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata},
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
-use huskarl_core::server_metadata::AuthorizationServerMetadata;
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::{IntrospectionValidator, validator::dpop_nonce::NoNonceCheck};
+use huskarl_resource_server::validator::{
+    dpop_nonce::NoNonceCheck, introspection::IntrospectionValidator,
+};
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
 /// Introspection of a client-credentials access token against a real Keycloak.

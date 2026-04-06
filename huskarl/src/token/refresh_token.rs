@@ -1,4 +1,4 @@
-use huskarl_core::secrets::SecretString;
+use crate::core::secrets::SecretString;
 use serde::{Deserialize, Serialize};
 
 /// An `OAuth2` refresh token.

@@ -1,5 +1,7 @@
+//! Internal token validation error types.
+
+use crate::core::jwt::validator::JwtValidationError;
 use http::header::ToStrError;
-use huskarl_core::jwt::validator::JwtValidationError;
 use snafu::prelude::*;
 
 use crate::{
@@ -18,7 +20,10 @@ pub enum TokenBindingError {
     /// The DPoP header is required but missing from the request.
     MissingDPoPHeader,
     /// The DPoP header is present but is not valid UTF-8.
-    DPoPHeaderNotString { source: ToStrError },
+    DPoPHeaderNotString {
+        /// The underlying string conversion error.
+        source: ToStrError,
+    },
     /// The token has a DPoP key binding (`cnf.jkt`) but was presented as a Bearer token.
     ///
     /// Per RFC 9449 §7.1, DPoP-bound tokens MUST be presented using the `DPoP`
@@ -34,11 +39,20 @@ pub enum TokenBindingError {
     /// rather than silently ignored, per RFC 7800's requirement that applications ensure
     /// confirmation members they require are understood and processed.
     #[snafu(display("Unsupported cnf confirmation method: {method}"))]
-    UnsupportedCnfMethod { method: &'static str },
+    UnsupportedCnfMethod {
+        /// The name of the unsupported confirmation method.
+        method: &'static str,
+    },
     /// The DPoP binding is invalid.
-    DPoPBinding { source: DPoPBindingError },
+    DPoPBinding {
+        /// The underlying DPoP binding error.
+        source: DPoPBindingError,
+    },
     /// The mTLS binding is invalid.
-    MtlsBinding { source: MtlsBindingError },
+    MtlsBinding {
+        /// The underlying mTLS binding error.
+        source: MtlsBindingError,
+    },
 }
 
 impl ToRfc6750Error for TokenBindingError {
@@ -86,20 +100,29 @@ impl ToRfc6750Error for TokenBindingError {
     }
 }
 
+/// Errors that can occur while extracting and binding-checking an access token from request headers.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 pub enum ValidateHeadersError {
     /// Errors in extracting or binding-checking the access token from the request.
     #[snafu(display("Token presentation error"))]
-    Extract { source: TokenExtractError },
+    Extract {
+        /// The underlying extraction error.
+        source: TokenExtractError,
+    },
+    /// The token sender-constraint binding check failed.
     #[snafu(display("Token binding error"))]
     Binding {
+        /// The token type that was presented.
         token_type: TokenType,
+        /// The underlying binding error.
         source: TokenBindingError,
     },
     /// The token is not a valid JWT.
     InvalidJwt {
+        /// The token type that was presented.
         token_type: TokenType,
+        /// The underlying JWT validation error.
         source: JwtValidationError,
     },
 }

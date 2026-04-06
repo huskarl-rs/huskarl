@@ -5,9 +5,9 @@
 
 use std::sync::Arc;
 
+use crate::core::{BoxedError, jwt::BoxedJtiUniquenessChecker, secrets::SecretString};
 use base64::prelude::*;
 use http::StatusCode;
-use huskarl_core::{BoxedError, jwt::BoxedJtiUniquenessChecker, secrets::SecretString};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, prelude::*};

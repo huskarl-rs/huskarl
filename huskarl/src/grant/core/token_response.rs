@@ -180,8 +180,8 @@ mod test {
         grant::core::token_response::InvalidTokenResponse,
     };
 
+    use crate::core::secrets::SecretString;
     use http::HeaderValue;
-    use huskarl_core::secrets::SecretString;
 
     use crate::grant::core::token_response::RawTokenResponse;
 

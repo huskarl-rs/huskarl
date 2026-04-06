@@ -1,3 +1,5 @@
+//! Access token validation traits and implementations.
+
 mod binding;
 mod common;
 pub mod custom;
@@ -9,9 +11,7 @@ pub mod metadata;
 pub mod observe;
 pub mod rfc9068;
 
-pub use observe::{OnValidate, ValidationOutcome};
-
-use huskarl_core::{
+use crate::core::{
     jwt::ConfirmationClaim, jwt::validator::ValidatedJwt, platform::MaybeSend,
     platform::MaybeSendSync, platform::SystemTime,
 };
@@ -27,9 +27,12 @@ use crate::error::ToRfc6750Error;
 /// present (unauthenticated request), `Ok(Some(_))` when a valid token is found, and `Err(_)`
 /// when a token is present but invalid.
 pub trait AccessTokenValidator: MaybeSendSync {
+    /// The application-specific claims type extracted from the token.
     type Claims: MaybeSendSync;
+    /// The error type returned when validation fails.
     type Error: ToRfc6750Error;
 
+    /// Validates an access token from the given HTTP request headers.
     fn validate_request(
         &self,
         headers: &http::HeaderMap,

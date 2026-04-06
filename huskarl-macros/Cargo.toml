@@ -5,6 +5,8 @@ edition = "2024"
 rust-version = "1.92"
 description = "Procedural macros for the huskarl OAuth2 client library."
 repository = "https://github.com/huskarl-rs/huskarl"
+homepage = "https://github.com/huskarl-rs/huskarl"
+documentation = "https://docs.rs/huskarl-macros"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 

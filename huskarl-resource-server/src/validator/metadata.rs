@@ -1,3 +1,5 @@
+//! Validator configuration metadata.
+
 use serde::Serialize;
 
 /// Metadata about how an access token validator is configured.

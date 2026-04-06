@@ -9,10 +9,10 @@
 
 pub mod error;
 
+use crate::core::jwk::JwksSource;
+use crate::core::jwt::BoxedJtiUniquenessChecker;
+use crate::core::server_metadata::AuthorizationServerMetadata;
 pub use error::IntrospectionValidateError;
-use huskarl_core::jwk::JwksSource;
-use huskarl_core::jwt::BoxedJtiUniquenessChecker;
-use huskarl_core::server_metadata::AuthorizationServerMetadata;
 
 use std::collections::HashMap;
 use std::marker::PhantomData;

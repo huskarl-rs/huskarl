@@ -5,8 +5,8 @@
 
 use std::borrow::Cow;
 
+use crate::core::dpop::DPoPNotConfigured;
 use bon::Builder;
-use huskarl_core::dpop::DPoPNotConfigured;
 use serde::Serialize;
 use snafu::prelude::*;
 

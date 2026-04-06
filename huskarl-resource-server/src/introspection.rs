@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
+use crate::core::jwt::ConfirmationClaim;
+use crate::core::secrets::SecretString;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, StatusCode};
-use huskarl_core::jwt::ConfirmationClaim;
-use huskarl_core::secrets::SecretString;
 use serde::Deserialize;
 use serde::Deserializer;
 use snafu::OptionExt as _;
@@ -385,13 +385,22 @@ pub enum IntrospectionCallError<
 > {
     /// Client authentication failed.
     #[snafu(display("Client authentication failed"))]
-    ClientAuth { source: AuthErr },
+    ClientAuth {
+        /// The underlying authentication error.
+        source: AuthErr,
+    },
     /// Failed to build or execute the HTTP request to the introspection endpoint.
     #[snafu(display("HTTP request to introspection endpoint failed"))]
-    HttpRequest { source: HttpErr },
+    HttpRequest {
+        /// The underlying HTTP error.
+        source: HttpErr,
+    },
     /// Failed to read the introspection response body.
     #[snafu(display("Failed to read introspection response body"))]
-    HttpResponseBody { source: HttpRespErr },
+    HttpResponseBody {
+        /// The underlying response body error.
+        source: HttpRespErr,
+    },
     /// The introspection endpoint returned a non-2xx status code.
     #[snafu(display("Introspection endpoint returned status {status}"))]
     BadStatus {
@@ -402,7 +411,10 @@ pub enum IntrospectionCallError<
     },
     /// Failed to parse the JSON introspection response.
     #[snafu(display("Failed to parse introspection JSON response"))]
-    ParseJsonResponse { source: serde_json::Error },
+    ParseJsonResponse {
+        /// The underlying JSON parse error.
+        source: serde_json::Error,
+    },
     /// The AS returned `application/token-introspection+jwt` but no JWT validator was configured.
     #[snafu(display(
         "AS returned a JWT introspection response but no JWT validator was configured"
@@ -410,7 +422,10 @@ pub enum IntrospectionCallError<
     UnexpectedJwtResponse,
     /// JWT validation of the introspection response (RFC 9701) failed.
     #[snafu(display("JWT introspection response validation failed"))]
-    JwtResponse { source: JwtValidationError },
+    JwtResponse {
+        /// The underlying JWT validation error.
+        source: JwtValidationError,
+    },
     /// The token is not active (`active: false`).
     #[snafu(display("Token is not active"))]
     TokenInactive,
@@ -422,7 +437,12 @@ pub enum IntrospectionCallError<
     MissingIntrospectionClaim,
     /// The introspection response contains a timestamp that cannot be represented as a Unix timestamp.
     #[snafu(display("Introspection response field '{field}' has invalid timestamp: {value}"))]
-    InvalidTimestamp { field: &'static str, value: i64 },
+    InvalidTimestamp {
+        /// The name of the field with the invalid timestamp.
+        field: &'static str,
+        /// The invalid timestamp value.
+        value: i64,
+    },
 }
 
 impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crate::core::Error>

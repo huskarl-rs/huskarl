@@ -1,6 +1,6 @@
 use std::{convert::Infallible, time::Duration};
 
-use huskarl_core::crypto::signer::{JwsSigner, JwsSignerSelector};
+use crate::core::crypto::signer::{JwsSigner, JwsSignerSelector};
 
 use crate::{
     core::{

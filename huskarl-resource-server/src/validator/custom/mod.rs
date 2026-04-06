@@ -1,8 +1,8 @@
+//! Custom access token validator builder.
+
 use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
 
-use bon::Builder;
-use http::HeaderName;
-use huskarl_core::{
+use crate::core::{
     BoxedError, EndpointUrl,
     crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
     jwt::{
@@ -12,6 +12,8 @@ use huskarl_core::{
     platform::MaybeSendSync,
     server_metadata::AuthorizationServerMetadata,
 };
+use bon::Builder;
+use http::HeaderName;
 use serde::Deserialize;
 
 use crate::{

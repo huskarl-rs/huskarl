@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use httpmock::prelude::*;
-use huskarl_core::{
+use crate::core::{
     IntoEndpointUrl,
     crypto::signer::AsymmetricJwsSigner,
     jwk::{JwksSource, PublicJwks},
     jwt::Jwt,
 };
+use httpmock::prelude::*;
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::validator::{dpop_nonce::NoNonceCheck, rfc9068::Rfc9068Validator};
@@ -69,9 +69,7 @@ async fn test_rfc9068_validator() {
         .audience("api://resource")
         .subject("user-123")
         .issued_now()
-        .expiration(
-            huskarl_core::platform::SystemTime::now() + std::time::Duration::from_secs(3600),
-        )
+        .expiration(crate::core::platform::SystemTime::now() + std::time::Duration::from_secs(3600))
         .jti(Some("token-456".to_string()))
         .extra_claims(ExtraClaims {
             client_id: "client-789".to_string(),

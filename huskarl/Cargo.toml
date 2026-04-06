@@ -7,6 +7,8 @@ description = '''
 A modern OAuth2 client library.
 '''
 repository = "https://github.com/huskarl-rs/huskarl"
+homepage = "https://github.com/huskarl-rs/huskarl"
+documentation = "https://docs.rs/huskarl"
 license = "MIT OR Apache-2.0"
 keywords = ["oauth2", "security", "authentication"]
 categories = ["authentication"]

@@ -6,10 +6,12 @@ use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
     cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
-    core::{client_auth::ClientSecret, dpop::NoDPoP},
+    core::{
+        client_auth::ClientSecret, dpop::NoDPoP, jwk::JwksSource,
+        server_metadata::AuthorizationServerMetadata,
+    },
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
-use huskarl_core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata};
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::validator::{
     custom::{AccessTokenValidationRules, CustomValidator},

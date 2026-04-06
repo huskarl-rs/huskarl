@@ -4,12 +4,14 @@ use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
     cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
-    core::{client_auth::NoAuth, dpop::DPoP, server_metadata::AuthorizationServerMetadata},
+    core::{
+        client_auth::NoAuth, dpop::DPoP, jwk::JwksSource,
+        server_metadata::AuthorizationServerMetadata,
+    },
     grant::authorization_code::{
         AuthorizationCodeGrant, NoJar, StartInput, StartOutput, bind_loopback,
     },
 };
-use huskarl_core::jwk::JwksSource;
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::validator::{dpop_nonce::NoNonceCheck, rfc9068::Rfc9068Validator};

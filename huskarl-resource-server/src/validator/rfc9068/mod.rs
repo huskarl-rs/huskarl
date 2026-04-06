@@ -1,7 +1,8 @@
+//! RFC 9068 JWT profile for OAuth 2.0 access tokens.
+
 use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
 
-use http::HeaderName;
-use huskarl_core::{
+use crate::core::{
     BoxedError, EndpointUrl,
     crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
     jwt::{
@@ -11,6 +12,7 @@ use huskarl_core::{
     platform::MaybeSendSync,
     server_metadata::AuthorizationServerMetadata,
 };
+use http::HeaderName;
 use serde::Deserialize;
 
 use crate::{

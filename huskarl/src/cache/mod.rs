@@ -90,7 +90,7 @@ impl<E: crate::core::Error + 'static> crate::core::Error for GetTokenError<E> {
 
 #[cfg(test)]
 mod tests {
-    use huskarl_core::{client_auth::NoAuth, dpop::NoDPoP};
+    use crate::core::{client_auth::NoAuth, dpop::NoDPoP};
 
     use crate::{
         cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
