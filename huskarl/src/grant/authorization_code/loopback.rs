@@ -200,7 +200,7 @@ pub async fn complete_on_loopback_oidc<
     )
         -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>), E>,
 ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>), LoopbackError<E>> {
-    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    let port = listener.local_addr().map_or(0, |a| a.port());
 
     let expected_path = Url::parse(redirect_uri)
         .context(InvalidRedirectUriSnafu)?
@@ -470,9 +470,7 @@ mod tests {
     fn ok_token_response() -> (TokenResponse, Option<ValidatedJwt<IdTokenClaims>>) {
         (
             crate::grant::core::token_response::RawTokenResponse::builder()
-                .access_token(crate::core::secrets::SecretString::new(
-                    "test-token".to_string(),
-                ))
+                .access_token(crate::core::secrets::SecretString::new("test-token"))
                 .token_type("Bearer")
                 .build()
                 .into_token_response(None, crate::core::platform::SystemTime::now())

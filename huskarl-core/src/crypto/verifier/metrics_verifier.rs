@@ -1,4 +1,7 @@
-use crate::crypto::verifier::{JwsVerifier, KeyMatch, KeyMatchStrength, VerifyError};
+use crate::crypto::{
+    KeyMatchStrength,
+    verifier::{JwsVerifier, KeyMatch, VerifyError},
+};
 
 /// A [`JwsVerifier`] wrapper that records a `huskarl.jws.verify` counter for each
 /// verification attempt.
@@ -10,10 +13,10 @@ use crate::crypto::verifier::{JwsVerifier, KeyMatch, KeyMatchStrength, VerifyErr
 ///
 /// # Labels
 ///
-/// | Label     | Values                                                                        | Description                              |
-/// |-----------|-------------------------------------------------------------------------------|------------------------------------------|
-/// | `name`    | user-provided                                                                 | Identifies this verifier instance        |
-/// | `alg`     | `RS256`, `ES256`, etc.                                                        | Algorithm from the JWS header            |
+/// | Label     | Values                                                                       | Description                              |
+/// |-----------|------------------------------------------------------------------------------|------------------------------------------|
+/// | `name`    | user-provided                                                                | Identifies this verifier instance        |
+/// | `alg`     | `RS256`, `ES256`, etc.                                                       | Algorithm from the JWS header            |
 /// | `outcome` | `success`, `no_matching_key`, `ambiguous_key`, `signature_mismatch`, `error` | Verification result                      |
 ///
 /// `no_matching_key` and `signature_mismatch` are particularly useful for security

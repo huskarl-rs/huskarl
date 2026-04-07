@@ -187,7 +187,7 @@ mod test {
 
     #[test]
     fn parse_rfc6749_token_response() {
-        let token_response_str = r###"
+        let token_response_str = r#"
 {
   "access_token":"2YotnFZFEjr1zCsicMWpAA",
   "token_type":"example",
@@ -195,7 +195,7 @@ mod test {
   "refresh_token":"tGzv3JOkF0XG5Qx2TlKWIA",
   "example_parameter":"example_value"
 }
-            "###;
+            "#;
 
         let raw_token_response: RawTokenResponse =
             serde_json::from_str(token_response_str).expect("Basic token parsing succeeds");
@@ -210,7 +210,7 @@ mod test {
             raw_token_response
                 .refresh_token
                 .as_ref()
-                .map(|t| t.expose_secret()),
+                .map(SecretString::expose_secret),
             Some("tGzv3JOkF0XG5Qx2TlKWIA")
         );
         assert_eq!(
@@ -221,7 +221,7 @@ mod test {
 
     #[test]
     fn parse_token_response_with_string_expires_in() {
-        let token_response_str = r###"
+        let token_response_str = r#"
 {
   "access_token":"2YotnFZFEjr1zCsicMWpAA",
   "token_type":"example",
@@ -229,7 +229,7 @@ mod test {
   "refresh_token":"tGzv3JOkF0XG5Qx2TlKWIA",
   "example_parameter":"example_value"
 }
-            "###;
+            "#;
 
         let raw_token_response: RawTokenResponse =
             serde_json::from_str(token_response_str).expect("Basic token parsing succeeds");
@@ -244,7 +244,7 @@ mod test {
             raw_token_response
                 .refresh_token
                 .as_ref()
-                .map(|t| t.expose_secret()),
+                .map(SecretString::expose_secret),
             Some("tGzv3JOkF0XG5Qx2TlKWIA")
         );
         assert_eq!(
@@ -269,7 +269,7 @@ mod test {
                 .unwrap(),
         );
 
-        let err_token_response = token_response.err().expect("Token response is invalid");
+        let err_token_response = token_response.expect_err("Token response is invalid");
 
         assert!(matches!(
             err_token_response,
@@ -339,7 +339,7 @@ mod test {
                 .unwrap(),
         );
 
-        let err_token_response = token_response.err().expect("No dpop_jkt for DPoP token");
+        let err_token_response = token_response.expect_err("No dpop_jkt for DPoP token");
 
         assert!(matches!(
             err_token_response,
