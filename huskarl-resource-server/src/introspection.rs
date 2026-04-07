@@ -137,7 +137,6 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
         ValidatedRequest<Claims>,
         IntrospectionCallError<Auth::Error, C::Error, C::ResponseError>,
     > {
-        // 1. Get client authentication parameters
         let auth_params = self
             .client_auth
             .authentication_params(
@@ -149,8 +148,6 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
             .await
             .context(ClientAuthSnafu)?;
 
-        // 2. Build form body — finish and drop the Serializer before the execute() await
-        //    (form_urlencoded::Serializer is not Send due to an internal encoding Fn)
         let (body, auth_headers) = {
             let mut serializer = form_urlencoded::Serializer::new(String::new());
             serializer.append_pair("token", access_token.expose_secret());
@@ -167,7 +164,6 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
             (Bytes::from(serializer.finish()), auth_params.headers)
         };
 
-        // 3. Build HTTP request
         let (mut parts, ()) = Request::new(()).into_parts();
         parts.method = Method::POST;
         parts.uri = self.introspection_endpoint.clone().into_uri();
@@ -186,7 +182,6 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
         }
         let request = Request::from_parts(parts, body);
 
-        // 4. Execute request; read status and content-type before consuming the body
         let response = http_client
             .execute(request)
             .await
@@ -205,7 +200,6 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
             .unwrap_or(false);
         let body = response.body().await.context(HttpResponseBodySnafu)?;
 
-        // 5. Non-2xx → error
         if !status.is_success() {
             return BadStatusSnafu {
                 status,
@@ -214,7 +208,6 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
             .fail();
         }
 
-        // 6. Parse response by Content-Type
         let (introspection, introspection_jwt): (IntrospectionResponse<Claims>, Option<String>) =
             if is_jwt_response {
                 let jwt_validator = self
@@ -243,10 +236,8 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
                 (response, None)
             };
 
-        // 7. Check active
         ensure!(introspection.active, TokenInactiveSnafu);
 
-        // 8. Build ValidatedRequest
         let expiration = introspection
             .exp
             .map(|ts| {

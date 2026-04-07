@@ -2,15 +2,20 @@
 
 use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
 
-use crate::core::{
-    BoxedError, EndpointUrl,
-    crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-    jwt::{
-        BoxedJtiUniquenessChecker,
-        validator::{ClaimCheck, JwtValidator},
+use crate::{
+    core::{
+        BoxedError, EndpointUrl,
+        crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+        jwt::{
+            BoxedJtiUniquenessChecker,
+            validator::{ClaimCheck, JwtValidator},
+        },
+        platform::MaybeSendSync,
+        server_metadata::AuthorizationServerMetadata,
     },
-    platform::MaybeSendSync,
-    server_metadata::AuthorizationServerMetadata,
+    validator::{
+        dpop_nonce::NoNonceCheck, rfc9068::rfc9068_validator_builder::SetDpopNonceChecker,
+    },
 };
 use http::HeaderName;
 use serde::Deserialize;
@@ -37,17 +42,17 @@ use crate::{
 ///
 /// For authorization servers that do not issue RFC 9068-compliant tokens, use
 /// [`crate::validator::custom::CustomValidator`] instead.
-pub struct Rfc9068Validator<N: DpopNonceChecker, Extra = HashMap<String, serde_json::Value>> {
+pub struct Rfc9068Validator<N: DpopNonceChecker, Claims = ()> {
     inner: ValidatorInner<N>,
     issuer: String,
     audience: String,
     on_validate: Option<Arc<dyn OnValidate>>,
-    _phantom: PhantomData<Extra>,
+    _phantom: PhantomData<Claims>,
 }
 
 #[bon::bon]
-impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
-    Rfc9068Validator<N, Extra>
+impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
+    Rfc9068Validator<N, Claims>
 {
     /// Creates a new [`Rfc9068Validator`].
     ///
@@ -55,16 +60,15 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
     /// see [`Rfc9068Validator::builder_from_metadata`].
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
-        generics(setters(vis = "", name = "with_{}_internal"))
+        generics(setters(vis = "", name = "with_{}_internal")),
+        on(String, into)
     )]
     pub async fn new(
         /// The issuer URL of the authorization server.
         ///
         /// Required for exact issuer matching per RFC 9068 §4.
-        #[builder(into)]
         issuer: String,
         /// The expected audience value.
-        #[builder(into)]
         audience: String,
         /// Allowed algorithms for access token signature verification.
         ///
@@ -82,12 +86,12 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
         /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
         ///
         /// Advertised as `dpop_bound_access_tokens_required` in RFC 9728 metadata.
-        #[builder(default = false)]
+        #[builder(default)]
         require_dpop: bool,
         /// If `true`, tokens without a `cnf.x5t#S256` certificate binding are rejected.
         ///
         /// Advertised as `tls_client_certificate_bound_access_tokens` in RFC 9728 metadata.
-        #[builder(default = false)]
+        #[builder(default)]
         require_mtls: bool,
         /// JWKS URI for fetching the authorization server's signing keys.
         jwks_uri: Option<EndpointUrl>,
@@ -99,10 +103,11 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
         /// `default-jws-verifier-platform` feature is enabled, defaults to the platform default.
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
-        /// JTI uniqueness checker.
+        /// Access token JTI uniqueness checker.
         jti_checker: Option<BoxedJtiUniquenessChecker>,
         /// DPoP nonce checker.
-        dpop_nonce_checker: N,
+        #[builder(setters(vis = "", name = "dpop_nonce_checker_internal"))]
+        dpop_nonce_checker: Option<N>,
         /// JTI uniqueness checker.
         dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
         /// The HTTP header to extract the access token from.
@@ -120,7 +125,7 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
             .build(jwks_uri.as_ref(), jws_verifier_platform.clone())
             .await?;
 
-        let token_validator = JwtValidator::builder()
+        let jwt_validator = JwtValidator::builder()
             .verifier(jws_verifier)
             .aud(ClaimCheck::required_value(&audience))
             .maybe_allowed_algorithms(allowed_signing_algorithms)
@@ -135,7 +140,7 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
 
         Ok(Self {
             inner: ValidatorInner {
-                token_validator,
+                jwt_validator,
                 dpop_binding_checker: DPoPBindingChecker {
                     dpop_nonce_checker,
                     dpop_jti_checker,
@@ -155,39 +160,23 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
     }
 }
 
-impl<N: DpopNonceChecker> Rfc9068Validator<N, ()> {
+impl Rfc9068Validator<NoNonceCheck, ()> {
     /// Creates a builder for [`Rfc9068Validator`].
     ///
-    /// Call [`.with_extra::<T>()`][Rfc9068ValidatorBuilder::with_extra] on the builder
-    /// to specify a custom extra claims type. The default is `()` (no extra claims).
-    pub fn builder() -> Rfc9068ValidatorBuilder<N, ()> {
+    /// Call [`.with_claims::<T>()`][Rfc9068ValidatorBuilder::with_claims] on the builder
+    /// to specify a custom claims type. The default is `()` (no extra claims).
+    pub fn builder() -> Rfc9068ValidatorBuilder<NoNonceCheck, ()> {
         Rfc9068Validator::builder_internal()
     }
-}
 
-impl<
-    N: DpopNonceChecker,
-    Extra: for<'de> Deserialize<'de> + Clone + 'static,
-    S: rfc9068_validator_builder::State,
-> Rfc9068ValidatorBuilder<N, Extra, S>
-{
-    /// Sets the extra claims type for the validator.
-    pub fn with_extra<Extra1: for<'de> Deserialize<'de> + Clone + 'static>(
-        self,
-    ) -> Rfc9068ValidatorBuilder<N, Extra1, S> {
-        self.with_extra_internal()
-    }
-}
-
-impl<N: DpopNonceChecker> Rfc9068Validator<N, ()> {
     /// Configure the validator from authorization server metadata.
     ///
     /// Pre-fills `issuer` and `jwks_uri` from the metadata.
-    /// Call `.with_extra::<MyExtra>()` on the builder to use a custom extra claims type.
+    /// Call `.with_claims::<MyClaims>()` on the builder to use a custom claims type.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> Rfc9068ValidatorBuilder<
-        N,
+        NoNonceCheck,
         (),
         rfc9068_validator_builder::SetJwksUri<rfc9068_validator_builder::SetIssuer>,
     > {
@@ -197,8 +186,34 @@ impl<N: DpopNonceChecker> Rfc9068Validator<N, ()> {
     }
 }
 
-impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
-    Rfc9068Validator<N, Extra>
+impl<
+    N: DpopNonceChecker,
+    Claims: for<'de> Deserialize<'de> + Clone + 'static,
+    S: rfc9068_validator_builder::State,
+> Rfc9068ValidatorBuilder<N, Claims, S>
+{
+    /// Sets the claims type for the validator.
+    pub fn with_claims<Claims1: for<'de> Deserialize<'de> + Clone + 'static>(
+        self,
+    ) -> Rfc9068ValidatorBuilder<N, Claims1, S> {
+        self.with_claims_internal()
+    }
+
+    /// Sets the DPoP nonce checker for the validator.
+    pub fn dpop_nonce_checker<N1: DpopNonceChecker>(
+        self,
+        dpop_nonce_checker: N1,
+    ) -> Rfc9068ValidatorBuilder<N1, Claims, SetDpopNonceChecker<S>>
+    where
+        S::DpopNonceChecker: rfc9068_validator_builder::IsUnset,
+    {
+        self.with_n_internal()
+            .dpop_nonce_checker_internal(dpop_nonce_checker)
+    }
+}
+
+impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
+    Rfc9068Validator<N, Claims>
 {
     /// Returns metadata describing how this validator is configured.
     ///
@@ -226,7 +241,7 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
         http_method: &http::Method,
         http_uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
-    ) -> ValidationResult<Rfc9068AccessTokenClaims<Extra>, ValidateHeadersError> {
+    ) -> ValidationResult<Rfc9068AccessTokenClaims<Claims>, ValidateHeadersError> {
         let result = self
             .inner
             .validate_request(headers, http_method, http_uri, client_cert_der)

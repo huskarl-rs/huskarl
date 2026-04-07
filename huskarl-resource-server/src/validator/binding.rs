@@ -160,7 +160,7 @@ pub enum MtlsBindingError {
 /// against the request, and confirms the proof key matches the `cnf.jkt`
 /// thumbprint in the token. Also validates the provided DPoP nonce.
 pub(crate) struct DPoPBindingChecker<N: DpopNonceChecker> {
-    pub(crate) dpop_nonce_checker: N,
+    pub(crate) dpop_nonce_checker: Option<N>,
     pub(crate) dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
     pub(crate) max_proof_age: Duration,
     pub(crate) jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
@@ -216,13 +216,13 @@ impl<N: DpopNonceChecker> DPoPBindingChecker<N> {
             .as_ref()
             .and_then(|p| p.nonce.as_deref());
 
-        let nonce_check = self
-            .dpop_nonce_checker
-            .check_nonce(proof_nonce)
-            .await
-            .map_err(|e| DPoPBindingError::NonceCheckFailed {
-                source: BoxedError::from_err(e),
-            })?;
+        let nonce_check = match self.dpop_nonce_checker.as_ref() {
+            Some(c) => c.check_nonce(proof_nonce).await,
+            None => Ok(NonceCheck::Valid),
+        }
+        .map_err(|e| DPoPBindingError::NonceCheckFailed {
+            source: BoxedError::from_err(e),
+        })?;
 
         let new_nonce = match nonce_check {
             NonceCheck::Valid => None,

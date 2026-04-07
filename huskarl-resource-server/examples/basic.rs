@@ -1,5 +1,3 @@
-use huskarl_resource_server::validator::dpop_nonce::NoNonceCheck;
-
 #[cfg(target_family = "wasm")]
 fn main() {}
 
@@ -35,7 +33,6 @@ pub async fn main() {
                 .build(),
         ))
         .audience("api://client")
-        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .unwrap();

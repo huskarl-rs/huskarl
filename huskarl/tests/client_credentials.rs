@@ -13,10 +13,7 @@ use huskarl::{
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::{
-    custom::{AccessTokenValidationRules, CustomValidator},
-    dpop_nonce::NoNonceCheck,
-};
+use huskarl_resource_server::validator::custom::{AccessTokenValidationRules, CustomValidator};
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
 /// Full client credentials flow against a real Keycloak: create a fresh realm and client,
@@ -59,7 +56,6 @@ async fn client_credentials_exchange() {
             JwksSource::builder().http_client(http.clone()).build(),
         ))
         .rules(AccessTokenValidationRules::builder().build())
-        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .expect("create validator");

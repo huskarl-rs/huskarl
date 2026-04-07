@@ -12,9 +12,10 @@ pub mod error;
 use crate::core::jwk::JwksSource;
 use crate::core::jwt::BoxedJtiUniquenessChecker;
 use crate::core::server_metadata::AuthorizationServerMetadata;
+use crate::validator::dpop_nonce::NoNonceCheck;
+use crate::validator::introspection::introspection_validator_builder::SetDpopNonceChecker;
 pub use error::IntrospectionValidateError;
 
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -57,7 +58,7 @@ pub struct IntrospectionValidator<
     Auth: ClientAuthentication,
     C: HttpClient,
     N: DpopNonceChecker,
-    Claims = HashMap<String, serde_json::Value>,
+    Claims = (),
 > {
     token_introspection: TokenIntrospection<Auth>,
     http_client: C,
@@ -81,18 +82,17 @@ impl<
     /// Creates a new [`IntrospectionValidator`].
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
-        generics(setters(vis = "", name = "with_{}_internal"))
+        generics(setters(vis = "", name = "with_{}_internal")),
+        on(String, into)
     )]
     pub async fn new(
         /// The client ID of this resource server, used for authenticating to the introspection
         /// endpoint.
-        #[builder(into)]
         client_id: String,
         /// The issuer URL of the authorization server.
         ///
         /// Used for client authentication methods that require an audience (e.g.
         /// `private_key_jwt`) and for RFC 9701 JWT response issuer (`iss`) validation.
-        #[builder(into)]
         issuer: Option<String>,
         /// The URL of the token introspection endpoint.
         introspection_endpoint: EndpointUrl,
@@ -117,12 +117,12 @@ impl<
         /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
         ///
         /// Advertised as `dpop_bound_access_tokens_required` in RFC 9728 metadata.
-        #[builder(default = false)]
+        #[builder(default)]
         require_dpop: bool,
         /// If `true`, tokens without a `cnf.x5t#S256` certificate binding are rejected.
         ///
         /// Advertised as `tls_client_certificate_bound_access_tokens` in RFC 9728 metadata.
-        #[builder(default = false)]
+        #[builder(default)]
         require_mtls: bool,
         /// JWKS URI for RFC 9701 JWT response validation.
         ///
@@ -136,7 +136,8 @@ impl<
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
         /// DPoP nonce checker.
-        dpop_nonce_checker: N,
+        #[builder(setters(vis = "", name = "dpop_nonce_checker_internal"))]
+        dpop_nonce_checker: Option<N>,
         /// DPoP JTI uniqueness checker.
         dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
         /// JWS verifier factory for RFC 9701 JWT response validation.
@@ -193,37 +194,17 @@ impl<
     }
 }
 
-impl<
-    Auth: ClientAuthentication,
-    C: HttpClient + Clone + 'static,
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + 'static,
-    S: State,
-> IntrospectionValidatorBuilder<Auth, C, N, Claims, S>
-{
-    /// Sets the claims type for the introspection validator.
-    pub fn with_claims<Claims1: Clone + for<'de> Deserialize<'de> + 'static>(
-        self,
-    ) -> IntrospectionValidatorBuilder<Auth, C, N, Claims1, S> {
-        self.with_claims_internal()
-    }
-}
-
-impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static, N: DpopNonceChecker>
-    IntrospectionValidator<Auth, C, N, ()>
+impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static>
+    IntrospectionValidator<Auth, C, NoNonceCheck, ()>
 {
     /// Creates a builder for [`IntrospectionValidator`].
     ///
     /// Call [`.with_claims::<T>()`][IntrospectionValidatorBuilder::with_claims] on the builder
     /// to specify a custom claims type. The default is `()` (no extra claims).
-    pub fn builder() -> IntrospectionValidatorBuilder<Auth, C, N, ()> {
+    pub fn builder() -> IntrospectionValidatorBuilder<Auth, C, NoNonceCheck, ()> {
         IntrospectionValidator::builder_internal()
     }
-}
 
-impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static, N: DpopNonceChecker>
-    IntrospectionValidator<Auth, C, N, ()>
-{
     /// Configure the validator from authorization server metadata.
     ///
     /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Validation
@@ -236,7 +217,7 @@ impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static, N: DpopNonceCh
         IntrospectionValidatorBuilder<
             Auth,
             C,
-            N,
+            NoNonceCheck,
             (),
             SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>,
         >,
@@ -250,6 +231,34 @@ impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static, N: DpopNonceCh
                     .introspection_endpoint(introspection_endpoint.clone())
                     .maybe_jwks_uri(metadata.jwks_uri.clone())
             })
+    }
+}
+
+impl<
+    Auth: ClientAuthentication,
+    C: HttpClient + Clone + 'static,
+    N: DpopNonceChecker,
+    Claims: for<'de> Deserialize<'de> + Clone + 'static,
+    S: State,
+> IntrospectionValidatorBuilder<Auth, C, N, Claims, S>
+{
+    /// Sets the claims type for the validator.
+    pub fn with_claims<Claims1: for<'de> Deserialize<'de> + Clone + 'static>(
+        self,
+    ) -> IntrospectionValidatorBuilder<Auth, C, N, Claims1, S> {
+        self.with_claims_internal()
+    }
+
+    /// Sets the DPoP nonce checker for the validator.
+    pub fn dpop_nonce_checker<N1: DpopNonceChecker>(
+        self,
+        dpop_nonce_checker: N1,
+    ) -> IntrospectionValidatorBuilder<Auth, C, N1, Claims, SetDpopNonceChecker<S>>
+    where
+        S::DpopNonceChecker: introspection_validator_builder::IsUnset,
+    {
+        self.with_n_internal()
+            .dpop_nonce_checker_internal(dpop_nonce_checker)
     }
 }
 

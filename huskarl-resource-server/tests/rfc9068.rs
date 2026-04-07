@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
-use crate::core::{
+use httpmock::prelude::*;
+use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+use huskarl_reqwest::ReqwestClient;
+use huskarl_resource_server::core::{
     IntoEndpointUrl,
     crypto::signer::AsymmetricJwsSigner,
     jwk::{JwksSource, PublicJwks},
     jwt::Jwt,
 };
-use httpmock::prelude::*;
-use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
-use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::{dpop_nonce::NoNonceCheck, rfc9068::Rfc9068Validator};
+use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
 
 #[tokio::test]
 async fn test_rfc9068_validator() {
@@ -51,7 +51,6 @@ async fn test_rfc9068_validator() {
                 .http_client(http_client.clone())
                 .build(),
         ))
-        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .unwrap();
@@ -69,7 +68,10 @@ async fn test_rfc9068_validator() {
         .audience("api://resource")
         .subject("user-123")
         .issued_now()
-        .expiration(crate::core::platform::SystemTime::now() + std::time::Duration::from_secs(3600))
+        .expiration(
+            huskarl_resource_server::core::platform::SystemTime::now()
+                + std::time::Duration::from_secs(3600),
+        )
         .jti(Some("token-456".to_string()))
         .extra_claims(ExtraClaims {
             client_id: "client-789".to_string(),

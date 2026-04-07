@@ -2,15 +2,18 @@
 
 use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
 
-use crate::core::{
-    BoxedError, EndpointUrl,
-    crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-    jwt::{
-        BoxedJtiUniquenessChecker,
-        validator::{ClaimCheck, JwtValidator},
+use crate::{
+    core::{
+        BoxedError, EndpointUrl,
+        crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+        jwt::{
+            BoxedJtiUniquenessChecker,
+            validator::{ClaimCheck, JwtValidator},
+        },
+        platform::MaybeSendSync,
+        server_metadata::AuthorizationServerMetadata,
     },
-    platform::MaybeSendSync,
-    server_metadata::AuthorizationServerMetadata,
+    validator::{custom::custom_validator_builder::SetDpopNonceChecker, dpop_nonce::NoNonceCheck},
 };
 use bon::Builder;
 use http::HeaderName;
@@ -50,7 +53,8 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     /// Creates a new [`CustomValidator`].
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
-        generics(setters(vis = "", name = "with_{}_internal"))
+        generics(setters(vis = "", name = "with_{}_internal")),
+        on(String, into)
     )]
     pub async fn new(
         /// Validation rules for the access token.
@@ -59,7 +63,6 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         ///
         /// Per RFC 7519, the `aud` claim is optional. When set, tokens that include an `aud`
         /// claim must contain this value; tokens without `aud` are accepted.
-        #[builder(into)]
         audience: Option<String>,
         /// Allowed algorithms for access token signature verification.
         ///
@@ -77,26 +80,27 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
         ///
         /// Advertised as `dpop_bound_access_tokens_required` in RFC 9728 metadata.
-        #[builder(default = false)]
+        #[builder(default)]
         require_dpop: bool,
         /// If `true`, tokens without a `cnf.x5t#S256` certificate binding are rejected.
         ///
         /// Advertised as `tls_client_certificate_bound_access_tokens` in RFC 9728 metadata.
-        #[builder(default = false)]
+        #[builder(default)]
         require_mtls: bool,
         /// The issuer URI of the authorization server, for RFC 9728 metadata.
         ///
         /// If provided, included in [`ValidatorMetadata::authorization_servers`].
         /// Independent of the `iss` check in [`AccessTokenValidationRules`].
-        #[builder(into)]
         authorization_server: Option<String>,
         /// JWKS URI for fetching the authorization server's signing keys.
         jwks_uri: Option<EndpointUrl>,
         /// Factory for creating JWS verifiers for access token signature verification.
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
+        /// Access token JTI uniqueness checker.
         token_jti_checker: Option<BoxedJtiUniquenessChecker>,
         /// DPoP nonce checker.
-        dpop_nonce_checker: N,
+        #[builder(setters(vis = "", name = "dpop_nonce_checker_internal"))]
+        dpop_nonce_checker: Option<N>,
         /// DPoP JTI uniqueness checker.
         dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
         /// Cryptographic platform for JWS verification.
@@ -120,7 +124,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
             .build(jwks_uri.as_ref(), jws_verifier_platform.clone())
             .await?;
 
-        let token_validator = JwtValidator::builder()
+        let jwt_validator = JwtValidator::builder()
             .verifier(jws_verifier)
             .aud(
                 audience
@@ -139,7 +143,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
 
         Ok(Self {
             inner: ValidatorInner {
-                token_validator,
+                jwt_validator,
                 dpop_binding_checker: DPoPBindingChecker {
                     dpop_nonce_checker,
                     dpop_jti_checker,
@@ -159,13 +163,28 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     }
 }
 
-impl<N: DpopNonceChecker> CustomValidator<N, ()> {
+impl CustomValidator<NoNonceCheck, ()> {
     /// Creates a builder for [`CustomValidator`].
     ///
     /// Call [`.with_claims::<T>()`][CustomValidatorBuilder::with_claims] on the builder
     /// to specify a custom claims type. The default is `()` (no extra claims).
-    pub fn builder() -> CustomValidatorBuilder<N, ()> {
+    pub fn builder() -> CustomValidatorBuilder<NoNonceCheck, ()> {
         CustomValidator::builder_internal()
+    }
+
+    /// Configure the validator from authorization server metadata.
+    ///
+    /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Issuer
+    /// validation is configured via [`AccessTokenValidationRules`] rather than
+    /// inferred from metadata, since non-RFC-9068 authorization servers may require
+    /// different issuer handling. Call `.with_claims::<MyClaims>()` to use a custom
+    /// claims type.
+    pub fn builder_from_metadata(
+        metadata: &AuthorizationServerMetadata,
+    ) -> CustomValidatorBuilder<NoNonceCheck, (), SetJwksUri<SetAuthorizationServer>> {
+        Self::builder()
+            .authorization_server(metadata.issuer.clone())
+            .maybe_jwks_uri(metadata.jwks_uri.clone())
     }
 }
 
@@ -181,22 +200,17 @@ impl<
     ) -> CustomValidatorBuilder<N, Claims1, S> {
         self.with_claims_internal()
     }
-}
 
-impl<N: DpopNonceChecker> CustomValidator<N, ()> {
-    /// Configure the validator from authorization server metadata.
-    ///
-    /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Issuer
-    /// validation is configured via [`AccessTokenValidationRules`] rather than
-    /// inferred from metadata, since non-RFC-9068 authorization servers may require
-    /// different issuer handling. Call `.with_claims::<MyClaims>()` to use a custom
-    /// claims type.
-    pub fn builder_from_metadata(
-        metadata: &AuthorizationServerMetadata,
-    ) -> CustomValidatorBuilder<N, (), SetJwksUri<SetAuthorizationServer>> {
-        Self::builder()
-            .authorization_server(metadata.issuer.clone())
-            .maybe_jwks_uri(metadata.jwks_uri.clone())
+    /// Sets the DPoP nonce checker for the validator.
+    pub fn dpop_nonce_checker<N1: DpopNonceChecker>(
+        self,
+        dpop_nonce_checker: N1,
+    ) -> CustomValidatorBuilder<N1, Claims, SetDpopNonceChecker<S>>
+    where
+        S::DpopNonceChecker: custom_validator_builder::IsUnset,
+    {
+        self.with_n_internal()
+            .dpop_nonce_checker_internal(dpop_nonce_checker)
     }
 }
 

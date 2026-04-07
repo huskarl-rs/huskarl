@@ -29,12 +29,10 @@ rest of the authorization checking.
 use std::sync::Arc;
 use huskarl_resource_server::core::jwk::JwksSource;
 use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
-use huskarl_resource_server::validator::dpop_nonce::NoNonceCheck;
 
 let validator = Rfc9068Validator::builder()
   .issuer("https://issuer")
   .audience("audience")
-  .dpop_nonce_checker(NoNonceCheck)
   .jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client).build()))
   .build();
 ```

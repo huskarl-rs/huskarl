@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub(super) struct ValidatorInner<N: DpopNonceChecker> {
-    pub token_validator: JwtValidator,
+    pub jwt_validator: JwtValidator,
     pub dpop_binding_checker: DPoPBindingChecker<N>,
     pub token_header: HeaderName,
     /// If `true`, tokens without a `cnf.x5t#S256` certificate binding are rejected.
@@ -48,7 +48,7 @@ impl<N: DpopNonceChecker> ValidatorInner<N> {
         };
 
         let validated = match self
-            .token_validator
+            .jwt_validator
             .validate::<Claims>(access_token.expose_secret())
             .await
             .context(InvalidJwtSnafu { token_type })

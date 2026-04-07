@@ -40,6 +40,12 @@ pub trait DpopNonceChecker: MaybeSendSync {
 }
 
 /// A [`DpopNonceChecker`] that always accepts any nonce (i.e. disables nonce checking).
+///
+/// This is currently not called as the ergonomics of bon require an `Option` to make
+/// the nonce check parameter optional.
+///
+/// Do not construct manually.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoNonceCheck;
 
