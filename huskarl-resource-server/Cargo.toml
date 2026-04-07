@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-resource-server"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.92"
 description = "OAuth2 resource server (JWT validation) support for the huskarl ecosystem."
