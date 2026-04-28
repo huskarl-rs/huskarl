@@ -64,7 +64,6 @@ pub struct IntrospectionValidator<
     http_client: C,
     dpop_binding_checker: DPoPBindingChecker<N>,
     token_header: HeaderName,
-    client_id: String,
     on_validate: Option<Arc<dyn OnValidate>>,
     issuer: Option<String>,
     require_mtls: bool,
@@ -157,7 +156,6 @@ impl<
         token_header: HeaderName,
         /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
         ///
-        /// Receives the [`ValidationOutcome`] and the `client_id` identifying this validator.
         /// Use this to record metrics, emit log events, or trigger alerts.
         on_validate: Option<Arc<dyn OnValidate>>,
     ) -> Result<Self, BoxedError> {
@@ -185,7 +183,6 @@ impl<
                 required: require_dpop,
             },
             token_header,
-            client_id,
             on_validate,
             issuer,
             require_mtls,
@@ -271,8 +268,10 @@ impl<
 {
     /// Returns metadata describing how this validator is configured.
     ///
+    /// The resource is the URL of the protected resource.
+    ///
     /// See [`ProvideValidatorMetadata`] for use in generic contexts.
-    pub fn validator_metadata(&self) -> ValidatorMetadata {
+    pub fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         ValidatorMetadata {
             realm: None,
             authorization_servers: self.issuer.as_ref().map(|s| vec![s.clone()]),
@@ -281,7 +280,7 @@ impl<
                 .allowed_signing_algorithms
                 .clone(),
             dpop_bound_access_tokens_required: Some(self.dpop_binding_checker.required),
-            resource: None,
+            resource: resource.map(|r| r.to_owned()),
             bearer_methods_supported: Some(vec!["header"]),
         }
     }
@@ -324,7 +323,7 @@ impl<
                     }
                 }
             };
-            cb.on_validate(validation_outcome, &self.client_id);
+            cb.on_validate(validation_outcome);
         }
 
         ValidationResult {
@@ -398,8 +397,8 @@ impl<
     Claims: for<'de> Deserialize<'de> + Clone + 'static,
 > ProvideValidatorMetadata for IntrospectionValidator<Auth, C, N, Claims>
 {
-    fn validator_metadata(&self) -> ValidatorMetadata {
-        self.validator_metadata()
+    fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
+        self.validator_metadata(resource)
     }
 }
 

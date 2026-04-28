@@ -13,9 +13,9 @@ use huskarl::{
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::{
-    custom::{AccessTokenValidationRules, CustomValidator},
-    dpop_nonce::NoNonceCheck,
+use huskarl_resource_server::{
+    core::jwt::validator::ClaimCheck,
+    validator::{custom::CustomValidator, dpop_nonce::NoNonceCheck},
 };
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
@@ -54,12 +54,11 @@ async fn client_credentials_exchange() {
         .build();
 
     let validator = CustomValidator::builder_from_metadata(&server_metadata)
-        .audience("huskarl-rs")
+        .audience(ClaimCheck::required_value("huskarl-rs"))
         .jws_verifier_factory(Arc::new(
             JwksSource::builder().http_client(http.clone()).build(),
         ))
         .dpop_nonce_checker(NoNonceCheck)
-        .rules(AccessTokenValidationRules::builder().build())
         .build()
         .await
         .expect("create validator");

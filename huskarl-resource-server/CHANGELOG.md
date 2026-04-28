@@ -10,10 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Improvements
 
 - If custom claims from a JWT token fail to be parsed, there is a distinct error.
+- Flatten configuration of custom resource server config to be more friendly.
+- RFC 9728 resource identifer is no longer tied to the audience.
 
 ## Changes
 
 - Bump huskarl-core to 0.4
+- Breaking: some changes to the custom validator API.
 
 ## [0.4.0] - 2026-04-28
 

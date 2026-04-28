@@ -568,3 +568,93 @@ pub enum JwtValidationError {
         source: serde_json::Error,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crypto::KeyMatchStrength;
+    use crate::crypto::verifier::JwsVerifier;
+    use crate::crypto::verifier::KeyMatch;
+    use crate::crypto::verifier::VerifyError;
+
+    #[derive(Debug)]
+    struct MockVerifier;
+
+    impl JwsVerifier for MockVerifier {
+        type Error = crate::BoxedError;
+
+        fn key_match(&self, _key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
+            Some(KeyMatchStrength::ByAlgorithm)
+        }
+
+        async fn verify(
+            &self,
+            _input: &[u8],
+            _signature: &[u8],
+            _key: &KeyMatch<'_>,
+        ) -> Result<(), VerifyError<Self::Error>> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_unit_claims_with_extra_fields() {
+        // A JWT with standard claims + an extra field "foo"
+        // Header: {"alg": "RS256", "typ": "JWT"}
+        // Claims: {"iss": "joe", "foo": "bar"}
+        let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJqb2UiLCJmb28iOiJiYXIifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::required_value("joe"))
+            .build();
+
+        // This should succeed even though "foo": "bar" is present and C is ()
+        let result = validator.validate::<()>(token).await;
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_custom_claims_success() {
+        #[derive(Debug, Clone, Deserialize, PartialEq)]
+        struct MyClaims {
+            foo: String,
+        }
+
+        let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJqb2UiLCJmb28iOiJiYXIifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::required_value("joe"))
+            .build();
+
+        let result = validator.validate::<MyClaims>(token).await.unwrap();
+        assert_eq!(
+            result.claims,
+            MyClaims {
+                foo: "bar".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_custom_claims_failure() {
+        #[derive(Debug, Clone, Deserialize, PartialEq)]
+        struct MyClaims {
+            missing: String,
+        }
+
+        let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJqb2UiLCJmb28iOiJiYXIifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::required_value("joe"))
+            .build();
+
+        let result = validator.validate::<MyClaims>(token).await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::ExtraClaims { .. })
+        ));
+    }
+}
