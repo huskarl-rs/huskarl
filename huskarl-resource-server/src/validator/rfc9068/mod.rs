@@ -45,7 +45,6 @@ use crate::{
 pub struct Rfc9068Validator<N: DpopNonceChecker, Claims = ()> {
     inner: ValidatorInner<N>,
     issuer: String,
-    audience: String,
     on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
@@ -117,7 +116,6 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         token_header: HeaderName,
         /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
         ///
-        /// Receives the [`ValidationOutcome`] and the audience string identifying this validator.
         /// Use this to record metrics, emit log events, or trigger alerts.
         on_validate: Option<Arc<dyn OnValidate>>,
     ) -> Result<Self, BoxedError> {
@@ -153,7 +151,6 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
                 require_mtls,
             },
             issuer,
-            audience,
             on_validate,
             _phantom: PhantomData,
         })
@@ -217,8 +214,10 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
 {
     /// Returns metadata describing how this validator is configured.
     ///
+    /// The resource is the URL of the protected resource.
+    ///
     /// See [`ProvideValidatorMetadata`] for use in generic contexts.
-    pub fn validator_metadata(&self) -> ValidatorMetadata {
+    pub fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         ValidatorMetadata {
             realm: None,
             authorization_servers: Some(vec![self.issuer.clone()]),
@@ -228,7 +227,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
                 .allowed_signing_algorithms
                 .clone(),
             dpop_bound_access_tokens_required: Some(self.inner.dpop_binding_checker.required),
-            resource: Some(self.audience.clone()),
+            resource: resource.map(|r| r.to_owned()),
             bearer_methods_supported: Some(vec!["header"]),
         }
     }
@@ -255,7 +254,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
                 Err(ValidateHeadersError::InvalidJwt { .. }) => ValidationOutcome::InvalidToken,
                 Err(ValidateHeadersError::Binding { .. }) => ValidationOutcome::BindingError,
             };
-            cb.on_validate(validation_outcome, &self.audience);
+            cb.on_validate(validation_outcome);
         }
 
         result
@@ -283,8 +282,8 @@ impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + Maybe
 impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + 'static>
     ProvideValidatorMetadata for Rfc9068Validator<N, ExtraClaims>
 {
-    fn validator_metadata(&self) -> ValidatorMetadata {
-        self.validator_metadata()
+    fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
+        self.validator_metadata(resource)
     }
 }
 

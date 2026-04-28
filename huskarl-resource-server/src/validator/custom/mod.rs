@@ -41,7 +41,6 @@ use crate::{
 pub struct CustomValidator<N: DpopNonceChecker, Claims = ()> {
     inner: ValidatorInner<N>,
     authorization_server: Option<String>,
-    audience: Option<String>,
     on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
@@ -58,12 +57,8 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     )]
     pub async fn new(
         /// Validation rules for the access token.
+        #[builder(field)]
         rules: AccessTokenValidationRules,
-        /// The expected audience value.
-        ///
-        /// Per RFC 7519, the `aud` claim is optional. When set, tokens that include an `aud`
-        /// claim must contain this value; tokens without `aud` are accepted.
-        audience: Option<String>,
         /// Allowed algorithms for access token signature verification.
         ///
         /// If `None`, any algorithm supported by the verifier is accepted.
@@ -116,7 +111,6 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         token_header: HeaderName,
         /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
         ///
-        /// Receives the [`ValidationOutcome`] and the audience string identifying this validator.
         /// Use this to record metrics, emit log events, or trigger alerts.
         on_validate: Option<Arc<dyn OnValidate>>,
     ) -> Result<Self, BoxedError> {
@@ -126,11 +120,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
 
         let jwt_validator = JwtValidator::builder()
             .verifier(jws_verifier)
-            .aud(
-                audience
-                    .as_deref()
-                    .map_or(ClaimCheck::NoCheck, ClaimCheck::if_present),
-            )
+            .aud(rules.aud)
             .maybe_allowed_algorithms(allowed_signing_algorithms)
             .typ(rules.typ)
             .iss(rules.iss)
@@ -156,7 +146,6 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
                 require_mtls,
             },
             authorization_server,
-            audience,
             on_validate,
             _phantom: PhantomData,
         })
@@ -212,6 +201,56 @@ impl<
         self.with_n_internal()
             .dpop_nonce_checker_internal(dpop_nonce_checker)
     }
+
+    /// Replaces all validation rules at once.
+    ///
+    /// Overrides any individual rule setters called earlier on this builder.
+    pub fn rules(mut self, rules: AccessTokenValidationRules) -> Self {
+        self.rules = rules;
+        self
+    }
+
+    /// Check the `typ` header. Defaults to no check.
+    pub fn token_type(mut self, typ: ClaimCheck) -> Self {
+        self.rules.typ = typ;
+        self
+    }
+
+    /// Check on the `iss` claim. Defaults to requiring presence.
+    pub fn issuer(mut self, iss: ClaimCheck) -> Self {
+        self.rules.iss = iss;
+        self
+    }
+
+    /// Check on the `aud` claim. Defaults to no check.
+    pub fn audience(mut self, aud: ClaimCheck) -> Self {
+        self.rules.aud = aud;
+        self
+    }
+
+    /// Require the `exp` claim to be present. Defaults to `true`.
+    pub fn require_exp(mut self, require_exp: bool) -> Self {
+        self.rules.require_exp = require_exp;
+        self
+    }
+
+    /// Require the `iat` claim to be present. Defaults to `true`.
+    pub fn require_iat(mut self, require_iat: bool) -> Self {
+        self.rules.require_iat = require_iat;
+        self
+    }
+
+    /// Check on the `sub` claim. Defaults to requiring presence.
+    pub fn subject(mut self, sub: ClaimCheck) -> Self {
+        self.rules.sub = sub;
+        self
+    }
+
+    /// Require the `jti` claim to be present. Defaults to `true`.
+    pub fn require_jti(mut self, require_jti: bool) -> Self {
+        self.rules.require_jti = require_jti;
+        self
+    }
 }
 
 impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static>
@@ -238,7 +277,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     /// Returns metadata describing how this validator is configured.
     ///
     /// See [`ProvideValidatorMetadata`] for use in generic contexts.
-    pub fn validator_metadata(&self) -> ValidatorMetadata {
+    pub fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         ValidatorMetadata {
             realm: None,
             authorization_servers: self.authorization_server.as_ref().map(|s| vec![s.clone()]),
@@ -248,7 +287,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
                 .allowed_signing_algorithms
                 .clone(),
             dpop_bound_access_tokens_required: Some(self.inner.dpop_binding_checker.required),
-            resource: self.audience.clone(),
+            resource: resource.map(|r| r.to_owned()),
             bearer_methods_supported: Some(vec!["header"]),
         }
     }
@@ -275,7 +314,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
                 Err(ValidateHeadersError::InvalidJwt { .. }) => ValidationOutcome::InvalidToken,
                 Err(ValidateHeadersError::Binding { .. }) => ValidationOutcome::BindingError,
             };
-            cb.on_validate(validation_outcome, self.audience.as_deref().unwrap_or(""));
+            cb.on_validate(validation_outcome);
         }
 
         result
@@ -285,8 +324,8 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
 impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     ProvideValidatorMetadata for CustomValidator<N, Claims>
 {
-    fn validator_metadata(&self) -> ValidatorMetadata {
-        self.validator_metadata()
+    fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
+        self.validator_metadata(resource)
     }
 }
 
@@ -294,6 +333,11 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
 ///
 /// Used with [`CustomValidator`] to opt out of strict RFC 9068
 /// validation. Boolean checks default to `true`; claim checks default to `NoCheck`.
+///
+/// When using [`CustomValidator::builder`] or [`CustomValidator::builder_from_metadata`],
+/// all rules default to the values shown below. Use the individual rule setters on the
+/// builder (e.g., `.require_jti(false)`, `.issuer(ClaimCheck::NoCheck)`) to customize, or
+/// pass a complete `AccessTokenValidationRules` via `.rules(...)`.
 #[derive(Debug, Clone, Builder)]
 #[allow(clippy::should_implement_trait)]
 pub struct AccessTokenValidationRules {
@@ -303,6 +347,9 @@ pub struct AccessTokenValidationRules {
     /// Check on the `iss` claim. Defaults to requiring presence.
     #[builder(default = ClaimCheck::Present)]
     pub(super) iss: ClaimCheck,
+    /// Check on the `aud` claim. Defaults to no check.
+    #[builder(default)]
+    pub(super) aud: ClaimCheck,
     /// Require the `exp` claim to be present.
     #[builder(default = true)]
     pub(super) require_exp: bool,
@@ -315,4 +362,10 @@ pub struct AccessTokenValidationRules {
     /// Require the `jti` claim to be present.
     #[builder(default = true)]
     pub(super) require_jti: bool,
+}
+
+impl Default for AccessTokenValidationRules {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }

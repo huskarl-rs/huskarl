@@ -41,28 +41,30 @@ impl ValidationOutcome {
 /// Implement this trait (or use a closure) to observe validation outcomes — for
 /// example to record metrics, emit structured log events, or trigger alerts.
 ///
+/// Any context needed to identify the validator (resource name, machine ID, etc.)
+/// should be captured by the implementation itself.
+///
 /// # Example
 ///
 /// ```rust,no_run
 /// # use std::sync::Arc;
 /// # use huskarl_resource_server::validator::observe::{OnValidate, ValidationOutcome};
-/// let observer: Arc<dyn OnValidate> = Arc::new(|outcome: ValidationOutcome, resource: &str| {
+/// let resource = "my-api";
+/// let observer: Arc<dyn OnValidate> = Arc::new(move |outcome: ValidationOutcome| {
 ///     metrics::counter!(
 ///         "my.token.validate",
-///         "resource" => resource.to_owned(),
+///         "resource" => resource,
 ///         "outcome" => outcome.as_str(),
 ///     ).increment(1);
 /// });
 /// ```
 pub trait OnValidate: MaybeSendSync {
     /// Called after each call to `validate_request`.
-    ///
-    /// `resource` identifies the validator instance — typically the audience or client ID.
-    fn on_validate(&self, outcome: ValidationOutcome, resource: &str);
+    fn on_validate(&self, outcome: ValidationOutcome);
 }
 
-impl<F: Fn(ValidationOutcome, &str) + MaybeSendSync> OnValidate for F {
-    fn on_validate(&self, outcome: ValidationOutcome, resource: &str) {
-        self(outcome, resource)
+impl<F: Fn(ValidationOutcome) + MaybeSendSync> OnValidate for F {
+    fn on_validate(&self, outcome: ValidationOutcome) {
+        self(outcome)
     }
 }

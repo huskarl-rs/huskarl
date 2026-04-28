@@ -33,7 +33,8 @@ pub struct ValidatorMetadata {
     pub dpop_bound_access_tokens_required: Option<bool>,
     /// The resource server's identifier URI.
     ///
-    /// Taken from the configured audience value when known. Maps to `resource` in RFC 9728 metadata.
+    /// Provided by the caller to identify this specific resource instance. Maps to `resource` in
+    /// RFC 9728 metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     /// Supported methods for presenting Bearer tokens (RFC 6750).
@@ -200,5 +201,8 @@ impl ValidatorMetadata {
 /// Metadata document (RFC 9728).
 pub trait ProvideValidatorMetadata {
     /// Returns metadata describing how this validator is configured.
-    fn validator_metadata(&self) -> ValidatorMetadata;
+    ///
+    /// The resource is the URL of the protected resource.
+    ///
+    fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata;
 }
