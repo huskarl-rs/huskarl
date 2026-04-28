@@ -4,13 +4,11 @@ members = ["huskarl", "huskarl-core", "huskarl-macros", "huskarl-resource-server
 exclude = ["integration"]
 
 [workspace.dependencies]
-huskarl = { version = "0.3" }
-huskarl-core = { version = "0.2" }
+huskarl-core = { version = "0.3" }
 huskarl-macros = { version = "0.1" }
-huskarl-resource-server = { version = "0.2" }
-huskarl-reqwest = { version = "0.2" }
-huskarl-crypto-native = { version = "0.3" }
-huskarl-crypto-webcrypto = { version = "0.2" }
+huskarl-reqwest = { version = "0.3" }
+huskarl-crypto-native = { version = "0.4" }
+huskarl-crypto-webcrypto = { version = "0.3" }
 
 bon = { version = "3.9", default-features = false, features = [
   "experimental-generics-setters",

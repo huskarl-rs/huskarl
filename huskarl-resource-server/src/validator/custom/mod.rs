@@ -1,6 +1,6 @@
 //! Custom access token validator builder.
 
-use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use crate::{
     core::{
@@ -38,7 +38,7 @@ use crate::{
 /// Use [`AccessTokenValidationRules`] to configure which claims are required and how
 /// they are validated. For RFC 9068-compliant authorization servers, prefer
 /// [`crate::validator::rfc9068::Rfc9068Validator`].
-pub struct CustomValidator<N: DpopNonceChecker, Claims = HashMap<String, serde_json::Value>> {
+pub struct CustomValidator<N: DpopNonceChecker, Claims = ()> {
     inner: ValidatorInner<N>,
     authorization_server: Option<String>,
     audience: Option<String>,

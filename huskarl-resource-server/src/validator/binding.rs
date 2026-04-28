@@ -211,10 +211,7 @@ impl<N: DpopNonceChecker> DPoPBindingChecker<N> {
             .await
             .context(InvalidProofSnafu)?;
 
-        let proof_nonce = validated_proof
-            .claims
-            .as_ref()
-            .and_then(|p| p.nonce.as_deref());
+        let proof_nonce = validated_proof.claims.nonce.as_deref();
 
         let nonce_check = match self.dpop_nonce_checker.as_ref() {
             Some(c) => c.check_nonce(proof_nonce).await,
@@ -233,9 +230,9 @@ impl<N: DpopNonceChecker> DPoPBindingChecker<N> {
         let access_token_hash = hash_access_token_for_dpop(access_token.expose_secret());
 
         match (
-            validated_proof.claims.as_ref().and_then(|c| c.htm.as_ref()),
-            validated_proof.claims.as_ref().and_then(|c| c.htu.as_ref()),
-            validated_proof.claims.as_ref().and_then(|c| c.ath.as_ref()),
+            validated_proof.claims.htm.as_ref(),
+            validated_proof.claims.htu.as_ref(),
+            validated_proof.claims.ath.as_ref(),
         ) {
             (None, _, _) => return MissingProofClaimSnafu { claim: "htm" }.fail(),
             (_, None, _) => return MissingProofClaimSnafu { claim: "htu" }.fail(),
