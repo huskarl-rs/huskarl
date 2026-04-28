@@ -409,7 +409,13 @@ impl JwtValidator {
     ) -> Result<ValidatedJwt<C>, JwtValidationError> {
         let parsed_jwt = parse_compact_jws::<(), serde_json::Value>(token).context(ParseSnafu)?;
         let validated = self.validate_parsed_jws(parsed_jwt).await?;
-        validated.try_map_claims(|value| serde_json::from_value(value).context(ExtraClaimsSnafu))
+        validated.try_map_claims(|value| {
+            if std::any::TypeId::of::<C>() == std::any::TypeId::of::<()>() {
+                serde_json::from_value(serde_json::Value::Null).context(ExtraClaimsSnafu)
+            } else {
+                serde_json::from_value(value).context(ExtraClaimsSnafu)
+            }
+        })
     }
 }
 

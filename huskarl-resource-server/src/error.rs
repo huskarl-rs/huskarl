@@ -253,9 +253,9 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
                 Some("The access token 'jti' claim value was previously seen".to_string())
             }
             E::JtiCheck { .. } => None,
-            E::ExtraClaims { .. } => Some(
-                "The access token does not contain the required claims".to_string(),
-            ),
+            E::ExtraClaims { .. } => {
+                Some("The access token does not contain the required claims".to_string())
+            }
         }
     }
 }
