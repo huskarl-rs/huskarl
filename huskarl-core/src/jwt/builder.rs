@@ -9,7 +9,7 @@ use crate::{
     crypto::signer::JwsSigner,
     jwk::PublicJwk,
     jwt::{
-        builder::jwt_builder::{SetExtraClaims, SetExtraHeaders},
+        builder::jwt_builder::{SetClaims, SetExtraHeaders},
         structure::{JwtClaims, JwtHeader},
     },
     platform::{Duration, SystemTime, SystemTimeError},
@@ -27,10 +27,10 @@ use crate::{
     start_fn(vis = "", name = "builder_internal"),
     generics(setters(name = "with_{}"))
 )]
-pub struct Jwt<'a, ExtraHeaders, ExtraClaims>
+pub struct Jwt<'a, ExtraHeaders = (), Claims = ()>
 where
     ExtraHeaders: Serialize + Clone,
-    ExtraClaims: Serialize + Clone,
+    Claims: Serialize + Clone,
 {
     /// The type (`typ`) of the JWT.
     #[builder(default = "JWT", into)]
@@ -58,9 +58,9 @@ where
     /// Extra key/value pairs in the JWT protected header not included above.
     #[builder(setters(vis = "", name = "extra_headers_internal"))]
     pub extra_headers: Option<ExtraHeaders>,
-    /// Extra key/value pairs in the JWT claims not included above.
-    #[builder(setters(vis = "", name = "extra_claims_internal"))]
-    pub extra_claims: Option<ExtraClaims>,
+    /// Additional claims beyond the registered JWT claim set.
+    #[builder(setters(vis = "", name = "claims_internal"))]
+    pub claims: Claims,
 }
 
 impl<'a> Jwt<'a, (), ()> {
@@ -70,17 +70,16 @@ impl<'a> Jwt<'a, (), ()> {
     }
 }
 
-impl<'a, ExtraHeaders, ExtraClaims, S: jwt_builder::State>
-    JwtBuilder<'a, ExtraHeaders, ExtraClaims, S>
+impl<'a, ExtraHeaders, Claims, S: jwt_builder::State> JwtBuilder<'a, ExtraHeaders, Claims, S>
 where
     ExtraHeaders: Serialize + Clone,
-    ExtraClaims: Serialize + Clone,
+    Claims: Serialize + Clone,
 {
     /// Sets a single audience value for the JWT.
     pub fn audience(
         self,
         audience: impl Into<String>,
-    ) -> JwtBuilder<'a, ExtraHeaders, ExtraClaims, jwt_builder::SetAudiences<S>>
+    ) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetAudiences<S>>
     where
         S::Audiences: jwt_builder::IsUnset,
     {
@@ -92,9 +91,7 @@ where
     /// # Panics
     ///
     /// This call panics if the reported time is before the epoch.
-    pub fn issued_now(
-        self,
-    ) -> JwtBuilder<'a, ExtraHeaders, ExtraClaims, jwt_builder::SetIssuedAt<S>>
+    pub fn issued_now(self) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetIssuedAt<S>>
     where
         S::IssuedAt: jwt_builder::IsUnset,
     {
@@ -109,12 +106,7 @@ where
     pub fn issued_now_expires_after(
         self,
         after: Duration,
-    ) -> JwtBuilder<
-        'a,
-        ExtraHeaders,
-        ExtraClaims,
-        jwt_builder::SetExpiration<jwt_builder::SetIssuedAt<S>>,
-    >
+    ) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetExpiration<jwt_builder::SetIssuedAt<S>>>
     where
         S::IssuedAt: jwt_builder::IsUnset,
         S::Expiration: jwt_builder::IsUnset,
@@ -123,20 +115,17 @@ where
         self.issued_at(now).expiration(now + after)
     }
 
-    /// Sets extra claims for the JWT, replacing the current extra-claims type parameter.
-    pub fn extra_claims<E2>(self, claims: E2) -> JwtBuilder<'a, ExtraHeaders, E2, SetExtraClaims<S>>
+    /// Sets additional claims for the JWT, replacing the current claims type parameter.
+    pub fn claims<E2>(self, claims: E2) -> JwtBuilder<'a, ExtraHeaders, E2, SetClaims<S>>
     where
         E2: Serialize + Clone,
-        S::ExtraClaims: jwt_builder::IsUnset,
+        S::Claims: jwt_builder::IsUnset,
     {
-        self.with_extra_claims::<E2>().extra_claims_internal(claims)
+        self.with_claims::<E2>().claims_internal(claims)
     }
 
     /// Sets extra headers for the JWT, replacing the current extra-headers type parameter.
-    pub fn extra_headers<E2>(
-        self,
-        headers: E2,
-    ) -> JwtBuilder<'a, E2, ExtraClaims, SetExtraHeaders<S>>
+    pub fn extra_headers<E2>(self, headers: E2) -> JwtBuilder<'a, E2, Claims, SetExtraHeaders<S>>
     where
         E2: Serialize + Clone,
         S::ExtraHeaders: jwt_builder::IsUnset,
@@ -204,10 +193,10 @@ impl<SgnErr: crate::Error> crate::Error for JwsSerializationError<SgnErr> {
     }
 }
 
-impl<ExtraHeaders, ExtraClaims> Jwt<'_, ExtraHeaders, ExtraClaims>
+impl<ExtraHeaders, Claims> Jwt<'_, ExtraHeaders, Claims>
 where
     ExtraHeaders: Serialize + Clone,
-    ExtraClaims: Serialize + Clone,
+    Claims: Serialize + Clone,
 {
     /// Creates a string using the JWS compact serialization.
     ///
@@ -285,7 +274,7 @@ where
             nbf,
             jti: self.jti.as_deref().map(Cow::Borrowed),
             cnf: None,
-            extra_claims: self.extra_claims.as_ref().map(Cow::Borrowed),
+            claims: Cow::Borrowed(&self.claims),
         };
         let jwt_header_json = serde_json::to_vec(&jwt_header).context(EncodeHeaderSnafu)?;
         let jwt_header_b64 = BASE64_URL_SAFE_NO_PAD.encode(&jwt_header_json);

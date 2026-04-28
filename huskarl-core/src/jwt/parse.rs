@@ -101,9 +101,6 @@ mod tests {
         assert_eq!(jws.claims.exp, Some(1_300_819_380));
         assert_eq!(jws.claims.nbf, None);
         assert_eq!(jws.claims.jti, None);
-        assert_eq!(
-            jws.claims.extra_claims,
-            Some(Cow::Owned(TestClaims { is_root: true }))
-        );
+        assert_eq!(jws.claims.claims, Cow::Owned(TestClaims { is_root: true }));
     }
 }
