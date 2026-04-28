@@ -73,7 +73,7 @@ async fn test_rfc9068_validator() {
                 + std::time::Duration::from_secs(3600),
         )
         .jti(Some("token-456".to_string()))
-        .extra_claims(ExtraClaims {
+        .claims(ExtraClaims {
             client_id: "client-789".to_string(),
         })
         .build();
@@ -103,7 +103,7 @@ async fn test_rfc9068_validator() {
     assert_eq!(validated.issuer.as_deref().unwrap(), issuer);
     assert_eq!(validated.subject.as_deref().unwrap(), "user-123");
     assert_eq!(validated.audience, vec!["api://resource".to_string()]);
-    assert_eq!(validated.claims.as_ref().unwrap().client_id, "client-789");
+    assert_eq!(validated.claims.client_id, "client-789");
 
     jwks_mock.assert();
 }

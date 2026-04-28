@@ -1,6 +1,6 @@
 //! RFC 9068 JWT profile for OAuth 2.0 access tokens.
 
-use std::{collections::HashMap, marker::PhantomData, sync::Arc, time::Duration};
+use std::{marker::PhantomData, sync::Arc, time::Duration};
 
 use crate::{
     core::{
@@ -37,7 +37,7 @@ use crate::{
 ///
 /// Enforces all RFC 9068 §2.2 requirements: `typ`, `iss`, `exp`, `aud`,
 /// `sub`, `iat`, `jti`, and `client_id` (via deserialization into
-/// [`Rfc9068AccessTokenClaims`]). The `Extra` type parameter captures any
+/// [`Rfc9068AccessTokenClaims`]). The `Claims` type parameter captures any
 /// additional claims your authorization server includes beyond the standard set.
 ///
 /// For authorization servers that do not issue RFC 9068-compliant tokens, use
@@ -262,10 +262,10 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     }
 }
 
-impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static>
-    AccessTokenValidator for Rfc9068Validator<N, Extra>
+impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static>
+    AccessTokenValidator for Rfc9068Validator<N, ExtraClaims>
 {
-    type Claims = Rfc9068AccessTokenClaims<Extra>;
+    type Claims = Rfc9068AccessTokenClaims<ExtraClaims>;
     type Error = ValidateHeadersError;
 
     async fn validate_request(
@@ -280,8 +280,8 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + MaybeSendSy
     }
 }
 
-impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
-    ProvideValidatorMetadata for Rfc9068Validator<N, Extra>
+impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + 'static>
+    ProvideValidatorMetadata for Rfc9068Validator<N, ExtraClaims>
 {
     fn validator_metadata(&self) -> ValidatorMetadata {
         self.validator_metadata()
@@ -296,14 +296,14 @@ impl<N: DpopNonceChecker, Extra: for<'de> Deserialize<'de> + Clone + 'static>
 /// — it is not issuing RFC 9068-compliant tokens. In that case, use
 /// [`crate::validator::custom::CustomValidator`] with a claims type suited to your AS.
 ///
-/// `Extra` captures any additional claims beyond the RFC 9068 standard set.
+/// `ExtraClaims` captures any additional claims beyond the RFC 9068 standard set.
 /// RFC 9068 §2.2.3.1 describes `groups`, `roles`, and `entitlements` claims and
 /// recommends a specific encoding for them, but does not make it mandatory.
-/// Therefore, you should use the `Extra` type parameter to capture these claims
+/// Therefore, you should use the `ExtraClaims` type parameter to capture these claims
 /// in whatever shape your authorization server emits.
 #[derive(Debug, Deserialize, Clone)]
-#[serde(bound(deserialize = "Extra: for<'d> Deserialize<'d>"))]
-pub struct Rfc9068AccessTokenClaims<Extra = HashMap<String, serde_json::Value>> {
+#[serde(bound(deserialize = "ExtraClaims: for<'d> Deserialize<'d>"))]
+pub struct Rfc9068AccessTokenClaims<ExtraClaims = ()> {
     /// The client identifier for the OAuth 2.0 client that requested this token.
     ///
     /// Required by RFC 9068 §2.2. Deserialization of this claims type will fail
@@ -321,5 +321,5 @@ pub struct Rfc9068AccessTokenClaims<Extra = HashMap<String, serde_json::Value>> 
     pub scope: Option<String>,
     /// Additional claims beyond the RFC 9068 standard set.
     #[serde(flatten)]
-    pub extra: Option<Extra>,
+    pub extra_claims: ExtraClaims,
 }

@@ -55,7 +55,7 @@ pub struct ValidationResult<C, E> {
 ///
 /// Returned by [`super::AccessTokenValidator::validate_request`].
 #[derive(Debug)]
-pub struct ValidatedRequest<C> {
+pub struct ValidatedRequest<Claims> {
     /// The issuer of the token, if present.
     pub issuer: Option<String>,
     /// The subject of the token, if present.
@@ -73,8 +73,8 @@ pub struct ValidatedRequest<C> {
     /// Binds the token to a DPoP key (`jkt`, RFC 9449) or mTLS certificate
     /// (`x5t#S256`, RFC 8705).
     pub cnf: Option<ConfirmationClaim>,
-    /// The claims of the token, if present.
-    pub claims: Option<C>,
+    /// Additional claims beyond the registered token claim set.
+    pub claims: Claims,
     /// Raw introspection JWT (RFC 9701), if the authorization server returned one.
     ///
     /// Populated only when using [`crate::validator::introspection::IntrospectionValidator`] and the

@@ -52,7 +52,7 @@ impl<S: JwsSignerSelector> Jar for S {
             .issuer(authorization_payload.client_id)
             .audience(audience)
             .issued_now_expires_after(Duration::from_mins(1))
-            .extra_claims(authorization_payload)
+            .claims(authorization_payload)
             .build()
             .to_jws_compact(&self.select_signer())
             .await

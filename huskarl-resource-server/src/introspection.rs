@@ -8,7 +8,6 @@ use bytes::Bytes;
 use http::{HeaderValue, Method, Request, StatusCode};
 use serde::Deserialize;
 use serde::Deserializer;
-use snafu::OptionExt as _;
 use snafu::{ResultExt as _, Snafu, ensure};
 
 use crate::core::BoxedError;
@@ -224,12 +223,10 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
                     .await
                     .context(JwtResponseSnafu)?;
 
-                let inner = validated
-                    .claims
-                    .map(|c| c.token_introspection)
-                    .context(MissingIntrospectionClaimSnafu)?;
-
-                (inner, Some(jwt_str.to_owned()))
+                (
+                    validated.claims.token_introspection,
+                    Some(jwt_str.to_owned()),
+                )
             } else {
                 let response: IntrospectionResponse<Claims> =
                     serde_json::from_slice(&body).context(ParseJsonResponseSnafu)?;
@@ -273,7 +270,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
             issued_at,
             expiration,
             cnf: introspection.cnf,
-            claims: introspection.extra,
+            claims: introspection.claims,
             introspection_jwt,
         })
     }
@@ -281,10 +278,10 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
 
 /// RFC 7662 §2.2 introspection response.
 ///
-/// The `Extra` type parameter captures any additional fields your authorization server
+/// The `Claims` type parameter captures any additional fields your authorization server
 /// includes beyond the standard set.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct IntrospectionResponse<Extra> {
+pub(crate) struct IntrospectionResponse<Claims = ()> {
     /// Indicates whether the token is active.
     pub active: bool,
     /// The issuer of the token, if present.
@@ -304,16 +301,16 @@ pub(crate) struct IntrospectionResponse<Extra> {
     pub jti: Option<String>,
     /// The key confirmation claim (`cnf`, RFC 7800), if present.
     pub cnf: Option<ConfirmationClaim>,
-    /// Any additional claims from the introspection response.
+    /// Additional claims beyond the standard introspection response fields.
     #[serde(flatten)]
-    pub extra: Option<Extra>,
+    pub claims: Claims,
 }
 
 /// RFC 9701 §4 outer JWT claims wrapping an introspection response.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct TokenIntrospectionJwtClaims<Extra: Clone> {
+pub(crate) struct TokenIntrospectionJwtClaims<Claims: Clone> {
     /// The RFC 7662 introspection response embedded as a claim.
-    pub token_introspection: IntrospectionResponse<Extra>,
+    pub token_introspection: IntrospectionResponse<Claims>,
 }
 
 fn deserialize_optional_audience<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -423,9 +420,6 @@ pub enum IntrospectionCallError<
     /// The JWT introspection response body is not valid UTF-8.
     #[snafu(display("JWT introspection response body is not valid UTF-8"))]
     MalformedJwtResponseBody,
-    /// The validated JWT introspection response is missing the `token_introspection` claim.
-    #[snafu(display("JWT introspection response is missing the token_introspection claim"))]
-    MissingIntrospectionClaim,
     /// The introspection response contains a timestamp that cannot be represented as a Unix timestamp.
     #[snafu(display("Introspection response field '{field}' has invalid timestamp: {value}"))]
     InvalidTimestamp {
@@ -458,7 +452,6 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
             | Self::UnexpectedJwtResponse
             | Self::JwtResponse { .. }
             | Self::MalformedJwtResponseBody
-            | Self::MissingIntrospectionClaim
             | Self::InvalidTimestamp { .. } => {
                 TokenValidationError::Server(http::StatusCode::INTERNAL_SERVER_ERROR)
             }
@@ -477,7 +470,6 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
             | Self::UnexpectedJwtResponse
             | Self::JwtResponse { .. }
             | Self::MalformedJwtResponseBody
-            | Self::MissingIntrospectionClaim
             | Self::InvalidTimestamp { .. } => None,
         }
     }

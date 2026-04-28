@@ -170,10 +170,8 @@ impl IdTokenValidator {
 
         // OIDC Core §3.1.3.7 step 11: if nonce was sent, it MUST be present and match.
         ensure!(
-            expected_nonce.is_none_or(|expected| validated_jwt
-                .claims
-                .as_ref()
-                .is_some_and(|claims| claims.nonce.as_deref() == Some(expected))),
+            expected_nonce
+                .is_none_or(|expected| validated_jwt.claims.nonce.as_deref() == Some(expected)),
             NonceMismatchSnafu
         );
 
@@ -181,14 +179,11 @@ impl IdTokenValidator {
         // time since last authentication MUST NOT exceed max_age.
         if let Some(max_age) = self.max_age {
             ensure!(
-                validated_jwt
-                    .claims
-                    .as_ref()
-                    .is_none_or(|claims| claims.auth_time.is_some()),
+                validated_jwt.claims.auth_time.is_some(),
                 AuthTimeMissingSnafu
             );
 
-            if let Some(auth_time) = validated_jwt.claims.as_ref().and_then(|c| c.auth_time) {
+            if let Some(auth_time) = validated_jwt.claims.auth_time {
                 let auth_at = SystemTime::UNIX_EPOCH + Duration::from_secs(auth_time);
                 let now = SystemTime::now();
                 ensure!(
@@ -204,7 +199,7 @@ impl IdTokenValidator {
 
         // OIDC Core §3.1.3.7 step 5: if azp is present, it MUST contain our client_id.
         if let Some(expected_azp) = &self.expected_azp
-            && let Some(azp) = validated_jwt.claims.as_ref().and_then(|c| c.azp.as_ref())
+            && let Some(azp) = validated_jwt.claims.azp.as_ref()
         {
             ensure!(
                 azp == expected_azp,
@@ -217,7 +212,7 @@ impl IdTokenValidator {
 
         // OIDC Core §3.1.3.7 step 12: if acr was requested, check the asserted value.
         if let Some(required_acr) = &self.required_acr {
-            match validated_jwt.claims.as_ref().and_then(|c| c.acr.as_ref()) {
+            match validated_jwt.claims.acr.as_ref() {
                 Some(acr) => ensure!(
                     acr == required_acr,
                     AcrMismatchSnafu {
