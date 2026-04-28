@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-### Changes
+### [0.4.0] - 2026-04-28
 
 - Breaking: add an ExtraClaims error when parsing a JWT, which is returned if the custom claim type cannot be parsed into.
 
