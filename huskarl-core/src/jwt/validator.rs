@@ -385,10 +385,10 @@ impl JwtValidator {
                 .map(|exp| SystemTime::UNIX_EPOCH + Duration::from_secs(exp)),
             jti: parsed_jwt.claims.jti.map(Into::into),
             cnf: parsed_jwt.claims.cnf,
-            claims: parsed_jwt.claims.extra_claims.map(|c| match c {
+            claims: match parsed_jwt.claims.claims {
                 std::borrow::Cow::Borrowed(c) => c.clone(),
                 std::borrow::Cow::Owned(c) => c,
-            }),
+            },
         })
     }
 
@@ -408,7 +408,7 @@ impl JwtValidator {
 
 /// A validated JWT, containing the parsed claims and other metadata.
 #[derive(Debug)]
-pub struct ValidatedJwt<C> {
+pub struct ValidatedJwt<Claims> {
     /// The issuer of the JWT, if present.
     pub issuer: Option<String>,
     /// The subject of the JWT, if present.
@@ -426,15 +426,15 @@ pub struct ValidatedJwt<C> {
     /// Binds the token to a `DPoP` key (`jkt`, RFC 9449) or mTLS certificate
     /// (`x5t#S256`, RFC 8705). Independent of the token profile and claims type.
     pub cnf: Option<ConfirmationClaim>,
-    /// The claims of the JWT, if present.
-    pub claims: Option<C>,
+    /// Additional claims beyond the registered JWT claim set.
+    pub claims: Claims,
 }
 
-impl<C> ValidatedJwt<C> {
+impl<Claims> ValidatedJwt<Claims> {
     /// Maps the claims of the JWT using the provided function.
     pub fn map_claims<C1, F>(self, f: F) -> ValidatedJwt<C1>
     where
-        F: FnOnce(C) -> C1,
+        F: FnOnce(Claims) -> C1,
     {
         ValidatedJwt {
             issuer: self.issuer,
@@ -444,7 +444,7 @@ impl<C> ValidatedJwt<C> {
             issued_at: self.issued_at,
             expiration: self.expiration,
             cnf: self.cnf,
-            claims: self.claims.map(f),
+            claims: f(self.claims),
         }
     }
 }

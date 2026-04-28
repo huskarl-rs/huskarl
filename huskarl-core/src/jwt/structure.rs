@@ -214,8 +214,8 @@ pub struct JwtHeader<'a, ExtraHeaders: Clone> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "ExtraClaims: serde::de::Deserialize<'de>"))]
-pub struct JwtClaims<'a, ExtraClaims: Clone> {
+#[serde(bound(deserialize = "Claims: serde::de::Deserialize<'de>"))]
+pub struct JwtClaims<'a, Claims: Clone> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iss: Option<Cow<'a, str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,6 +250,7 @@ pub struct JwtClaims<'a, ExtraClaims: Clone> {
     /// Key confirmation claim (RFC 7800). Binds the token to a `DPoP` key or mTLS certificate.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cnf: Option<ConfirmationClaim>,
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub extra_claims: Option<Cow<'a, ExtraClaims>>,
+    /// Additional claims beyond the registered JWT claim set.
+    #[serde(flatten)]
+    pub claims: Cow<'a, Claims>,
 }

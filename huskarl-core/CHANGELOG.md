@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changes
+
+- Breaking: makes claims a non-optional type, renames the field to `claims`, type to `Claims`.
+
 ## [0.2.0] - 2026-04-06
 
 ### Additions

@@ -107,6 +107,7 @@ impl<Sgn: JwsSignerSelector> ClientAuthentication for JwtBearer<Sgn> {
             .issuer(client_id)
             .subject(self.subject.as_deref().unwrap_or(client_id))
             .issued_now_expires_after(self.expires_after)
+            .claims(())
             .build();
 
         Ok(AuthenticationParams::builder()

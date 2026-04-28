@@ -177,7 +177,7 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
         .typ("dpop+jwt")
         .issued_now_expires_after(Duration::from_mins(1))
         .jwk(signer.public_key_jwk().into_owned())
-        .extra_claims(extra_claims)
+        .claims(extra_claims)
         .build();
 
     jwt.to_jws_compact(signer).await.map(Some)
