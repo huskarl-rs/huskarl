@@ -394,6 +394,12 @@ impl JwtValidator {
 
     /// Validate a JWT token, returning a [`ValidatedJwt`] on success.
     ///
+    /// Uses two-phase parsing: the JWT is first parsed and validated structurally
+    /// (signature, standard claims), then the extra claims are deserialized into
+    /// the target type `C`. If the token is valid but does not contain the required
+    /// extra claims, returns [`JwtValidationError::ExtraClaims`] instead of
+    /// [`JwtValidationError::Parse`].
+    ///
     /// # Errors
     ///
     /// Returns a [`JwtValidationError`] if the token is invalid.
@@ -401,8 +407,9 @@ impl JwtValidator {
         &self,
         token: &str,
     ) -> Result<ValidatedJwt<C>, JwtValidationError> {
-        let parsed_jwt = parse_compact_jws::<(), _>(token).context(ParseSnafu)?;
-        self.validate_parsed_jws(parsed_jwt).await
+        let parsed_jwt = parse_compact_jws::<(), serde_json::Value>(token).context(ParseSnafu)?;
+        let validated = self.validate_parsed_jws(parsed_jwt).await?;
+        validated.try_map_claims(|value| serde_json::from_value(value).context(ExtraClaimsSnafu))
     }
 }
 
@@ -446,6 +453,27 @@ impl<Claims> ValidatedJwt<Claims> {
             cnf: self.cnf,
             claims: f(self.claims),
         }
+    }
+
+    /// Maps the claims of the JWT using a fallible function.
+    ///
+    /// # Errors
+    ///
+    /// Returns the eror of the mapper, if it fails.
+    pub fn try_map_claims<C1, E, F>(self, f: F) -> Result<ValidatedJwt<C1>, E>
+    where
+        F: FnOnce(Claims) -> Result<C1, E>,
+    {
+        Ok(ValidatedJwt {
+            issuer: self.issuer,
+            subject: self.subject,
+            audience: self.audience,
+            jti: self.jti,
+            issued_at: self.issued_at,
+            expiration: self.expiration,
+            cnf: self.cnf,
+            claims: f(self.claims)?,
+        })
     }
 }
 
@@ -527,5 +555,10 @@ pub enum JwtValidationError {
     JtiCheck {
         /// The underlying error.
         source: BoxedError,
+    },
+    /// The token is structurally valid but does not contain the required extra claims.
+    ExtraClaims {
+        /// The underlying deserialization error.
+        source: serde_json::Error,
     },
 }
