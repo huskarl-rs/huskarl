@@ -8,7 +8,7 @@ publish = false
 name = "huskarl_testkit"
 
 [dependencies]
-huskarl-core = { version = "0.3" }
+huskarl-core = { version = "0.4" }
 reqwest = { version = "0.13", features = ["json", "form"] }
 serde = { workspace = true }
 bon = { workspace = true }

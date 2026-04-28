@@ -409,7 +409,7 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
                         "The DPoP proof is missing the required '{claim}' claim"
                     )),
                     E::JtiNotUnique => Some("The DPoP proof jti has already been used".to_string()),
-                    E::JtiCheck { .. } => None,
+                    E::JtiCheck { .. } | E::ExtraClaims { .. } => None,
                 }
             }
             Self::MissingJwkHeader => Some("The DPoP proof is missing the JWK header".to_string()),
