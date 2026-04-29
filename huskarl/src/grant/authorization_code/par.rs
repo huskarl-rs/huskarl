@@ -36,12 +36,14 @@ pub(super) async fn make_par_call<C: HttpClient, D: AuthorizationServerDPoP>(
     auth_params: AuthenticationParams<'_>,
     payload: &ParBody<'_>,
     dpop: &D,
+    dpop_jkt: Option<&str>,
 ) -> Result<AuthorizationPushResponse, OAuth2FormError<C::Error, C::ResponseError, D::Error>> {
     OAuth2FormRequest::builder()
         .form(payload)
         .auth_params(auth_params)
         .uri(par_url.as_uri())
         .dpop(dpop)
+        .maybe_dpop_jkt(dpop_jkt)
         .build()
         .execute(http_client)
         .await

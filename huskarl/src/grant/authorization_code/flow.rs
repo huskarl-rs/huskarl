@@ -262,12 +262,14 @@ impl<
             None => par::ParBody::Expanded(Box::new(payload.clone())),
         };
 
+        let dpop_jkt = self.dpop.get_current_thumbprint();
         let par_response = par::make_par_call(
             http_client,
             effective_par_url,
             auth_params,
             &par_body,
             &self.dpop,
+            dpop_jkt.as_deref(),
         )
         .await
         .context(ParRequestSnafu)?;
