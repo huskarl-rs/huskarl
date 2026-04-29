@@ -100,6 +100,8 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
             &self.device_authorization_endpoint
         };
 
+        let dpop_jkt = self.dpop().get_current_thumbprint();
+
         let response: DeviceAuthorizationResponse = OAuth2FormRequest::builder()
             .form(&payload)
             .auth_params(
@@ -109,6 +111,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
             )
             .uri(effective_device_auth_endpoint.as_uri())
             .dpop(self.dpop())
+            .maybe_dpop_jkt(dpop_jkt.as_deref())
             .build()
             .execute(http_client)
             .await
