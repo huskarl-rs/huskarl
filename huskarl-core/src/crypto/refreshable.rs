@@ -73,17 +73,20 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     /// Concurrent callers are serialised — only one factory call runs at a time.
     /// If another task already refreshed while this one was waiting for the lock,
     /// the new value is adopted without a redundant fetch.
-    pub(crate) async fn refresh(&self) -> Result<(), BoxedError> {
+    ///
+    /// Returns `Ok(true)` if a new value was fetched by this call, or `Ok(false)`
+    /// if another task already refreshed concurrently.
+    pub(crate) async fn refresh(&self) -> Result<bool, BoxedError> {
         let cur = self.value.load_full();
         let _lock = self.refresh_lock.lock().await;
         if !Arc::ptr_eq(&self.value.load_full(), &cur) {
             // Another task already refreshed while we were waiting for the lock.
-            return Ok(());
+            return Ok(false);
         }
 
         let new_value = self.factory.call().await?;
         self.value.store(Arc::new(new_value));
-        Ok(())
+        Ok(true)
     }
 
     /// Returns a cheap guard reference to the current value.
@@ -223,7 +226,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     }
 
     /// Forces a refresh bypassing the scheduling policy, but still records the outcome.
-    pub(crate) async fn refresh(&self) -> Result<(), BoxedError> {
+    pub(crate) async fn refresh(&self) -> Result<bool, BoxedError> {
         let result = self.inner.refresh().await;
         self.record_refresh(result.is_ok());
         result

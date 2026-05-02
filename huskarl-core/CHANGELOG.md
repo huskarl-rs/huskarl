@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Adds RefreshableSigner/ScheduledRefreshSigner to allow JWS signers to be reloaded.
 
+### Changes
+
+- TTL for verifier refresh changed from 5 minutes to 1 hour.
+- RefreshingVerifier changed to ScheduledRefreshVerifier (with backwards compatible type alias for now).
+
 ## [0.4.1] - 2026-04-28
 
 ### Fixes

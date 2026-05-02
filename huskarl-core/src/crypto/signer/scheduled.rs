@@ -70,12 +70,14 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshSigner<S> {
 
     /// Forces a refresh bypassing the scheduling policy, but still records the outcome.
     ///
+    /// Returns `Ok(true)` if new key material was fetched by this call, or
+    /// `Ok(false)` if another task already refreshed concurrently.
+    ///
     /// # Errors
     ///
     /// Returns an error if the factory call fails.
     pub async fn refresh(&self) -> Result<bool, BoxedError> {
-        self.inner.refresh().await?;
-        Ok(true)
+        self.inner.refresh().await
     }
 }
 

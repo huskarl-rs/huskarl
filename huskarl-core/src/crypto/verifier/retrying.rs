@@ -11,7 +11,7 @@ use crate::{
 ///
 /// This is the single place in the verifier hierarchy where the refresh-and-retry loop lives.
 /// Wrap the root verifier with this type so that any composition underneath — a single
-/// [`RefreshingVerifier`](crate::crypto::verifier::RefreshingVerifier), a
+/// [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier), a
 /// [`MultiKeyVerifier`](crate::crypto::verifier::MultiKeyVerifier), or arbitrary nesting —
 /// gets one retry attempt without any component needing to implement it themselves.
 #[derive(Debug, Clone)]

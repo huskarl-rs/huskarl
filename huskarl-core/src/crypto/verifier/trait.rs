@@ -133,9 +133,9 @@ pub trait JwsVerifier: MaybeSendSync {
 
     /// Attempts to refresh the verifier's key material if warranted.
     ///
-    /// Called by [`MultiKeyVerifier`](crate::crypto::verifier::MultiKeyVerifier) when no key
-    /// matches an incoming token, giving refreshable verifiers a chance to reload before
-    /// verification is retried.
+    /// This can be called manually to force a key reload, or automatically by
+    /// [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier) when no key
+    /// matches an incoming token.
     ///
     /// Returns `true` if new key material was loaded (or was concurrently loaded by another
     /// task). Returns `false` if no refresh was needed, attempted, or successful. The default

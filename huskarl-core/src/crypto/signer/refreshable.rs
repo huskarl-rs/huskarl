@@ -59,12 +59,14 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> RefreshableSigner<S> {
     /// If another task already refreshed while this one was waiting for the lock,
     /// the new value is adopted without a redundant fetch.
     ///
+    /// Returns `Ok(true)` if new key material was fetched by this call, or
+    /// `Ok(false)` if another task already refreshed concurrently.
+    ///
     /// # Errors
     ///
     /// Returns an error if the factory call fails.
     pub async fn refresh(&self) -> Result<bool, crate::BoxedError> {
-        self.inner.refresh().await?;
-        Ok(true)
+        self.inner.refresh().await
     }
 }
 
