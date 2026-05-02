@@ -465,7 +465,7 @@ impl<Claims> ValidatedJwt<Claims> {
     ///
     /// # Errors
     ///
-    /// Returns the eror of the mapper, if it fails.
+    /// Returns the error of the mapper, if it fails.
     pub fn try_map_claims<C1, E, F>(self, f: F) -> Result<ValidatedJwt<C1>, E>
     where
         F: FnOnce(Claims) -> Result<C1, E>,
