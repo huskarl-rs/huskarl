@@ -60,7 +60,10 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> RefreshableVeri
     ///
     /// Returns `Ok(true)` if new key material was fetched by this call, or
     /// `Ok(false)` if another task already refreshed concurrently.
-    /// Returns `Err` if the factory call failed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the factory call fails.
     pub async fn refresh(&self) -> Result<bool, crate::BoxedError> {
         self.inner.refresh().await
     }
