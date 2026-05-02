@@ -7,7 +7,7 @@ use crate::{
     BoxedError, EndpointUrl,
     crypto::verifier::{
         BoxedJwsVerifier, CreateVerifierError, JwsVerifierFactory, JwsVerifierPlatform,
-        MultiKeyVerifier, RefreshingVerifier, RetryingVerifier,
+        MultiKeyVerifier, RetryingVerifier, ScheduledRefreshVerifier,
     },
     http::HttpClient,
     jwk::PublicJwks,
@@ -18,7 +18,7 @@ use crate::{
 /// with automatic periodic refresh and retry.
 ///
 /// This is an opinionated default stack: a [`MultiKeyVerifier`] wrapped in a
-/// [`RefreshingVerifier`] and a [`RetryingVerifier`] — keys are fetched from the JWKS
+/// [`ScheduledRefreshVerifier`] and a [`RetryingVerifier`] — keys are fetched from the JWKS
 /// endpoint on first use, refreshed automatically after the TTL expires, and a single retry
 /// is attempted when a key lookup misses after a successful refresh.
 ///
@@ -44,7 +44,7 @@ impl<C: HttpClient + Clone + 'static> JwsVerifierFactory for JwksSource<C> {
         };
 
         Box::pin(async move {
-            RefreshingVerifier::builder()
+            let refreshing = ScheduledRefreshVerifier::builder()
                 .factory(move || {
                     let client = client.clone();
                     let uri = uri.clone();
@@ -61,8 +61,8 @@ impl<C: HttpClient + Clone + 'static> JwsVerifierFactory for JwksSource<C> {
                     })
                 })
                 .build()
-                .await
-                .map(|v| BoxedJwsVerifier::new(RetryingVerifier::new(v)))
+                .await?;
+            Ok(BoxedJwsVerifier::new(RetryingVerifier::new(refreshing)))
         })
     }
 }
