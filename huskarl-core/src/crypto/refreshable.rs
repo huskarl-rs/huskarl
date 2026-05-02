@@ -15,11 +15,6 @@ use crate::{
 };
 
 /// Object-safe wrapper for a `MaybeSendSync` factory closure.
-///
-/// This trait exists because Rust only permits auto traits (`Send`, `Sync`) as additional
-/// bounds in a `dyn` type. By using `MaybeSendSync` as a supertrait of this named trait,
-/// `Box<dyn RefreshFactory<V>>` is valid on all platforms without extra bounds in the `dyn`
-/// position.
 pub(crate) trait RefreshFactory<V>: MaybeSendSync {
     fn call(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>>;
 }
@@ -34,11 +29,6 @@ where
 }
 
 /// A value that can be atomically refreshed by re-invoking a factory closure.
-///
-/// This is the pure **mechanism** layer — it knows how to atomically swap the inner
-/// value by re-invoking a factory closure. Concurrent refresh attempts are serialised
-/// so that only one factory call runs at a time; waiters that arrive while a refresh is
-/// in flight adopt the result.
 pub(crate) struct Refreshable<V> {
     value: ArcSwap<V>,
     factory: Box<dyn RefreshFactory<V>>,
@@ -115,10 +105,6 @@ struct RefreshTimestamps {
 }
 
 /// A [`Refreshable`] combined with TTL, failure-backoff, and rate-limiting policy.
-///
-/// This is the shared **policy + mechanism** layer used by both
-/// [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier) and
-/// [`ScheduledRefreshSigner`](crate::crypto::signer::ScheduledRefreshSigner).
 pub(crate) struct ScheduledRefreshable<V> {
     inner: Refreshable<V>,
     ttl: Duration,
