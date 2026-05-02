@@ -8,6 +8,7 @@
 //! are provided externally.
 
 pub mod cipher;
+pub(crate) mod refreshable;
 pub mod signer;
 pub mod verifier;
 
