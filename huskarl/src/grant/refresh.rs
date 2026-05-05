@@ -2,6 +2,127 @@
 //!
 //! Used to obtain a new access token using a previously issued refresh token,
 //! without requiring the user to re-authenticate.
+//!
+//! # Usage
+//!
+//! ## 1. Set up your HTTP client
+//!
+//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//!
+//! ```rust
+//! use huskarl_reqwest::ReqwestClient;
+//! use huskarl_reqwest::mtls::NoMtls;
+//!
+//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
+//! let client: ReqwestClient = ReqwestClient::builder()
+//!     .mtls(NoMtls)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 2. Set up client authentication (if not using `to_refresh_grant`).
+//!
+//! When constructing a refresh grant directly (steps 3b/3c), client authentication
+//! must be provided. Any `ClientAuthentication` implementation can be used.
+//! See the client credentials grant for an example using `ClientSecret`.
+//!
+//! ## 3a. Create a refresh grant from an existing grant (most common)
+//!
+//! The most common way to create a refresh grant is from another grant that has
+//! already been configured. This inherits the same client authentication and `DPoP`
+//! settings without needing to repeat them.
+//!
+//! ```rust
+//! use huskarl::prelude::*;
+//! use huskarl::grant::client_credentials::ClientCredentialsGrant;
+//! use huskarl::grant::refresh::RefreshGrant;
+//! use huskarl::core::client_auth::NoAuth;
+//! use huskarl::core::dpop::NoDPoP;
+//! # fn example(grant: &ClientCredentialsGrant<NoAuth, NoDPoP>) {
+//! let refresh_grant: RefreshGrant<NoAuth, NoDPoP> = grant.to_refresh_grant();
+//! # }
+//! ```
+//!
+//! ## 3b. Set up the grant directly with authorization server metadata
+//!
+//! ```rust
+//! use huskarl::core::server_metadata::AuthorizationServerMetadata;
+//! use huskarl::grant::refresh::RefreshGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::core::secrets::EnvVarSecret;
+//! use huskarl::core::secrets::encodings::StringEncoding;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
+//! #
+//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//!
+//! let metadata = AuthorizationServerMetadata::builder()
+//!     .issuer("https://my-issuer")
+//!     .http_client(&client)
+//!     .build()
+//!     .await?;
+//!
+//! let refresh_grant: RefreshGrant<ClientSecret<EnvVarSecret>, NoDPoP> =
+//!     RefreshGrant::builder_from_metadata(&metadata)
+//!         .client_id("client_id")
+//!         .client_auth(client_auth)
+//!         .dpop(NoDPoP)
+//!         .build();
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3c. Alternative: Set up the grant without metadata
+//!
+//! ```rust
+//! use huskarl::grant::refresh::RefreshGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::core::secrets::EnvVarSecret;
+//! use huskarl::core::secrets::encodings::StringEncoding;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! #
+//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//!
+//! let refresh_grant: RefreshGrant<ClientSecret<EnvVarSecret>, NoDPoP> = RefreshGrant::builder()
+//!     .token_endpoint("https://my-server/token")?
+//!     .client_id("client_id")
+//!     .client_auth(client_auth)
+//!     .dpop(NoDPoP)
+//!     .build();
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 4. Exchange the refresh token for a new access token
+//!
+//! ```rust
+//! use huskarl::prelude::*;
+//! use huskarl::grant::refresh::{RefreshGrant, RefreshGrantParameters};
+//! use huskarl::core::client_auth::NoAuth;
+//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::token::{AccessToken, RefreshToken};
+//! # async fn exchange(
+//! #     client: &huskarl_reqwest::ReqwestClient,
+//! #     refresh_grant: &RefreshGrant<NoAuth, NoDPoP>,
+//! #     refresh_token: RefreshToken,
+//! # ) -> Result<(), Box<dyn std::error::Error>> {
+//!
+//! let params = RefreshGrantParameters::refresh_token(refresh_token);
+//! let response = refresh_grant.exchange(client, params).await?;
+//! let token: &AccessToken = response.access_token();
+//! # Ok(())
+//! # }
+//! ```
 
 use bon::Builder;
 use serde::Serialize;
@@ -21,6 +142,8 @@ use crate::{
 /// after an access token expires, by asking the authorization server
 /// for a new token. This offers the opportunity for the authorization
 /// server to consider if continued access is appropriate.
+///
+/// See the [module documentation][crate::grant::refresh] for a usage guide.
 #[huskarl_macros::grant]
 #[derive(Debug, Clone, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]

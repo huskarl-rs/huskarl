@@ -1,6 +1,142 @@
 //! Client credentials grant (RFC 6749 §4.4).
 //!
 //! Used when the client is acting on its own behalf, not on behalf of a user.
+//!
+//! # Usage
+//!
+//! ## 1. Set up your HTTP client
+//!
+//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//!
+//! ```rust
+//! use huskarl_reqwest::ReqwestClient;
+//! use huskarl_reqwest::mtls::NoMtls;
+//!
+//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
+//! let client: ReqwestClient = ReqwestClient::builder()
+//!     .mtls(NoMtls)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 2. Set up client authentication (mandatory for client credentials).
+//!
+//! This example shows the use of a client secret as credentials, but any `ClientAuthentication`
+//! implementation can be used.
+//!
+//! ```rust
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::secrets::EnvVarSecret;
+//! use huskarl::core::secrets::encodings::StringEncoding;
+//!
+//! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
+//! let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3a. Set up the grant with authorization server metadata
+//!
+//! ```rust
+//! use huskarl::core::server_metadata::AuthorizationServerMetadata;
+//! use huskarl::grant::client_credentials::ClientCredentialsGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::dpop::NoDPoP;
+//! # use huskarl::core::http::HttpClient;
+//! # use huskarl::core::secrets::EnvVarSecret;
+//! # use huskarl::core::secrets::encodings::StringEncoding;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
+//! #
+//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//!
+//! let metadata = AuthorizationServerMetadata::builder()
+//!     .issuer("https://my-issuer")
+//!     .http_client(&client)
+//!     .build()
+//!     .await?;
+//!
+//! let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> = ClientCredentialsGrant::builder_from_metadata(&metadata)
+//!     .client_id("client_id")
+//!     .client_auth(client_auth)
+//!     .dpop(NoDPoP)
+//!     .build();
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3b. Alternative: Set up the grant without metadata
+//!
+//! ```rust
+//! use huskarl::grant::client_credentials::ClientCredentialsGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::dpop::NoDPoP;
+//! # use huskarl::core::http::HttpClient;
+//! # use huskarl::core::secrets::EnvVarSecret;
+//! # use huskarl::core::secrets::encodings::StringEncoding;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
+//! #
+//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//!
+//! let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> = ClientCredentialsGrant::builder()
+//!     .token_endpoint("https://my-server/token")?
+//!     .client_id("client_id")
+//!     .client_auth(client_auth)
+//!     .dpop(NoDPoP)
+//!     .build();
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 4. Get an access token.
+//!
+//! ```rust
+//! use huskarl::prelude::*; // Imports OAuth2ExchangeGrant which defines the exchange call.
+//! use huskarl::grant::client_credentials::ClientCredentialsGrantParameters;
+//! use huskarl::token::AccessToken;
+//! # use huskarl::grant::client_credentials::ClientCredentialsGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! # use huskarl::core::dpop::NoDPoP;
+//! # use huskarl::core::http::HttpClient;
+//! # use huskarl::core::secrets::EnvVarSecret;
+//! # use huskarl::core::secrets::encodings::StringEncoding;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
+//! #
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
+//! #
+//! # let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> = ClientCredentialsGrant::builder()
+//! #     .token_endpoint("https://my-server/token")?
+//! #     .client_id("client_id")
+//! #     .client_auth(client_auth)
+//! #     .dpop(NoDPoP)
+//! #     .build();
+//!
+//! let params = ClientCredentialsGrantParameters::builder().scopes(vec!["read", "write"]).build();
+//! let response = grant.exchange(&client, params).await?;
+//! let token: &AccessToken = response.access_token();
+//!
+//! # Ok(())
+//! # }
+//! ```
 
 use bon::Builder;
 use serde::Serialize;
@@ -18,6 +154,8 @@ use crate::{
 /// This grant is used for machine-to-machine authentication where no user
 /// interaction is required. The client authenticates directly with the
 /// authorization server using its own credentials.
+///
+/// See the [module documentation][crate::grant::client_credentials] for a usage guide.
 #[huskarl_macros::grant]
 #[derive(Debug, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]

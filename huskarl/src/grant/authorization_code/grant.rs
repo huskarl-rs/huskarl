@@ -30,27 +30,7 @@ use crate::{
 
 /// The authorization code grant (RFC 6749 §4.1).
 ///
-/// # Examples
-///
-/// ## Simple flow example (public `OAuth2` client, no `DPoP`).
-///
-/// ```rust, no_run
-/// use huskarl::core::server_metadata::AuthorizationServerMetadata;
-/// use huskarl::grant::authorization_code::{AuthorizationCodeGrant, NoJar};
-/// use huskarl::core::client_auth::NoAuth;
-/// use huskarl::core::dpop::NoDPoP;
-///
-/// let metadata: AuthorizationServerMetadata = todo!();
-///
-/// let grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
-///     .unwrap()
-///     .client_id("my_client_id")
-///     .client_auth(NoAuth)
-///     .redirect_uri("https://redirect_url")
-///     .dpop(NoDPoP)
-///     .jar(NoJar)
-///     .build();
-/// ```
+/// See the [module documentation][crate::grant::authorization_code] for a usage guide.
 #[huskarl_macros::grant(vis(pub(super)))]
 #[derive(Clone)]
 pub struct AuthorizationCodeGrant<
