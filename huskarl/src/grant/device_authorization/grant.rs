@@ -29,6 +29,8 @@ use crate::{
 /// input capabilities. The device displays a code and a URL to the user, who
 /// then authorizes the device on a separate device with a browser. The client
 /// polls the token endpoint until the user completes authorization or the code expires.
+///
+/// See the [module documentation][crate::grant::device_authorization] for a usage guide.
 #[huskarl_macros::grant]
 #[derive(Debug, Clone, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]

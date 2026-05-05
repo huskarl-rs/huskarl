@@ -1,6 +1,144 @@
 //! Token exchange grant (RFC 8693).
 //!
-//! Used to issue a new access token using an existing token.
+//! Used to issue a new security token by exchanging an existing token, supporting
+//! impersonation and delegation without requiring user re-authentication.
+//!
+//! # Usage
+//!
+//! ## 1. Set up your HTTP client
+//!
+//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//!
+//! ```rust
+//! use huskarl_reqwest::ReqwestClient;
+//! use huskarl_reqwest::mtls::NoMtls;
+//!
+//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
+//! let client: ReqwestClient = ReqwestClient::builder()
+//!     .mtls(NoMtls)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 2. Set up client authentication (if necessary).
+//!
+//! This example shows the use of a client secret as credentials, but any `ClientAuthentication`
+//! implementation can be used.
+//!
+//! ```rust
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::secrets::EnvVarSecret;
+//! use huskarl::core::secrets::encodings::StringEncoding;
+//!
+//! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
+//! let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3a. Set up the grant with authorization server metadata
+//!
+//! ```rust
+//! use huskarl::core::server_metadata::AuthorizationServerMetadata;
+//! use huskarl::grant::token_exchange::TokenExchangeGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::dpop::NoDPoP;
+//! # use huskarl::core::http::HttpClient;
+//! # use huskarl::core::secrets::EnvVarSecret;
+//! # use huskarl::core::secrets::encodings::StringEncoding;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
+//! #
+//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//!
+//! let metadata = AuthorizationServerMetadata::builder()
+//!     .issuer("https://my-issuer")
+//!     .http_client(&client)
+//!     .build()
+//!     .await?;
+//!
+//! let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> = TokenExchangeGrant::builder_from_metadata(&metadata)
+//!     .client_id("client_id")
+//!     .client_auth(client_auth)
+//!     .dpop(NoDPoP)
+//!     .build();
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3b. Alternative: Set up the grant without metadata
+//!
+//! ```rust
+//! use huskarl::grant::token_exchange::TokenExchangeGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! use huskarl::core::dpop::NoDPoP;
+//! # use huskarl::core::http::HttpClient;
+//! # use huskarl::core::secrets::EnvVarSecret;
+//! # use huskarl::core::secrets::encodings::StringEncoding;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
+//! #
+//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//!
+//! let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> = TokenExchangeGrant::builder()
+//!     .token_endpoint("https://my-server/token")?
+//!     .client_id("client_id")
+//!     .client_auth(client_auth)
+//!     .dpop(NoDPoP)
+//!     .build();
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 4. Get an access token.
+//!
+//! ```rust
+//! use huskarl::prelude::*; // Imports OAuth2ExchangeGrant which defines the exchange call.
+//! use huskarl::grant::token_exchange::{SecurityToken, SecurityTokenType, TokenExchangeGrantParameters};
+//! use huskarl::token::AccessToken;
+//! # use huskarl::grant::token_exchange::TokenExchangeGrant;
+//! use huskarl::core::client_auth::ClientSecret;
+//! # use huskarl::core::dpop::NoDPoP;
+//! # use huskarl::core::http::HttpClient;
+//! # use huskarl::core::secrets::EnvVarSecret;
+//! # use huskarl::core::secrets::encodings::StringEncoding;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
+//! #
+//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
+//! #
+//! # let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> = TokenExchangeGrant::builder()
+//! #     .token_endpoint("https://my-server/token")?
+//! #     .client_id("client_id")
+//! #     .client_auth(client_auth)
+//! #     .dpop(NoDPoP)
+//! #     .build();
+//!
+//! let subject = SecurityToken::builder().token("eyToken").token_type(SecurityTokenType::AccessToken).build();
+//! let params = TokenExchangeGrantParameters::builder().subject(subject).build();
+//! let response = grant.exchange(&client, params).await?;
+//! let token: &AccessToken = response.access_token();
+//!
+//! # Ok(())
+//! # }
+//! ```
 
 use bon::Builder;
 use serde::Serialize;
@@ -18,6 +156,8 @@ use crate::{
 /// This grant is used to issue a new security token by exchanging an existing
 /// token, without requiring user re-authentication. It supports impersonation
 /// and delegation use cases by allowing the exchange of one token type for another.
+///
+/// See the [module documentation][crate::grant::token_exchange] for a usage guide.
 #[huskarl_macros::grant]
 #[derive(Debug, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
@@ -102,6 +242,7 @@ pub struct TokenExchangeGrantParameters {
 #[derive(Debug, Clone, Builder)]
 pub struct SecurityToken {
     /// The raw token string.
+    #[builder(into)]
     token: String,
     /// The type of the token.
     token_type: SecurityTokenType,
