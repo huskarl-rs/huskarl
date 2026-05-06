@@ -6,6 +6,143 @@
 //!
 //! Optionally supports RFC 9701 (JWT Response for Introspection) when a
 //! `jws_verifier_factory` is provided.
+//!
+//! # Usage
+//!
+//! ## 1. Set up your HTTP client
+//!
+//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//!
+//! ```rust
+//! use huskarl_reqwest::ReqwestClient;
+//! use huskarl_reqwest::mtls::NoMtls;
+//!
+//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
+//! let client: ReqwestClient = ReqwestClient::builder()
+//!     .mtls(NoMtls)
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 2. Set up client authentication
+//!
+//! The introspection endpoint requires the resource server to authenticate to the
+//! authorization server. This example uses a client secret, but any
+//! `ClientAuthentication` implementation can be used.
+//!
+//! ```rust
+//! use huskarl_resource_server::core::client_auth::ClientSecret;
+//! use huskarl_resource_server::core::secrets::{EnvVarSecret, encodings::StringEncoding};
+//!
+//! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
+//! let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(client_secret);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3a. Build the validator from authorization server metadata
+//!
+//! Note: `builder_from_metadata` returns `None` if the server does not advertise
+//! an introspection endpoint.
+//!
+//! ```rust
+//! use huskarl_resource_server::core::{
+//!     client_auth::ClientSecret,
+//!     secrets::{EnvVarSecret, encodings::StringEncoding},
+//!     server_metadata::AuthorizationServerMetadata,
+//! };
+//! use huskarl_resource_server::validator::introspection::IntrospectionValidator;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//!
+//! let metadata = AuthorizationServerMetadata::builder()
+//!     .issuer("https://my-issuer")
+//!     .http_client(&http_client)
+//!     .build()
+//!     .await?;
+//!
+//! let validator = IntrospectionValidator::builder_from_metadata(&metadata)
+//!     .expect("authorization server does not support token introspection")
+//!     .client_id("my-resource-server")
+//!     .client_auth(ClientSecret::new(client_secret))
+//!     .http_client(http_client.clone())
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 3b. Alternative: Build without authorization server metadata
+//!
+//! ```rust
+//! use huskarl_resource_server::core::{
+//!     IntoEndpointUrl as _,
+//!     client_auth::ClientSecret,
+//!     secrets::{EnvVarSecret, encodings::StringEncoding},
+//! };
+//! use huskarl_resource_server::validator::introspection::IntrospectionValidator;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//!
+//! let validator = IntrospectionValidator::builder()
+//!     .client_id("my-resource-server")
+//!     .issuer("https://my-issuer")
+//!     .introspection_endpoint(
+//!         "https://my-issuer/oauth/introspect".into_endpoint_url()?,
+//!     )
+//!     .client_auth(ClientSecret::new(client_secret))
+//!     .http_client(http_client.clone())
+//!     .build()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## 4. Validate a request
+//!
+//! Call [`IntrospectionValidator::validate_request`] with the HTTP request headers, method,
+//! and URI. The [`outcome`][crate::validator::ValidationResult::outcome] field of the result is:
+//! - `Ok(None)` — no authentication header was present
+//! - `Ok(Some(_))` — the token was active; the request is authenticated
+//! - `Err(_)` — a token was present but inactive or the introspection call failed
+//!
+//! ```rust
+//! # use huskarl_resource_server::core::{
+//! #     client_auth::ClientSecret,
+//! #     secrets::{EnvVarSecret, encodings::StringEncoding},
+//! #     server_metadata::AuthorizationServerMetadata,
+//! # };
+//! # use huskarl_resource_server::validator::introspection::IntrospectionValidator;
+//! # use huskarl_reqwest::mtls::NoMtls;
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
+//! # let metadata = AuthorizationServerMetadata::builder().issuer("https://my-issuer").http_client(&http_client).build().await?;
+//! # let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
+//! use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
+//!
+//! let mut headers = http::HeaderMap::new();
+//! headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer mF_9.B5f-4.1JqM"));
+//! let method = Method::GET;
+//! let uri = Uri::from_static("https://api.example.com/resource");
+//!
+//! let result = validator.validate_request(&headers, &method, &uri, None).await;
+//!
+//! match result.outcome {
+//!     Ok(Some(validated)) => println!("Authenticated: subject={:?}", validated.subject),
+//!     Ok(None) => println!("No authentication provided"),
+//!     Err(e) => println!("Introspection failed: {e}"),
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod error;
 
