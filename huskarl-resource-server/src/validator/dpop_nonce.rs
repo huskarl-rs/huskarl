@@ -92,7 +92,11 @@ impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
     async fn nonce_age_secs(&self, nonce: Option<&str>) -> Option<u64> {
         use base64::prelude::*;
         let nonce_bytes = BASE64_STANDARD.decode(nonce?).ok()?;
-        let unsealed_bytes = self.sealer.unseal(&nonce_bytes, &self.aad).await.ok()?;
+        let unsealed_bytes = self
+            .sealer
+            .unseal(None, &nonce_bytes, &self.aad)
+            .await
+            .ok()?;
         let timestamp_bytes = <[u8; 8]>::try_from(unsealed_bytes).ok()?;
         let nonce_issued_at = u64::from_be_bytes(timestamp_bytes);
         let current_secs = SystemTime::now()
