@@ -26,12 +26,17 @@ pub struct AeadOutput {
     pub tag: Vec<u8>,
 }
 
-/// The set of JWE header parameters used to select a content decryption key.
+/// Selection criteria used to choose a content decryption key.
+///
+/// Both fields are optional. When `enc` is `None`, algorithm matching is
+/// skipped and the key is considered algorithm-compatible. When `kid` is
+/// `None`, key ID matching is skipped.
 #[derive(Debug, Clone, Copy)]
 pub struct CipherMatch<'a> {
-    /// The content encryption algorithm (`enc`) from the JWE header.
-    pub enc: &'a str,
-    /// The key ID (`kid`) from the JWE header.
+    /// The content encryption algorithm (e.g. from the JWE `enc` header).
+    /// When `None`, the algorithm is not used for matching.
+    pub enc: Option<&'a str>,
+    /// The key ID (e.g. from the JWE `kid` header or an out-of-band source).
     pub kid: Option<&'a str>,
 }
 
@@ -66,31 +71,32 @@ pub trait AeadDecryptor: MaybeSendSync {
     /// The error type returned by decryption operations.
     type Error: crate::Error;
 
-    /// Returns the nonce length in bytes.
-    fn nonce_length(&self) -> usize;
-
-    /// Returns the authentication tag length in bytes.
-    fn tag_length(&self) -> usize;
-
     /// Returns how well this decryptor matches the given selection criteria.
     ///
     /// Implementations must return:
     ///
-    /// - `Some(ByKeyId)` — the algorithm matches **and** both the header and this decryptor
-    ///   have a `kid`, and they are equal.
-    /// - `Some(ByAlgorithm)` — the algorithm matches, but the `kid` could not be used for
-    ///   matching: either the header has no `kid`, or this decryptor has no `kid` registered.
-    /// - `None` — the algorithm is unsupported by this decryptor, **or** both the header and
-    ///   this decryptor have a `kid` but they differ.
+    /// - `Some(ByKeyId)` — the algorithm is compatible (matches or was not specified)
+    ///   **and** both the criteria and this decryptor have a `kid`, and they are equal.
+    /// - `Some(ByAlgorithm)` — the algorithm is compatible, but the `kid` could not be
+    ///   used for matching: either the criteria has no `kid`, or this decryptor has no
+    ///   `kid` registered.
+    /// - `None` — the algorithm is unsupported by this decryptor, **or** both the
+    ///   criteria and this decryptor have a `kid` but they differ.
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength>;
 
     /// Asynchronously decrypts the given ciphertext with the provided nonce, tag, and associated data.
+    ///
+    /// `cipher_match` carries the selection criteria (algorithm and key ID) from the
+    /// caller, when available. Multi-key implementations like
+    /// multi-key decryptors use this to dispatch to the correct key. Single-key
+    /// implementations may ignore it.
     ///
     /// # Errors
     ///
     /// Returns [`Self::Error`] if the decryption operation fails or if the data was tampered with.
     fn decrypt(
         &self,
+        cipher_match: Option<&CipherMatch<'_>>,
         nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
@@ -113,7 +119,8 @@ pub trait AeadCipherSelector: MaybeSendSync {
 
 /// An encryptor that produces self-contained bundles with a prepended version byte and IV.
 pub trait AeadSealer: AeadEncryptor {
-    /// Encrypts `plaintext` and returns a versioned bundle: `[0x01 || IV || ciphertext || tag]`.
+    /// Encrypts `plaintext` and returns a versioned bundle:
+    /// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
     fn seal(
         &self,
         plaintext: &[u8],
@@ -124,14 +131,20 @@ pub trait AeadSealer: AeadEncryptor {
 /// A decryptor that consumes self-contained bundles produced by [`AeadSealer`].
 pub trait AeadUnsealer: AeadDecryptor {
     /// Decrypts a versioned bundle produced by [`AeadSealer::seal`].
+    ///
+    /// `cipher_match` carries optional key selection criteria from an out-of-band
+    /// source (e.g. a cookie attribute or database column). Multi-key decryptors
+    /// use this to select the correct key without trying all candidates.
     fn unseal(
         &self,
+        cipher_match: Option<&CipherMatch<'_>>,
         bundle: &[u8],
         aad: &[u8],
     ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
 }
 
-/// An [`AeadSealer`] using the v1 bundle format: `[0x01 || IV || ciphertext || tag]`.
+/// An [`AeadSealer`] using the v1 bundle format:
+/// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
 pub struct AeadV1Sealer<E: AeadEncryptor>(E);
 
 impl<E: AeadEncryptor> AeadV1Sealer<E> {
@@ -161,9 +174,22 @@ impl<E: AeadEncryptor> AeadSealer for AeadV1Sealer<E> {
     async fn seal(&self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, Self::Error> {
         let output = self.encrypt(plaintext, aad).await?;
 
+        let nonce_len: u8 = output
+            .nonce
+            .len()
+            .try_into()
+            .expect("nonce length exceeds u8::MAX");
+        let tag_len: u8 = output
+            .tag
+            .len()
+            .try_into()
+            .expect("tag length exceeds u8::MAX");
+
         let mut bundle =
-            Vec::with_capacity(1 + output.nonce.len() + output.ciphertext.len() + output.tag.len());
+            Vec::with_capacity(3 + output.nonce.len() + output.ciphertext.len() + output.tag.len());
         bundle.push(0x01);
+        bundle.push(nonce_len);
+        bundle.push(tag_len);
         bundle.extend_from_slice(&output.nonce);
         bundle.extend_from_slice(&output.ciphertext);
         bundle.extend_from_slice(&output.tag);
@@ -172,7 +198,8 @@ impl<E: AeadEncryptor> AeadSealer for AeadV1Sealer<E> {
     }
 }
 
-/// An [`AeadUnsealer`] using the v1 bundle format: `[0x01 || IV || ciphertext || tag]`.
+/// An [`AeadUnsealer`] using the v1 bundle format:
+/// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
 pub struct AeadV1Unsealer<D: AeadDecryptor>(D);
 
 impl<D: AeadDecryptor> AeadV1Unsealer<D> {
@@ -185,46 +212,44 @@ impl<D: AeadDecryptor> AeadV1Unsealer<D> {
 impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
     type Error = UnsealError<D::Error>;
 
-    fn nonce_length(&self) -> usize {
-        self.0.nonce_length()
-    }
-
-    fn tag_length(&self) -> usize {
-        self.0.tag_length()
-    }
-
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.0.cipher_match(m)
     }
 
     async fn decrypt(
         &self,
+        cipher_match: Option<&CipherMatch<'_>>,
         nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, Self::Error> {
         self.0
-            .decrypt(nonce, ciphertext, tag, aad)
+            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
             .await
             .map_err(Into::into)
     }
 }
 
 impl<D: AeadDecryptor> AeadUnsealer for AeadV1Unsealer<D> {
-    async fn unseal(&self, bundle: &[u8], aad: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        let nonce_len = self.nonce_length();
-        let tag_len = self.tag_length();
+    async fn unseal(
+        &self,
+        cipher_match: Option<&CipherMatch<'_>>,
+        bundle: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, Self::Error> {
+        ensure!(bundle.len() >= 3 && bundle[0] == 0x01, InvalidBundleSnafu);
 
-        ensure!(
-            bundle.len() >= 1 + nonce_len + tag_len && bundle[0] == 0x01,
-            InvalidBundleSnafu
-        );
+        let nonce_len = bundle[1] as usize;
+        let tag_len = bundle[2] as usize;
 
-        let nonce = &bundle[1..=nonce_len];
+        ensure!(bundle.len() >= 3 + nonce_len + tag_len, InvalidBundleSnafu);
+
+        let nonce = &bundle[3..3 + nonce_len];
         let tag = &bundle[bundle.len() - tag_len..];
-        let ciphertext = &bundle[1 + nonce_len..bundle.len() - tag_len];
+        let ciphertext = &bundle[3 + nonce_len..bundle.len() - tag_len];
 
-        self.decrypt(nonce, ciphertext, tag, aad).await
+        self.decrypt(cipher_match, nonce, ciphertext, tag, aad)
+            .await
     }
 }
