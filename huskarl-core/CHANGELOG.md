@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Additions
 
 - Adds RefreshableSigner/ScheduledRefreshSigner to allow JWS signers to be reloaded.
+- Adds MultiKeyDecryptor/MultiKeyCipher that handle routing of decryption with multiple keys.
 
 ### Changes
 

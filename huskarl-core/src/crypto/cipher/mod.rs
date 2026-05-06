@@ -2,6 +2,7 @@
 
 mod boxed;
 mod error;
+mod multi;
 
 use std::borrow::Cow;
 
@@ -10,6 +11,7 @@ use snafu::ensure;
 pub use boxed::{BoxedAeadDecryptor, BoxedAeadEncryptor};
 pub(crate) use error::InvalidBundleSnafu;
 pub use error::UnsealError;
+pub use multi::{MultiKeyCipher, MultiKeyDecryptor, MultiKeyDecryptorError};
 
 use crate::{
     crypto::KeyMatchStrength,
