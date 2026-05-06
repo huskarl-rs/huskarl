@@ -87,6 +87,24 @@ pub enum CompleteError<GrantErr: crate::core::Error + 'static> {
     },
 }
 
+impl<
+    AuthErr: crate::core::Error + 'static,
+    HttpErr: crate::core::Error + 'static,
+    HttpRespErr: crate::core::Error + 'static,
+    DPoPErr: crate::core::Error + 'static,
+    JarErr: crate::core::Error + 'static,
+> crate::core::Error for StartError<AuthErr, HttpErr, HttpRespErr, DPoPErr, JarErr>
+{
+    fn is_retryable(&self) -> bool {
+        match self {
+            StartError::EncodeUrlEncoded { .. } => false,
+            StartError::ParRequest { source } => source.is_retryable(),
+            StartError::Jar { source } => source.is_retryable(),
+            StartError::ClientAuth { source } => source.is_retryable(),
+        }
+    }
+}
+
 impl<GrantErr: crate::core::Error + 'static> crate::core::Error for CompleteError<GrantErr> {
     fn is_retryable(&self) -> bool {
         match self {
