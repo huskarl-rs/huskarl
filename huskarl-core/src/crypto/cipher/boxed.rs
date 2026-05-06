@@ -105,36 +105,30 @@ impl Clone for BoxedAeadDecryptor {
 impl AeadDecryptor for BoxedAeadDecryptor {
     type Error = BoxedError;
 
-    fn nonce_length(&self) -> usize {
-        self.inner.nonce_length()
-    }
-
-    fn tag_length(&self) -> usize {
-        self.inner.tag_length()
-    }
-
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.inner.cipher_match(m)
     }
 
     async fn decrypt(
         &self,
+        cipher_match: Option<&CipherMatch<'_>>,
         nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
         aad: &[u8],
     ) -> Result<Vec<u8>, Self::Error> {
-        self.inner.decrypt(nonce, ciphertext, tag, aad).await
+        self.inner
+            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+            .await
     }
 }
 
 trait DynAeadDecryptor: MaybeSendSync {
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength>;
-    fn nonce_length(&self) -> usize;
-    fn tag_length(&self) -> usize;
 
     fn decrypt<'a>(
         &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
         nonce: &'a [u8],
         ciphertext: &'a [u8],
         tag: &'a [u8],
@@ -147,23 +141,16 @@ impl<D: AeadDecryptor> DynAeadDecryptor for D {
         AeadDecryptor::cipher_match(self, m)
     }
 
-    fn nonce_length(&self) -> usize {
-        AeadDecryptor::nonce_length(self)
-    }
-
-    fn tag_length(&self) -> usize {
-        AeadDecryptor::tag_length(self)
-    }
-
     fn decrypt<'a>(
         &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
         nonce: &'a [u8],
         ciphertext: &'a [u8],
         tag: &'a [u8],
         aad: &'a [u8],
     ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<Vec<u8>, BoxedError>> + 'a>> {
         Box::pin(async move {
-            self.decrypt(nonce, ciphertext, tag, aad)
+            self.decrypt(cipher_match, nonce, ciphertext, tag, aad)
                 .await
                 .map_err(BoxedError::from_err)
         })

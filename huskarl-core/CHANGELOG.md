@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - TTL for verifier refresh changed from 5 minutes to 1 hour.
 - RefreshingVerifier changed to ScheduledRefreshVerifier (with backwards compatible type alias for now).
+- Breaking: AeadSealer gains tag/nonce length in the serialized value, removed from the AeadDecryptor trait.
+- Breaking: AeadDecryptor adds a cipher_match parameter letting decryption occur without needing to try all keys.
+- Breaking: The alg parameter of CipherMatch becomes an Option.
 
 ## [0.4.1] - 2026-04-28
 
