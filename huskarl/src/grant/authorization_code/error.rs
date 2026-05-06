@@ -71,7 +71,8 @@ pub enum CompleteError<GrantErr: crate::core::Error + 'static> {
     MissingIssuer,
     /// The token response included an ID token but no JWS verifier was configured on the grant.
     #[snafu(display(
-        "ID token received but grant has no JWS verifier configured; provide a JWKS URI and verifier factory"
+        "ID token received but grant has no JWS verifier configured; \
+         call `.jws_verifier_factory(...)` on the builder to enable ID token validation"
     ))]
     IdTokenVerifierNotConfigured,
     /// The token response included an ID token but no issuer was configured on the grant.
@@ -102,6 +103,25 @@ impl<
             StartError::Jar { source } => source.is_retryable(),
             StartError::ClientAuth { source } => source.is_retryable(),
         }
+    }
+}
+
+/// An error that occurs when building an [`AuthorizationCodeGrant`](super::AuthorizationCodeGrant).
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(super)))]
+pub enum BuildError {
+    /// A JWS verifier factory was provided but no verifier platform is available.
+    #[snafu(display(
+        "jws_verifier_factory was set but no JWS verifier platform is configured; \
+         enable the `default-jws-verifier-platform` feature or call \
+         `.jws_verifier_platform(...)` on the builder"
+    ))]
+    MissingJwsVerifierPlatform,
+}
+
+impl crate::core::Error for BuildError {
+    fn is_retryable(&self) -> bool {
+        false
     }
 }
 

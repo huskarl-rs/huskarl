@@ -129,16 +129,16 @@ impl<
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
-        let jws_verifier = if let Some(jws_verifier_platform) = jws_verifier_platform.clone()
-            && let Some(jws_verifier_factory) = jws_verifier_factory.clone()
-        {
-            Some(
-                jws_verifier_factory
-                    .build(jwks_uri.as_ref(), jws_verifier_platform)
-                    .await?,
-            )
-        } else {
-            None
+        let jws_verifier = match (jws_verifier_platform.clone(), jws_verifier_factory.clone()) {
+            (Some(platform), Some(factory)) => {
+                Some(factory.build(jwks_uri.as_ref(), platform).await?)
+            }
+            (None, Some(_)) => {
+                return Err(BoxedError::from_err(
+                    super::error::MissingJwsVerifierPlatformSnafu.build(),
+                ));
+            }
+            (Some(_) | None, None) => None,
         };
 
         Ok(Self {
