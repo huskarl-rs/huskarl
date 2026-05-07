@@ -133,7 +133,7 @@ use crate::{
     },
 };
 use http::HeaderName;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AccessTokenValidator,
@@ -415,7 +415,7 @@ impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + 'stat
 /// recommends a specific encoding for them, but does not make it mandatory.
 /// Therefore, you should use the `ExtraClaims` type parameter to capture these claims
 /// in whatever shape your authorization server emits.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound(deserialize = "ExtraClaims: for<'d> Deserialize<'d>"))]
 pub struct Rfc9068AccessTokenClaims<ExtraClaims = ()> {
     /// The client identifier for the OAuth 2.0 client that requested this token.
