@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changes
 
 - Breaking: Split out DPoP proof into a separate struct with its own errors
+- Switch timestamp-based nonce to base64url encoding
 
 ## [0.6.1] - 2026-05-07
 
