@@ -170,6 +170,7 @@ use crate::introspection::TokenIntrospection;
 use crate::validator::binding::DPoPBindingChecker;
 use crate::validator::binding::check_token_binding;
 use crate::validator::dpop_nonce::DpopNonceChecker;
+use crate::validator::dpop_proof::DpopProofValidator;
 use crate::validator::extract::extract_token;
 use crate::validator::introspection::error::{BindingSnafu, CallSnafu, ExtractSnafu};
 use crate::validator::introspection::introspection_validator_builder::SetIntrospectionEndpoint;
@@ -313,10 +314,12 @@ impl<
             http_client,
             dpop_binding_checker: DPoPBindingChecker {
                 dpop_nonce_checker,
-                dpop_jti_checker,
-                max_proof_age: max_dpop_proof_age,
-                jws_verifier_platform,
-                allowed_signing_algorithms: allowed_dpop_signing_algorithms,
+                proof_validator: DpopProofValidator::builder()
+                    .jws_verifier_platform(jws_verifier_platform)
+                    .max_proof_age(max_dpop_proof_age)
+                    .maybe_allowed_signing_algorithms(allowed_dpop_signing_algorithms)
+                    .maybe_jti_checker(dpop_jti_checker)
+                    .build(),
                 required: require_dpop,
             },
             token_header,
@@ -414,8 +417,9 @@ impl<
             authorization_servers: self.issuer.as_ref().map(|s| vec![s.clone()]),
             dpop_signing_alg_values_supported: self
                 .dpop_binding_checker
-                .allowed_signing_algorithms
-                .clone(),
+                .proof_validator
+                .allowed_signing_algorithms()
+                .map(<[_]>::to_vec),
             dpop_bound_access_tokens_required: Some(self.dpop_binding_checker.required),
             resource: resource.map(|r| r.to_owned()),
             bearer_methods_supported: Some(vec!["header"]),
