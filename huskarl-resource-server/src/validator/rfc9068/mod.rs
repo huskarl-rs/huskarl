@@ -142,6 +142,7 @@ use crate::{
         binding::DPoPBindingChecker,
         common::ValidatorInner,
         dpop_nonce::DpopNonceChecker,
+        dpop_proof::DpopProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
         observe::{OnValidate, ValidationOutcome},
@@ -256,10 +257,12 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
                 jwt_validator,
                 dpop_binding_checker: DPoPBindingChecker {
                     dpop_nonce_checker,
-                    dpop_jti_checker,
-                    max_proof_age: max_dpop_proof_age,
-                    jws_verifier_platform,
-                    allowed_signing_algorithms: allowed_dpop_signing_algorithms,
+                    proof_validator: DpopProofValidator::builder()
+                        .jws_verifier_platform(jws_verifier_platform)
+                        .max_proof_age(max_dpop_proof_age)
+                        .maybe_allowed_signing_algorithms(allowed_dpop_signing_algorithms)
+                        .maybe_jti_checker(dpop_jti_checker)
+                        .build(),
                     required: require_dpop,
                 },
                 token_header,
@@ -339,8 +342,9 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
             dpop_signing_alg_values_supported: self
                 .inner
                 .dpop_binding_checker
-                .allowed_signing_algorithms
-                .clone(),
+                .proof_validator
+                .allowed_signing_algorithms()
+                .map(<[_]>::to_vec),
             dpop_bound_access_tokens_required: Some(self.inner.dpop_binding_checker.required),
             resource: resource.map(|r| r.to_owned()),
             bearer_methods_supported: Some(vec!["header"]),
