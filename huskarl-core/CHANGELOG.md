@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Additions
 
  - Added some extra OpenID fields to authorization server metadata for logout and userinfo.
+ - Added a max JTI length check to the JWT validator.
 
 ### Changes
 
