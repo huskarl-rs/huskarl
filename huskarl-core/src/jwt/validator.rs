@@ -83,6 +83,9 @@ pub struct JwtValidator {
     /// The `jti` claim is required.
     #[builder(default)]
     require_jti: bool,
+    /// Maximum allowed byte length for the `jti` claim. Defaults to 255.
+    #[builder(default = 255)]
+    max_jti_len: usize,
     /// Implementation of a JTI checker to check for uniqueness.
     jti_checker: Option<BoxedJtiUniquenessChecker>,
     /// Maximum token age to validate against.
@@ -271,16 +274,23 @@ impl JwtValidator {
             );
         }
 
-        if let Some(jti) = parsed_jwt.claims.jti.as_deref()
-            && let Some(jti_checker) = self.jti_checker.as_ref()
-        {
+        if let Some(jti) = parsed_jwt.claims.jti.as_deref() {
             ensure!(
-                !jti_checker
-                    .check_and_mark_seen(jti)
-                    .await
-                    .context(JtiCheckSnafu)?,
-                JtiNotUniqueSnafu
+                jti.len() <= self.max_jti_len,
+                JtiTooLongSnafu {
+                    len: jti.len(),
+                    max_len: self.max_jti_len,
+                }
             );
+            if let Some(jti_checker) = self.jti_checker.as_ref() {
+                ensure!(
+                    !jti_checker
+                        .check_and_mark_seen(jti)
+                        .await
+                        .context(JtiCheckSnafu)?,
+                    JtiNotUniqueSnafu
+                );
+            }
         }
 
         if let Some(max_token_age) = self.max_token_age {
@@ -552,6 +562,13 @@ pub enum JwtValidationError {
     RequiredClaimMissing {
         /// The missing claim.
         claim: &'static str,
+    },
+    /// The `jti` claim exceeds the maximum allowed length.
+    JtiTooLong {
+        /// The length of the `jti` value in bytes.
+        len: usize,
+        /// The maximum allowed length in bytes.
+        max_len: usize,
     },
     /// The JTI was required to be unique, but was previously marked as seen.
     JtiNotUnique,
