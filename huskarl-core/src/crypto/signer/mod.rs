@@ -5,9 +5,13 @@ mod refreshable;
 mod scheduled;
 mod symmetric;
 
-pub use asymmetric::boxed::{BoxedAsymmetricJwsSigner, BoxedAsymmetricJwsSignerSelector};
-pub use asymmetric::{AsymmetricJwsSigner, AsymmetricJwsSignerSelector};
+pub use asymmetric::{
+    AsymmetricJwsSigner, AsymmetricJwsSignerSelector,
+    boxed::{BoxedAsymmetricJwsSigner, BoxedAsymmetricJwsSignerSelector},
+};
 pub use refreshable::RefreshableSigner;
 pub use scheduled::ScheduledRefreshSigner;
-pub use symmetric::boxed::{BoxedJwsSigner, BoxedJwsSignerSelector};
-pub use symmetric::{JwsSigner, JwsSignerSelector};
+pub use symmetric::{
+    JwsSigner, JwsSignerSelector,
+    boxed::{BoxedJwsSigner, BoxedJwsSignerSelector},
+};

@@ -1,10 +1,10 @@
-use crate::core::jwt::validator::JwtValidator;
 use http::HeaderName;
 use serde::Deserialize;
 use snafu::prelude::*;
 
 use crate::{
     ValidatedRequest,
+    core::jwt::validator::JwtValidator,
     validator::{
         ValidationResult,
         binding::{DPoPBindingChecker, check_token_binding},

@@ -14,14 +14,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//! use huskarl_reqwest::mtls::NoMtls;
+//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder()
-//!     .mtls(NoMtls)
-//!     .build()
-//!     .await?;
+//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -33,8 +29,10 @@
 //! `ClientAuthentication` implementation can be used.
 //!
 //! ```rust
-//! use huskarl_resource_server::core::client_auth::ClientSecret;
-//! use huskarl_resource_server::core::secrets::{EnvVarSecret, encodings::StringEncoding};
+//! use huskarl_resource_server::core::{
+//!     client_auth::ClientSecret,
+//!     secrets::{EnvVarSecret, encodings::StringEncoding},
+//! };
 //!
 //! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
 //! let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
@@ -146,41 +144,40 @@
 
 pub mod error;
 
-use crate::core::jwk::JwksSource;
-use crate::core::jwt::BoxedJtiUniquenessChecker;
-use crate::core::server_metadata::AuthorizationServerMetadata;
-use crate::validator::dpop_nonce::NoNonceCheck;
-use crate::validator::introspection::introspection_validator_builder::SetDpopNonceChecker;
+use std::{marker::PhantomData, sync::Arc};
+
 pub use error::IntrospectionValidateError;
-
-use std::marker::PhantomData;
-use std::sync::Arc;
-
 use http::HeaderName;
 use serde::Deserialize;
 use snafu::ResultExt as _;
 
-use crate::core::BoxedError;
-use crate::core::EndpointUrl;
-use crate::core::client_auth::ClientAuthentication;
-use crate::core::crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform};
-use crate::core::http::HttpClient;
-use crate::core::platform::{Duration, MaybeSendSync};
-use crate::introspection::TokenIntrospection;
-use crate::validator::binding::DPoPBindingChecker;
-use crate::validator::binding::check_token_binding;
-use crate::validator::dpop_nonce::DpopNonceChecker;
-use crate::validator::dpop_proof::DpopProofValidator;
-use crate::validator::extract::extract_token;
-use crate::validator::introspection::error::{BindingSnafu, CallSnafu, ExtractSnafu};
-use crate::validator::introspection::introspection_validator_builder::SetIntrospectionEndpoint;
-use crate::validator::introspection::introspection_validator_builder::SetIssuer;
-use crate::validator::introspection::introspection_validator_builder::SetJwksUri;
-use crate::validator::introspection::introspection_validator_builder::State;
-use crate::validator::{
-    AccessTokenValidator, ValidatedRequest, ValidationResult,
-    metadata::{ProvideValidatorMetadata, ValidatorMetadata},
-    observe::{OnValidate, ValidationOutcome},
+use crate::{
+    core::{
+        BoxedError, EndpointUrl,
+        client_auth::ClientAuthentication,
+        crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+        http::HttpClient,
+        jwk::JwksSource,
+        jwt::BoxedJtiUniquenessChecker,
+        platform::{Duration, MaybeSendSync},
+        server_metadata::AuthorizationServerMetadata,
+    },
+    introspection::TokenIntrospection,
+    validator::{
+        AccessTokenValidator, ValidatedRequest, ValidationResult,
+        binding::{DPoPBindingChecker, check_token_binding},
+        dpop_nonce::{DpopNonceChecker, NoNonceCheck},
+        dpop_proof::DpopProofValidator,
+        extract::extract_token,
+        introspection::{
+            error::{BindingSnafu, CallSnafu, ExtractSnafu},
+            introspection_validator_builder::{
+                SetDpopNonceChecker, SetIntrospectionEndpoint, SetIssuer, SetJwksUri, State,
+            },
+        },
+        metadata::{ProvideValidatorMetadata, ValidatorMetadata},
+        observe::{OnValidate, ValidationOutcome},
+    },
 };
 
 /// Validates access tokens by calling an authorization server's RFC 7662 token introspection

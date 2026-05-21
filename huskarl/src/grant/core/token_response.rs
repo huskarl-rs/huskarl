@@ -1,12 +1,14 @@
 use std::collections::HashMap;
 
-use crate::core::{platform::Duration, secrets::SecretString};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
 
-use crate::token::{AccessToken, BearerAccessToken, DpopAccessToken, IdToken, RefreshToken};
+use crate::{
+    core::{platform::Duration, secrets::SecretString},
+    token::{AccessToken, BearerAccessToken, DpopAccessToken, IdToken, RefreshToken},
+};
 
 /// The response from the token endpoint.
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
@@ -175,15 +177,15 @@ impl InvalidTokenResponse {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        core::platform::{Duration, SystemTime},
-        grant::core::token_response::InvalidTokenResponse,
-    };
-
-    use crate::core::secrets::SecretString;
     use http::HeaderValue;
 
-    use crate::grant::core::token_response::RawTokenResponse;
+    use crate::{
+        core::{
+            platform::{Duration, SystemTime},
+            secrets::SecretString,
+        },
+        grant::core::token_response::{InvalidTokenResponse, RawTokenResponse},
+    };
 
     #[test]
     fn parse_rfc6749_token_response() {

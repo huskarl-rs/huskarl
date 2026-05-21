@@ -1,5 +1,3 @@
 //! Imports for syntax extensions.
 
-pub use crate::cache::TokenCache as _;
-pub use crate::core::prelude::*;
-pub use crate::grant::core::OAuth2ExchangeGrant as _;
+pub use crate::{cache::TokenCache as _, core::prelude::*, grant::core::OAuth2ExchangeGrant as _};

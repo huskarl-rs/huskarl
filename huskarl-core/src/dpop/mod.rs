@@ -11,17 +11,16 @@ mod no_dpop;
 use std::sync::Arc;
 
 use http::{Method, Uri};
-
-use crate::{
-    platform::{MaybeSend, MaybeSendSync},
-    secrets::SecretString,
-};
-
 pub use implementation::{
     DPoP, DPoPBuilder, ResourceDPoP, ResourceDPoPBuilder, hash_access_token_for_dpop,
     normalize_uri_for_dpop,
 };
 pub use no_dpop::{DPoPNotConfigured, NoDPoP};
+
+use crate::{
+    platform::{MaybeSend, MaybeSendSync},
+    secrets::SecretString,
+};
 
 /// Proof implementation for `DPoP`.
 pub trait AuthorizationServerDPoP: Clone + MaybeSendSync {

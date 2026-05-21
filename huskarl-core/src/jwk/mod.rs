@@ -34,13 +34,13 @@
 mod serde_utils;
 mod source;
 
-use crate::jwk::serde_utils::{base64url, base64url_uint, trim_leading_zeros};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-
 pub use source::JwksSource;
+
+use crate::jwk::serde_utils::{base64url, base64url_uint, trim_leading_zeros};
 
 /// A JSON Web Key Set (RFC 7517 §5).
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]

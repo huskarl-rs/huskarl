@@ -5,13 +5,15 @@ use std::sync::Arc;
 use httpmock::prelude::*;
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::core::{
-    IntoEndpointUrl,
-    crypto::signer::AsymmetricJwsSigner,
-    jwk::{JwksSource, PublicJwks},
-    jwt::Jwt,
+use huskarl_resource_server::{
+    core::{
+        IntoEndpointUrl,
+        crypto::signer::AsymmetricJwsSigner,
+        jwk::{JwksSource, PublicJwks},
+        jwt::Jwt,
+    },
+    validator::rfc9068::Rfc9068Validator,
 };
-use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
 
 #[tokio::test]
 async fn test_rfc9068_validator() {

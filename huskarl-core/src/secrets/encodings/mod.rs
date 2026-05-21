@@ -7,14 +7,13 @@ mod string;
 
 use std::str::Utf8Error;
 
-use snafu::Snafu;
-
-use crate::platform::MaybeSendSync;
-
 pub use base64::Base64Encoding;
 pub use binary::BinaryEncoding;
 pub use hex::HexEncoding;
+use snafu::Snafu;
 pub use string::StringEncoding;
+
+use crate::platform::MaybeSendSync;
 
 /// Trait for decoding raw bytes into a typed secret.
 pub trait SecretDecoder: Clone + MaybeSendSync {

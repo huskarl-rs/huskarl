@@ -6,8 +6,7 @@ use crate::{
     TokenType,
     error::{ToRfc6750Error, TokenValidationError},
     introspection::IntrospectionCallError,
-    validator::error::TokenBindingError,
-    validator::extract::TokenExtractError,
+    validator::{error::TokenBindingError, extract::TokenExtractError},
 };
 
 /// Error returned by [`super::IntrospectionValidator::validate_request`].

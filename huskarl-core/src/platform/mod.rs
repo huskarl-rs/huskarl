@@ -15,14 +15,11 @@ mod wasm32;
 #[cfg(not(target_arch = "wasm32"))]
 mod not_wasm32;
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-pub use wasm32_unknown::{Duration, Instant, SystemTime, SystemTimeError, sleep};
-
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-pub use not_wasm32_unknown::{Duration, Instant, SystemTime, SystemTimeError, sleep};
-
-#[cfg(target_arch = "wasm32")]
-pub use wasm32::{MaybeSend, MaybeSendFuture, MaybeSendSync, MaybeSync};
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use not_wasm32::{MaybeSend, MaybeSendFuture, MaybeSendSync, MaybeSync};
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+pub use not_wasm32_unknown::{Duration, Instant, SystemTime, SystemTimeError, sleep};
+#[cfg(target_arch = "wasm32")]
+pub use wasm32::{MaybeSend, MaybeSendFuture, MaybeSendSync, MaybeSync};
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use wasm32_unknown::{Duration, Instant, SystemTime, SystemTimeError, sleep};

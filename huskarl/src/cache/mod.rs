@@ -5,19 +5,20 @@
 
 mod in_memory;
 
-use std::sync::{Arc, PoisonError};
+use std::sync::{Arc, PoisonError, RwLock};
+
+pub use in_memory::{InMemoryTokenCache, InMemoryTokenCacheBuilder};
+use snafu::prelude::*;
 
 use crate::{
     core::{
-        dpop::ResourceServerDPoP, http::HttpClient, platform::MaybeSend, platform::MaybeSendSync,
+        dpop::ResourceServerDPoP,
+        http::HttpClient,
+        platform::{MaybeSend, MaybeSendSync},
     },
+    grant::core::TokenResponse,
     token::RefreshToken,
 };
-use snafu::prelude::*;
-use std::sync::RwLock;
-
-use crate::grant::core::TokenResponse;
-pub use in_memory::{InMemoryTokenCache, InMemoryTokenCacheBuilder};
 
 /// A cache for OAuth tokens that supports retrieving tokens, attempting to refresh them,
 /// and allows priming with a valid [`TokenResponse`].
@@ -90,10 +91,9 @@ impl<E: crate::core::Error + 'static> crate::core::Error for GetTokenError<E> {
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{client_auth::NoAuth, dpop::NoDPoP};
-
     use crate::{
         cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+        core::{client_auth::NoAuth, dpop::NoDPoP},
         grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
     };
 

@@ -3,13 +3,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use crate::core::http::HttpClient;
 use arc_swap::ArcSwapOption;
 use bon::Builder;
 
 use crate::{
     cache::{GetTokenError, RefreshTokenStore, TokenCache},
-    core::{dpop::AuthorizationServerDPoP, platform::Duration},
+    core::{dpop::AuthorizationServerDPoP, http::HttpClient, platform::Duration},
     grant::{
         core::{ExchangeError, OAuth2ExchangeGrant, TokenResponse},
         refresh::RefreshGrantParameters,

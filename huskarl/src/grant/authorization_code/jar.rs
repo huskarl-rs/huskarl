@@ -1,9 +1,8 @@
 use std::{convert::Infallible, time::Duration};
 
-use crate::core::crypto::signer::{JwsSigner, JwsSignerSelector};
-
 use crate::{
     core::{
+        crypto::signer::{JwsSigner, JwsSignerSelector},
         jwt::{JwsSerializationError, Jwt},
         platform::{MaybeSend, MaybeSendSync},
         secrets::SecretString,

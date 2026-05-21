@@ -4,8 +4,10 @@ pub mod boxed;
 
 use std::borrow::Cow;
 
-use crate::Error;
-use crate::platform::{MaybeSend, MaybeSendSync};
+use crate::{
+    Error,
+    platform::{MaybeSend, MaybeSendSync},
+};
 
 /// A selector for a JWS signer.
 ///

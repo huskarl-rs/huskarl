@@ -46,8 +46,10 @@ pub struct ValidatorMetadata {
     pub bearer_methods_supported: Option<Vec<&'static str>>,
 }
 
-use crate::TokenType;
-use crate::error::{ToRfc6750Error, TokenValidationError, escape_quoted};
+use crate::{
+    TokenType,
+    error::{ToRfc6750Error, TokenValidationError, escape_quoted},
+};
 
 impl ValidatorMetadata {
     /// Returns the `WWW-Authenticate` challenges for a request.
@@ -82,8 +84,14 @@ impl ValidatorMetadata {
     /// };
     /// let challenges = metadata.challenges(None, Some("read write"), None);
     /// assert_eq!(challenges.len(), 2);
-    /// assert_eq!(challenges[0], r#"Bearer realm="example", scope="read write""#);
-    /// assert_eq!(challenges[1], r#"DPoP realm="example", scope="read write", algs="ES256""#);
+    /// assert_eq!(
+    ///     challenges[0],
+    ///     r#"Bearer realm="example", scope="read write""#
+    /// );
+    /// assert_eq!(
+    ///     challenges[1],
+    ///     r#"DPoP realm="example", scope="read write", algs="ES256""#
+    /// );
     /// ```
     #[must_use]
     pub fn challenges(
@@ -203,6 +211,5 @@ pub trait ProvideValidatorMetadata {
     /// Returns metadata describing how this validator is configured.
     ///
     /// The resource is the URL of the protected resource.
-    ///
     fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata;
 }

@@ -2,21 +2,19 @@
 
 use std::collections::HashSet;
 
+use bon::Builder;
+use serde::Deserialize;
+use snafu::{ResultExt as _, Snafu, ensure};
+
 use crate::{
     BoxedError,
-    crypto::verifier::{JwsVerifier, KeyMatch, VerifyError},
+    crypto::verifier::{BoxedJwsVerifier, JwsVerifier, KeyMatch, VerifyError},
     jwt::{
         BoxedJtiUniquenessChecker, ConfirmationClaim, JtiUniquenessChecker, JwsParseError,
         ParsedJws, parse_compact_jws,
     },
     platform::{Duration, SystemTime},
 };
-
-use bon::Builder;
-use serde::Deserialize;
-use snafu::{ResultExt as _, Snafu, ensure};
-
-use crate::crypto::verifier::BoxedJwsVerifier;
 
 /// A check to perform on a JWT claim.
 #[derive(Debug, Clone, Default)]
@@ -572,10 +570,10 @@ pub enum JwtValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::KeyMatchStrength;
-    use crate::crypto::verifier::JwsVerifier;
-    use crate::crypto::verifier::KeyMatch;
-    use crate::crypto::verifier::VerifyError;
+    use crate::crypto::{
+        KeyMatchStrength,
+        verifier::{JwsVerifier, KeyMatch, VerifyError},
+    };
 
     #[derive(Debug)]
     struct MockVerifier;

@@ -109,7 +109,7 @@ pub struct AuthorizationServerMetadata {
     pub require_pushed_authorization_requests: bool,
     /**
      * RFC 9207 - OAuth 2.0 Authorization Server Issuer Identification
-     */
+     * */
     /// Indicates support for an `iss` identifier in the authorization endpoint response (RFC 9207 §3).
     #[serde(default)]
     pub authorization_response_iss_parameter_supported: bool,
@@ -231,9 +231,8 @@ fn add_issuer_to_known_path(
 
 #[cfg(test)]
 mod tests {
-    use crate::IntoEndpointUrl;
-
     use super::*;
+    use crate::IntoEndpointUrl;
 
     /// Test the document from OIDC Discovery §4.2.
     #[test]

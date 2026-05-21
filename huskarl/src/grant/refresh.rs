@@ -10,14 +10,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//! use huskarl_reqwest::mtls::NoMtls;
+//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder()
-//!     .mtls(NoMtls)
-//!     .build()
-//!     .await?;
+//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -35,11 +31,11 @@
 //! settings without needing to repeat them.
 //!
 //! ```rust
-//! use huskarl::prelude::*;
-//! use huskarl::grant::client_credentials::ClientCredentialsGrant;
-//! use huskarl::grant::refresh::RefreshGrant;
-//! use huskarl::core::client_auth::NoAuth;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{client_auth::NoAuth, dpop::NoDPoP},
+//!     grant::{client_credentials::ClientCredentialsGrant, refresh::RefreshGrant},
+//!     prelude::*,
+//! };
 //! # fn example(grant: &ClientCredentialsGrant<NoAuth, NoDPoP>) {
 //! let refresh_grant: RefreshGrant<NoAuth, NoDPoP> = grant.to_refresh_grant();
 //! # }
@@ -48,12 +44,15 @@
 //! ## 3b. Set up the grant directly with authorization server metadata
 //!
 //! ```rust
-//! use huskarl::core::server_metadata::AuthorizationServerMetadata;
-//! use huskarl::grant::refresh::RefreshGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::dpop::NoDPoP;
-//! use huskarl::core::secrets::EnvVarSecret;
-//! use huskarl::core::secrets::encodings::StringEncoding;
+//! use huskarl::{
+//!     core::{
+//!         client_auth::ClientSecret,
+//!         dpop::NoDPoP,
+//!         secrets::{EnvVarSecret, encodings::StringEncoding},
+//!         server_metadata::AuthorizationServerMetadata,
+//!     },
+//!     grant::refresh::RefreshGrant,
+//! };
 //! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
@@ -83,11 +82,14 @@
 //! ## 3c. Alternative: Set up the grant without metadata
 //!
 //! ```rust
-//! use huskarl::grant::refresh::RefreshGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::dpop::NoDPoP;
-//! use huskarl::core::secrets::EnvVarSecret;
-//! use huskarl::core::secrets::encodings::StringEncoding;
+//! use huskarl::{
+//!     core::{
+//!         client_auth::ClientSecret,
+//!         dpop::NoDPoP,
+//!         secrets::{EnvVarSecret, encodings::StringEncoding},
+//!     },
+//!     grant::refresh::RefreshGrant,
+//! };
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! #
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
@@ -106,11 +108,12 @@
 //! ## 4. Exchange the refresh token for a new access token
 //!
 //! ```rust
-//! use huskarl::prelude::*;
-//! use huskarl::grant::refresh::{RefreshGrant, RefreshGrantParameters};
-//! use huskarl::core::client_auth::NoAuth;
-//! use huskarl::core::dpop::NoDPoP;
-//! use huskarl::token::{AccessToken, RefreshToken};
+//! use huskarl::{
+//!     core::{client_auth::NoAuth, dpop::NoDPoP},
+//!     grant::refresh::{RefreshGrant, RefreshGrantParameters},
+//!     prelude::*,
+//!     token::{AccessToken, RefreshToken},
+//! };
 //! # async fn exchange(
 //! #     client: &huskarl_reqwest::ReqwestClient,
 //! #     refresh_grant: &RefreshGrant<NoAuth, NoDPoP>,

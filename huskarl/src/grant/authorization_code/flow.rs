@@ -1,9 +1,16 @@
 use http::Uri;
-use serde::Deserialize;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use subtle::ConstantTimeEq;
 
+#[cfg(all(
+    feature = "authorization-flow-loopback",
+    any(
+        not(target_family = "wasm"),
+        all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
+    )
+))]
+use crate::grant::authorization_code::{LoopbackError, loopback};
 use crate::{
     core::{
         EndpointUrl, client_auth::ClientAuthentication, dpop::AuthorizationServerDPoP,
@@ -32,15 +39,6 @@ use crate::{
     },
     token::id_token::{IdTokenClaims, IdTokenValidator},
 };
-
-#[cfg(all(
-    feature = "authorization-flow-loopback",
-    any(
-        not(target_family = "wasm"),
-        all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
-    )
-))]
-use crate::grant::authorization_code::{LoopbackError, loopback};
 
 impl<
     Auth: ClientAuthentication + 'static,

@@ -56,6 +56,7 @@ pub struct ValidatedDpopProof {
 ///
 /// ```
 /// use std::sync::Arc;
+///
 /// use huskarl_resource_server::validator::dpop_proof::DpopProofValidator;
 /// # use huskarl_resource_server::core::crypto::verifier::JwsVerifierPlatform;
 ///

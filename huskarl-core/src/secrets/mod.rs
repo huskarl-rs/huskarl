@@ -9,14 +9,13 @@ mod providers;
 
 pub mod encodings;
 
+pub use cached::CachedSecret;
+pub use encodings::{DecodingError, SecretDecoder};
+pub use providers::EnvVarSecret;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
 use crate::platform::{MaybeSend, MaybeSendSync};
-
-pub use cached::CachedSecret;
-pub use encodings::{DecodingError, SecretDecoder};
-pub use providers::EnvVarSecret;
 
 /// A secret string value that avoids accidental exposure in logs and debug output.
 #[derive(Debug, Clone)]

@@ -12,12 +12,13 @@ pub mod metadata;
 pub mod observe;
 pub mod rfc9068;
 
-use crate::core::{
-    jwt::ConfirmationClaim, jwt::validator::ValidatedJwt, platform::MaybeSend,
-    platform::MaybeSendSync, platform::SystemTime,
+use crate::{
+    core::{
+        jwt::{ConfirmationClaim, validator::ValidatedJwt},
+        platform::{MaybeSend, MaybeSendSync, SystemTime},
+    },
+    error::ToRfc6750Error,
 };
-
-use crate::error::ToRfc6750Error;
 
 /// A trait for validators that authenticate and validate access tokens from HTTP requests.
 ///

@@ -1,5 +1,4 @@
 use http::Method;
-use huskarl::token::AccessToken;
 use huskarl::{
     core::{
         client_auth::ClientSecret,
@@ -9,6 +8,7 @@ use huskarl::{
     },
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
     prelude::*,
+    token::AccessToken,
 };
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
