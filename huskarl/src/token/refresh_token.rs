@@ -1,5 +1,6 @@
-use crate::core::secrets::SecretString;
 use serde::{Deserialize, Serialize};
+
+use crate::core::secrets::SecretString;
 
 /// An `OAuth2` refresh token.
 #[derive(Debug, Clone, Serialize, Deserialize)]

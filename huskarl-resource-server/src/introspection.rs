@@ -2,22 +2,26 @@
 
 use std::sync::Arc;
 
-use crate::core::jwt::ConfirmationClaim;
-use crate::core::secrets::SecretString;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, StatusCode};
-use serde::Deserialize;
-use serde::Deserializer;
+use serde::{Deserialize, Deserializer};
 use snafu::{ResultExt as _, Snafu, ensure};
 
-use crate::core::BoxedError;
-use crate::core::EndpointUrl;
-use crate::core::client_auth::{ClientAuthentication, FormValue};
-use crate::core::crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform};
-use crate::core::http::{HttpClient, HttpResponse};
-use crate::core::jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator};
-use crate::core::platform::{Duration, SystemTime};
-use crate::validator::ValidatedRequest;
+use crate::{
+    core::{
+        BoxedError, EndpointUrl,
+        client_auth::{ClientAuthentication, FormValue},
+        crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+        http::{HttpClient, HttpResponse},
+        jwt::{
+            ConfirmationClaim,
+            validator::{ClaimCheck, JwtValidationError, JwtValidator},
+        },
+        platform::{Duration, SystemTime},
+        secrets::SecretString,
+    },
+    validator::ValidatedRequest,
+};
 
 /// Performs a raw RFC 7662 token introspection call.
 ///

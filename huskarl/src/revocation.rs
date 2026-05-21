@@ -5,15 +5,17 @@
 
 use std::borrow::Cow;
 
-use crate::core::dpop::DPoPNotConfigured;
 use bon::Builder;
 use serde::Serialize;
 use snafu::prelude::*;
 
 use crate::{
     core::{
-        EndpointUrl, IntoEndpointUrl, client_auth::ClientAuthentication, dpop::NoDPoP,
-        http::HttpClient, server_metadata::AuthorizationServerMetadata,
+        EndpointUrl, IntoEndpointUrl,
+        client_auth::ClientAuthentication,
+        dpop::{DPoPNotConfigured, NoDPoP},
+        http::HttpClient,
+        server_metadata::AuthorizationServerMetadata,
     },
     grant::core::form::{OAuth2FormError, OAuth2FormRequest},
     token::{AccessToken, RefreshToken},

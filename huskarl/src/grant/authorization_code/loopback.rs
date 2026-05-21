@@ -453,9 +453,10 @@ pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
     )
 ))]
 mod tests {
+    use tokio::net::TcpStream;
+
     use super::*;
     use crate::token::{AccessToken, id_token::IdTokenClaims};
-    use tokio::net::TcpStream;
 
     #[derive(Debug, snafu::Snafu)]
     #[snafu(display("mock error"))]

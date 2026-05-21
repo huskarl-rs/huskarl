@@ -12,14 +12,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//! use huskarl_reqwest::mtls::NoMtls;
+//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder()
-//!     .mtls(NoMtls)
-//!     .build()
-//!     .await?;
+//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -73,9 +69,10 @@
 //! ## 3b. Alternative: Set up the grant without metadata
 //!
 //! ```rust
-//! use huskarl::grant::authorization_code::{AuthorizationCodeGrant, NoJar};
-//! use huskarl::core::client_auth::NoAuth;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{client_auth::NoAuth, dpop::NoDPoP},
+//!     grant::authorization_code::{AuthorizationCodeGrant, NoJar},
+//! };
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! let grant: AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar> = AuthorizationCodeGrant::builder()
@@ -99,15 +96,18 @@
 //! `Serialize`/`Deserialize` and can be stored in a session or database.
 //!
 //! ```rust
-//! use huskarl::grant::authorization_code::{AuthorizationCodeGrant, NoJar, StartInput};
-//! use huskarl::core::client_auth::NoAuth;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{client_auth::NoAuth, dpop::NoDPoP},
+//!     grant::authorization_code::{AuthorizationCodeGrant, NoJar, StartInput},
+//! };
 //! # async fn start_flow(
 //! #     client: &huskarl_reqwest::ReqwestClient,
 //! #     grant: &AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar>,
 //! # ) -> Result<(), Box<dyn std::error::Error>> {
 //!
-//! let start_output = grant.start(client, StartInput::scopes(["read", "write"])).await?;
+//! let start_output = grant
+//!     .start(client, StartInput::scopes(["read", "write"]))
+//!     .await?;
 //!
 //! // Redirect the user to this URL to authorize.
 //! let authorization_url = start_output.authorization_url;
@@ -124,10 +124,11 @@
 //! `code` and `state` query parameters and pass them to `complete()`.
 //!
 //! ```rust
-//! use huskarl::grant::authorization_code::{AuthorizationCodeGrant, CompleteInput, NoJar, PendingState};
-//! use huskarl::core::client_auth::NoAuth;
-//! use huskarl::core::dpop::NoDPoP;
-//! use huskarl::token::AccessToken;
+//! use huskarl::{
+//!     core::{client_auth::NoAuth, dpop::NoDPoP},
+//!     grant::authorization_code::{AuthorizationCodeGrant, CompleteInput, NoJar, PendingState},
+//!     token::AccessToken,
+//! };
 //! # async fn complete_flow(
 //! #     client: &huskarl_reqwest::ReqwestClient,
 //! #     grant: &AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar>,
@@ -142,7 +143,9 @@
 //!     .state(state_from_callback)
 //!     .build();
 //!
-//! let response = grant.complete(client, pending_state, complete_input).await?;
+//! let response = grant
+//!     .complete(client, pending_state, complete_input)
+//!     .await?;
 //! let token: &AccessToken = response.access_token();
 //! # Ok(())
 //! # }

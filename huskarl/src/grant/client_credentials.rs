@@ -9,14 +9,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//! use huskarl_reqwest::mtls::NoMtls;
+//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder()
-//!     .mtls(NoMtls)
-//!     .build()
-//!     .await?;
+//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -27,9 +23,10 @@
 //! implementation can be used.
 //!
 //! ```rust
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::secrets::EnvVarSecret;
-//! use huskarl::core::secrets::encodings::StringEncoding;
+//! use huskarl::core::{
+//!     client_auth::ClientSecret,
+//!     secrets::{EnvVarSecret, encodings::StringEncoding},
+//! };
 //!
 //! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
 //! let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
@@ -41,10 +38,12 @@
 //! ## 3a. Set up the grant with authorization server metadata
 //!
 //! ```rust
-//! use huskarl::core::server_metadata::AuthorizationServerMetadata;
-//! use huskarl::grant::client_credentials::ClientCredentialsGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{
+//!         client_auth::ClientSecret, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata,
+//!     },
+//!     grant::client_credentials::ClientCredentialsGrant,
+//! };
 //! # use huskarl::core::http::HttpClient;
 //! # use huskarl::core::secrets::EnvVarSecret;
 //! # use huskarl::core::secrets::encodings::StringEncoding;
@@ -64,11 +63,12 @@
 //!     .build()
 //!     .await?;
 //!
-//! let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> = ClientCredentialsGrant::builder_from_metadata(&metadata)
-//!     .client_id("client_id")
-//!     .client_auth(client_auth)
-//!     .dpop(NoDPoP)
-//!     .build();
+//! let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> =
+//!     ClientCredentialsGrant::builder_from_metadata(&metadata)
+//!         .client_id("client_id")
+//!         .client_auth(client_auth)
+//!         .dpop(NoDPoP)
+//!         .build();
 //! # Ok(())
 //! # }
 //! ```
@@ -76,9 +76,10 @@
 //! ## 3b. Alternative: Set up the grant without metadata
 //!
 //! ```rust
-//! use huskarl::grant::client_credentials::ClientCredentialsGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{client_auth::ClientSecret, dpop::NoDPoP},
+//!     grant::client_credentials::ClientCredentialsGrant,
+//! };
 //! # use huskarl::core::http::HttpClient;
 //! # use huskarl::core::secrets::EnvVarSecret;
 //! # use huskarl::core::secrets::encodings::StringEncoding;
@@ -92,12 +93,13 @@
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
 //!
-//! let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> = ClientCredentialsGrant::builder()
-//!     .token_endpoint("https://my-server/token")?
-//!     .client_id("client_id")
-//!     .client_auth(client_auth)
-//!     .dpop(NoDPoP)
-//!     .build();
+//! let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> =
+//!     ClientCredentialsGrant::builder()
+//!         .token_endpoint("https://my-server/token")?
+//!         .client_id("client_id")
+//!         .client_auth(client_auth)
+//!         .dpop(NoDPoP)
+//!         .build();
 //! # Ok(())
 //! # }
 //! ```
@@ -249,7 +251,6 @@ pub struct ClientCredentialsGrantForm {
 mod tests {
     use std::sync::LazyLock;
 
-    use crate::token::AccessToken;
     use httpmock::MockServer;
     use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
     use huskarl_reqwest::ReqwestClient;
@@ -261,6 +262,7 @@ mod tests {
             dpop::{DPoP, NoDPoP},
         },
         grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
+        token::AccessToken,
     };
 
     static MOCK_SERVER: LazyLock<MockServer> = LazyLock::new(MockServer::start);
@@ -294,8 +296,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_exchange() {
-        use crate::prelude::*;
         use httpmock::prelude::*;
+
+        use crate::prelude::*;
 
         let grant = ClientCredentialsGrant::builder()
             .token_endpoint(MOCK_SERVER.url("/no_dpop/token"))
@@ -341,8 +344,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_exchange_with_dpop() {
-        use crate::prelude::*;
         use httpmock::prelude::*;
+
+        use crate::prelude::*;
 
         let grant = ClientCredentialsGrant::builder()
             .token_endpoint(MOCK_SERVER.url("/with_dpop/token"))

@@ -8,10 +8,10 @@ pub async fn main() {
 
     use http::{HeaderValue, Method, header::AUTHORIZATION};
     use huskarl_reqwest::ReqwestClient;
-    use huskarl_resource_server::core::{
-        jwk::JwksSource, server_metadata::AuthorizationServerMetadata,
+    use huskarl_resource_server::{
+        core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata},
+        validator::rfc9068::Rfc9068Validator,
     };
-    use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
 
     let http_client = ReqwestClient::builder()
         .mtls(huskarl_reqwest::mtls::NoMtls)

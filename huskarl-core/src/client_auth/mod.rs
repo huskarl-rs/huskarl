@@ -16,14 +16,13 @@ mod no_auth;
 use std::sync::Arc;
 
 use bon::Builder;
-use http::{HeaderMap, Uri};
-
-use crate::platform::{MaybeSend, MaybeSendSync};
-
 pub use client_secret::{ClientSecret, ClientSecretError};
 pub use form_value::FormValue;
+use http::{HeaderMap, Uri};
 pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder};
 pub use no_auth::NoAuth;
+
+use crate::platform::{MaybeSend, MaybeSendSync};
 
 /// Abstracts over client authentication types.
 ///

@@ -1,6 +1,7 @@
+use std::collections::HashSet;
+
 use proc_macro2::TokenStream;
 use quote::quote;
-use std::collections::HashSet;
 use syn::{ImplItem, ImplItemFn, ItemImpl, Result, parse2};
 
 /// Names of the methods that have identical bodies in every grant's

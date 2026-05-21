@@ -9,7 +9,6 @@ use crate::{
 
 /// Client Secret authentication (RFC 6749 §2.3.1)
 ///
-///
 #[derive(Debug, Clone)]
 pub struct ClientSecret<Sec: Secret<Output = SecretString>> {
     client_secret: Sec,

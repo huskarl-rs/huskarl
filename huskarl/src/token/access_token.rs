@@ -1,9 +1,9 @@
+use http::{HeaderValue, header::InvalidHeaderValue};
+
 use crate::core::{
     platform::{Duration, SystemTime},
     secrets::SecretString,
 };
-use http::HeaderValue;
-use http::header::InvalidHeaderValue;
 
 /// Represents an access token, either a `DPoP` token or a `Bearer` token.
 #[derive(Debug, Clone)]

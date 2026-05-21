@@ -1,11 +1,11 @@
 //! Internal token validation error types.
 
-use crate::core::jwt::validator::JwtValidationError;
 use http::header::ToStrError;
 use snafu::prelude::*;
 
 use crate::{
     TokenType,
+    core::jwt::validator::JwtValidationError,
     error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
     validator::{
         binding::{DPoPBindingError, MtlsBindingError},

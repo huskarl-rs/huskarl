@@ -1,10 +1,12 @@
 //! Access token extraction from HTTP headers.
 
-use crate::core::secrets::SecretString;
 use http::{HeaderMap, HeaderName, header::ToStrError};
 use snafu::prelude::*;
 
-use crate::error::{ToRfc6750Error, TokenErrorCode, TokenValidationError};
+use crate::{
+    core::secrets::SecretString,
+    error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
+};
 
 /// The scheme used to present an access token in an HTTP request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

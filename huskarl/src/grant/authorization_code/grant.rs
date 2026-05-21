@@ -7,8 +7,7 @@ use crate::{
     core::{
         BoxedError, EndpointUrl,
         client_auth::ClientAuthentication,
-        crypto::verifier::JwsVerifierPlatform,
-        crypto::verifier::{BoxedJwsVerifier, JwsVerifierFactory},
+        crypto::verifier::{BoxedJwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
         dpop::AuthorizationServerDPoP,
         platform::MaybeSendSync,
         server_metadata::AuthorizationServerMetadata,

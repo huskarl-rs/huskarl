@@ -169,8 +169,7 @@ pub struct PendingState {
 const RANDOM_VALUE_BYTES: usize = 32;
 
 pub(super) fn generate_random_value() -> String {
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
     let mut random_bytes = [0u8; RANDOM_VALUE_BYTES];
     rand::rng()

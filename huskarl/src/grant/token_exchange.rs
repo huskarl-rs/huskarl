@@ -10,14 +10,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//! use huskarl_reqwest::mtls::NoMtls;
+//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder()
-//!     .mtls(NoMtls)
-//!     .build()
-//!     .await?;
+//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -28,9 +24,10 @@
 //! implementation can be used.
 //!
 //! ```rust
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::secrets::EnvVarSecret;
-//! use huskarl::core::secrets::encodings::StringEncoding;
+//! use huskarl::core::{
+//!     client_auth::ClientSecret,
+//!     secrets::{EnvVarSecret, encodings::StringEncoding},
+//! };
 //!
 //! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
 //! let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
@@ -42,10 +39,12 @@
 //! ## 3a. Set up the grant with authorization server metadata
 //!
 //! ```rust
-//! use huskarl::core::server_metadata::AuthorizationServerMetadata;
-//! use huskarl::grant::token_exchange::TokenExchangeGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{
+//!         client_auth::ClientSecret, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata,
+//!     },
+//!     grant::token_exchange::TokenExchangeGrant,
+//! };
 //! # use huskarl::core::http::HttpClient;
 //! # use huskarl::core::secrets::EnvVarSecret;
 //! # use huskarl::core::secrets::encodings::StringEncoding;
@@ -65,11 +64,12 @@
 //!     .build()
 //!     .await?;
 //!
-//! let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> = TokenExchangeGrant::builder_from_metadata(&metadata)
-//!     .client_id("client_id")
-//!     .client_auth(client_auth)
-//!     .dpop(NoDPoP)
-//!     .build();
+//! let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> =
+//!     TokenExchangeGrant::builder_from_metadata(&metadata)
+//!         .client_id("client_id")
+//!         .client_auth(client_auth)
+//!         .dpop(NoDPoP)
+//!         .build();
 //! # Ok(())
 //! # }
 //! ```
@@ -77,9 +77,10 @@
 //! ## 3b. Alternative: Set up the grant without metadata
 //!
 //! ```rust
-//! use huskarl::grant::token_exchange::TokenExchangeGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{client_auth::ClientSecret, dpop::NoDPoP},
+//!     grant::token_exchange::TokenExchangeGrant,
+//! };
 //! # use huskarl::core::http::HttpClient;
 //! # use huskarl::core::secrets::EnvVarSecret;
 //! # use huskarl::core::secrets::encodings::StringEncoding;

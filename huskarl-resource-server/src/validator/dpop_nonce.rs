@@ -2,11 +2,12 @@
 
 use std::convert::Infallible;
 
+use bon::Builder;
+
 use crate::core::{
     crypto::cipher::{AeadEncryptor, AeadSealer, AeadUnsealer},
     platform::{Duration, MaybeSend, MaybeSendSync, SystemTime},
 };
-use bon::Builder;
 
 /// The outcome of a DPoP nonce check.
 #[derive(Debug, Clone, PartialEq, Eq)]

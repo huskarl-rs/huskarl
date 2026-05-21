@@ -10,13 +10,12 @@ mod get;
 mod metrics_client;
 
 use bytes::Bytes;
-use http::{HeaderMap, Request, StatusCode};
-
-use crate::platform::{MaybeSend, MaybeSendSync};
-
 pub(crate) use get::{GetError, get};
+use http::{HeaderMap, Request, StatusCode};
 #[cfg(feature = "metrics")]
 pub use metrics_client::MetricsHttpClient;
+
+use crate::platform::{MaybeSend, MaybeSendSync};
 
 /// Defines the common interface for HTTP requests.
 pub trait HttpClient: MaybeSendSync {

@@ -13,14 +13,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//! use huskarl_reqwest::mtls::NoMtls;
+//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder()
-//!     .mtls(NoMtls)
-//!     .build()
-//!     .await?;
+//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -124,7 +120,12 @@
 
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
+use bon::Builder;
+use http::HeaderName;
+use serde::Deserialize;
+
 use crate::{
+    AccessTokenValidator,
     core::{
         BoxedError, EndpointUrl,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
@@ -135,20 +136,14 @@ use crate::{
         platform::MaybeSendSync,
         server_metadata::AuthorizationServerMetadata,
     },
-    validator::{custom::custom_validator_builder::SetDpopNonceChecker, dpop_nonce::NoNonceCheck},
-};
-use bon::Builder;
-use http::HeaderName;
-use serde::Deserialize;
-
-use crate::{
-    AccessTokenValidator,
     validator::{
         ValidationResult,
         binding::DPoPBindingChecker,
         common::ValidatorInner,
-        custom::custom_validator_builder::{SetAuthorizationServer, SetJwksUri},
-        dpop_nonce::DpopNonceChecker,
+        custom::custom_validator_builder::{
+            SetAuthorizationServer, SetDpopNonceChecker, SetJwksUri,
+        },
+        dpop_nonce::{DpopNonceChecker, NoNonceCheck},
         dpop_proof::DpopProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},

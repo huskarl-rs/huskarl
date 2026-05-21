@@ -3,7 +3,6 @@
 //! These functions operate on an already-validated token's [`ConfirmationClaim`]
 //! and can be shared across JWT validation and token introspection flows.
 
-use crate::core::{BoxedError, secrets::SecretString};
 use base64::prelude::*;
 use http::StatusCode;
 use sha2::{Digest as _, Sha256};
@@ -12,8 +11,10 @@ use snafu::{ensure, prelude::*};
 use crate::{
     TokenType,
     core::{
+        BoxedError,
         dpop::{hash_access_token_for_dpop, normalize_uri_for_dpop},
         jwt::ConfirmationClaim,
+        secrets::SecretString,
     },
     validator::{
         dpop_nonce::{DpopNonceChecker, NonceCheck},

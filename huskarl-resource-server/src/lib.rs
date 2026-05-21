@@ -13,16 +13,20 @@
 //!
 //! ```
 //! use std::sync::Arc;
-//! use huskarl_resource_server::core::jwk::JwksSource;
-//! use huskarl_resource_server::core::http::HttpClient;
-//! use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
+//!
+//! use huskarl_resource_server::{
+//!     core::{http::HttpClient, jwk::JwksSource},
+//!     validator::rfc9068::Rfc9068Validator,
+//! };
 //!
 //! # fn setup_resource_server(http_client: impl HttpClient + Clone + 'static) {
 //! let validator = Rfc9068Validator::builder()
-//!   .issuer("https://issuer")
-//!   .audience("audience")
-//!   .jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client).build()))
-//!   .build();
+//!     .issuer("https://issuer")
+//!     .audience("audience")
+//!     .jws_verifier_factory(Arc::new(
+//!         JwksSource::builder().http_client(http_client).build(),
+//!     ))
+//!     .build();
 //! # }
 //! ```
 
@@ -32,11 +36,9 @@ pub mod validator;
 
 use std::sync::Arc;
 
-use validator::extract::TokenType;
-use validator::{AccessTokenValidator, ValidatedRequest};
-
 #[doc(inline)]
 pub use huskarl_core as core;
+use validator::{AccessTokenValidator, ValidatedRequest, extract::TokenType};
 
 /// The platform default [`core::crypto::verifier::JwsVerifierPlatform`] implementation.
 ///
