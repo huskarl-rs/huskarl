@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use snafu::ensure;
 
-pub use boxed::{BoxedAeadDecryptor, BoxedAeadEncryptor};
+pub use boxed::{BoxedAeadCipher, BoxedAeadDecryptor, BoxedAeadEncryptor};
 pub(crate) use error::InvalidBundleSnafu;
 pub use error::UnsealError;
 pub use multi::{MultiKeyCipher, MultiKeyDecryptor, MultiKeyDecryptorError};

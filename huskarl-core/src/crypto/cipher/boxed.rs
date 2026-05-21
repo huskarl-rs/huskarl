@@ -156,3 +156,76 @@ impl<D: AeadDecryptor> DynAeadDecryptor for D {
         })
     }
 }
+
+/// Type-erased AEAD cipher that implements both [`AeadEncryptor`] and
+/// [`AeadDecryptor`].
+///
+/// Wraps a single value that can both encrypt and decrypt, sharing it behind
+/// an `Arc`. This is useful when the same key material is used for both
+/// directions (e.g. a symmetric AEAD key).
+///
+/// Unlike using [`BoxedAeadEncryptor`] and [`BoxedAeadDecryptor`] separately,
+/// this type guarantees both capabilities come from the same source.
+pub struct BoxedAeadCipher {
+    inner: Arc<dyn DynAeadCipher>,
+}
+
+impl BoxedAeadCipher {
+    /// Creates a new cipher from a type that implements both [`AeadEncryptor`]
+    /// and [`AeadDecryptor`].
+    pub fn new<C: AeadEncryptor + AeadDecryptor + 'static>(cipher: C) -> Self {
+        Self {
+            inner: Arc::new(cipher),
+        }
+    }
+}
+
+impl Clone for BoxedAeadCipher {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl AeadEncryptor for BoxedAeadCipher {
+    type Error = BoxedError;
+
+    fn enc_algorithm(&self) -> Cow<'_, str> {
+        self.inner.enc_algorithm()
+    }
+
+    fn key_id(&self) -> Option<Cow<'_, str>> {
+        self.inner.key_id()
+    }
+
+    async fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> Result<AeadOutput, Self::Error> {
+        self.inner.encrypt(plaintext, aad).await
+    }
+}
+
+impl AeadDecryptor for BoxedAeadCipher {
+    type Error = BoxedError;
+
+    fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+        self.inner.cipher_match(m)
+    }
+
+    async fn decrypt(
+        &self,
+        cipher_match: Option<&CipherMatch<'_>>,
+        nonce: &[u8],
+        ciphertext: &[u8],
+        tag: &[u8],
+        aad: &[u8],
+    ) -> Result<Vec<u8>, Self::Error> {
+        self.inner
+            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+            .await
+    }
+}
+
+/// Combined object-safe trait for types that can both encrypt and decrypt.
+trait DynAeadCipher: DynAeadEncryptor + DynAeadDecryptor {}
+
+impl<C: DynAeadEncryptor + DynAeadDecryptor> DynAeadCipher for C {}
