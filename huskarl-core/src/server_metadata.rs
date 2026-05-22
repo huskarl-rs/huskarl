@@ -25,10 +25,13 @@ pub struct MtlsEndpointAliases {
     pub pushed_authorization_request_endpoint: Option<EndpointUrl>,
     /// The mTLS alias for the registration endpoint.
     pub registration_endpoint: Option<EndpointUrl>,
+    /// The mTLS alias for the userinfo endpoint.
+    pub userinfo_endpoint: Option<EndpointUrl>,
 }
 
 /// Authorization server metadata.
 #[derive(Debug, Clone, Deserialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct AuthorizationServerMetadata {
     /// The authorization server's issuer identifier.
     pub issuer: String,
@@ -113,6 +116,38 @@ pub struct AuthorizationServerMetadata {
     /// Indicates support for an `iss` identifier in the authorization endpoint response (RFC 9207 §3).
     #[serde(default)]
     pub authorization_response_iss_parameter_supported: bool,
+    /**
+     * `OpenID` Connect Core 1.0
+     * */
+    /// The URL of the `OpenID` Connect userinfo endpoint.
+    pub userinfo_endpoint: Option<EndpointUrl>,
+    /**
+     * `OpenID` Connect Session Management 1.0
+     * */
+    /// URL of an OP iframe that supports cross-origin communications for session state information
+    /// with the RP Client, using the HTML5 postMessage API.
+    pub check_session_iframe: Option<EndpointUrl>,
+    /**
+     * `OpenID` Connect RP-Initiated Logout 1.0
+     * */
+    /// URL at the OP to which an RP can perform a redirect to request that the End-User be logged out at the OP.
+    pub end_session_endpoint: Option<EndpointUrl>,
+    /**
+     * `OpenID` Connect Front-Channel Logout 1.0
+     * */
+    /// Boolean value specifying whether the OP supports HTTP-based logout, with true indicating support.
+    #[serde(default)]
+    pub frontchannel_logout_supported: bool,
+    /**
+     * `OpenID` Connect Back-Channel Logout 1.0
+     * */
+    /// Boolean value specifying whether the OP supports back-channel logout, with true indicating support.
+    #[serde(default)]
+    pub backchannel_logout_supported: bool,
+    /// Boolean value specifying whether the OP can pass a `sid` (session ID) Claim in the Logout Token
+    /// to identify the RP session with the OP.
+    #[serde(default)]
+    pub backchannel_logout_session_supported: bool,
 }
 
 #[bon]
