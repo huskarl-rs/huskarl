@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 
- - Breaking: made AsymmetricJwsSignerSelector a subtype of JwsSignerSelector. 
+ - Breaking: made AsymmetricJwsSignerSelector a subtype of JwsSignerSelector.
+ - The builder method that fetches authorization server metadata is now called fetch().
+ - The authorization server metadata method builder() is the actual struct builder.
+ - Authorization server metadata is now non-exhaustive.
 
 ## [0.5.1] - 2026-05-21
 

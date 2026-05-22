@@ -11,7 +11,8 @@ use snafu::prelude::*;
 use crate::{EndpointUrl, http::HttpClient};
 
 /// mTLS endpoint aliases from AS discovery metadata (RFC 8705 §5.1).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, bon::Builder)]
+#[non_exhaustive]
 pub struct MtlsEndpointAliases {
     /// The mTLS alias for the token endpoint.
     pub token_endpoint: Option<EndpointUrl>,
@@ -30,10 +31,12 @@ pub struct MtlsEndpointAliases {
 }
 
 /// Authorization server metadata.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, bon::Builder)]
+#[non_exhaustive]
 #[allow(clippy::struct_excessive_bools)]
 pub struct AuthorizationServerMetadata {
     /// The authorization server's issuer identifier.
+    #[builder(into)]
     pub issuer: String,
     /// The URL of the authorization server's authorization endpoint.
     pub authorization_endpoint: Option<EndpointUrl>,
@@ -51,12 +54,15 @@ pub struct AuthorizationServerMetadata {
     pub response_types_supported: Vec<String>,
     /// Array containing a list of the OAuth 2.0 "`response_mode`" values that this authorization server supports
     #[serde(default = "default_response_modes_supported")]
+    #[builder(default = default_response_modes_supported())]
     pub response_modes_supported: Vec<String>,
     /// Array containing a list of the OAuth 2.0 grant type values that this authorization server supports.
     #[serde(default = "default_grant_types_supported")]
+    #[builder(default = default_grant_types_supported())]
     pub grant_types_supported: Vec<String>,
     /// Array containing a list of client authentication methods supported by this token endpoint.
     #[serde(default = "default_auth_methods_supported")]
+    #[builder(default = default_auth_methods_supported())]
     pub token_endpoint_auth_methods_supported: Vec<String>,
     /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the token endpoint
     /// for the signature on the JWT used to authenticate the client at the token endpoint for the
@@ -74,6 +80,7 @@ pub struct AuthorizationServerMetadata {
     pub revocation_endpoint: Option<EndpointUrl>,
     /// Array containing a list of client authentication methods supported by this revocation endpoint.
     #[serde(default = "default_auth_methods_supported")]
+    #[builder(default = default_auth_methods_supported())]
     pub revocation_endpoint_auth_methods_supported: Vec<String>,
     /// Array containing a list of the JWS signing algorithms ("alg" values) supported by the revocation
     /// endpoint for the signature on the JWT used to authenticate the client at the revocation endpoint for the
@@ -90,63 +97,61 @@ pub struct AuthorizationServerMetadata {
     /// Array containing a list of Proof Key for Code Exchange (PKCE) code challenge methods supported
     /// by this authorization server.
     #[serde(default = "Vec::new")]
+    #[builder(default)]
     pub code_challenge_methods_supported: Vec<String>,
-    /**
-     * RFC 8628 - OAuth 2.0 Device Authorization Grant
-     */
+    /// RFC 8628 - OAuth 2.0 Device Authorization Grant
     pub device_authorization_endpoint: Option<EndpointUrl>,
-    /**
-     * RFC 8705 - OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens
-     */
+    /// RFC 8705 - OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens
     #[serde(default)]
+    #[builder(default)]
     pub tls_client_certificate_bound_access_tokens: bool,
     /// mTLS endpoint aliases (RFC 8705 §5).
     pub mtls_endpoint_aliases: Option<MtlsEndpointAliases>,
-    /**
-     * RFC 9126 - OAuth 2.0 Pushed Authorization Requests
-     */
-    // Specifies the URL of the pushed authorization request endpoint (RFC 9126 §5).
+    /// Specifies the URL of the pushed authorization request endpoint (RFC 9126 §5).
+    ///
+    /// RFC 9126 - OAuth 2.0 Pushed Authorization Requests
     pub pushed_authorization_request_endpoint: Option<EndpointUrl>,
     /// If true, indicates that pushed authorization requests are required (RFC 9126 §5).
     #[serde(default)]
+    #[builder(default)]
     pub require_pushed_authorization_requests: bool,
-    /**
-     * RFC 9207 - OAuth 2.0 Authorization Server Issuer Identification
-     * */
     /// Indicates support for an `iss` identifier in the authorization endpoint response (RFC 9207 §3).
+    ///
+    /// RFC 9207 - OAuth 2.0 Authorization Server Issuer Identification
     #[serde(default)]
+    #[builder(default)]
     pub authorization_response_iss_parameter_supported: bool,
-    /**
-     * `OpenID` Connect Core 1.0
-     * */
     /// The URL of the `OpenID` Connect userinfo endpoint.
+    ///
+    /// `OpenID` Connect Core 1.0
     pub userinfo_endpoint: Option<EndpointUrl>,
-    /**
-     * `OpenID` Connect Session Management 1.0
-     * */
     /// URL of an OP iframe that supports cross-origin communications for session state information
     /// with the RP Client, using the HTML5 postMessage API.
+    ///
+    /// `OpenID` Connect Session Management 1.0
     pub check_session_iframe: Option<EndpointUrl>,
-    /**
-     * `OpenID` Connect RP-Initiated Logout 1.0
-     * */
     /// URL at the OP to which an RP can perform a redirect to request that the End-User be logged out at the OP.
+    ///
+    /// `OpenID` Connect RP-Initiated Logout 1.0
     pub end_session_endpoint: Option<EndpointUrl>,
-    /**
-     * `OpenID` Connect Front-Channel Logout 1.0
-     * */
     /// Boolean value specifying whether the OP supports HTTP-based logout, with true indicating support.
+    ///
+    /// `OpenID` Connect Front-Channel Logout 1.0
     #[serde(default)]
+    #[builder(default)]
     pub frontchannel_logout_supported: bool,
-    /**
-     * `OpenID` Connect Back-Channel Logout 1.0
-     * */
     /// Boolean value specifying whether the OP supports back-channel logout, with true indicating support.
+    ///
+    /// `OpenID` Connect Back-Channel Logout 1.0
     #[serde(default)]
+    #[builder(default)]
     pub backchannel_logout_supported: bool,
     /// Boolean value specifying whether the OP can pass a `sid` (session ID) Claim in the Logout Token
     /// to identify the RP session with the OP.
+    ///
+    /// `OpenID` Connect Back-Channel Logout 1.0
     #[serde(default)]
+    #[builder(default)]
     pub backchannel_logout_session_supported: bool,
 }
 
@@ -154,7 +159,7 @@ pub struct AuthorizationServerMetadata {
 impl AuthorizationServerMetadata {
     /// Get the authorization server metadata for an issuer.
     #[builder]
-    pub async fn new<C: HttpClient>(
+    pub async fn fetch<C: HttpClient>(
         http_client: &C,
         #[builder(into)] issuer: String,
         #[builder(into, default = "/.well-known/oauth-authorization-server")]
@@ -188,18 +193,18 @@ impl AuthorizationServerMetadata {
 }
 
 impl AuthorizationServerMetadata {
-    /// Sets up appropriate builder parameters via `OpenID` Connect Discovery (RFC 8414 / `OpenID` Connect Discovery 1.0).
+    /// Sets up appropriate fetch parameters via `OpenID` Connect Discovery (RFC 8414 / `OpenID` Connect Discovery 1.0).
     ///
-    /// Equivalent to calling [`Self::builder()`](Self::builder) with
+    /// Equivalent to calling [`Self::fetch()`](Self::fetch) with
     /// `well_known_path = "/.well-known/openid-configuration"` and `use_legacy_transformation = true`.
-    pub fn oidc_builder<'c, C: HttpClient>() -> AuthorizationServerMetadataBuilder<
+    pub fn oidc_fetch<'c, C: HttpClient>() -> AuthorizationServerMetadataFetchBuilder<
         'c,
         C,
-        authorization_server_metadata_builder::SetUseLegacyTransformation<
-            authorization_server_metadata_builder::SetWellKnownPath,
+        authorization_server_metadata_fetch_builder::SetUseLegacyTransformation<
+            authorization_server_metadata_fetch_builder::SetWellKnownPath,
         >,
     > {
-        AuthorizationServerMetadata::builder()
+        AuthorizationServerMetadata::fetch()
             .well_known_path("/.well-known/openid-configuration")
             .use_legacy_transformation(true)
     }
