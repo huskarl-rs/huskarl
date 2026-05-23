@@ -3,8 +3,10 @@ use std::ops::Deref;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::client_config::{ClientConfig, ClientRepresentation};
-use crate::user_config::{UserConfig, UserRepresentation};
+use crate::{
+    client_config::{ClientConfig, ClientRepresentation},
+    user_config::{UserConfig, UserRepresentation},
+};
 
 /// Opaque error type for admin operations.
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
