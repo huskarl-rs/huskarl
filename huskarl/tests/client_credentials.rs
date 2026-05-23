@@ -24,7 +24,7 @@ use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 #[tokio::test]
 #[cfg_attr(
     not(feature = "keycloak-tests"),
-    ignore = "requires Keycloak: cd integration && mise run up"
+    ignore = "requires Keycloak: cd integration && mise run keycloak:up"
 )]
 async fn client_credentials_exchange() {
     let admin = KeycloakAdmin::local();

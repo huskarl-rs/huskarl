@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["huskarl-testkit"]
+members = ["huskarl-testkit", "huskarl-conformance"]
+
+[patch.crates-io]
+huskarl-core = { path = "../huskarl-core" }
+huskarl = { path = "../huskarl" }
+huskarl-crypto-native = { path = "../../huskarl-crypto-native" }
+huskarl-reqwest = { path = "../../huskarl-reqwest" }
 
 [workspace.dependencies]
 bon = { version = "3.9", default-features = false, features = [

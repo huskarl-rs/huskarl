@@ -1,5 +1,31 @@
-[tasks.up]
+# Keycloak (for huskarl crate integration tests)
+[tasks."keycloak:up"]
 run = "docker compose up --wait"
+depends = ["conformance:down"]
 
-[tasks.down]
+[tasks."keycloak:down"]
 run = "docker compose down"
+
+[tasks."keycloak:test"]
+run = "cargo test --manifest-path ../huskarl/Cargo.toml --features keycloak-tests"
+depends = ["keycloak:up"]
+
+# OpenID Conformance Suite (for huskarl-conformance tests)
+[tasks."conformance:up"]
+run = "docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml up --wait"
+depends = ["keycloak:down"]
+
+[tasks."conformance:down"]
+run = "docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml down"
+
+[tasks."conformance:test"]
+run = "cargo test -p huskarl-conformance --features conformance-suite-tests -- --nocapture"
+depends = ["conformance:up"]
+
+[tasks."conformance:test:oidc"]
+run = "cargo test -p huskarl-conformance --test oidc --features conformance-suite-tests -- --nocapture"
+depends = ["conformance:up"]
+
+[tasks."conformance:test:fapi2"]
+run = "cargo test -p huskarl-conformance --test fapi2 --features conformance-suite-tests -- --nocapture"
+depends = ["conformance:up"]

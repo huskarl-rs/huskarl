@@ -81,7 +81,9 @@ impl GrantConfig {
 /// let config = ClientConfig::builder()
 ///     .client_id("test-ac")
 ///     .secret("test-secret")
-///     .grant(GrantConfig::authorization_code(["http://localhost:8080/callback"]))
+///     .grant(GrantConfig::authorization_code([
+///         "http://localhost:8080/callback",
+///     ]))
 ///     .build();
 /// ```
 #[derive(Debug, Clone, Builder)]
