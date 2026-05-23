@@ -260,9 +260,9 @@ fn add_issuer_to_known_path(
     let path = issuer_as_uri.path();
     let cleaned_path = path.strip_suffix('/').unwrap_or(path);
     let new_path = if use_legacy_transformation {
-        format!("{uri_suffix}{cleaned_path}")
-    } else {
         format!("{cleaned_path}{uri_suffix}")
+    } else {
+        format!("{uri_suffix}{cleaned_path}")
     };
     let mut parts = issuer_as_uri.into_parts();
     parts.path_and_query = Some(new_path.try_into()?);

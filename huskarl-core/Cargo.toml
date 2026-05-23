@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-core"
-version = "0.6.1"
+version = "0.6.3"
 edition = "2024"
 rust-version = "1.92"
 description = "Base library for huskarl (OAuth2 client) ecosystem."
