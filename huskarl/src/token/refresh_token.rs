@@ -6,6 +6,7 @@ use crate::core::secrets::SecretString;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshToken {
     token: SecretString,
+    #[serde(skip_serializing_if = "Option::is_none")]
     dpop_jkt: Option<String>,
 }
 
