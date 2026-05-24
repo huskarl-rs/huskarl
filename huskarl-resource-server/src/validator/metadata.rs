@@ -124,74 +124,70 @@ impl ValidatorMetadata {
             && (attempted_scheme.is_none() || attempted_scheme == Some(TokenType::Bearer));
 
         if bearer_allowed {
-            let mut bearer_parts = Vec::new();
-            if let Some(realm) = self.realm.as_deref() {
-                bearer_parts.push(format!(r#"realm="{}""#, escape_quoted(realm)));
-            }
-
-            if let Some(scope) = scope {
-                bearer_parts.push(format!(r#"scope="{}""#, escape_quoted(scope)));
-            }
-
-            if include_in_bearer
-                && let Some(e) = error
-                && let TokenValidationError::Client(code) = e.token_error()
-            {
-                bearer_parts.push(format!(r#"error="{}""#, code.as_str()));
-                if let Some(desc) = e.error_description() {
-                    bearer_parts.push(format!(r#"error_description="{}""#, escape_quoted(&desc)));
-                }
-                if let Some(uri) = error_uri {
-                    bearer_parts.push(format!(r#"error_uri="{}""#, escape_quoted(uri)));
-                }
-                bearer_parts.extend(e.extra_params().into_iter().map(|p| p.format()));
-            }
-
-            let mut bearer = "Bearer".to_string();
-            if !bearer_parts.is_empty() {
-                bearer.push(' ');
-                bearer.push_str(&bearer_parts.join(", "));
-            }
-            challenges.push(bearer);
+            challenges.push(self.build_challenge(
+                "Bearer",
+                scope,
+                include_in_bearer.then_some(error).flatten(),
+                error_uri,
+            ));
         }
 
         if dpop_supported {
-            let mut dpop_parts = Vec::new();
-            if let Some(realm) = self.realm.as_deref() {
-                dpop_parts.push(format!(r#"realm="{}""#, escape_quoted(realm)));
-            }
-
-            if let Some(scope) = scope {
-                dpop_parts.push(format!(r#"scope="{}""#, escape_quoted(scope)));
-            }
-
-            if include_in_dpop
-                && let Some(e) = error
-                && let TokenValidationError::Client(code) = e.token_error()
-            {
-                dpop_parts.push(format!(r#"error="{}""#, code.as_str()));
-                if let Some(desc) = e.error_description() {
-                    dpop_parts.push(format!(r#"error_description="{}""#, escape_quoted(&desc)));
-                }
-                if let Some(uri) = error_uri {
-                    dpop_parts.push(format!(r#"error_uri="{}""#, escape_quoted(uri)));
-                }
-                dpop_parts.extend(e.extra_params().into_iter().map(|p| p.format()));
-            }
-
-            if let Some(algs) = &self.dpop_signing_alg_values_supported {
-                dpop_parts.push(format!(r#"algs="{}""#, algs.join(" ")));
-            }
-
-            let mut dpop = "DPoP".to_string();
-            if !dpop_parts.is_empty() {
-                dpop.push(' ');
-                dpop.push_str(&dpop_parts.join(", "));
-            }
-            challenges.push(dpop);
+            challenges.push(self.build_challenge(
+                "DPoP",
+                scope,
+                include_in_dpop.then_some(error).flatten(),
+                error_uri,
+            ));
         }
 
         challenges
+    }
+
+    /// Builds a single `WWW-Authenticate` challenge string for the given scheme.
+    ///
+    /// If `error` is `Some`, includes error details (code, description, uri, extra params).
+    fn build_challenge(
+        &self,
+        scheme: &str,
+        scope: Option<&str>,
+        error: Option<&dyn ToRfc6750Error>,
+        error_uri: Option<&str>,
+    ) -> String {
+        let mut parts = Vec::new();
+
+        if let Some(realm) = self.realm.as_deref() {
+            parts.push(format!(r#"realm="{}""#, escape_quoted(realm)));
+        }
+
+        if let Some(scope) = scope {
+            parts.push(format!(r#"scope="{}""#, escape_quoted(scope)));
+        }
+
+        if let Some(e) = error
+            && let TokenValidationError::Client(code) = e.token_error()
+        {
+            parts.push(format!(r#"error="{}""#, code.as_str()));
+            if let Some(desc) = e.error_description() {
+                parts.push(format!(r#"error_description="{}""#, escape_quoted(&desc)));
+            }
+            if let Some(uri) = error_uri {
+                parts.push(format!(r#"error_uri="{}""#, escape_quoted(uri)));
+            }
+            parts.extend(e.extra_params().into_iter().map(|p| p.format()));
+        }
+
+        if scheme == "DPoP"
+            && let Some(algs) = &self.dpop_signing_alg_values_supported
+        {
+            parts.push(format!(r#"algs="{}""#, algs.join(" ")));
+        }
+
+        if parts.is_empty() {
+            scheme.to_string()
+        } else {
+            format!("{} {}", scheme, parts.join(", "))
+        }
     }
 
     /// Returns the `WWW-Authenticate` header values for an unauthenticated request.

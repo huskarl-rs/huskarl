@@ -239,45 +239,36 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
 
         ensure!(introspection.active, TokenInactiveSnafu);
 
-        let expiration = introspection
-            .exp
-            .map(|ts| {
-                u64::try_from(ts).map_err(|_| {
-                    InvalidTimestampSnafu {
-                        field: "exp",
-                        value: ts,
-                    }
-                    .build()
-                })
-            })
-            .transpose()?
-            .map(|ts| SystemTime::UNIX_EPOCH + Duration::from_secs(ts));
-        let issued_at = introspection
-            .iat
-            .map(|ts| {
-                u64::try_from(ts).map_err(|_| {
-                    InvalidTimestampSnafu {
-                        field: "iat",
-                        value: ts,
-                    }
-                    .build()
-                })
-            })
-            .transpose()?
-            .map(|ts| SystemTime::UNIX_EPOCH + Duration::from_secs(ts));
-
         Ok(ValidatedRequest {
+            expiration: parse_optional_timestamp("exp", introspection.exp)?,
+            issued_at: parse_optional_timestamp("iat", introspection.iat)?,
             issuer: introspection.iss,
             subject: introspection.sub,
             audience: introspection.aud,
             jti: introspection.jti,
-            issued_at,
-            expiration,
             cnf: introspection.cnf,
             claims: introspection.claims,
             introspection_jwt,
         })
     }
+}
+
+/// Converts an optional `i64` timestamp to `Option<SystemTime>`.
+fn parse_optional_timestamp<
+    AuthErr: crate::core::Error,
+    HttpErr: crate::core::Error,
+    HttpRespErr: crate::core::Error,
+>(
+    field: &'static str,
+    value: Option<i64>,
+) -> Result<Option<SystemTime>, IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>> {
+    value
+        .map(|ts| {
+            u64::try_from(ts)
+                .map(|ts| SystemTime::UNIX_EPOCH + Duration::from_secs(ts))
+                .map_err(|_| InvalidTimestampSnafu { field, value: ts }.build())
+        })
+        .transpose()
 }
 
 /// RFC 7662 §2.2 introspection response.
