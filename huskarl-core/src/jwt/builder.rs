@@ -115,6 +115,32 @@ where
         self.issued_at(now).expiration(now + after)
     }
 
+    /// Sets `iat`, `nbf`, and `exp` from a single captured timestamp.
+    ///
+    /// Equivalent to [`issued_now_expires_after`](Self::issued_now_expires_after) but also sets
+    /// `nbf` to the same `now` value, ensuring `iat == nbf` without a race between calls.
+    ///
+    /// # Panics
+    ///
+    /// This call panics if the reported time is before the epoch.
+    pub fn issued_now_not_before_now_expires_after(
+        self,
+        after: Duration,
+    ) -> JwtBuilder<
+        'a,
+        ExtraHeaders,
+        Claims,
+        jwt_builder::SetNotBefore<jwt_builder::SetExpiration<jwt_builder::SetIssuedAt<S>>>,
+    >
+    where
+        S::IssuedAt: jwt_builder::IsUnset,
+        S::Expiration: jwt_builder::IsUnset,
+        S::NotBefore: jwt_builder::IsUnset,
+    {
+        let now = crate::platform::SystemTime::now();
+        self.issued_at(now).expiration(now + after).not_before(now)
+    }
+
     /// Sets additional claims for the JWT, replacing the current claims type parameter.
     pub fn claims<E2>(self, claims: E2) -> JwtBuilder<'a, ExtraHeaders, E2, SetClaims<S>>
     where

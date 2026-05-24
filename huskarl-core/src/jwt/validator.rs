@@ -173,108 +173,137 @@ fn check_str_claim(
     Ok(())
 }
 
-impl JwtValidator {
-    /// Validate a pre-parsed JWS, returning a [`ValidatedJwt`] on success.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`JwtValidationError`] if the token is invalid.
-    #[allow(clippy::too_many_lines)]
-    pub async fn validate_parsed_jws<C: for<'de> Deserialize<'de> + Clone + 'static>(
-        &self,
-        parsed_jwt: ParsedJws<(), C>,
-    ) -> Result<ValidatedJwt<C>, JwtValidationError> {
-        let now = SystemTime::now();
+fn check_aud(check: &ClaimCheck, aud: &[String]) -> Result<(), JwtValidationError> {
+    match check {
+        ClaimCheck::Present => ensure!(!aud.is_empty(), RequiredClaimMissingSnafu { claim: "aud" }),
+        ClaimCheck::RequiredValue(v) => ensure!(
+            aud.contains(v),
+            ClaimMismatchSnafu {
+                claim: "aud",
+                expected: v.clone(),
+                actual: aud.join(", "),
+            }
+        ),
+        ClaimCheck::RequireAny(vs) => ensure!(
+            vs.iter().any(|v| aud.contains(v)),
+            ClaimMismatchSnafu {
+                claim: "aud",
+                expected: vs.join(", "),
+                actual: aud.join(", "),
+            }
+        ),
+        ClaimCheck::IfPresent(v) => {
+            if !aud.is_empty() {
+                ensure!(
+                    aud.contains(v),
+                    ClaimMismatchSnafu {
+                        claim: "aud",
+                        expected: v.clone(),
+                        actual: aud.join(", "),
+                    }
+                );
+            }
+        }
+        ClaimCheck::NoCheck => {}
+    }
+    Ok(())
+}
 
-        ensure!(parsed_jwt.header.alg != "none", UnsignedTokenSnafu);
+fn check_typ(check: &ClaimCheck, typ: Option<&str>) -> Result<(), JwtValidationError> {
+    match check {
+        ClaimCheck::IfPresent(t) => ensure!(
+            typ.is_none_or(|v| normalize_typ(v).eq_ignore_ascii_case(normalize_typ(t))),
+            InvalidTokenTypeSnafu {
+                typ: typ.map(Into::into)
+            }
+        ),
+        ClaimCheck::RequireAny(allowed) => match typ {
+            None => return RequiredClaimMissingSnafu { claim: "typ" }.fail(),
+            Some(v)
+                if allowed
+                    .iter()
+                    .any(|t| normalize_typ(v).eq_ignore_ascii_case(normalize_typ(t))) => {}
+            Some(v) => {
+                return InvalidTokenTypeSnafu {
+                    typ: Some(v.into()),
+                }
+                .fail();
+            }
+        },
+        ClaimCheck::RequiredValue(t) => match typ {
+            None => return RequiredClaimMissingSnafu { claim: "typ" }.fail(),
+            Some(v) if normalize_typ(v).eq_ignore_ascii_case(normalize_typ(t)) => {}
+            Some(v) => {
+                return InvalidTokenTypeSnafu {
+                    typ: Some(v.into()),
+                }
+                .fail();
+            }
+        },
+        ClaimCheck::Present => {
+            ensure!(typ.is_some(), RequiredClaimMissingSnafu { claim: "typ" });
+        }
+        ClaimCheck::NoCheck => {}
+    }
+    Ok(())
+}
+
+fn check_temporal(
+    now: SystemTime,
+    clock_leeway: Duration,
+    exp: Option<u64>,
+    nbf: Option<u64>,
+    iat: Option<u64>,
+) -> Result<(), JwtValidationError> {
+    if let Some(exp) = exp {
+        let expiration = SystemTime::UNIX_EPOCH + Duration::from_secs(exp);
+        ensure!(
+            expiration + clock_leeway >= now,
+            ExpiredSnafu { expiration, now }
+        );
+    }
+    if let Some(nbf) = nbf {
+        let not_before = SystemTime::UNIX_EPOCH + Duration::from_secs(nbf);
+        ensure!(
+            not_before <= now + clock_leeway,
+            NotYetValidSnafu { not_before, now }
+        );
+    }
+    if let Some(iat) = iat {
+        let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(iat);
+        ensure!(
+            issued_at <= now + clock_leeway,
+            IssuedInFutureSnafu { issued_at, now }
+        );
+    }
+    Ok(())
+}
+
+impl JwtValidator {
+    fn validate_header(&self, alg: &str, crit: &[String]) -> Result<(), JwtValidationError> {
+        ensure!(alg != "none", UnsignedTokenSnafu);
 
         if let Some(allowed) = &self.allowed_algorithms {
             ensure!(
-                allowed.contains(&*parsed_jwt.header.alg),
+                allowed.contains(alg),
                 DisallowedAlgorithmSnafu {
-                    alg: parsed_jwt.header.alg.to_string()
+                    alg: alg.to_string()
                 }
             );
         }
 
         ensure!(
-            parsed_jwt
-                .header
-                .crit
-                .iter()
-                .all(|v| self.allowed_crit.contains(v)),
+            crit.iter().all(|v| self.allowed_crit.contains(v)),
             UnrecognizedCriticalHeaderSnafu {
-                params: parsed_jwt.header.crit
+                params: crit.to_vec()
             }
         );
 
-        let key_match = KeyMatch {
-            alg: &parsed_jwt.header.alg,
-            kid: parsed_jwt.header.kid.as_deref(),
-        };
-        self.verifier
-            .verify(&parsed_jwt.signing_input, &parsed_jwt.signature, &key_match)
-            .await
-            .context(SignatureSnafu)?;
+        Ok(())
+    }
 
-        match &self.aud {
-            ClaimCheck::Present => ensure!(
-                !parsed_jwt.claims.aud.is_empty(),
-                RequiredClaimMissingSnafu { claim: "aud" }
-            ),
-            ClaimCheck::RequiredValue(v) => ensure!(
-                parsed_jwt.claims.aud.contains(v),
-                ClaimMismatchSnafu {
-                    claim: "aud",
-                    expected: v.clone(),
-                    actual: parsed_jwt.claims.aud.join(", "),
-                }
-            ),
-            ClaimCheck::RequireAny(vs) => ensure!(
-                vs.iter().any(|v| parsed_jwt.claims.aud.contains(v)),
-                ClaimMismatchSnafu {
-                    claim: "aud",
-                    expected: vs.join(", "),
-                    actual: parsed_jwt.claims.aud.join(", "),
-                }
-            ),
-            ClaimCheck::IfPresent(v) => {
-                if !parsed_jwt.claims.aud.is_empty() {
-                    ensure!(
-                        parsed_jwt.claims.aud.contains(v),
-                        ClaimMismatchSnafu {
-                            claim: "aud",
-                            expected: v.clone(),
-                            actual: parsed_jwt.claims.aud.join(", "),
-                        }
-                    );
-                }
-            }
-            ClaimCheck::NoCheck => {}
-        }
-
-        if self.require_exp {
-            ensure!(
-                parsed_jwt.claims.exp.is_some(),
-                RequiredClaimMissingSnafu { claim: "exp" }
-            );
-        }
-
-        if self.require_iat {
-            ensure!(
-                parsed_jwt.claims.iat.is_some(),
-                RequiredClaimMissingSnafu { claim: "iat" }
-            );
-        }
-
-        if self.require_jti {
-            ensure!(
-                parsed_jwt.claims.jti.is_some(),
-                RequiredClaimMissingSnafu { claim: "jti" }
-            );
-        }
-
-        if let Some(jti) = parsed_jwt.claims.jti.as_deref() {
+    async fn validate_jti(&self, jti: Option<&str>) -> Result<(), JwtValidationError> {
+        if let Some(jti) = jti {
             ensure!(
                 jti.len() <= self.max_jti_len,
                 JtiTooLongSnafu {
@@ -292,6 +321,56 @@ impl JwtValidator {
                 );
             }
         }
+        Ok(())
+    }
+
+    fn check_required_claims(
+        &self,
+        exp: Option<u64>,
+        iat: Option<u64>,
+        jti: Option<&str>,
+    ) -> Result<(), JwtValidationError> {
+        if self.require_exp {
+            ensure!(exp.is_some(), RequiredClaimMissingSnafu { claim: "exp" });
+        }
+        if self.require_iat {
+            ensure!(iat.is_some(), RequiredClaimMissingSnafu { claim: "iat" });
+        }
+        if self.require_jti {
+            ensure!(jti.is_some(), RequiredClaimMissingSnafu { claim: "jti" });
+        }
+        Ok(())
+    }
+
+    /// Validate a pre-parsed JWS, returning a [`ValidatedJwt`] on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JwtValidationError`] if the token is invalid.
+    pub async fn validate_parsed_jws<C: for<'de> Deserialize<'de> + Clone + 'static>(
+        &self,
+        parsed_jwt: ParsedJws<(), C>,
+    ) -> Result<ValidatedJwt<C>, JwtValidationError> {
+        let now = SystemTime::now();
+
+        self.validate_header(&parsed_jwt.header.alg, &parsed_jwt.header.crit)?;
+
+        let key_match = KeyMatch {
+            alg: &parsed_jwt.header.alg,
+            kid: parsed_jwt.header.kid.as_deref(),
+        };
+        self.verifier
+            .verify(&parsed_jwt.signing_input, &parsed_jwt.signature, &key_match)
+            .await
+            .context(SignatureSnafu)?;
+
+        check_aud(&self.aud, &parsed_jwt.claims.aud)?;
+        self.check_required_claims(
+            parsed_jwt.claims.exp,
+            parsed_jwt.claims.iat,
+            parsed_jwt.claims.jti.as_deref(),
+        )?;
+        self.validate_jti(parsed_jwt.claims.jti.as_deref()).await?;
 
         if let Some(max_token_age) = self.max_token_age {
             let iat = parsed_jwt
@@ -311,73 +390,17 @@ impl JwtValidator {
             );
         }
 
-        match &self.typ {
-            ClaimCheck::IfPresent(t) => ensure!(
-                parsed_jwt.header.typ.as_ref().is_none_or(|typ| {
-                    normalize_typ(typ).eq_ignore_ascii_case(normalize_typ(t))
-                }),
-                InvalidTokenTypeSnafu {
-                    typ: parsed_jwt.header.typ.map(Into::into)
-                }
-            ),
-            ClaimCheck::RequireAny(allowed) => match parsed_jwt.header.typ.as_deref() {
-                None => return RequiredClaimMissingSnafu { claim: "typ" }.fail(),
-                Some(typ)
-                    if allowed
-                        .iter()
-                        .any(|t| normalize_typ(typ).eq_ignore_ascii_case(normalize_typ(t))) => {}
-                Some(typ) => {
-                    return InvalidTokenTypeSnafu {
-                        typ: Some(typ.into()),
-                    }
-                    .fail();
-                }
-            },
-            ClaimCheck::RequiredValue(t) => match parsed_jwt.header.typ.as_deref() {
-                None => return RequiredClaimMissingSnafu { claim: "typ" }.fail(),
-                Some(typ) if normalize_typ(typ).eq_ignore_ascii_case(normalize_typ(t)) => {}
-                Some(typ) => {
-                    return InvalidTokenTypeSnafu {
-                        typ: Some(typ.into()),
-                    }
-                    .fail();
-                }
-            },
-            ClaimCheck::Present => {
-                ensure!(
-                    parsed_jwt.header.typ.is_some(),
-                    RequiredClaimMissingSnafu { claim: "typ" }
-                );
-            }
-            ClaimCheck::NoCheck => {}
-        }
-
+        check_typ(&self.typ, parsed_jwt.header.typ.as_deref())?;
         check_str_claim("iss", &self.iss, parsed_jwt.claims.iss.as_deref())?;
         check_str_claim("sub", &self.sub, parsed_jwt.claims.sub.as_deref())?;
 
-        if let Some(exp) = parsed_jwt.claims.exp {
-            let expiration = SystemTime::UNIX_EPOCH + Duration::from_secs(exp);
-            ensure!(
-                expiration + self.clock_leeway >= now,
-                ExpiredSnafu { expiration, now }
-            );
-        }
-
-        if let Some(nbf) = parsed_jwt.claims.nbf {
-            let not_before = SystemTime::UNIX_EPOCH + Duration::from_secs(nbf);
-            ensure!(
-                not_before <= now + self.clock_leeway,
-                NotYetValidSnafu { not_before, now }
-            );
-        }
-
-        if let Some(iat) = parsed_jwt.claims.iat {
-            let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(iat);
-            ensure!(
-                issued_at <= now + self.clock_leeway,
-                IssuedInFutureSnafu { issued_at, now }
-            );
-        }
+        check_temporal(
+            now,
+            self.clock_leeway,
+            parsed_jwt.claims.exp,
+            parsed_jwt.claims.nbf,
+            parsed_jwt.claims.iat,
+        )?;
 
         Ok(ValidatedJwt {
             issuer: parsed_jwt.claims.iss.map(Into::into),
