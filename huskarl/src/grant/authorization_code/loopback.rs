@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde::Deserialize;
 use snafu::{ResultExt as _, Snafu};
 use tokio::{
-    io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader},
+    io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
     net::{TcpListener, TcpStream},
 };
 use url::Url;
@@ -286,7 +286,15 @@ async fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, std
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
 
-    // Drain remaining headers until empty line
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    if parts.len() < 2 {
+        return Ok(None);
+    }
+    let method = parts[0];
+    let path = parts[1].to_owned();
+
+    // Read headers, collecting Content-Length for POST bodies.
+    let mut content_length: Option<usize> = None;
     let mut header_line = String::new();
     loop {
         header_line.clear();
@@ -294,14 +302,28 @@ async fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, std
         if header_line.trim().is_empty() {
             break;
         }
+        let lower = header_line.to_ascii_lowercase();
+        if let Some(val) = lower.strip_prefix("content-length:") {
+            content_length = val.trim().parse().ok();
+        }
     }
 
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        return Ok(None);
+    // For POST requests (response_mode=form_post), the callback parameters
+    // arrive as a form-encoded body rather than query parameters. Read the
+    // body and append it as a query string so parse_callback_params works
+    // without modification.
+    if method.eq_ignore_ascii_case("POST")
+        && let Some(len) = content_length
+    {
+        let mut body = vec![0u8; len];
+        reader.read_exact(&mut body).await?;
+        let body_str = String::from_utf8(body)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let path_base = path.split('?').next().unwrap_or(&path);
+        return Ok(Some(format!("{path_base}?{body_str}")));
     }
 
-    Ok(Some(parts[1].to_owned()))
+    Ok(Some(path))
 }
 
 fn parse_callback_params<E: crate::core::Error + 'static>(

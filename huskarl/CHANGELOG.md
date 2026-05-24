@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Update client auth on DPoP-based retry (private key jwt must have different jti if present).
  - Adds allowed_id_token_signed_response_algs to filter allowed algorithms for ID token signature algorithm.
  - Checks that azp has the client_id if the aud value of an ID token has multiple values.
+ - Support form_post response mode in loopback server.
+ - Skip serializing None fields in various requests.
 
 ## [0.6.0] - 2026-05-06
 

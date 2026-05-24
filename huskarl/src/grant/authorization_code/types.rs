@@ -11,17 +11,26 @@ pub struct AuthorizationPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) scope: Option<&'a str>,
     pub(super) state: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) code_challenge: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) code_challenge_method: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) dpop_jkt: Option<String>,
     pub(super) nonce: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) display: Option<&'a Display>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) prompt: Option<&'a Prompt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) max_age: Option<&'a Duration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) ui_locales: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) id_token_hint: Option<&'a IdToken>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) login_hint: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) acr_values: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) resource: Option<&'a [String]>,
