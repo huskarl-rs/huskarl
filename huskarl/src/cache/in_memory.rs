@@ -67,80 +67,43 @@ where
         &self,
         http_client: &C,
     ) -> Result<Arc<TokenResponse>, GetTokenError<Self::Error<C>>> {
-        let maybe_cached_token = self.cached.load_full();
-        let mut best_error: Option<Self::Error<C>> = None;
-
-        if let Some(cached_token) = maybe_cached_token
-            && !cached_token
-                .access_token()
-                .is_expired(self.default_expires_in, self.expires_margin)
-        {
-            return Ok(cached_token);
+        if let Some(token) = self.get_valid_cached() {
+            return Ok(token);
         }
 
         let _refresh_lock = self.refresh_lock.lock().await;
 
-        let maybe_cached_token = self.cached.load_full();
-
-        if let Some(cached_token) = maybe_cached_token
-            && !cached_token
-                .access_token()
-                .is_expired(self.default_expires_in, self.expires_margin)
-        {
-            return Ok(cached_token);
+        if let Some(token) = self.get_valid_cached() {
+            return Ok(token);
         }
 
-        if let Some(refresh_token) = self.refresh_store.get().await {
-            let token_response = self
-                .grant
-                .to_refresh_grant()
-                .exchange(
-                    http_client,
-                    RefreshGrantParameters::builder()
-                        .refresh_token(refresh_token)
-                        .build(),
-                )
-                .await;
+        let refresh_error = match self.try_refresh(http_client).await {
+            Ok(token) => return Ok(token),
+            Err(e) => e,
+        };
 
-            match token_response {
-                Ok(token_response) => {
-                    let token_response = Arc::new(token_response);
-
-                    self.store_token_response(token_response.clone()).await;
-
-                    return Ok(token_response);
-                }
-                Err(err) => {
-                    self.refresh_store.clear().await;
-                    self.has_refresh_token_cached
-                        .store(false, Ordering::Relaxed);
-                    best_error = Some(err);
-                }
-            }
-        }
-
-        if let Some(params) = self.grant_parameters.clone() {
-            match self.grant.exchange(http_client, params).await {
-                Ok(token_response) => {
-                    let token_response = Arc::new(token_response);
-                    self.store_token_response(token_response.clone()).await;
-                    Ok(token_response)
-                }
-                Err(exchange_source) => Err(match best_error {
-                    Some(refresh_source) => GetTokenError::BothFailed {
-                        refresh_source,
-                        exchange_source,
-                    },
-                    None => GetTokenError::ExchangeFailed {
-                        source: exchange_source,
-                    },
-                }),
-            }
-        } else {
-            match best_error {
+        let Some(params) = self.grant_parameters.clone() else {
+            return match refresh_error {
                 Some(source) => Err(GetTokenError::RefreshFailed { source }),
                 None => Err(GetTokenError::NoTokenSource),
+            };
+        };
+
+        match self.grant.exchange(http_client, params).await {
+            Ok(token_response) => {
+                let token_response = Arc::new(token_response);
+                self.store_token_response(token_response.clone()).await;
+                Ok(token_response)
             }
+            Err(exchange_source) => Err(match refresh_error {
+                Some(refresh_source) => GetTokenError::BothFailed {
+                    refresh_source,
+                    exchange_source,
+                },
+                None => GetTokenError::ExchangeFailed {
+                    source: exchange_source,
+                },
+            }),
         }
     }
 
@@ -195,6 +158,48 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> InMemoryTokenCache<G, S> {
         self.refresh_store.clear().await;
         self.has_refresh_token_cached
             .store(false, Ordering::Relaxed);
+    }
+
+    fn get_valid_cached(&self) -> Option<Arc<TokenResponse>> {
+        self.cached.load_full().filter(|t| {
+            !t.access_token()
+                .is_expired(self.default_expires_in, self.expires_margin)
+        })
+    }
+
+    /// Attempts to refresh the token.
+    ///
+    /// Returns `Ok(token)` on success, `Err(Some(error))` if refresh failed,
+    /// or `Err(None)` if no refresh token is available.
+    async fn try_refresh<C: HttpClient>(
+        &self,
+        http_client: &C,
+    ) -> Result<Arc<TokenResponse>, Option<ExchangeError<C, G>>> {
+        let refresh_token = self.refresh_store.get().await.ok_or(None)?;
+
+        match self
+            .grant
+            .to_refresh_grant()
+            .exchange(
+                http_client,
+                RefreshGrantParameters::builder()
+                    .refresh_token(refresh_token)
+                    .build(),
+            )
+            .await
+        {
+            Ok(token_response) => {
+                let token_response = Arc::new(token_response);
+                self.store_token_response(token_response.clone()).await;
+                Ok(token_response)
+            }
+            Err(err) => {
+                self.refresh_store.clear().await;
+                self.has_refresh_token_cached
+                    .store(false, Ordering::Relaxed);
+                Err(Some(err))
+            }
+        }
     }
 
     async fn store_token_response(&self, token: Arc<TokenResponse>) {
