@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Improvements
+
+ - Adds a userinfo client.
+
 ### Changes
 
  - Update client auth on DPoP-based retry (private key jwt must have different jti if present).
