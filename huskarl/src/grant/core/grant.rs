@@ -12,7 +12,7 @@ use crate::{
     grant::{
         core::{
             ExchangeError,
-            form::{OAuth2FormError, OAuth2FormRequest},
+            form::{DPoPNonceError, OAuth2FormError, OAuth2FormRequest, with_dpop_nonce_retry},
             token_response::{InvalidTokenResponse, RawTokenResponse, TokenResponse},
         },
         refresh::RefreshGrant,
@@ -115,28 +115,31 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .or_else(|| self.dpop().get_current_thumbprint());
 
             let effective_endpoint = self.effective_token_endpoint(http_client.uses_mtls());
-            let auth_params = self
-                .client_auth()
-                .authentication_params(
-                    self.client_id(),
-                    self.issuer(),
-                    effective_endpoint.as_uri(),
-                    self.allowed_auth_methods(),
-                )
-                .await
-                .context(AuthSnafu)?;
             let form = self.build_form(params);
 
-            let raw_token_response: RawTokenResponse = OAuth2FormRequest::builder()
-                .auth_params(auth_params)
-                .dpop(self.dpop())
-                .maybe_dpop_jkt(dpop_jkt.as_deref())
-                .form(&form)
-                .uri(effective_endpoint.as_uri())
-                .build()
-                .execute(http_client)
-                .await
-                .context(OAuth2FormSnafu)?;
+            let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
+                let auth_params = self
+                    .client_auth()
+                    .authentication_params(
+                        self.client_id(),
+                        self.issuer(),
+                        effective_endpoint.as_uri(),
+                        self.allowed_auth_methods(),
+                    )
+                    .await
+                    .context(AuthSnafu)?;
+
+                OAuth2FormRequest::builder()
+                    .auth_params(auth_params)
+                    .dpop(self.dpop())
+                    .maybe_dpop_jkt(dpop_jkt.as_deref())
+                    .form(&form)
+                    .uri(effective_endpoint.as_uri())
+                    .build()
+                    .execute(http_client)
+                    .await
+                    .context(OAuth2FormSnafu)
+            })?;
 
             raw_token_response
                 .into_token_response(dpop_jkt, crate::core::platform::SystemTime::now())
@@ -171,6 +174,18 @@ pub enum OAuth2ExchangeGrantError<
         /// The underlying error.
         source: InvalidTokenResponse,
     },
+}
+
+impl<
+    HttpErr: crate::core::Error,
+    HttpRespErr: crate::core::Error,
+    AuthErr: crate::core::Error,
+    DPoPErr: crate::core::Error,
+> DPoPNonceError for OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
+{
+    fn is_dpop_nonce_required(&self) -> bool {
+        matches!(self, Self::OAuth2Form { source } if source.is_dpop_nonce_required())
+    }
 }
 
 impl<
