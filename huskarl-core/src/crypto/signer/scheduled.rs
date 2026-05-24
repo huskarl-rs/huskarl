@@ -96,20 +96,8 @@ where
 impl<S> super::AsymmetricJwsSignerSelector for ScheduledRefreshSigner<S>
 where
     S: super::AsymmetricJwsSignerSelector + std::fmt::Debug + MaybeSendSync + 'static,
-    S::AsymmetricSigner: super::asymmetric::AsymmetricJwsSigner,
 {
-    type AsymmetricSigner = S::AsymmetricSigner;
-
-    fn select_asymmetric_signer(&self) -> Self::AsymmetricSigner {
-        self.inner.load().select_asymmetric_signer()
-    }
-
-    fn select_asymmetric_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Self::AsymmetricSigner> {
-        self.inner
-            .load()
-            .select_asymmetric_signer_by_thumbprint(thumbprint)
+    fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<S::Signer> {
+        self.inner.load().select_signer_by_thumbprint(thumbprint)
     }
 }

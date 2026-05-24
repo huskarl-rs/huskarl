@@ -3,7 +3,7 @@ use std::{borrow::Cow, sync::Arc};
 use crate::{
     BoxedError,
     crypto::signer::{
-        JwsSigner,
+        JwsSigner, JwsSignerSelector,
         asymmetric::{AsymmetricJwsSigner, AsymmetricJwsSignerSelector},
         symmetric::boxed::DynJwsSigner,
     },
@@ -29,40 +29,32 @@ impl BoxedAsymmetricJwsSignerSelector {
 pub(in crate::crypto::signer) trait DynAsymmetricJwsSignerSelector:
     std::fmt::Debug + MaybeSendSync
 {
-    fn select_asymmetric_signer(&self) -> BoxedAsymmetricJwsSigner;
-    fn select_asymmetric_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<BoxedAsymmetricJwsSigner>;
+    fn select_signer(&self) -> BoxedAsymmetricJwsSigner;
+    fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<BoxedAsymmetricJwsSigner>;
 }
 
 impl<Sgn: AsymmetricJwsSignerSelector + 'static> DynAsymmetricJwsSignerSelector for Sgn {
-    fn select_asymmetric_signer(&self) -> BoxedAsymmetricJwsSigner {
-        BoxedAsymmetricJwsSigner::new(self.select_asymmetric_signer())
+    fn select_signer(&self) -> BoxedAsymmetricJwsSigner {
+        BoxedAsymmetricJwsSigner::new(self.select_signer())
     }
 
-    fn select_asymmetric_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<BoxedAsymmetricJwsSigner> {
-        self.select_asymmetric_signer_by_thumbprint(thumbprint)
+    fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<BoxedAsymmetricJwsSigner> {
+        self.select_signer_by_thumbprint(thumbprint)
             .map(BoxedAsymmetricJwsSigner::new)
     }
 }
 
-impl AsymmetricJwsSignerSelector for BoxedAsymmetricJwsSignerSelector {
-    type AsymmetricSigner = BoxedAsymmetricJwsSigner;
+impl JwsSignerSelector for BoxedAsymmetricJwsSignerSelector {
+    type Signer = BoxedAsymmetricJwsSigner;
 
-    fn select_asymmetric_signer(&self) -> Self::AsymmetricSigner {
-        self.inner.select_asymmetric_signer()
+    fn select_signer(&self) -> BoxedAsymmetricJwsSigner {
+        self.inner.select_signer()
     }
+}
 
-    fn select_asymmetric_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Self::AsymmetricSigner> {
-        self.inner
-            .select_asymmetric_signer_by_thumbprint(thumbprint)
+impl AsymmetricJwsSignerSelector for BoxedAsymmetricJwsSignerSelector {
+    fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<BoxedAsymmetricJwsSigner> {
+        self.inner.select_signer_by_thumbprint(thumbprint)
     }
 }
 
