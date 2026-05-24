@@ -48,9 +48,10 @@ impl<S: JwsSignerSelector> Jar for S {
         authorization_payload: AuthorizationPayloadWithClientId<'_>,
     ) -> Result<Option<SecretString>, Self::Error> {
         Jwt::builder()
+            .typ("oauth-authz-req+jwt")
             .issuer(authorization_payload.client_id)
             .audience(audience)
-            .issued_now_expires_after(Duration::from_mins(1))
+            .issued_now_not_before_now_expires_after(Duration::from_mins(1))
             .claims(authorization_payload)
             .build()
             .to_jws_compact(&self.select_signer())

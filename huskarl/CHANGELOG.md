@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Support form_post response mode in loopback server.
  - Skip serializing None fields in various requests.
  - Bump huskarl-core to 0.6.
+ - Set JAR typ and nbf claims.
 
 ## [0.6.0] - 2026-05-06
 
