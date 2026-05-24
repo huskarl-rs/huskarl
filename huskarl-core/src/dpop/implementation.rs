@@ -32,7 +32,7 @@ pub struct DPoP<Sgn: AsymmetricJwsSignerSelector = BoxedAsymmetricJwsSignerSelec
 }
 
 impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
-    type Error = JwsSerializationError<<Sgn::AsymmetricSigner as JwsSigner>::Error>;
+    type Error = JwsSerializationError<<Sgn::Signer as JwsSigner>::Error>;
     type ResourceServerDPoP = ResourceDPoP<Sgn>;
 
     fn update_nonce(&self, nonce: String) {
@@ -48,10 +48,7 @@ impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
     }
 
     fn get_current_thumbprint(&self) -> Option<String> {
-        self.signer
-            .select_asymmetric_signer()
-            .public_key_jwk()
-            .thumbprint()
+        self.signer.select_signer().public_key_jwk().thumbprint()
     }
 
     async fn proof(
@@ -73,7 +70,7 @@ impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
 
         let signer = self
             .signer
-            .select_asymmetric_signer_by_thumbprint(dpop_jkt)
+            .select_signer_by_thumbprint(dpop_jkt)
             .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
 
         sign_proof(&signer, method, uri, None, nonce).await
@@ -93,7 +90,7 @@ pub struct ResourceDPoP<Sgn: AsymmetricJwsSignerSelector> {
 }
 
 impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> {
-    type Error = JwsSerializationError<<Sgn::AsymmetricSigner as JwsSigner>::Error>;
+    type Error = JwsSerializationError<<Sgn::Signer as JwsSigner>::Error>;
 
     fn update_nonce(&self, uri: &Uri, nonce: String) {
         let origin = origin_from_uri(uri);
@@ -125,7 +122,7 @@ impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> 
 
         let signer = self
             .signer
-            .select_asymmetric_signer_by_thumbprint(dpop_jkt)
+            .select_signer_by_thumbprint(dpop_jkt)
             .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
 
         sign_proof(
