@@ -106,6 +106,7 @@ pub mod grant;
 pub mod prelude;
 pub mod revocation;
 pub mod token;
+pub mod userinfo;
 
 use std::sync::Arc;
 
