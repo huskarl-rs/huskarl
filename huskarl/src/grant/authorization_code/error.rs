@@ -1,6 +1,9 @@
 use snafu::Snafu;
 
-use crate::{grant::core::form::OAuth2FormError, token::id_token::IdTokenValidationError};
+use crate::{
+    grant::core::form::{DPoPNonceError, OAuth2FormError},
+    token::id_token::IdTokenValidationError,
+};
 
 /// An error that occurs when attempting to start an authorization code flow.
 #[derive(Debug, Snafu)]
@@ -86,6 +89,19 @@ pub enum CompleteError<GrantErr: crate::core::Error + 'static> {
         /// The underlying validation error.
         source: IdTokenValidationError,
     },
+}
+
+impl<
+    AuthErr: crate::core::Error + 'static,
+    HttpErr: crate::core::Error + 'static,
+    HttpRespErr: crate::core::Error + 'static,
+    DPoPErr: crate::core::Error + 'static,
+    JarErr: crate::core::Error + 'static,
+> DPoPNonceError for StartError<AuthErr, HttpErr, HttpRespErr, DPoPErr, JarErr>
+{
+    fn is_dpop_nonce_required(&self) -> bool {
+        matches!(self, Self::ParRequest { source } if source.is_dpop_nonce_required())
+    }
 }
 
 impl<

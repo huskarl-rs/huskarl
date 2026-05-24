@@ -197,6 +197,25 @@ impl IdTokenValidator {
             }
         }
 
+        // OIDC Core §3.1.3.7 clauses 3 & 4: when aud contains multiple values, azp MUST be
+        // present and match our client_id.
+        if validated_jwt.audience.len() > 1 {
+            let azp = validated_jwt
+                .claims
+                .azp
+                .as_deref()
+                .ok_or_else(|| AzpMissingSnafu.build())?;
+            if let Some(expected) = self.audience.as_deref() {
+                ensure!(
+                    azp == expected,
+                    AzpMismatchSnafu {
+                        expected: expected.to_string(),
+                        actual: azp.to_string(),
+                    }
+                );
+            }
+        }
+
         // OIDC Core §3.1.3.7 step 5: if azp is present, it MUST contain our client_id.
         if let Some(expected_azp) = &self.expected_azp
             && let Some(azp) = validated_jwt.claims.azp.as_ref()
@@ -249,6 +268,9 @@ pub enum IdTokenValidationError {
         /// The maximum age in seconds.
         max_age_secs: u64,
     },
+    /// `azp` claim missing when `aud` contains multiple values. OIDC Core §3.1.3.7 clause 4.
+    #[snafu(display("azp claim is required when aud contains multiple values"))]
+    AzpMissing,
     /// `azp` claim present but does not match the expected client ID. OIDC Core §3.1.3.7 step 5.
     AzpMismatch {
         /// The expected authorized party.

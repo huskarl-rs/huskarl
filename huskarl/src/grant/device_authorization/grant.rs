@@ -14,7 +14,10 @@ use crate::{
     grant::{
         core::{
             ExchangeError, OAuth2ExchangeGrant, OAuth2ExchangeGrantError, TokenResponse,
-            form::{HandleResponseError, OAuth2ErrorBody, OAuth2FormError, OAuth2FormRequest},
+            form::{
+                DPoPNonceError, HandleResponseError, OAuth2ErrorBody, OAuth2FormError,
+                OAuth2FormRequest, with_dpop_nonce_retry,
+            },
         },
         device_authorization::grant::builder::{
             SetDeviceAuthorizationEndpoint, SetMtlsDeviceAuthorizationEndpoint,
@@ -104,20 +107,23 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
 
         let dpop_jkt = self.dpop().get_current_thumbprint();
 
-        let response: DeviceAuthorizationResponse = OAuth2FormRequest::builder()
-            .form(&payload)
-            .auth_params(
-                self.authentication_params()
-                    .await
-                    .context(ClientAuthSnafu)?,
-            )
-            .uri(effective_device_auth_endpoint.as_uri())
-            .dpop(self.dpop())
-            .maybe_dpop_jkt(dpop_jkt.as_deref())
-            .build()
-            .execute(http_client)
-            .await
-            .context(FormSnafu)?;
+        let response: DeviceAuthorizationResponse = with_dpop_nonce_retry!({
+            let auth_params = self
+                .authentication_params()
+                .await
+                .context(ClientAuthSnafu)?;
+
+            OAuth2FormRequest::builder()
+                .form(&payload)
+                .auth_params(auth_params)
+                .uri(effective_device_auth_endpoint.as_uri())
+                .dpop(self.dpop())
+                .maybe_dpop_jkt(dpop_jkt.as_deref())
+                .build()
+                .execute(http_client)
+                .await
+                .context(FormSnafu)
+        })?;
 
         Ok(StartOutput::builder()
             .expires_at(
@@ -381,4 +387,16 @@ pub enum StartError<
     ClientAuth {
         source: AuthErr,
     },
+}
+
+impl<
+    AuthErr: crate::core::Error + 'static,
+    HttpErr: crate::core::Error + 'static,
+    HttpRespErr: crate::core::Error + 'static,
+    DPoPErr: crate::core::Error + 'static,
+> DPoPNonceError for StartError<AuthErr, HttpErr, HttpRespErr, DPoPErr>
+{
+    fn is_dpop_nonce_required(&self) -> bool {
+        matches!(self, Self::Form { source } if source.is_dpop_nonce_required())
+    }
 }

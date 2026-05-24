@@ -62,10 +62,16 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
         Ok(Request::from_parts(parts, body.into()))
     }
 
-    pub async fn execute_once<C: HttpClient, R: for<'de> Deserialize<'de>>(
+    /// Executes the form request once, without `DPoP` nonce auto-retry.
+    ///
+    /// If the server returns a `DPoP-Nonce` header, the `DPoP` nonce state is updated.
+    /// If the error is `use_dpop_nonce`, no retry is performed — wrap the call site
+    /// with [`with_dpop_nonce_retry!`] to retry with freshly generated `auth_params`
+    /// (required to avoid `jti` reuse in `private_key_jwt` client assertions per
+    /// RFC 7523 §3).
+    pub async fn execute<C: HttpClient, R: for<'de> Deserialize<'de>>(
         &self,
         http_client: &C,
-        updated_nonce: &mut bool,
     ) -> Result<R, OAuth2FormError<C::Error, C::ResponseError, D::Error>> {
         let request = self.build_request().await.context(SerializeSnafu)?;
         let response = http_client.execute(request).await.context(RequestSnafu)?;
@@ -80,7 +86,6 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
             && let Ok(nonce_str) = nonce.to_str()
         {
             self.dpop.update_nonce(nonce_str.to_string());
-            *updated_nonce = true;
         }
 
         let body = response.body().await.context(ResponseBodyReadSnafu)?;
@@ -89,30 +94,6 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
             parse_oauth2_response(status, content_type, &body).context(ResponseSnafu)?;
 
         Ok(parsed_response)
-    }
-
-    pub async fn execute<C: HttpClient, R: for<'de> Deserialize<'de>>(
-        &self,
-        http_client: &C,
-    ) -> Result<R, OAuth2FormError<C::Error, C::ResponseError, D::Error>> {
-        let mut updated_nonce = false;
-
-        let response_or_error = self.execute_once(http_client, &mut updated_nonce).await;
-
-        if updated_nonce
-            && let Err(OAuth2FormError::Response {
-                source:
-                    HandleResponseError::OAuth2 {
-                        body: OAuth2ErrorBody { error, .. },
-                        ..
-                    },
-            }) = &response_or_error
-            && error == "use_dpop_nonce"
-        {
-            return self.execute_once(http_client, &mut updated_nonce).await;
-        }
-
-        response_or_error
     }
 
     /// Executes the form request, expecting an empty response body on success.
@@ -212,6 +193,28 @@ pub enum OAuth2FormError<
         /// An error when handling the response.
         source: HandleResponseError,
     },
+}
+
+impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
+    OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>
+{
+    /// Returns `true` if the error indicates the server requires a `DPoP` nonce.
+    ///
+    /// When this returns `true`, the `DPoP` nonce state has already been updated by the
+    /// most recent request. Callers should retry with freshly generated authentication
+    /// parameters to avoid reusing the same `jti` in `private_key_jwt` assertions
+    /// (RFC 7523 §3).
+    pub fn is_dpop_nonce_required(&self) -> bool {
+        matches!(
+            self,
+            Self::Response {
+                source: HandleResponseError::OAuth2 {
+                    body: OAuth2ErrorBody { error, .. },
+                    ..
+                },
+            } if error == "use_dpop_nonce"
+        )
+    }
 }
 
 impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
@@ -318,3 +321,36 @@ pub struct OAuth2ErrorBody {
     /// The (optional) `error_uri` from the `OAuth2` error.
     pub error_uri: Option<String>,
 }
+
+/// Trait for error types that may indicate a `DPoP` nonce is required.
+pub(crate) trait DPoPNonceError {
+    /// Returns `true` if the error indicates the server requires a `DPoP` nonce.
+    fn is_dpop_nonce_required(&self) -> bool;
+}
+
+impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
+    DPoPNonceError for OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>
+{
+    fn is_dpop_nonce_required(&self) -> bool {
+        self.is_dpop_nonce_required()
+    }
+}
+
+/// Executes a block, retrying once if the error indicates a `DPoP` nonce is required.
+///
+/// The block is expected to regenerate fresh authentication parameters on each
+/// invocation to avoid `jti` reuse in `private_key_jwt` client assertions (RFC 7523 §3).
+macro_rules! with_dpop_nonce_retry {
+    ($body:block) => {{
+        let result = $body;
+        if let Err(ref e) = result
+            && $crate::grant::core::form::DPoPNonceError::is_dpop_nonce_required(e)
+        {
+            $body
+        } else {
+            result
+        }
+    }};
+}
+
+pub(crate) use with_dpop_nonce_retry;

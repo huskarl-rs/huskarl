@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,14 @@ pub struct AuthorizationCodeGrant<
     /// Set to true to prefer PAR when available.
     pub(super) prefer_pushed_authorization_requests: bool,
 
+    /// If set, restricts accepted ID token signature algorithms to this set.
+    ///
+    /// When set, the [`crate::token::id_token::IdTokenValidator`] will reject any ID token whose `alg` header
+    /// is not in this set. Use a single-element set to enforce a specific registered
+    /// algorithm (`id_token_signed_response_alg`), or a multi-element set to enforce
+    /// a policy (e.g. the FAPI 2.0 allowed algorithms: PS256, ES256, `EdDSA`).
+    pub(super) allowed_id_token_signed_response_algs: Option<HashSet<String>>,
+
     _phantom: PhantomData<IdClaims>,
 }
 
@@ -117,6 +125,7 @@ impl<
         >,
         redirect_uri: String,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
+        allowed_id_token_signed_response_algs: Option<HashSet<String>>,
         #[cfg(not(feature = "default-jws-verifier-platform"))] jws_verifier_platform: Option<
             Arc<dyn JwsVerifierPlatform>,
         >,
@@ -158,6 +167,7 @@ impl<
             code_challenge_methods_supported,
             redirect_uri,
             prefer_pushed_authorization_requests,
+            allowed_id_token_signed_response_algs,
             _phantom: PhantomData,
         })
     }

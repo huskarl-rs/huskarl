@@ -35,7 +35,7 @@ use crate::{
                 PendingState, StartInput, StartOutput,
             },
         },
-        core::{ExchangeError, OAuth2ExchangeGrant, TokenResponse},
+        core::{ExchangeError, OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry},
     },
     token::id_token::{IdTokenClaims, IdTokenValidator},
 };
@@ -242,17 +242,6 @@ impl<
             par_url
         };
 
-        let auth_params = self
-            .client_auth
-            .authentication_params(
-                &self.client_id,
-                self.issuer.as_deref(),
-                effective_par_url.as_uri(),
-                self.token_endpoint_auth_methods_supported.as_deref(),
-            )
-            .await
-            .context(ClientAuthSnafu)?;
-
         let par_body = match request_object {
             Some(jwt) => par::ParBody::Jar {
                 request: jwt.expose_secret(),
@@ -261,16 +250,30 @@ impl<
         };
 
         let dpop_jkt = self.dpop.get_current_thumbprint();
-        let par_response = par::make_par_call(
-            http_client,
-            effective_par_url,
-            auth_params,
-            &par_body,
-            &self.dpop,
-            dpop_jkt.as_deref(),
-        )
-        .await
-        .context(ParRequestSnafu)?;
+
+        let par_response = with_dpop_nonce_retry!({
+            let auth_params = self
+                .client_auth
+                .authentication_params(
+                    &self.client_id,
+                    self.issuer.as_deref(),
+                    effective_par_url.as_uri(),
+                    self.token_endpoint_auth_methods_supported.as_deref(),
+                )
+                .await
+                .context(ClientAuthSnafu)?;
+
+            par::make_par_call(
+                http_client,
+                effective_par_url,
+                auth_params,
+                &par_body,
+                &self.dpop,
+                dpop_jkt.as_deref(),
+            )
+            .await
+            .context(ParRequestSnafu)
+        })?;
 
         let push_payload = par::AuthorizationPushPayload {
             client_id: &self.client_id,
@@ -322,21 +325,6 @@ impl<
         (TokenResponse, Option<ValidatedJwt<IdTokenClaims<IdClaims>>>),
         CompleteError<ExchangeError<C, Self>>,
     > {
-        // Request the token even in cases where checks fail. This removes the
-        // ability of an attacker to abuse the unused code.
-        let token_or_error = self
-            .exchange(
-                http_client,
-                AuthorizationCodeGrantParameters {
-                    dpop_jkt: pending_state.dpop_jkt.clone(),
-                    code: complete_input.code.clone(),
-                    pkce_verifier: pending_state.pkce_verifier.clone(),
-                    resource: complete_input.resource.clone(),
-                },
-            )
-            .await
-            .context(GrantSnafu);
-
         // Required state check (one layer of CSRF protection).
         if pending_state
             .state
@@ -369,7 +357,18 @@ impl<
             }
         }
 
-        let token = token_or_error?;
+        let token = self
+            .exchange(
+                http_client,
+                AuthorizationCodeGrantParameters {
+                    dpop_jkt: pending_state.dpop_jkt.clone(),
+                    code: complete_input.code.clone(),
+                    pkce_verifier: pending_state.pkce_verifier.clone(),
+                    resource: complete_input.resource.clone(),
+                },
+            )
+            .await
+            .context(GrantSnafu)?;
 
         if let Some(id_token) = &token.id_token() {
             let verifier = self
@@ -386,6 +385,8 @@ impl<
             let validator = IdTokenValidator::builder()
                 .verifier(verifier)
                 .issuer(issuer)
+                .audience(self.client_id.clone())
+                .maybe_allowed_algorithms(self.allowed_id_token_signed_response_algs.clone())
                 .build();
 
             let verified_token = validator
