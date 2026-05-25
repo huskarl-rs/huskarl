@@ -12,6 +12,8 @@ pub mod encodings;
 pub use cached::CachedSecret;
 pub use encodings::{DecodingError, SecretDecoder};
 pub use providers::EnvVarSecret;
+#[cfg(feature = "fs")]
+pub use providers::{FileSecret, FileSecretError};
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
