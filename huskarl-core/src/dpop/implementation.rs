@@ -23,6 +23,8 @@ use crate::{
 // Used internally to track the origin value for a Uri (nonces are matched by origin).
 type Origin = (Option<Scheme>, Option<String>, Option<u16>);
 
+impl<Sgn: AsymmetricJwsSignerSelector> super::sealed::Sealed for DPoP<Sgn> {}
+
 /// This respresents a grant with the ability to create DPoP-bound tokens and sign requests with them.
 #[derive(Debug, Clone, Builder)]
 pub struct DPoP<Sgn: AsymmetricJwsSignerSelector = BoxedAsymmetricJwsSignerSelector> {
@@ -80,6 +82,8 @@ impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
         ResourceDPoP::builder().signer(self.signer.clone()).build()
     }
 }
+
+impl<Sgn: AsymmetricJwsSignerSelector> super::sealed::Sealed for ResourceDPoP<Sgn> {}
 
 /// This respresents the ability to create proofs for resource servers from DPoP-bound access tokens.
 #[derive(Debug, Clone, Builder)]

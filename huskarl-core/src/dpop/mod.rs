@@ -7,6 +7,7 @@
 
 mod implementation;
 mod no_dpop;
+mod sealed;
 
 use std::sync::Arc;
 
@@ -23,7 +24,7 @@ use crate::{
 };
 
 /// Proof implementation for `DPoP`.
-pub trait AuthorizationServerDPoP: Clone + MaybeSendSync {
+pub trait AuthorizationServerDPoP: sealed::Sealed + Clone + MaybeSendSync {
     /// The error type when signing proofs.
     type Error: crate::Error;
     /// The type of the corresponding resource server variant.
@@ -77,7 +78,7 @@ impl<D: AuthorizationServerDPoP> AuthorizationServerDPoP for Arc<D> {
 }
 
 /// Proof implementation for `DPoP` when calling resource servers.
-pub trait ResourceServerDPoP: MaybeSendSync {
+pub trait ResourceServerDPoP: sealed::Sealed + MaybeSendSync {
     /// The error type when signing proofs;
     type Error: crate::Error;
 
