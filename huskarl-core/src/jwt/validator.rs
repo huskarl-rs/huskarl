@@ -17,6 +17,7 @@ use crate::{
 };
 
 /// A check to perform on a JWT claim.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub enum ClaimCheck {
     /// If claim is present, it must equal this value. Lack of value is acceptable.
@@ -451,7 +452,8 @@ impl JwtValidator {
 }
 
 /// A validated JWT, containing the parsed claims and other metadata.
-#[derive(Debug)]
+#[non_exhaustive]
+#[derive(Debug, Builder)]
 pub struct ValidatedJwt<Claims> {
     /// The issuer of the JWT, if present.
     pub issuer: Option<String>,

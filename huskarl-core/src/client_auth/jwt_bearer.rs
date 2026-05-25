@@ -71,6 +71,7 @@ pub struct JwtBearer<Sgn: JwsSignerSelector> {
 /// See <https://www.rfc-editor.org/rfc/rfc7523>,
 /// <https://openid.net/specs/fapi-security-profile-2_0-final.html> and
 /// <https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc7523bis/>
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Audience {
     /// If the issuer value is available, it will be used as the audience.

@@ -22,6 +22,7 @@ use crate::{
 /// from the signing layer. The signing layer can add the algorithm
 /// and key ID information, creates a JWS signature, and builds the
 /// final string.
+#[non_exhaustive]
 #[derive(Debug, Clone, Builder)]
 #[builder(
     start_fn(vis = "", name = "builder_internal"),

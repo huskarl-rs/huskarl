@@ -1,6 +1,7 @@
 use snafu::Snafu;
 
 /// Errors that could occur during AEAD unsealing.
+#[non_exhaustive]
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum UnsealError<E: crate::Error> {

@@ -43,13 +43,23 @@ pub use source::JwksSource;
 use crate::jwk::serde_utils::{base64url, base64url_uint, trim_leading_zeros};
 
 /// A JSON Web Key Set (RFC 7517 §5).
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct PublicJwks {
     /// List of keys
     pub keys: Vec<PublicJwk>,
 }
 
+impl PublicJwks {
+    /// Creates a new `PublicJwks` from the given keys.
+    #[must_use]
+    pub fn new(keys: Vec<PublicJwk>) -> Self {
+        Self { keys }
+    }
+}
+
 /// A JSON Web Key (RFC 7517 §4).
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, Builder, PartialEq, Clone)]
 #[builder(derive(Into), builder_type(
     doc {
@@ -108,6 +118,7 @@ impl PublicJwk {
 }
 
 /// Key use parameter (RFC 7517 §4.2).
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
 pub enum KeyUse {
     /// Digital signature or MAC.
@@ -122,6 +133,7 @@ pub enum KeyUse {
 }
 
 /// Key operations parameter (RFC 7517 §4.3).
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum KeyOperation {
@@ -151,6 +163,7 @@ pub enum KeyOperation {
 /// The list of values for `kty` come from
 /// <https://www.iana.org/assignments/jose/jose.xhtml#web-key-types>.
 /// It doesn't include `AKP` which is an RFC draft at this time.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "kty")] //
 pub enum PublicKey {
@@ -169,6 +182,7 @@ pub enum PublicKey {
 }
 
 /// An RSA public key.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, Builder, PartialEq, Clone)]
 #[builder(derive(Into), builder_type(
     doc {
@@ -214,6 +228,7 @@ where
 ///
 /// Parameters are defined in RFC 7518 §6.2.
 /// Technically, the `y` field is optional, but all currently defined `EC`-type keys require a value.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, Builder, PartialEq, Clone)]
 #[builder(derive(Into), builder_type(
     doc {
@@ -262,6 +277,7 @@ where
 /// An Octet Key Pair public key.
 ///
 /// Parameters are defined in RFC 8037 §2.
+#[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, Builder, PartialEq, Clone)]
 #[builder(derive(Into), builder_type(
     doc {

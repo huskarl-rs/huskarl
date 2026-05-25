@@ -6,6 +6,7 @@ mod multi;
 
 use std::borrow::Cow;
 
+use bon::Builder;
 pub use boxed::{BoxedAeadCipher, BoxedAeadDecryptor, BoxedAeadEncryptor};
 pub(crate) use error::InvalidBundleSnafu;
 pub use error::UnsealError;
@@ -32,7 +33,8 @@ pub struct AeadOutput {
 /// Both fields are optional. When `enc` is `None`, algorithm matching is
 /// skipped and the key is considered algorithm-compatible. When `kid` is
 /// `None`, key ID matching is skipped.
-#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Builder)]
 pub struct CipherMatch<'a> {
     /// The content encryption algorithm (e.g. from the JWE `enc` header).
     /// When `None`, the algorithm is not used for matching.
