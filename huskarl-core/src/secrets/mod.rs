@@ -96,3 +96,63 @@ pub trait Secret: Clone + MaybeSendSync {
         &self,
     ) -> impl Future<Output = Result<SecretOutput<Self::Output>, Self::Error>> + MaybeSend;
 }
+
+/// A wrapper that adds an identity to an existing secret.
+#[derive(Debug, Clone)]
+pub struct WithIdentity<S: Secret> {
+    inner: S,
+    identity: String,
+}
+
+impl<S: Secret> WithIdentity<S> {
+    /// Creates a new wrapper that adds the given identity to the secret.
+    pub fn new(inner: S, identity: impl Into<String>) -> Self {
+        Self {
+            inner,
+            identity: identity.into(),
+        }
+    }
+}
+
+impl<S: Secret> Secret for WithIdentity<S> {
+    type Output = S::Output;
+    type Error = S::Error;
+
+    async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
+        let mut output = self.inner.get_secret_value().await?;
+        output.identity = Some(self.identity.clone());
+        Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct MockSecret(SecretString);
+
+    impl Secret for MockSecret {
+        type Output = SecretString;
+        type Error = Infallible;
+
+        async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
+            Ok(SecretOutput {
+                value: self.0.clone(),
+                identity: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_with_identity() {
+        let secret = MockSecret(SecretString::new("secret"));
+        let with_id = WithIdentity::new(secret, "my-id");
+
+        let output = with_id.get_secret_value().await.unwrap();
+        assert_eq!(output.value.expose_secret(), "secret");
+        assert_eq!(output.identity.unwrap(), "my-id");
+    }
+}

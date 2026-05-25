@@ -87,6 +87,17 @@ impl crate::Error for EnvVarSecretError {
     }
 }
 
+#[cfg(test)]
+mod env_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_env_var_secret_missing() {
+        let result = EnvVarSecret::string("NON_EXISTENT_SECRET");
+        assert!(result.is_err());
+    }
+}
+
 #[cfg(feature = "fs")]
 mod file_secret {
     use std::path::PathBuf;

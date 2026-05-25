@@ -111,3 +111,81 @@ impl<S: Secret> Secret for CachedSecret<S> {
         self.reload().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        convert::Infallible,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::*;
+    use crate::secrets::SecretString;
+
+    #[derive(Clone)]
+    struct MockSecret {
+        counter: Arc<AtomicUsize>,
+    }
+
+    impl Secret for MockSecret {
+        type Output = SecretString;
+        type Error = Infallible;
+
+        async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
+            let count = self.counter.fetch_add(1, Ordering::SeqCst);
+            Ok(SecretOutput {
+                value: SecretString::new(format!("secret-{count}")),
+                identity: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cached_secret_no_ttl() {
+        let mock = MockSecret {
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let cached = CachedSecret::builder().secret(mock).build();
+
+        let val1 = cached.get_secret_value().await.unwrap();
+        assert_eq!(val1.value.expose_secret(), "secret-0");
+
+        let val2 = cached.get_secret_value().await.unwrap();
+        assert_eq!(val2.value.expose_secret(), "secret-0"); // Still 0
+    }
+
+    #[tokio::test]
+    async fn test_cached_secret_with_ttl() {
+        let mock = MockSecret {
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let cached = CachedSecret::builder()
+            .secret(mock)
+            .ttl(Duration::from_millis(10))
+            .build();
+
+        let val1 = cached.get_secret_value().await.unwrap();
+        assert_eq!(val1.value.expose_secret(), "secret-0");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let val2 = cached.get_secret_value().await.unwrap();
+        assert_eq!(val2.value.expose_secret(), "secret-1"); // Incremented
+    }
+
+    #[tokio::test]
+    async fn test_cached_secret_invalidate() {
+        let mock = MockSecret {
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let cached = CachedSecret::builder().secret(mock).build();
+
+        let val1 = cached.get_secret_value().await.unwrap();
+        assert_eq!(val1.value.expose_secret(), "secret-0");
+
+        cached.invalidate();
+
+        let val2 = cached.get_secret_value().await.unwrap();
+        assert_eq!(val2.value.expose_secret(), "secret-1"); // Incremented
+    }
+}
