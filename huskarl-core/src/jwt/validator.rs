@@ -697,4 +697,429 @@ mod tests {
             Err(JwtValidationError::ExtraClaims { .. })
         ));
     }
+
+    // Helper to create a ParsedJws with given header/claims
+    fn make_parsed_jws(
+        header: serde_json::Value,
+        claims: serde_json::Value,
+    ) -> ParsedJws<(), serde_json::Value> {
+        use crate::jwt::structure::{JwtClaims, JwtHeader};
+
+        let header: JwtHeader<'static, ()> = serde_json::from_value(header).unwrap();
+        let claims: JwtClaims<'static, serde_json::Value> = serde_json::from_value(claims).unwrap();
+
+        ParsedJws {
+            header,
+            claims,
+            signing_input: b"dummy.input".to_vec(),
+            signature: vec![0x00],
+        }
+    }
+
+    fn default_validator() -> JwtValidator {
+        JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .build()
+    }
+
+    // --- Algorithm checks ---
+
+    #[tokio::test]
+    async fn reject_alg_none() {
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "none"}), serde_json::json!({}));
+        let result = default_validator()
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(result, Err(JwtValidationError::UnsignedToken)));
+    }
+
+    #[tokio::test]
+    async fn reject_disallowed_algorithm() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .allowed_algorithms(["ES256".to_string()])
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::DisallowedAlgorithm { .. })
+        ));
+    }
+
+    // --- Critical header ---
+
+    #[tokio::test]
+    async fn reject_unrecognized_crit() {
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256", "crit": ["unknown-ext"]}),
+            serde_json::json!({}),
+        );
+        let result = default_validator()
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::UnrecognizedCriticalHeader { .. })
+        ));
+    }
+
+    // --- Temporal checks ---
+
+    #[tokio::test]
+    async fn reject_expired_token() {
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"exp": 1}), // expired long ago
+        );
+        let result = default_validator()
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(result, Err(JwtValidationError::Expired { .. })));
+    }
+
+    #[tokio::test]
+    async fn reject_not_yet_valid() {
+        let far_future = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 999_999;
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"nbf": far_future}),
+        );
+        let result = default_validator()
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::NotYetValid { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn reject_issued_in_future() {
+        let far_future = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 999_999;
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"iat": far_future}),
+        );
+        let result = default_validator()
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::IssuedInFuture { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn clock_leeway_allows_slightly_expired() {
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .clock_leeway(Duration::from_secs(10))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"exp": now - 5}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    // --- Required claims ---
+
+    #[tokio::test]
+    async fn require_exp_missing() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .require_exp(true)
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::RequiredClaimMissing { claim: "exp" })
+        ));
+    }
+
+    #[tokio::test]
+    async fn require_iat_missing() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .require_iat(true)
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::RequiredClaimMissing { claim: "iat" })
+        ));
+    }
+
+    #[tokio::test]
+    async fn require_jti_missing() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .require_jti(true)
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::RequiredClaimMissing { claim: "jti" })
+        ));
+    }
+
+    // --- iss claim checks ---
+
+    #[tokio::test]
+    async fn iss_required_value_mismatch() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::required_value("expected-issuer"))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"iss": "wrong-issuer"}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::ClaimMismatch { claim: "iss", .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn iss_require_any_mismatch() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::require_any(["a", "b"]))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"iss": "c"}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::ClaimMismatch { claim: "iss", .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn iss_present_missing() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::present())
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::RequiredClaimMissing { claim: "iss" })
+        ));
+    }
+
+    #[tokio::test]
+    async fn iss_if_present_mismatch() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::if_present("expected"))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"iss": "wrong"}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::ClaimMismatch { claim: "iss", .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn iss_if_present_absent_ok() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .iss(ClaimCheck::if_present("expected"))
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    // --- aud claim checks ---
+
+    #[tokio::test]
+    async fn aud_required_value_not_in_list() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .aud(ClaimCheck::required_value("expected-aud"))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"aud": "wrong-aud"}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::ClaimMismatch { claim: "aud", .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn aud_empty_when_required() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .aud(ClaimCheck::present())
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::RequiredClaimMissing { claim: "aud" })
+        ));
+    }
+
+    // --- typ claim checks ---
+
+    #[tokio::test]
+    async fn typ_required_value_mismatch() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .typ(ClaimCheck::required_value("at+jwt"))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256", "typ": "JWT"}),
+            serde_json::json!({}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::InvalidTokenType { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn typ_application_prefix_normalization() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .typ(ClaimCheck::required_value("at+jwt"))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256", "typ": "application/at+jwt"}),
+            serde_json::json!({}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn typ_case_insensitive() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .typ(ClaimCheck::required_value("AT+JWT"))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256", "typ": "at+jwt"}),
+            serde_json::json!({}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(result.is_ok());
+    }
+
+    // --- max_token_age ---
+
+    #[tokio::test]
+    async fn max_token_age_old_token() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .max_token_age(Duration::from_mins(1))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"iat": 1}), // issued at epoch
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::TokenTooOld { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn max_token_age_missing_iat() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .max_token_age(Duration::from_mins(1))
+            .build();
+        let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::RequiredClaimMissing { claim: "iat" })
+        ));
+    }
+
+    // --- JTI too long ---
+
+    #[tokio::test]
+    async fn jti_too_long() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .max_jti_len(5)
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"jti": "toolong"}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(matches!(result, Err(JwtValidationError::JtiTooLong { .. })));
+    }
 }

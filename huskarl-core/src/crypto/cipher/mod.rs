@@ -256,3 +256,113 @@ impl<D: AeadDecryptor> AeadUnsealer for AeadV1Unsealer<D> {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct MockEncryptor;
+
+    impl AeadEncryptor for MockEncryptor {
+        type Error = Infallible;
+
+        fn enc_algorithm(&self) -> Cow<'_, str> {
+            "mock".into()
+        }
+
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            None
+        }
+
+        async fn encrypt(&self, plaintext: &[u8], _aad: &[u8]) -> Result<AeadOutput, Infallible> {
+            Ok(AeadOutput {
+                nonce: vec![1, 2, 3],
+                ciphertext: plaintext.iter().map(|b| b ^ 0xFF).collect(),
+                tag: vec![4, 5, 6, 7],
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct MockDecryptor;
+
+    impl AeadDecryptor for MockDecryptor {
+        type Error = Infallible;
+
+        fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+            Some(KeyMatchStrength::ByAlgorithm)
+        }
+
+        async fn decrypt(
+            &self,
+            _cipher_match: Option<&CipherMatch<'_>>,
+            _nonce: &[u8],
+            ciphertext: &[u8],
+            _tag: &[u8],
+            _aad: &[u8],
+        ) -> Result<Vec<u8>, Infallible> {
+            // Reverse the XOR
+            Ok(ciphertext.iter().map(|b| b ^ 0xFF).collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn seal_roundtrip() {
+        let plaintext = b"hello world";
+        let aad = b"associated";
+
+        let sealer = AeadV1Sealer::new(MockEncryptor);
+        let bundle = sealer.seal(plaintext, aad).await.unwrap();
+
+        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let recovered = unsealer.unseal(None, &bundle, aad).await.unwrap();
+        assert_eq!(recovered, plaintext);
+    }
+
+    #[tokio::test]
+    async fn bundle_format() {
+        let plaintext = b"AB";
+        let sealer = AeadV1Sealer::new(MockEncryptor);
+        let bundle = sealer.seal(plaintext, b"").await.unwrap();
+
+        // [0x01, nonce_len=3, tag_len=4, nonce=[1,2,3], ciphertext=[0xBE, 0xBD], tag=[4,5,6,7]]
+        assert_eq!(bundle[0], 0x01);
+        assert_eq!(bundle[1], 3); // nonce_len
+        assert_eq!(bundle[2], 4); // tag_len
+        assert_eq!(&bundle[3..6], &[1, 2, 3]); // nonce
+        assert_eq!(&bundle[6..8], &[0x41 ^ 0xFF, 0x42 ^ 0xFF]); // ciphertext
+        assert_eq!(&bundle[8..12], &[4, 5, 6, 7]); // tag
+    }
+
+    #[tokio::test]
+    async fn unseal_wrong_version() {
+        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let result = unsealer.unseal(None, &[0x02, 0, 0], b"").await;
+        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+    }
+
+    #[tokio::test]
+    async fn unseal_too_short() {
+        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let result = unsealer.unseal(None, &[0x01], b"").await;
+        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+    }
+
+    #[tokio::test]
+    async fn unseal_truncated() {
+        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        // nonce_len=10, tag_len=10, but only 1 byte of data after header
+        let result = unsealer.unseal(None, &[0x01, 10, 10, 0x00], b"").await;
+        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+    }
+
+    #[tokio::test]
+    async fn unseal_empty() {
+        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let result = unsealer.unseal(None, &[], b"").await;
+        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+    }
+}

@@ -311,3 +311,153 @@ where
         Ok([jwt_header_b64, jwt_claims_b64].join("."))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use base64::prelude::*;
+    use serde::Serialize;
+
+    use crate::{crypto::signer::JwsSigner, jwt::Jwt, platform::SystemTime};
+
+    #[derive(Debug, Clone)]
+    struct MockJwsSigner {
+        alg: &'static str,
+        kid: Option<&'static str>,
+    }
+
+    impl JwsSigner for MockJwsSigner {
+        type Error = Infallible;
+        fn jws_algorithm(&self) -> Cow<'_, str> {
+            self.alg.into()
+        }
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            self.kid.map(Into::into)
+        }
+        async fn sign(&self, _input: &[u8]) -> Result<Vec<u8>, Infallible> {
+            Ok(vec![0xDE, 0xAD])
+        }
+    }
+
+    use std::borrow::Cow;
+
+    #[tokio::test]
+    async fn to_jws_compact_basic() {
+        let signer = MockJwsSigner {
+            alg: "ES256",
+            kid: None,
+        };
+        let jwt = Jwt::builder()
+            .jti(Some("test-jti".to_string()))
+            .claims(())
+            .build();
+        let compact = jwt.to_jws_compact(&signer).await.unwrap();
+        let parts: Vec<&str> = compact.expose_secret().split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        // Verify header
+        let header_json: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(header_json["alg"], "ES256");
+        assert_eq!(header_json["typ"], "JWT");
+
+        // Verify signature is base64url of [0xDE, 0xAD]
+        let sig_bytes = BASE64_URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
+        assert_eq!(sig_bytes, vec![0xDE, 0xAD]);
+    }
+
+    #[tokio::test]
+    async fn to_jws_compact_with_all_fields() {
+        let signer = MockJwsSigner {
+            alg: "RS256",
+            kid: Some("key-1"),
+        };
+        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+        let exp = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2_000_000);
+        let nbf = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(999_999);
+
+        let jwt = Jwt::builder()
+            .issuer("my-issuer")
+            .subject("my-subject")
+            .audiences(vec!["aud1".into(), "aud2".into()])
+            .issued_at(now)
+            .expiration(exp)
+            .not_before(nbf)
+            .jti(Some("unique-id".to_string()))
+            .claims(())
+            .build();
+
+        let compact = jwt.to_jws_compact(&signer).await.unwrap();
+        let parts: Vec<&str> = compact.expose_secret().split('.').collect();
+
+        let header: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(header["alg"], "RS256");
+        assert_eq!(header["kid"], "key-1");
+        assert_eq!(header["typ"], "JWT");
+
+        let claims: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(claims["iss"], "my-issuer");
+        assert_eq!(claims["sub"], "my-subject");
+        assert_eq!(claims["aud"], serde_json::json!(["aud1", "aud2"]));
+        assert_eq!(claims["iat"], 1_000_000);
+        assert_eq!(claims["exp"], 2_000_000);
+        assert_eq!(claims["nbf"], 999_999);
+        assert_eq!(claims["jti"], "unique-id");
+    }
+
+    #[tokio::test]
+    async fn to_jws_compact_with_extra_headers_and_claims() {
+        #[derive(Debug, Clone, Serialize)]
+        struct ExtraHeaders {
+            nonce: String,
+        }
+
+        #[derive(Debug, Clone, Serialize)]
+        struct ExtraClaims {
+            scope: String,
+        }
+
+        let signer = MockJwsSigner {
+            alg: "ES256",
+            kid: None,
+        };
+        let jwt = Jwt::builder()
+            .jti(Some("jti-val".to_string()))
+            .extra_headers(ExtraHeaders {
+                nonce: "abc123".into(),
+            })
+            .claims(ExtraClaims {
+                scope: "openid".into(),
+            })
+            .build();
+
+        let compact = jwt.to_jws_compact(&signer).await.unwrap();
+        let parts: Vec<&str> = compact.expose_secret().split('.').collect();
+
+        let header: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(header["nonce"], "abc123");
+
+        let claims: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(claims["scope"], "openid");
+    }
+
+    #[tokio::test]
+    async fn to_jws_compact_no_kid() {
+        let signer = MockJwsSigner {
+            alg: "EdDSA",
+            kid: None,
+        };
+        let jwt = Jwt::builder().jti(Some("j".to_string())).claims(()).build();
+        let compact = jwt.to_jws_compact(&signer).await.unwrap();
+        let parts: Vec<&str> = compact.expose_secret().split('.').collect();
+
+        let header: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert!(header.get("kid").is_none());
+    }
+}

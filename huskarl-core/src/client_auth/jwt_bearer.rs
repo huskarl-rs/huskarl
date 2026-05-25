@@ -120,3 +120,191 @@ impl<Sgn: JwsSignerSelector> ClientAuthentication for JwtBearer<Sgn> {
             .build())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use base64::Engine as _;
+
+    use super::*;
+    use crate::{
+        client_auth::{ClientAuthentication, FormValue},
+        crypto::signer::JwsSigner,
+    };
+
+    #[derive(Debug, Clone)]
+    struct MockJwsSigner {
+        alg: &'static str,
+    }
+
+    impl JwsSigner for MockJwsSigner {
+        type Error = Infallible;
+        fn jws_algorithm(&self) -> std::borrow::Cow<'_, str> {
+            self.alg.into()
+        }
+        fn key_id(&self) -> Option<std::borrow::Cow<'_, str>> {
+            None
+        }
+        async fn sign(&self, _input: &[u8]) -> Result<Vec<u8>, Infallible> {
+            Ok(vec![0xAB])
+        }
+    }
+
+    impl JwsSignerSelector for MockJwsSigner {
+        type Signer = Self;
+        fn select_signer(&self) -> Self {
+            self.clone()
+        }
+    }
+
+    fn extract_form_str(form: &[(&'static str, FormValue<'_>)], key: &str) -> String {
+        form.iter().find(|(k, _)| *k == key).map_or_else(
+            || unreachable!("key {key} not found in form params"),
+            |(_, v)| match v {
+                FormValue::NonSensitive(c) => c.to_string(),
+                FormValue::Sensitive(c) => c.expose_secret().to_string(),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn audience_prefer_issuer_with_issuer() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::PreferIssuer)
+            .build();
+        let uri: Uri = "https://token.example.com/token".parse().unwrap();
+        let params = bearer
+            .authentication_params("cid", Some("https://issuer.example.com"), &uri, None)
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        let assertion = extract_form_str(&form, "client_assertion");
+        let parts: Vec<&str> = assertion.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::prelude::BASE64_URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["aud"], "https://issuer.example.com");
+    }
+
+    #[tokio::test]
+    async fn audience_prefer_issuer_no_issuer() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::PreferIssuer)
+            .build();
+        let uri: Uri = "https://token.example.com/token".parse().unwrap();
+        let params = bearer
+            .authentication_params("cid", None, &uri, None)
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        let assertion = extract_form_str(&form, "client_assertion");
+        let parts: Vec<&str> = assertion.split('.').collect();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::prelude::BASE64_URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["aud"], "https://token.example.com/token");
+    }
+
+    #[tokio::test]
+    async fn audience_prefer_token_endpoint() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::PreferTokenEndpoint)
+            .build();
+        let uri: Uri = "https://token.example.com/token".parse().unwrap();
+        let params = bearer
+            .authentication_params("cid", Some("https://issuer.example.com"), &uri, None)
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        let assertion = extract_form_str(&form, "client_assertion");
+        let parts: Vec<&str> = assertion.split('.').collect();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::prelude::BASE64_URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["aud"], "https://token.example.com/token");
+    }
+
+    #[tokio::test]
+    async fn audience_custom() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::Custom("https://custom.example.com".into()))
+            .build();
+        let uri: Uri = "https://token.example.com/token".parse().unwrap();
+        let params = bearer
+            .authentication_params("cid", Some("https://issuer.example.com"), &uri, None)
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        let assertion = extract_form_str(&form, "client_assertion");
+        let parts: Vec<&str> = assertion.split('.').collect();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::prelude::BASE64_URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["aud"], "https://custom.example.com");
+    }
+
+    #[tokio::test]
+    async fn form_params_structure() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::PreferTokenEndpoint)
+            .build();
+        let uri: Uri = "https://token.example.com/token".parse().unwrap();
+        let params = bearer
+            .authentication_params("my-client", None, &uri, None)
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        assert_eq!(extract_form_str(&form, "client_id"), "my-client");
+        assert_eq!(
+            extract_form_str(&form, "client_assertion_type"),
+            "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+        );
+        let assertion = extract_form_str(&form, "client_assertion");
+        assert_eq!(assertion.split('.').count(), 3);
+    }
+
+    #[tokio::test]
+    async fn subject_override() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::PreferTokenEndpoint)
+            .subject("custom-subject")
+            .build();
+        let uri: Uri = "https://token.example.com/token".parse().unwrap();
+        let params = bearer
+            .authentication_params("my-client", None, &uri, None)
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        let assertion = extract_form_str(&form, "client_assertion");
+        let parts: Vec<&str> = assertion.split('.').collect();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::prelude::BASE64_URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["iss"], "my-client");
+        assert_eq!(claims["sub"], "custom-subject");
+    }
+}

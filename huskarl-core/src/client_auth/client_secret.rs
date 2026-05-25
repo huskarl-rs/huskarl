@@ -142,3 +142,131 @@ fn select_method(allowed_methods: Option<&[String]>) -> ClientSecretMethod {
             .unwrap_or(ClientSecretMethod::Basic),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use super::*;
+    use crate::{
+        client_auth::ClientAuthentication,
+        secrets::{Secret, SecretOutput, SecretString},
+    };
+
+    #[derive(Clone)]
+    struct MockSecret(SecretString);
+
+    impl Secret for MockSecret {
+        type Output = SecretString;
+        type Error = Infallible;
+
+        async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
+            Ok(SecretOutput {
+                value: self.0.clone(),
+                identity: None,
+            })
+        }
+    }
+
+    // --- select_method ---
+
+    #[test]
+    fn select_method_none_returns_basic() {
+        assert_eq!(select_method(None), ClientSecretMethod::Basic);
+    }
+
+    #[test]
+    fn select_method_empty_returns_basic() {
+        assert_eq!(select_method(Some(&[])), ClientSecretMethod::Basic);
+    }
+
+    #[test]
+    fn select_method_post_only() {
+        let methods = vec!["client_secret_post".to_string()];
+        assert_eq!(select_method(Some(&methods)), ClientSecretMethod::Post);
+    }
+
+    #[test]
+    fn select_method_basic_and_post_prefers_basic() {
+        let methods = vec![
+            "client_secret_basic".to_string(),
+            "client_secret_post".to_string(),
+        ];
+        assert_eq!(select_method(Some(&methods)), ClientSecretMethod::Basic);
+    }
+
+    #[test]
+    fn select_method_post_and_basic_prefers_basic() {
+        let methods = vec![
+            "client_secret_post".to_string(),
+            "client_secret_basic".to_string(),
+        ];
+        assert_eq!(select_method(Some(&methods)), ClientSecretMethod::Basic);
+    }
+
+    // --- authentication_params ---
+
+    #[tokio::test]
+    async fn authentication_params_basic() {
+        let secret = ClientSecret::new(MockSecret(SecretString::new("my-secret")));
+        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let params = secret
+            .authentication_params("my-client", None, &uri, None)
+            .await
+            .unwrap();
+
+        let headers = params.headers.unwrap();
+        let auth = headers.get(http::header::AUTHORIZATION).unwrap();
+        let auth_str = auth.to_str().unwrap();
+        assert!(auth_str.starts_with("Basic "));
+
+        // Decode and verify: "my-client:my-secret"
+        let decoded = String::from_utf8(
+            base64::prelude::BASE64_STANDARD
+                .decode(&auth_str[6..])
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(decoded, "my-client:my-secret");
+    }
+
+    #[tokio::test]
+    async fn authentication_params_post() {
+        let secret = ClientSecret::new(MockSecret(SecretString::new("s3cret")));
+        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let methods = vec!["client_secret_post".to_string()];
+        let params = secret
+            .authentication_params("cid", None, &uri, Some(&methods))
+            .await
+            .unwrap();
+
+        assert!(params.headers.is_none());
+        let form = params.form_params.unwrap();
+        assert!(form.iter().any(|(k, _)| *k == "client_id"));
+        assert!(form.iter().any(|(k, _)| *k == "client_secret"));
+    }
+
+    #[tokio::test]
+    async fn basic_percent_encodes_special_chars() {
+        let secret = ClientSecret::new(MockSecret(SecretString::new("p&ss=w:rd")));
+        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let params = secret
+            .authentication_params("cl&ent", None, &uri, None)
+            .await
+            .unwrap();
+
+        let headers = params.headers.unwrap();
+        let auth = headers.get(http::header::AUTHORIZATION).unwrap();
+        let auth_str = auth.to_str().unwrap();
+        let decoded = String::from_utf8(
+            base64::prelude::BASE64_STANDARD
+                .decode(&auth_str[6..])
+                .unwrap(),
+        )
+        .unwrap();
+        // Percent-encoded form: cl%26ent:p%26ss%3Dw%3Ard
+        assert!(decoded.contains("%26"));
+        assert!(decoded.contains("%3D"));
+        assert!(decoded.contains("%3A"));
+    }
+}
