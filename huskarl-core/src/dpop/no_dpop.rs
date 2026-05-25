@@ -10,6 +10,8 @@ use crate::{
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoDPoP;
 
+impl super::sealed::Sealed for NoDPoP {}
+
 /// This represents a situation where a `DPoP` proof is required, but the server is not configured to use `DPoP`.
 #[derive(Debug, Clone, Copy, Default, Snafu)]
 pub struct DPoPNotConfigured;

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - The authorization server metadata method builder() is the actual struct builder.
  - Authorization server metadata is now non-exhaustive.
  - Made a number of public enums/structs non-exhaustive.
+ - DPoP traits are now sealed (can only be implemented in huskarl-core).
 
 ## [0.5.1] - 2026-05-21
 
