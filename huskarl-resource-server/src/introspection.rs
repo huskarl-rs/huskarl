@@ -160,6 +160,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
                     let value_str: &str = match value {
                         FormValue::NonSensitive(s) => s.as_ref(),
                         FormValue::Sensitive(s) => s.expose_secret(),
+                        _ => continue,
                     };
                     serializer.append_pair(key, value_str);
                 }

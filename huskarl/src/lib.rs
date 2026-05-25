@@ -61,10 +61,10 @@ implemented by external crates. Examples include CIBA, JWT authorization, or pro
 # let client_id = "client_id";
 # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding).unwrap();
 #
-let metadata = AuthorizationServerMetadata::builder()
+let metadata = AuthorizationServerMetadata::fetch()
     .http_client(&http_client)
     .issuer(issuer)
-    .build()
+    .call()
     .await
     .unwrap();
 

@@ -18,7 +18,6 @@ use crate::{
 /// Implements an `OAuth2` token cache that stores a [`TokenResponse`] and refreshes
 /// it when it expires or is invalidated.
 #[derive(Builder)]
-#[builder(state_mod(name = "in_memory_token_cache_builder"))]
 pub struct InMemoryTokenCache<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     pub(crate) grant: G,
     grant_parameters: Option<G::Parameters>,

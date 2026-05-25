@@ -19,10 +19,10 @@ pub async fn main() {
         .await
         .unwrap();
 
-    let authorization_server_metadata = AuthorizationServerMetadata::builder()
+    let authorization_server_metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http_client)
         .issuer("https://...")
-        .build()
+        .call()
         .await
         .unwrap();
 

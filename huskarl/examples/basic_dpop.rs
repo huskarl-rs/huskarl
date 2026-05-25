@@ -28,10 +28,10 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Failed to build client")?;
 
-    let metadata = AuthorizationServerMetadata::builder()
-        .issuer(issuer)
+    let metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http_client)
-        .build()
+        .issuer(issuer)
+        .call()
         .await
         .whatever_context("Failed to get authorization server metadata")?;
 
@@ -40,7 +40,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .client_auth(ClientSecret::new(client_secret))
         .dpop(
             DPoP::builder()
-                .signer(PrivateKey::generate(GenerateAlgorithm::Ed25519))
+                .signer(PrivateKey::generate(GenerateAlgorithm::Ed25519, None))
                 .build(),
         )
         .build();

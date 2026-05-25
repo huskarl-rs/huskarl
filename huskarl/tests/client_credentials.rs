@@ -40,10 +40,10 @@ async fn client_credentials_exchange() {
     let client = realm.create_client(&config).await.expect("create client");
 
     let http: ReqwestClient = reqwest::Client::new().into();
-    let server_metadata = AuthorizationServerMetadata::builder()
-        .issuer(realm.issuer())
+    let server_metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http)
-        .build()
+        .issuer(realm.issuer())
+        .call()
         .await
         .expect("fetch server metadata");
 
