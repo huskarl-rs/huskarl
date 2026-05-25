@@ -254,3 +254,172 @@ pub struct JwtClaims<'a, Claims: Clone> {
     #[serde(flatten)]
     pub claims: Cow<'a, Claims>,
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    // --- aud serialization ---
+
+    #[test]
+    fn aud_serialize_empty() {
+        let claims = JwtClaims::<'static, ()> {
+            iss: None,
+            sub: None,
+            aud: vec![],
+            iat: None,
+            exp: None,
+            nbf: None,
+            jti: None,
+            cnf: None,
+            claims: Cow::Owned(()),
+        };
+        let v = serde_json::to_value(&claims).unwrap();
+        assert!(v.get("aud").is_none());
+    }
+
+    #[test]
+    fn aud_serialize_single() {
+        let claims = JwtClaims::<'static, ()> {
+            iss: None,
+            sub: None,
+            aud: vec!["https://example.com".into()],
+            iat: None,
+            exp: None,
+            nbf: None,
+            jti: None,
+            cnf: None,
+            claims: Cow::Owned(()),
+        };
+        let v = serde_json::to_value(&claims).unwrap();
+        assert_eq!(v["aud"], json!("https://example.com"));
+    }
+
+    #[test]
+    fn aud_serialize_multiple() {
+        let claims = JwtClaims::<'static, ()> {
+            iss: None,
+            sub: None,
+            aud: vec!["a".into(), "b".into()],
+            iat: None,
+            exp: None,
+            nbf: None,
+            jti: None,
+            cnf: None,
+            claims: Cow::Owned(()),
+        };
+        let v = serde_json::to_value(&claims).unwrap();
+        assert_eq!(v["aud"], json!(["a", "b"]));
+    }
+
+    // --- aud deserialization ---
+
+    #[test]
+    fn aud_deserialize_string() {
+        let j = r#"{"aud":"x"}"#;
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert_eq!(c.aud, vec!["x"]);
+    }
+
+    #[test]
+    fn aud_deserialize_array() {
+        let j = r#"{"aud":["a","b"]}"#;
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert_eq!(c.aud, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn aud_deserialize_null() {
+        let j = r#"{"aud":null}"#;
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert!(c.aud.is_empty());
+    }
+
+    #[test]
+    fn aud_deserialize_absent() {
+        let j = r"{}";
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert!(c.aud.is_empty());
+    }
+
+    // --- Timestamp deserialization ---
+
+    #[test]
+    fn timestamp_integer() {
+        let j = r#"{"iat":1234}"#;
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert_eq!(c.iat, Some(1234));
+    }
+
+    #[test]
+    fn timestamp_float_truncates() {
+        let j = r#"{"iat":1234.5}"#;
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert_eq!(c.iat, Some(1234));
+    }
+
+    #[test]
+    fn timestamp_negative_errors() {
+        let j = r#"{"iat":-1}"#;
+        let result = serde_json::from_str::<JwtClaims<'_, ()>>(j);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn timestamp_null() {
+        let j = r#"{"iat":null}"#;
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert_eq!(c.iat, None);
+    }
+
+    #[test]
+    fn timestamp_absent() {
+        let j = r"{}";
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert_eq!(c.iat, None);
+        assert_eq!(c.exp, None);
+        assert_eq!(c.nbf, None);
+    }
+
+    #[test]
+    fn all_timestamps() {
+        let j = r#"{"iat":100,"exp":200,"nbf":50}"#;
+        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
+        assert_eq!(c.iat, Some(100));
+        assert_eq!(c.exp, Some(200));
+        assert_eq!(c.nbf, Some(50));
+    }
+
+    // --- ConfirmationClaim roundtrip ---
+
+    #[test]
+    fn confirmation_claim_roundtrip() {
+        let cnf = ConfirmationClaim {
+            jkt: Some("thumbprint-value".into()),
+            x5t_s256: Some("cert-thumbprint".into()),
+            jwe: None,
+            jku: None,
+        };
+        let json = serde_json::to_string(&cnf).unwrap();
+        assert!(json.contains("\"jkt\""));
+        assert!(json.contains("\"x5t#S256\""));
+
+        let roundtripped: ConfirmationClaim = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtripped.jkt.as_deref(), Some("thumbprint-value"));
+        assert_eq!(roundtripped.x5t_s256.as_deref(), Some("cert-thumbprint"));
+    }
+
+    #[test]
+    fn confirmation_claim_skips_none() {
+        let cnf = ConfirmationClaim {
+            jkt: None,
+            x5t_s256: None,
+            jwe: None,
+            jku: None,
+        };
+        let json = serde_json::to_string(&cnf).unwrap();
+        assert_eq!(json, "{}");
+    }
+}
