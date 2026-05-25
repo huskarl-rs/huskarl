@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-core"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.92"
 description = "Base library for huskarl (OAuth2 client) ecosystem."
@@ -20,6 +20,9 @@ url = ["dep:url"]
 
 # When enabled, emits metrics via the `metrics` crate facade.
 metrics = ["dep:metrics"]
+
+# When enabled, provides FileSecret for reading secrets from files using async I/O.
+fs = ["tokio/fs"]
 
 [dependencies]
 arc-swap = "1"
@@ -62,3 +65,4 @@ wasm-bindgen-test = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
 httpmock = "0.8.3"
+tempfile = "3"
