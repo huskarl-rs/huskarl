@@ -22,6 +22,58 @@ pub(super) fn trim_leading_zeros(bytes: &[u8]) -> &[u8] {
     }
 }
 
+pub mod option_base64url_uint {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    // serde's `#[serde(with)]` requires `&Option<T>`, not `Option<&T>`.
+    #[allow(clippy::ref_option)]
+    pub fn serialize<S: Serializer>(value: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(bytes) => {
+                s.serialize_str(&URL_SAFE_NO_PAD.encode(super::trim_leading_zeros(bytes)))
+            }
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        let s: Option<String> = Deserialize::deserialize(d)?;
+        match s {
+            Some(s) => URL_SAFE_NO_PAD
+                .decode(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
+pub mod option_base64url {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    // serde's `#[serde(with)]` requires `&Option<T>`, not `Option<&T>`.
+    #[allow(clippy::ref_option)]
+    pub fn serialize<S: Serializer>(value: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(bytes) => s.serialize_str(&URL_SAFE_NO_PAD.encode(bytes)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        let s: Option<String> = Deserialize::deserialize(d)?;
+        match s {
+            Some(s) => URL_SAFE_NO_PAD
+                .decode(&s)
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 pub mod base64url_uint {
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use serde::{Deserialize, Deserializer, Serializer};

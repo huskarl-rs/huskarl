@@ -50,7 +50,7 @@ impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
     }
 
     fn get_current_thumbprint(&self) -> Option<String> {
-        self.signer.select_signer().public_key_jwk().thumbprint()
+        Some(self.signer.select_signer().public_key_jwk().thumbprint())
     }
 
     async fn proof(
