@@ -10,7 +10,7 @@ use crate::{
         MultiKeyVerifier, RetryingVerifier, ScheduledRefreshVerifier,
     },
     http::HttpClient,
-    jwk::PublicJwks,
+    jwk::{Jwks, PublicJwks},
     platform::MaybeSendFuture,
 };
 
@@ -50,12 +50,13 @@ impl<C: HttpClient + Clone + 'static> JwsVerifierFactory for JwksSource<C> {
                     let uri = uri.clone();
                     let platform = platform.clone();
                     Box::pin(async move {
-                        let jwks: PublicJwks =
+                        let jwks: Jwks =
                             crate::http::get(&client, uri.as_uri().clone(), HeaderMap::new())
                                 .await
                                 .map_err(BoxedError::from_err)?;
+                        let public_jwks: PublicJwks = jwks.into();
 
-                        MultiKeyVerifier::from_jwks(&jwks, platform.as_ref())
+                        MultiKeyVerifier::from_jwks(&public_jwks, platform.as_ref())
                             .await
                             .map_err(BoxedError::from_err)
                     })

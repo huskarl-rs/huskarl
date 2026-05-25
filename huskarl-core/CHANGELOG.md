@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Added some extra OpenID fields to authorization server metadata for logout and userinfo.
  - Added a max JTI length check to the JWT validator.
  - Added MultiKeySigner that allows signer selection by thumbprint.
+ - Breaking: Expanded JWK code to public/private types and conversions between them.
 
 ### Changes
 

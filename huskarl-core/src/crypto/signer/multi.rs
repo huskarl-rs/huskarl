@@ -39,7 +39,7 @@ impl<S: AsymmetricJwsSigner> AsymmetricJwsSignerSelector for MultiKeySigner<S> {
     fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<S> {
         let all = std::iter::once(&self.default).chain(self.additional.iter());
         for signer in all {
-            if signer.public_key_jwk().thumbprint().as_deref() == Some(thumbprint) {
+            if signer.public_key_jwk().thumbprint() == thumbprint {
                 return Some(signer.clone());
             }
         }
