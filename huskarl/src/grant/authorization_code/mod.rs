@@ -46,10 +46,10 @@
 //! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant(client: &huskarl_reqwest::ReqwestClient) -> Result<(), Box<dyn std::error::Error>> {
 //!
-//! let metadata = AuthorizationServerMetadata::builder()
-//!     .issuer("https://my-issuer")
+//! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(client)
-//!     .build()
+//!     .issuer("https://my-issuer")
+//!     .call()
 //!     .await?;
 //!
 //! let grant: AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar> =

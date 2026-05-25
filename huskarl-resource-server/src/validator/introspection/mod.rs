@@ -58,10 +58,10 @@
 //! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //!
-//! let metadata = AuthorizationServerMetadata::builder()
-//!     .issuer("https://my-issuer")
+//! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&http_client)
-//!     .build()
+//!     .issuer("https://my-issuer")
+//!     .call()
 //!     .await?;
 //!
 //! let validator = IntrospectionValidator::builder_from_metadata(&metadata)
@@ -122,7 +122,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let metadata = AuthorizationServerMetadata::builder().issuer("https://my-issuer").http_client(&http_client).build().await?;
+//! # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
 //! # let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
 //! use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 //!

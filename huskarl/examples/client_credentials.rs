@@ -25,10 +25,10 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Failed to build client")?;
 
-    let metadata = AuthorizationServerMetadata::builder()
-        .issuer(issuer)
+    let metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http_client)
-        .build()
+        .issuer(issuer)
+        .call()
         .await
         .whatever_context("Failed to get authorization server metadata")?;
 

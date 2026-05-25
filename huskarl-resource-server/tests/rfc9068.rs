@@ -20,11 +20,9 @@ async fn test_rfc9068_validator() {
     let server = MockServer::start();
 
     // 1. Generate key pair
-    let private_key = PrivateKey::generate(GenerateAlgorithm::Es256);
+    let private_key = PrivateKey::generate(GenerateAlgorithm::Es256, None);
     let public_jwk = private_key.public_key_jwk().into_owned();
-    let jwks = PublicJwks {
-        keys: vec![public_jwk],
-    };
+    let jwks = PublicJwks::new(vec![public_jwk]);
 
     // 2. Mock JWKS endpoint
     let jwks_mock = server.mock(|when, then| {

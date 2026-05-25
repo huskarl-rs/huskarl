@@ -29,10 +29,10 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Failed to build client")?;
 
-    let metadata = AuthorizationServerMetadata::builder()
-        .issuer(issuer)
+    let metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http_client)
-        .build()
+        .issuer(issuer)
+        .call()
         .await
         .whatever_context("Failed to get authorization server metadata")?;
 
@@ -47,7 +47,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .redirect_uri("http://localhost:8080/login/callback")
         .dpop(
             DPoP::builder()
-                .signer(PrivateKey::generate(GenerateAlgorithm::Es256))
+                .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None))
                 .build(),
         )
         .jar(NoJar)

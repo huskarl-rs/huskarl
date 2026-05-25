@@ -71,10 +71,10 @@ async fn client_credentials_mtls_binding() {
 
     // Fetch metadata via the HTTPS issuer — Keycloak's iss claim will reflect this URL,
     // so the validator must be configured with the same issuer.
-    let server_metadata = AuthorizationServerMetadata::builder()
-        .issuer(realm.mtls_issuer())
+    let server_metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http)
-        .build()
+        .issuer(realm.mtls_issuer())
+        .call()
         .await
         .expect("fetch server metadata");
 

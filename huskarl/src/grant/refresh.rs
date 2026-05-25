@@ -63,10 +63,10 @@
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
 //!
-//! let metadata = AuthorizationServerMetadata::builder()
-//!     .issuer("https://my-issuer")
+//! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&client)
-//!     .build()
+//!     .issuer("https://my-issuer")
+//!     .call()
 //!     .await?;
 //!
 //! let refresh_grant: RefreshGrant<ClientSecret<EnvVarSecret>, NoDPoP> =

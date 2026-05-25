@@ -32,10 +32,10 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
 //!
-//! let metadata = AuthorizationServerMetadata::builder()
-//!     .issuer("https://my-issuer")
+//! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&http_client)
-//!     .build()
+//!     .issuer("https://my-issuer")
+//!     .call()
 //!     .await?;
 //!
 //! let validator = Rfc9068Validator::builder_from_metadata(&metadata)
@@ -87,7 +87,7 @@
 //! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
-//! # let metadata = AuthorizationServerMetadata::builder().issuer("https://my-issuer").http_client(&http_client).build().await?;
+//! # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
 //! # let validator = Rfc9068Validator::builder_from_metadata(&metadata).audience("api://my-resource").jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
 //! use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 //!

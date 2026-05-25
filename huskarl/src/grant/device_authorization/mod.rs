@@ -50,10 +50,10 @@
 //! #     .build()
 //! #     .await?;
 //!
-//! let metadata = AuthorizationServerMetadata::builder()
-//!     .issuer("https://my-issuer")
+//! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&client)
-//!     .build()
+//!     .issuer("https://my-issuer")
+//!     .call()
 //!     .await?;
 //!
 //! let grant: DeviceAuthorizationGrant<NoAuth, NoDPoP> =

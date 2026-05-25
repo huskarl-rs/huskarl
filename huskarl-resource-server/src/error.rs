@@ -255,6 +255,7 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
             E::ExtraClaims { .. } => {
                 Some("The access token does not contain the required claims".to_string())
             }
+            E::JtiTooLong { .. } => Some("The access token 'jti' claim is too long".to_string()),
         }
     }
 }

@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Checks that azp has the client_id if the aud value of an ID token has multiple values.
  - Support form_post response mode in loopback server.
  - Skip serializing None fields in various requests.
+ - Bump huskarl-core to 0.6.
 
 ## [0.6.0] - 2026-05-06
 

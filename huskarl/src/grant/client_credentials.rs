@@ -57,10 +57,10 @@
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
 //!
-//! let metadata = AuthorizationServerMetadata::builder()
-//!     .issuer("https://my-issuer")
+//! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&client)
-//!     .build()
+//!     .issuer("https://my-issuer")
+//!     .call()
 //!     .await?;
 //!
 //! let grant: ClientCredentialsGrant<ClientSecret<EnvVarSecret>> =
@@ -355,7 +355,7 @@ mod tests {
             .client_auth(NoAuth)
             .dpop(
                 DPoP::builder()
-                    .signer(PrivateKey::generate(GenerateAlgorithm::Es256))
+                    .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None))
                     .build(),
             )
             .build();

@@ -137,7 +137,7 @@ impl DpopProofValidator {
             ath: validated.claims.ath,
             nonce: validated.claims.nonce,
             jti: validated.jti,
-            thumbprint,
+            thumbprint: Some(thumbprint),
             alg,
             iat: validated.issued_at.and_then(|t| {
                 t.duration_since(SystemTime::UNIX_EPOCH)
@@ -201,6 +201,7 @@ impl DpopProofError {
                         "The DPoP proof is missing the required '{claim}' claim"
                     )),
                     E::JtiNotUnique => Some("The DPoP proof jti has already been used".to_string()),
+                    E::JtiTooLong { .. } => Some("The DPoP proof jti is too long".to_string()),
                     E::JtiCheck { .. } | E::ExtraClaims { .. } => None,
                 }
             }
