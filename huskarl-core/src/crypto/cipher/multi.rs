@@ -38,6 +38,7 @@ impl MultiKeyDecryptor {
 }
 
 /// Errors that can occur during [`MultiKeyDecryptor`] decryption.
+#[non_exhaustive]
 #[derive(Debug, Snafu)]
 pub enum MultiKeyDecryptorError {
     /// No key could decrypt the ciphertext.

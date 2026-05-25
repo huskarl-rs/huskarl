@@ -60,6 +60,7 @@ impl<Auth: ClientAuthentication> ClientAuthentication for Arc<Auth> {
 }
 
 /// The authentication credentials that need to be added to the request.
+#[non_exhaustive]
 #[derive(Debug, Clone, Builder)]
 pub struct AuthenticationParams<'a> {
     /// Additional headers to include in the request.

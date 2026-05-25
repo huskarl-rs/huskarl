@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::secrets::SecretString;
 
 /// The types of form values that can be encoded when sending to an authorization server.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum FormValue<'a> {
     /// Represents a non-sensitive value (may be visible in logs, debug messages, etc.).

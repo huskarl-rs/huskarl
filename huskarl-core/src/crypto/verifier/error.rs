@@ -3,6 +3,7 @@ use snafu::Snafu;
 use crate::BoxedError;
 
 /// Errors that could occur during verification.
+#[non_exhaustive]
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum VerifyError<E: crate::Error> {
