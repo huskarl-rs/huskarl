@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.7.0-pre.1"
+version = "0.7.0"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1079,7 +1079,7 @@ dependencies = [
  "http",
  "httpmock",
  "huskarl",
- "huskarl-core 0.6.2",
+ "huskarl-core 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "huskarl-crypto-native",
  "huskarl-crypto-webcrypto",
  "huskarl-macros 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -1099,34 +1099,6 @@ dependencies = [
  "url",
  "wasm-bindgen-test",
  "web-time",
-]
-
-[[package]]
-name = "huskarl-core"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ea80b79b270dd5240535db40da7e9256f700a7388357c41d4219764be4958e1"
-dependencies = [
- "arc-swap",
- "base64",
- "bon",
- "bytes",
- "form_urlencoded",
- "futures-util",
- "getrandom 0.4.2",
- "gloo-timers",
- "hex",
- "http",
- "rand 0.10.1",
- "secrecy",
- "serde",
- "serde_json",
- "sha2",
- "snafu",
- "tokio",
- "url",
- "web-time",
- "zeroize",
 ]
 
 [[package]]
@@ -1161,6 +1133,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "huskarl-core"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be80cf5e17ec77b7f412528ddfc4bfaab01d0f29c26c5a79b27119940114e8dd"
+dependencies = [
+ "arc-swap",
+ "base64",
+ "bon",
+ "bytes",
+ "form_urlencoded",
+ "futures-util",
+ "getrandom 0.4.2",
+ "gloo-timers",
+ "hex",
+ "http",
+ "rand 0.10.1",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "snafu",
+ "tokio",
+ "url",
+ "web-time",
+ "zeroize",
+]
+
+[[package]]
 name = "huskarl-crypto-native"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1169,7 +1169,7 @@ dependencies = [
  "aes-gcm",
  "ed25519-dalek",
  "hmac",
- "huskarl-core 0.6.2",
+ "huskarl-core 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "p256",
  "p384",
  "pkcs8",
@@ -1189,7 +1189,7 @@ version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3919a900e09e39f85699e3cb4b3c5b7353641dc5fb51a4f5aaf8052d22e95f2"
 dependencies = [
- "huskarl-core 0.6.2",
+ "huskarl-core 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde",
  "serde-wasm-bindgen",
  "serde_bytes",
@@ -1234,14 +1234,14 @@ dependencies = [
  "bon",
  "bytes",
  "http",
- "huskarl-core 0.6.2",
+ "huskarl-core 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest",
  "snafu",
 ]
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.7.0-pre.1"
+version = "0.7.0"
 dependencies = [
  "base64",
  "bon",
@@ -1251,7 +1251,7 @@ dependencies = [
  "gloo-timers",
  "http",
  "httpmock",
- "huskarl-core 0.6.2",
+ "huskarl-core 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "huskarl-crypto-native",
  "huskarl-crypto-webcrypto",
  "huskarl-reqwest",
@@ -1270,7 +1270,7 @@ name = "huskarl-testkit"
 version = "0.1.0"
 dependencies = [
  "bon",
- "huskarl-core 0.6.2",
+ "huskarl-core 0.6.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "reqwest",
  "serde",
  "tokio",
