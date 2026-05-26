@@ -267,7 +267,8 @@ impl<DPoPErr: crate::core::Error + 'static> crate::core::Error
 pub enum HandleResponseError {
     /// The response was an error response code, but could not be parsed as an `OAuth2` error.
     #[snafu(display(
-        "Failed to parse error response as OAuth2 error: status={status}, content-type={}", content_type.as_ref().map(|s| s.to_str().ok().unwrap_or_default()).unwrap_or_default()
+        "Failed to parse error response as OAuth2 error: status={status}, content-type={ct}, body={body}",
+        ct = content_type.as_ref().map(|s| s.to_str().ok().unwrap_or_default()).unwrap_or_default()
     ))]
     UnparseableErrorResponse {
         /// The body of the response.
