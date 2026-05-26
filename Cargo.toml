@@ -4,7 +4,7 @@ members = ["huskarl", "huskarl-core", "huskarl-macros", "huskarl-resource-server
 exclude = ["integration"]
 
 [workspace.dependencies]
-huskarl-core = { version = "0.6" }
+huskarl-core = { version = "0.6.4" }
 huskarl-macros = { version = "0.1" }
 huskarl-reqwest = { version = "0.6" }
 huskarl-crypto-native = { version = "0.7" }
