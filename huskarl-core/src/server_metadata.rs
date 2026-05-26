@@ -115,6 +115,10 @@ pub struct AuthorizationServerMetadata {
     #[serde(default)]
     #[builder(default)]
     pub require_pushed_authorization_requests: bool,
+    /// Array containing a list of the JWS algorithms supported for `DPoP` proof JWTs (RFC 9449 §5.1).
+    ///
+    /// RFC 9449 - OAuth 2.0 Demonstrating Proof of Possession (`DPoP`)
+    pub dpop_signing_alg_values_supported: Option<Vec<String>>,
     /// Indicates support for an `iss` identifier in the authorization endpoint response (RFC 9207 §3).
     ///
     /// RFC 9207 - OAuth 2.0 Authorization Server Issuer Identification
