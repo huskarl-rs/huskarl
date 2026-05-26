@@ -23,6 +23,7 @@ pub mod jwt;
 pub mod platform;
 pub mod prelude;
 pub mod secrets;
+pub mod serde_utils;
 pub mod server_metadata;
 
 pub use endpoint_url::{EndpointUrl, IntoEndpointUrl};
