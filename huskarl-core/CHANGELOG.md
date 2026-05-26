@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changes
 
  - Added dpop_signing_alg_values_supported to server metadata.
+ - Include body of response in error when an OAuth2 error couldn't be parsed.
 
 ## [0.6.1] - 2026-05-25
 
