@@ -5,13 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.6.4] - 2026-05-29
 
 ### Changes
 
  - Added dpop_signing_alg_values_supported to server metadata.
  - Include body of response in error when an OAuth2 error couldn't be parsed.
  - Added serde utils for serializing vec-or-string, and SystemTime.
+
+## [0.6.3] - 2026-05-26
+
+### Changes
+
+ - Fix path for OIDC/authorization server metadata.
 
 ## [0.6.1] - 2026-05-25
 
