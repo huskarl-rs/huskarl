@@ -131,7 +131,7 @@ use bon::Builder;
 use serde::Serialize;
 
 use crate::{
-    core::server_metadata::AuthorizationServerMetadata,
+    core::{secrets::SecretString, server_metadata::AuthorizationServerMetadata},
     grant::core::{OAuth2ExchangeGrant, mk_scopes},
     token::RefreshToken,
 };
@@ -187,7 +187,7 @@ impl<
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {
         RefreshGrantForm {
             grant_type: "refresh_token",
-            refresh_token: params.refresh_token,
+            refresh_token: params.refresh_token.token().clone(),
             scope: params.scope,
             resource: params.resource,
         }
@@ -221,9 +221,52 @@ impl RefreshGrantParameters {
 #[derive(Debug, Serialize)]
 pub struct RefreshGrantForm {
     grant_type: &'static str,
-    refresh_token: RefreshToken,
+    refresh_token: SecretString,
     #[serde(skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     resource: Option<Vec<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_form_serializes_token_as_plain_string() {
+        let form = RefreshGrantForm {
+            grant_type: "refresh_token",
+            refresh_token: SecretString::new("my-refresh-token"),
+            scope: None,
+            resource: None,
+        };
+        let encoded = serde_html_form::to_string(&form).unwrap();
+        assert_eq!(encoded, "grant_type=refresh_token&refresh_token=my-refresh-token");
+    }
+
+    #[test]
+    fn refresh_form_resource_serializes_as_repeated_keys() {
+        let form = RefreshGrantForm {
+            grant_type: "refresh_token",
+            refresh_token: SecretString::new("tok"),
+            scope: None,
+            resource: Some(vec![
+                "https://api.example.com".to_string(),
+                "https://other.example.com".to_string(),
+            ]),
+        };
+        let encoded = serde_html_form::to_string(&form).unwrap();
+        assert!(
+            encoded.contains("resource=https%3A%2F%2Fapi.example.com"),
+            "first resource not found in: {encoded}"
+        );
+        assert!(
+            encoded.contains("resource=https%3A%2F%2Fother.example.com"),
+            "second resource not found in: {encoded}"
+        );
+        assert!(
+            !encoded.contains(','),
+            "resource values should not be comma-joined: {encoded}"
+        );
+    }
 }
