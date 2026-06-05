@@ -145,7 +145,11 @@ use bon::Builder;
 use serde::Serialize;
 
 use crate::{
-    core::server_metadata::AuthorizationServerMetadata,
+    core::{
+        EndpointUrl,
+        client_auth::ClientAuthentication,
+        dpop::{AuthorizationServerDPoP, NoDPoP},
+    },
     grant::{
         core::{OAuth2ExchangeGrant, mk_scopes},
         refresh::RefreshGrant,
@@ -159,34 +163,75 @@ use crate::{
 /// and delegation use cases by allowing the exchange of one token type for another.
 ///
 /// See the [module documentation][crate::grant::token_exchange] for a usage guide.
-#[huskarl_macros::grant]
+#[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
+#[huskarl_macros::try_builder]
 #[derive(Debug, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
-pub struct TokenExchangeGrant {}
+pub struct TokenExchangeGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP> {
+    /// The client ID.
+    client_id: String,
 
-impl<
-    Auth: crate::core::client_auth::ClientAuthentication + 'static,
-    D: crate::core::dpop::AuthorizationServerDPoP + 'static,
-> TokenExchangeGrant<Auth, D>
-{
-    /// Configure the grant from authorization server metadata.
-    pub fn builder_from_metadata(
-        metadata: &AuthorizationServerMetadata,
-    ) -> TokenExchangeGrantBuilder<Auth, D, SetCommonMetadata> {
-        TokenExchangeGrant::builder().with_common_metadata(metadata)
-    }
+    /// The client authentication method.
+    client_auth: Auth,
+
+    /// The `DPoP` signer.
+    dpop: D,
+
+    /// The issuer for tokens created by the authorization server.
+    #[from_metadata(path = "issuer")]
+    issuer: Option<String>,
+
+    /// The URL of the token endpoint.
+    #[from_metadata(path = "token_endpoint")]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    token_endpoint: EndpointUrl,
+
+    /// The mTLS alias for the token endpoint (RFC 8705 §5).
+    #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    mtls_token_endpoint: Option<EndpointUrl>,
+
+    /// Supported endpoint auth methods; used to auto-select basic or
+    /// form auth for client secrets.
+    #[from_metadata(path = "token_endpoint_auth_methods_supported")]
+    token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
-#[huskarl_macros::grant_impl]
-impl<
-    Auth: crate::core::client_auth::ClientAuthentication + Clone + 'static,
-    D: crate::core::dpop::AuthorizationServerDPoP + 'static,
-> OAuth2ExchangeGrant for TokenExchangeGrant<Auth, D>
+impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 'static>
+    OAuth2ExchangeGrant for TokenExchangeGrant<Auth, D>
 {
     type Parameters = TokenExchangeGrantParameters;
     type ClientAuth = Auth;
     type DPoP = D;
     type Form<'a> = TokenExchangeGrantForm;
+
+    fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+
+    fn client_auth(&self) -> &Self::ClientAuth {
+        &self.client_auth
+    }
+
+    fn token_endpoint(&self) -> &EndpointUrl {
+        &self.token_endpoint
+    }
+
+    fn mtls_token_endpoint(&self) -> Option<&EndpointUrl> {
+        self.mtls_token_endpoint.as_ref()
+    }
+
+    fn dpop(&self) -> &Self::DPoP {
+        &self.dpop
+    }
+
+    fn allowed_auth_methods(&self) -> Option<&[String]> {
+        self.token_endpoint_auth_methods_supported.as_deref()
+    }
 
     fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
         RefreshGrant::builder()

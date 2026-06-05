@@ -1,0 +1,5 @@
+error: #[from_metadata] supports `path = "…"`, `with = |m| …`, or `maybe` (with `with`)
+  --> tests/ui/fail_error_preserves_item.rs:13:21
+   |
+13 |     #[from_metadata(pathh = "name")]
+   |                     ^^^^^

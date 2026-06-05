@@ -1,0 +1,5 @@
+error: #[try_setter] does not support raw identifiers; rename the field
+  --> tests/ui/fail_raw_ident.rs:18:5
+   |
+18 |     r#type: Url,
+   |     ^^^^^^

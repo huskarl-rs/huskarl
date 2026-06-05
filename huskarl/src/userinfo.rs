@@ -48,16 +48,39 @@ pub struct UserInfoClient<
     _phantom: PhantomData<Extra>,
 }
 
+#[huskarl_macros::from_metadata(
+    metadata = crate::core::server_metadata::AuthorizationServerMetadata,
+    method(name = "builder_from_metadata_internal", vis = "")
+)]
+#[huskarl_macros::try_builder]
 #[bon::bon]
 impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
     UserInfoClient<D, Extra>
 {
     /// Creates a new [`UserInfoClient`].
-    #[builder(state_mod(name = "builder"))]
+    ///
+    /// This is the workhorse constructor; callers use [`Self::builder()`]
+    /// (which starts with `Extra = ()`) and can switch to a typed claim
+    /// set via [`with_extra`][UserInfoClientBuilder::with_extra] on the builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if JWT-response validation is misconfigured (a
+    /// `jws_verifier_factory` is supplied without `issuer` or `client_id`),
+    /// or if building the JWS verifier from `jwks_uri` fails.
+    #[builder(
+        start_fn(name = "builder_internal", vis = ""),
+        state_mod(name = "builder"),
+        generics(setters(vis = "", name = "with_{}_internal"))
+    )]
     pub async fn new(
         /// The URL of the `UserInfo` endpoint.
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[from_metadata(path = "userinfo_endpoint?")]
         userinfo_endpoint: EndpointUrl,
         /// The mTLS alias for the `UserInfo` endpoint (RFC 8705 §5).
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[from_metadata(path = "mtls_endpoint_aliases?.userinfo_endpoint?")]
         mtls_userinfo_endpoint: Option<EndpointUrl>,
         /// The `DPoP` proof implementation for resource server requests.
         ///
@@ -67,6 +90,8 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
         ///
         /// Must be provided together with `jws_verifier_factory` to enable JWT response
         /// validation.
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[from_metadata(path = "jwks_uri?")]
         jwks_uri: Option<EndpointUrl>,
         /// JWS verifier factory for JWT response validation.
         ///
@@ -88,6 +113,7 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
         /// Required when JWT validation is configured (`jwks_uri` and
         /// `jws_verifier_factory` are provided).
         #[builder(into)]
+        #[from_metadata(path = "issuer")]
         issuer: Option<String>,
         /// The client ID, used for JWT `aud` claim validation (OIDC Core §5.3.2).
         ///
@@ -132,7 +158,30 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
     }
 }
 
-impl<D: ResourceServerDPoP> UserInfoClient<D> {
+/// Specialized public entry points for the default `Extra = ()` case.
+///
+/// `builder()` and `builder_from_metadata()` forward to the bon- and
+/// macro-generated `_internal` workhorses living on the fully-generic impl;
+/// `Extra` is fixed to `()` here so callers don't need to turbofish. Users who
+/// want a typed claim set chain `with_extra::<E>()` on the returned builder.
+impl<D: ResourceServerDPoP + 'static> UserInfoClient<D, ()> {
+    /// Returns a builder for a `UserInfoClient`, with `Extra` defaulting to
+    /// `()` (call [`with_extra`][UserInfoClientBuilder::with_extra] on the
+    /// returned builder to switch to a typed claim set).
+    pub fn builder() -> UserInfoClientBuilder<D, ()> {
+        Self::builder_internal()
+    }
+
+    /// Configure the `UserInfo` client from authorization server metadata.
+    ///
+    /// Returns `None` if `metadata.userinfo_endpoint` is absent.
+    #[must_use]
+    pub fn builder_from_metadata(
+        metadata: &AuthorizationServerMetadata,
+    ) -> Option<UserInfoClientBuilder<D, (), UserInfoClientBuilderFromMetadataInternalState>> {
+        Self::builder_from_metadata_internal(metadata)
+    }
+
     /// Creates a `UserInfo` client from an `OAuth2` grant and authorization server metadata.
     ///
     /// The `DPoP` configuration is derived from the grant, converted to its resource
@@ -157,38 +206,23 @@ impl<D: ResourceServerDPoP> UserInfoClient<D> {
             _phantom: PhantomData,
         })
     }
+}
 
-    /// Fills builder parameters relevant to `UserInfo` from authorization server metadata.
-    ///
-    /// Returns `None` if the `userinfo_endpoint` is not included in metadata.
-    #[allow(clippy::type_complexity)]
-    pub fn builder_from_metadata(
-        metadata: &AuthorizationServerMetadata,
-    ) -> Option<
-        UserInfoClientBuilder<
-            D,
-            (),
-            builder::SetIssuer<
-                builder::SetJwksUri<
-                    builder::SetMtlsUserinfoEndpoint<builder::SetUserinfoEndpoint<builder::Empty>>,
-                >,
-            >,
-        >,
-    > {
-        let userinfo_endpoint = metadata.userinfo_endpoint.clone()?;
-
-        Some(
-            Self::builder()
-                .userinfo_endpoint(userinfo_endpoint)
-                .maybe_mtls_userinfo_endpoint(
-                    metadata
-                        .mtls_endpoint_aliases
-                        .as_ref()
-                        .and_then(|a| a.userinfo_endpoint.clone()),
-                )
-                .maybe_jwks_uri(metadata.jwks_uri.clone())
-                .issuer(metadata.issuer.clone()),
-        )
+/// Builder-level `with_extra` — switches the `Extra` parameter of the builder
+/// before any setter is called. Works because bon's experimental
+/// `generics(setters(...))` on `fn new` generated `with_extra_internal` to
+/// perform the type-state move.
+impl<
+    D: ResourceServerDPoP + 'static,
+    Extra: Clone + for<'de> Deserialize<'de> + 'static,
+    S: builder::State,
+> UserInfoClientBuilder<D, Extra, S>
+{
+    /// Sets the typed claim extension for the `UserInfo` response.
+    pub fn with_extra<E: Clone + for<'de> Deserialize<'de> + 'static>(
+        self,
+    ) -> UserInfoClientBuilder<D, E, S> {
+        self.with_extra_internal()
     }
 }
 

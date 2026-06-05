@@ -1,0 +1,13 @@
+error: Unknown field: `metdata`. Did you mean `metadata`?
+ --> tests/ui/fail_from_metadata_typo.rs:9:33
+  |
+9 | #[huskarl_macros::from_metadata(metdata = crate::Src)]
+  |                                 ^^^^^^^
+
+error: Missing field `metadata`
+ --> tests/ui/fail_from_metadata_typo.rs:9:1
+  |
+9 | #[huskarl_macros::from_metadata(metdata = crate::Src)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `huskarl_macros::from_metadata` (in Nightly builds, run with -Z macro-backtrace for more info)

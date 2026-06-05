@@ -307,17 +307,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "console"
-version = "0.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
-dependencies = [
- "encode_unicode",
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -672,12 +661,6 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
-
-[[package]]
-name = "encode_unicode"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
 
 [[package]]
 name = "encoding_rs"
@@ -1067,7 +1050,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.7.2"
+version = "0.8.0-pre.0"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1082,7 +1065,7 @@ dependencies = [
  "huskarl-core 0.6.4 (registry+https://github.com/rust-lang/crates.io-index)",
  "huskarl-crypto-native",
  "huskarl-crypto-webcrypto",
- "huskarl-macros 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "huskarl-macros",
  "huskarl-reqwest",
  "huskarl-resource-server",
  "huskarl-testkit",
@@ -1202,27 +1185,14 @@ dependencies = [
 
 [[package]]
 name = "huskarl-macros"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "bon",
  "darling",
- "insta",
- "prettyplease",
  "proc-macro2",
  "quote",
  "syn",
  "trybuild",
-]
-
-[[package]]
-name = "huskarl-macros"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06b601d29a5cd421ad13e7e4c3efc32c573cc3c7371cf3a98b4a0d40a3e8405f"
-dependencies = [
- "darling",
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1484,18 +1454,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4250ce6452e92010fdf7268ccc5d14faa80bb12fc741938534c58f16804e03c7"
 dependencies = [
  "hybrid-array",
-]
-
-[[package]]
-name = "insta"
-version = "1.47.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
-dependencies = [
- "console",
- "once_cell",
- "similar",
- "tempfile",
 ]
 
 [[package]]

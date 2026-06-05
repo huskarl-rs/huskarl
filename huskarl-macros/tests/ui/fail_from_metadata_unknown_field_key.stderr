@@ -1,0 +1,5 @@
+error: #[from_metadata] supports `path = "…"`, `with = |m| …`, or `maybe` (with `with`)
+  --> tests/ui/fail_from_metadata_unknown_field_key.rs:11:21
+   |
+11 |     #[from_metadata(pathh = "name")]
+   |                     ^^^^^
