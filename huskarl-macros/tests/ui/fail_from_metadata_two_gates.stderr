@@ -1,0 +1,5 @@
+error: #[from_metadata] currently supports at most one gating field (a required field whose source is Option in metadata)
+  --> tests/ui/fail_from_metadata_two_gates.rs:12:8
+   |
+12 | struct Foo {
+   |        ^^^

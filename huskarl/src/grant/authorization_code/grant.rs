@@ -1,25 +1,19 @@
 use std::{collections::HashSet, marker::PhantomData, sync::Arc};
 
 use bon::Builder;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     core::{
         BoxedError, EndpointUrl,
         client_auth::ClientAuthentication,
         crypto::verifier::{BoxedJwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
-        dpop::AuthorizationServerDPoP,
+        dpop::{AuthorizationServerDPoP, NoDPoP},
         platform::MaybeSendSync,
-        server_metadata::AuthorizationServerMetadata,
     },
     grant::{
         authorization_code::{
-            grant::builder::{
-                SetAuthorizationEndpoint, SetAuthorizationResponseIssParameterSupported,
-                SetCodeChallengeMethodsSupported, SetJwksUri,
-                SetMtlsPushedAuthorizationRequestEndpoint, SetPushedAuthorizationRequestEndpoint,
-                SetRequirePushedAuthorizationRequests, State,
-            },
+            grant::builder::State,
             jar::{Jar, NoJar},
         },
         core::OAuth2ExchangeGrant,
@@ -30,12 +24,35 @@ use crate::{
 /// The authorization code grant (RFC 6749 §4.1).
 ///
 /// See the [module documentation][crate::grant::authorization_code] for a usage guide.
-#[huskarl_macros::grant(vis(pub(super)))]
 #[derive(Clone)]
 pub struct AuthorizationCodeGrant<
+    Auth: ClientAuthentication,
+    D: AuthorizationServerDPoP = NoDPoP,
     J: Jar = NoJar,
     IdClaims: Clone + for<'de> Deserialize<'de> + 'static = (),
 > {
+    /// The client ID.
+    pub(super) client_id: String,
+
+    /// The client authentication method.
+    pub(super) client_auth: Auth,
+
+    /// The `DPoP` signer.
+    pub(super) dpop: D,
+
+    /// The issuer for tokens created by the authorization server.
+    pub(super) issuer: Option<String>,
+
+    /// The URL of the token endpoint.
+    pub(super) token_endpoint: EndpointUrl,
+
+    /// The mTLS alias for the token endpoint (RFC 8705 §5).
+    pub(super) mtls_token_endpoint: Option<EndpointUrl>,
+
+    /// Supported endpoint auth methods; used to auto-select basic or
+    /// form auth for client secrets.
+    pub(super) token_endpoint_auth_methods_supported: Option<Vec<String>>,
+
     /// The JWS verifier to use when verifying JWS signatures.
     ///
     /// This field is populated from the values of `jwks_uri`, `jws_verifier_platform`,
@@ -85,22 +102,59 @@ pub struct AuthorizationCodeGrant<
     _phantom: PhantomData<IdClaims>,
 }
 
-#[huskarl_macros::grant_new]
+#[huskarl_macros::from_metadata(
+    metadata = crate::core::server_metadata::AuthorizationServerMetadata,
+    method(name = "builder_from_metadata_internal", vis = "")
+)]
+#[huskarl_macros::try_builder]
 #[bon::bon]
 impl<
     Auth: ClientAuthentication + 'static,
     D: AuthorizationServerDPoP + 'static,
     J: Jar + 'static,
-    IdClaims: Clone + for<'de> Deserialize<'de> + 'static,
+    IdClaims: Clone + DeserializeOwned + 'static,
 > AuthorizationCodeGrant<Auth, D, J, IdClaims>
 {
     /// Creates a new [`AuthorizationCodeGrant`] instance.
+    ///
+    /// This is the workhorse constructor; callers use [`Self::builder()`]
+    /// (which starts with `IdClaims = ()`) and can switch to a typed claim
+    /// set via [`with_id_claims`][AuthorizationCodeGrantBuilder::with_id_claims]
+    /// on the builder.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a `jws_verifier_factory` is supplied without a
+    /// `jws_verifier_platform`, or if building the JWS verifier from `jwks_uri`
+    /// fails.
     #[builder(
+        start_fn(name = "builder_internal", vis = ""),
         state_mod(name = "builder"),
         generics(setters(vis = "", name = "with_{}_internal")),
         on(String, into)
     )]
     pub async fn new(
+        /// The client ID.
+        client_id: String,
+        /// The client authentication method.
+        client_auth: Auth,
+        /// The `DPoP` signer.
+        dpop: D,
+        /// The issuer for tokens created by the authorization server.
+        #[from_metadata(path = "issuer")]
+        issuer: Option<String>,
+        /// The URL of the token endpoint.
+        #[from_metadata(path = "token_endpoint")]
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        token_endpoint: EndpointUrl,
+        /// The mTLS alias for the token endpoint (RFC 8705 §5).
+        #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        mtls_token_endpoint: Option<EndpointUrl>,
+        /// Supported endpoint auth methods; used to auto-select basic or
+        /// form auth for client secrets.
+        #[from_metadata(path = "token_endpoint_auth_methods_supported")]
+        token_endpoint_auth_methods_supported: Option<Vec<String>>,
         /// The JAR (JWT Secured Authorization Request) implementation to use when making requests to the authorization server.
         ///
         /// With JAR, the parameters of the initial request to the authorization server are signed
@@ -114,15 +168,27 @@ impl<
         /// - [`crate::grant::authorization_code::jar::NoJar`]
         ///     No JAR is implemented when this variant is used.
         jar: J,
-        #[endpoint_url] jwks_uri: Option<EndpointUrl>,
-        #[endpoint_url] authorization_endpoint: EndpointUrl,
-        #[endpoint_url] pushed_authorization_request_endpoint: Option<EndpointUrl>,
-        #[endpoint_url] mtls_pushed_authorization_request_endpoint: Option<EndpointUrl>,
-        #[builder(default)] require_pushed_authorization_requests: bool,
-        #[builder(default)] authorization_response_iss_parameter_supported: bool,
-        #[builder(default = vec!["S256".to_string()])] code_challenge_methods_supported: Vec<
-            String,
-        >,
+        #[from_metadata(path = "jwks_uri?")]
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        jwks_uri: Option<EndpointUrl>,
+        #[from_metadata(path = "authorization_endpoint?")]
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        authorization_endpoint: EndpointUrl,
+        #[from_metadata(path = "pushed_authorization_request_endpoint?")]
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        pushed_authorization_request_endpoint: Option<EndpointUrl>,
+        #[from_metadata(path = "mtls_endpoint_aliases?.pushed_authorization_request_endpoint?")]
+        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        mtls_pushed_authorization_request_endpoint: Option<EndpointUrl>,
+        #[from_metadata(path = "require_pushed_authorization_requests")]
+        #[builder(default)]
+        require_pushed_authorization_requests: bool,
+        #[from_metadata(path = "authorization_response_iss_parameter_supported")]
+        #[builder(default)]
+        authorization_response_iss_parameter_supported: bool,
+        #[from_metadata(path = "code_challenge_methods_supported")]
+        #[builder(default = vec!["S256".to_string()])]
+        code_challenge_methods_supported: Vec<String>,
         redirect_uri: String,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
         allowed_id_token_signed_response_algs: Option<HashSet<String>>,
@@ -149,7 +215,7 @@ impl<
             (Some(_) | None, None) => None,
         };
 
-        Ok(Self {
+        Ok(AuthorizationCodeGrant {
             jws_verifier,
             client_id,
             client_auth,
@@ -173,65 +239,46 @@ impl<
     }
 }
 
+/// Specialized public entry points for the default `IdClaims = ()` case.
+///
+/// `builder()` and `builder_from_metadata()` forward to the bon- and
+/// macro-generated `_internal` workhorses living on the fully-generic impl;
+/// `IdClaims` is fixed to `()` here so callers don't need to turbofish. Users
+/// who want a typed claim set chain `with_id_claims::<C>()` on the returned
+/// builder before any other setter.
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, J: Jar + 'static>
     AuthorizationCodeGrant<Auth, D, J, ()>
 {
+    /// Returns a builder for an authorization code grant, with `IdClaims`
+    /// defaulting to `()` (call [`with_id_claims`][AuthorizationCodeGrantBuilder::with_id_claims]
+    /// to switch to a typed claim set).
+    pub fn builder() -> AuthorizationCodeGrantBuilder<Auth, D, J, ()> {
+        Self::builder_internal()
+    }
+
     /// Configure the grant from authorization server metadata.
+    ///
+    /// Returns `None` if `metadata.authorization_endpoint` is absent.
     #[must_use]
-    #[allow(clippy::type_complexity)]
     pub fn builder_from_metadata(
-        metadata: &AuthorizationServerMetadata,
+        metadata: &crate::core::server_metadata::AuthorizationServerMetadata,
     ) -> Option<
         AuthorizationCodeGrantBuilder<
             Auth,
             D,
             J,
             (),
-            SetMtlsPushedAuthorizationRequestEndpoint<
-                SetAuthorizationEndpoint<
-                    SetJwksUri<
-                        SetPushedAuthorizationRequestEndpoint<
-                            SetCodeChallengeMethodsSupported<
-                                SetAuthorizationResponseIssParameterSupported<
-                                    SetRequirePushedAuthorizationRequests<SetCommonMetadata>,
-                                >,
-                            >,
-                        >,
-                    >,
-                >,
-            >,
+            AuthorizationCodeGrantBuilderFromMetadataInternalState,
         >,
     > {
-        metadata
-            .authorization_endpoint
-            .as_ref()
-            .map(|authorization_endpoint| {
-                AuthorizationCodeGrant::builder()
-                    .with_common_metadata(metadata)
-                    .require_pushed_authorization_requests(
-                        metadata.require_pushed_authorization_requests,
-                    )
-                    .authorization_response_iss_parameter_supported(
-                        metadata.authorization_response_iss_parameter_supported,
-                    )
-                    .code_challenge_methods_supported(
-                        metadata.code_challenge_methods_supported.clone(),
-                    )
-                    .maybe_pushed_authorization_request_endpoint_internal(
-                        metadata.pushed_authorization_request_endpoint.clone(),
-                    )
-                    .maybe_jwks_uri_internal(metadata.jwks_uri.clone())
-                    .authorization_endpoint_internal(authorization_endpoint.clone())
-                    .maybe_mtls_pushed_authorization_request_endpoint_internal(
-                        metadata
-                            .mtls_endpoint_aliases
-                            .as_ref()
-                            .and_then(|a| a.pushed_authorization_request_endpoint.clone()),
-                    )
-            })
+        Self::builder_from_metadata_internal(metadata)
     }
 }
 
+/// Builder-level `with_id_claims` — switches the `IdClaims` parameter of the
+/// builder before any setter is called. Works because bon's experimental
+/// `generics(setters(...))` on `fn new` generated `with_id_claims_internal`
+/// to perform the type-state move.
 impl<
     Auth: ClientAuthentication + 'static,
     D: AuthorizationServerDPoP + 'static,
@@ -276,7 +323,6 @@ pub struct AuthorizationCodeGrantForm<'a> {
     resource: Option<Vec<String>>,
 }
 
-#[huskarl_macros::grant_impl]
 impl<
     Auth: ClientAuthentication + Clone + 'static,
     D: AuthorizationServerDPoP + 'static,
@@ -288,6 +334,34 @@ impl<
     type ClientAuth = Auth;
     type DPoP = D;
     type Form<'a> = AuthorizationCodeGrantForm<'a>;
+
+    fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+
+    fn client_auth(&self) -> &Self::ClientAuth {
+        &self.client_auth
+    }
+
+    fn token_endpoint(&self) -> &EndpointUrl {
+        &self.token_endpoint
+    }
+
+    fn mtls_token_endpoint(&self) -> Option<&EndpointUrl> {
+        self.mtls_token_endpoint.as_ref()
+    }
+
+    fn dpop(&self) -> &Self::DPoP {
+        &self.dpop
+    }
+
+    fn allowed_auth_methods(&self) -> Option<&[String]> {
+        self.token_endpoint_auth_methods_supported.as_deref()
+    }
 
     fn bound_dpop_jkt(params: &Self::Parameters) -> Option<&str> {
         params.dpop_jkt.as_deref()

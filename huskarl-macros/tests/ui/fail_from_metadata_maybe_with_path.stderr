@@ -1,0 +1,5 @@
+error: `maybe` only applies to `with = |m| …`; use `path = "…?"` to mark Option segments
+  --> tests/ui/fail_from_metadata_maybe_with_path.rs:12:5
+   |
+12 |     #[from_metadata(path = "name?", maybe)]
+   |     ^

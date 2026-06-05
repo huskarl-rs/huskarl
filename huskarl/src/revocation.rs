@@ -11,11 +11,10 @@ use snafu::prelude::*;
 
 use crate::{
     core::{
-        EndpointUrl, IntoEndpointUrl,
+        EndpointUrl,
         client_auth::ClientAuthentication,
         dpop::{DPoPNotConfigured, NoDPoP},
         http::HttpClient,
-        server_metadata::AuthorizationServerMetadata,
     },
     grant::core::form::{OAuth2FormError, OAuth2FormRequest},
     token::{AccessToken, RefreshToken},
@@ -51,6 +50,8 @@ impl RevocableToken for RefreshToken {
 }
 
 /// Implementation of token revocation.
+#[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
+#[huskarl_macros::try_builder]
 #[derive(Debug, Clone, Builder)]
 #[builder(state_mod(name = "builder"))]
 pub struct TokenRevocation<Auth: ClientAuthentication + 'static> {
@@ -65,55 +66,25 @@ pub struct TokenRevocation<Auth: ClientAuthentication + 'static> {
     // -- Metadata fields --
     /// The issuer for tokens created by the authorization server.
     #[builder(into)]
+    #[from_metadata(path = "issuer")]
     issuer: Option<String>,
 
     /// The URL of the revocation endpoint.
-    #[builder(setters(vis = "", name = "revocation_endpoint_internal"))]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[from_metadata(path = "revocation_endpoint?")]
     revocation_endpoint: EndpointUrl,
 
     /// The mTLS alias for the revocation endpoint (RFC 8705 §5).
-    #[builder(setters(vis = "", name = "mtls_revocation_endpoint_internal"))]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[from_metadata(path = "mtls_endpoint_aliases?.revocation_endpoint?")]
     mtls_revocation_endpoint: Option<EndpointUrl>,
 
     /// Supported endpoint auth methods (RFC 8414).
+    #[from_metadata(path = "revocation_endpoint_auth_methods_supported")]
     revocation_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
 impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
-    /// Fills builder parameters relevant to revocation from authorization server metadata.
-    ///
-    /// Returns an `Option` if the revocation endoint is not included in metadata.
-    #[allow(clippy::type_complexity)]
-    pub fn builder_from_metadata(
-        metadata: &AuthorizationServerMetadata,
-    ) -> Option<
-        TokenRevocationBuilder<
-            Auth,
-            builder::SetMtlsRevocationEndpoint<
-                builder::SetRevocationEndpointAuthMethodsSupported<
-                    builder::SetRevocationEndpoint<builder::SetIssuer<builder::Empty>>,
-                >,
-            >,
-        >,
-    > {
-        let revocation_endpoint = metadata.revocation_endpoint.clone()?;
-
-        Some(
-            Self::builder()
-                .issuer(metadata.issuer.clone())
-                .revocation_endpoint_internal(revocation_endpoint)
-                .revocation_endpoint_auth_methods_supported(
-                    metadata.revocation_endpoint_auth_methods_supported.clone(),
-                )
-                .maybe_mtls_revocation_endpoint_internal(
-                    metadata
-                        .mtls_endpoint_aliases
-                        .as_ref()
-                        .and_then(|a| a.revocation_endpoint.clone()),
-                ),
-        )
-    }
-
     /// Revoke a token at the authorization server's revocation endpoint.
     ///
     /// Sends a POST request to the revocation endpoint with the token and
@@ -167,27 +138,6 @@ impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
             .context(RevocationSnafu)?;
 
         Ok(())
-    }
-}
-
-impl<Auth: ClientAuthentication, S: builder::State> TokenRevocationBuilder<Auth, S> {
-    /// Sets the revocation endpoint URL.
-    ///
-    /// Accepts any type that implements [`IntoEndpointUrl`], including
-    /// `&str`, [`String`], `Url`, [`Uri`](http::Uri), and
-    /// [`EndpointUrl`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the URL cannot be parsed as a valid URI.
-    pub fn revocation_endpoint<U: IntoEndpointUrl>(
-        self,
-        url: U,
-    ) -> Result<TokenRevocationBuilder<Auth, builder::SetRevocationEndpoint<S>>, U::Error>
-    where
-        S::RevocationEndpoint: builder::IsUnset,
-    {
-        Ok(self.revocation_endpoint_internal(url.into_endpoint_url()?))
     }
 }
 

@@ -1,0 +1,5 @@
+error: #[from_metadata] takes either `path` or `with`, not both
+  --> tests/ui/fail_from_metadata_path_and_with.rs:11:5
+   |
+11 |     #[from_metadata(path = "name", with = |m: &crate::Src| m.name.clone())]
+   |     ^

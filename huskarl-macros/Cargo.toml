@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-macros"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Procedural macros for the huskarl OAuth2 client library."
@@ -21,6 +21,5 @@ quote = "1"
 syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
-insta = "1"
-prettyplease = "0.2"
+bon = { workspace = true }
 trybuild = { version = "1", features = ["diff"] }

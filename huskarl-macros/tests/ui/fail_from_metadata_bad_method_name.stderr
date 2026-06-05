@@ -1,0 +1,5 @@
+error: Unknown value: `not an ident`
+ --> tests/ui/fail_from_metadata_bad_method_name.rs:8:70
+  |
+8 | #[huskarl_macros::from_metadata(metadata = crate::Src, method(name = "not an ident"))]
+  |                                                                      ^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: #[try_setter(...)] requires a path of the form `Trait::method`
+ --> tests/ui/fail_try_setter_single_segment.rs:8:5
+  |
+8 |     #[try_setter(into_url)]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^

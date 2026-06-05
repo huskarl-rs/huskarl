@@ -6,10 +6,9 @@ use crate::{
     core::{
         EndpointUrl,
         client_auth::ClientAuthentication,
-        dpop::AuthorizationServerDPoP,
+        dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         platform::{Duration, sleep},
-        server_metadata::AuthorizationServerMetadata,
     },
     grant::{
         core::{
@@ -18,9 +17,6 @@ use crate::{
                 DPoPNonceError, HandleResponseError, OAuth2ErrorBody, OAuth2FormError,
                 OAuth2FormRequest, with_dpop_nonce_retry,
             },
-        },
-        device_authorization::grant::builder::{
-            SetDeviceAuthorizationEndpoint, SetMtlsDeviceAuthorizationEndpoint,
         },
         refresh::RefreshGrant,
     },
@@ -34,49 +30,54 @@ use crate::{
 /// polls the token endpoint until the user completes authorization or the code expires.
 ///
 /// See the [module documentation][crate::grant::device_authorization] for a usage guide.
-#[huskarl_macros::grant]
+#[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
+#[huskarl_macros::try_builder]
 #[derive(Debug, Clone, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
-pub struct DeviceAuthorizationGrant {
+pub struct DeviceAuthorizationGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP>
+{
+    /// The client ID.
+    client_id: String,
+
+    /// The client authentication method.
+    client_auth: Auth,
+
+    /// The `DPoP` signer.
+    dpop: D,
+
+    /// The issuer for tokens created by the authorization server.
+    #[from_metadata(path = "issuer")]
+    issuer: Option<String>,
+
+    /// The URL of the token endpoint.
+    #[from_metadata(path = "token_endpoint")]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    token_endpoint: EndpointUrl,
+
+    /// The mTLS alias for the token endpoint (RFC 8705 §5).
+    #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    mtls_token_endpoint: Option<EndpointUrl>,
+
+    /// Supported endpoint auth methods; used to auto-select basic or
+    /// form auth for client secrets.
+    #[from_metadata(path = "token_endpoint_auth_methods_supported")]
+    token_endpoint_auth_methods_supported: Option<Vec<String>>,
+
     /// The device authorization endpoint (RFC 8628 §3.1).
-    #[endpoint_url]
+    #[from_metadata(path = "device_authorization_endpoint?")]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
     device_authorization_endpoint: EndpointUrl,
 
     /// The mTLS alias for the device authorization endpoint (RFC 8705 §5).
-    #[endpoint_url]
+    #[from_metadata(path = "mtls_endpoint_aliases?.device_authorization_endpoint?")]
+    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
     mtls_device_authorization_endpoint: Option<EndpointUrl>,
 }
 
 impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     DeviceAuthorizationGrant<Auth, D>
 {
-    /// Configure the grant from authorization server metadata.
-    #[allow(clippy::type_complexity)]
-    pub fn builder_from_metadata(
-        metadata: &AuthorizationServerMetadata,
-    ) -> Option<
-        DeviceAuthorizationGrantBuilder<
-            Auth,
-            D,
-            SetMtlsDeviceAuthorizationEndpoint<SetDeviceAuthorizationEndpoint<SetCommonMetadata>>,
-        >,
-    > {
-        metadata
-            .device_authorization_endpoint
-            .as_ref()
-            .map(|device_authorization_endpoint| {
-                DeviceAuthorizationGrant::builder()
-                    .with_common_metadata(metadata)
-                    .device_authorization_endpoint_internal(device_authorization_endpoint.clone())
-                    .maybe_mtls_device_authorization_endpoint_internal(
-                        metadata
-                            .mtls_endpoint_aliases
-                            .as_ref()
-                            .and_then(|a| a.device_authorization_endpoint.clone()),
-                    )
-            })
-    }
-
     /// Begin a device authorization request.
     ///
     /// This sends a request to the device authorization endpoint. The endpoint
@@ -238,7 +239,6 @@ pub struct DeviceAuthorizationGrantForm {
     resource: Option<Vec<String>>,
 }
 
-#[huskarl_macros::grant_impl]
 impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 'static>
     OAuth2ExchangeGrant for DeviceAuthorizationGrant<Auth, D>
 {
@@ -246,6 +246,34 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
     type ClientAuth = Auth;
     type DPoP = D;
     type Form<'a> = DeviceAuthorizationGrantForm;
+
+    fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    fn issuer(&self) -> Option<&str> {
+        self.issuer.as_deref()
+    }
+
+    fn client_auth(&self) -> &Self::ClientAuth {
+        &self.client_auth
+    }
+
+    fn token_endpoint(&self) -> &EndpointUrl {
+        &self.token_endpoint
+    }
+
+    fn mtls_token_endpoint(&self) -> Option<&EndpointUrl> {
+        self.mtls_token_endpoint.as_ref()
+    }
+
+    fn dpop(&self) -> &Self::DPoP {
+        &self.dpop
+    }
+
+    fn allowed_auth_methods(&self) -> Option<&[String]> {
+        self.token_endpoint_auth_methods_supported.as_deref()
+    }
 
     fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
         RefreshGrant::builder()
