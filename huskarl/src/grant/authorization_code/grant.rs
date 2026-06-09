@@ -24,6 +24,7 @@ use crate::{
 /// The authorization code grant (RFC 6749 §4.1).
 ///
 /// See the [module documentation][crate::grant::authorization_code] for a usage guide.
+#[allow(clippy::struct_excessive_bools)] // independent protocol switches, not a state machine
 #[derive(Clone)]
 pub struct AuthorizationCodeGrant<
     Auth: ClientAuthentication,
@@ -78,15 +79,24 @@ pub struct AuthorizationCodeGrant<
     /// Set to true if the provider supports the `iss` parameter in the authorization code callback (RFC 9207).
     pub(super) authorization_response_iss_parameter_supported: bool,
 
-    /// Contains the supported code challenge methods (RFC 8152 §7.1).
+    /// Contains the supported code challenge methods (RFC 8414 §2).
     ///
-    /// The default is `S256`; this is different to the default value if authorization server
-    /// metadata does not include the field (the default at that layer is an empty list).
+    /// `S256` is used unless this advertises `plain` without `S256`. An empty
+    /// list (metadata that omits the optional field) still gets `S256`: PKCE
+    /// is required by current best practice (RFC 9700 §2.1.1) and servers
+    /// ignore unrecognized request parameters (RFC 6749 §3.1).
     pub(super) code_challenge_methods_supported: Vec<String>,
 
     // -- User-supplied grant-specific fields --
     /// A redirect URL registered with the authorization server.
     pub(super) redirect_uri: String,
+
+    /// Set to true to disable PKCE (RFC 7636) entirely.
+    ///
+    /// PKCE is otherwise always applied, as required by current best practice
+    /// (RFC 9700 §2.1.1). Only disable it for an authorization server that
+    /// rejects requests containing PKCE parameters.
+    pub(super) disable_pkce: bool,
 
     /// Set to true to prefer PAR when available.
     pub(super) prefer_pushed_authorization_requests: bool,
@@ -190,6 +200,13 @@ impl<
         #[builder(default = vec!["S256".to_string()])]
         code_challenge_methods_supported: Vec<String>,
         redirect_uri: String,
+        /// Set to true to disable PKCE (RFC 7636) entirely.
+        ///
+        /// PKCE is otherwise always applied, as required by current best practice
+        /// (RFC 9700 §2.1.1). Only disable it for an authorization server that
+        /// rejects requests containing PKCE parameters.
+        #[builder(default)]
+        disable_pkce: bool,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
         allowed_id_token_signed_response_algs: Option<HashSet<String>>,
         #[cfg(not(feature = "default-jws-verifier-platform"))] jws_verifier_platform: Option<
@@ -232,6 +249,7 @@ impl<
             authorization_response_iss_parameter_supported,
             code_challenge_methods_supported,
             redirect_uri,
+            disable_pkce,
             prefer_pushed_authorization_requests,
             allowed_id_token_signed_response_algs,
             _phantom: PhantomData,
