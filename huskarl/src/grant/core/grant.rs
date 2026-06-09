@@ -193,6 +193,21 @@ impl<
     HttpRespErr: crate::core::Error,
     AuthErr: crate::core::Error,
     DPoPErr: crate::core::Error,
+> OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
+{
+    /// Returns `true` if the server definitively rejected the grant itself with
+    /// `invalid_grant` (RFC 6749 §5.2), e.g. a revoked, expired, or otherwise
+    /// invalid refresh token or authorization code.
+    pub fn is_invalid_grant(&self) -> bool {
+        matches!(self, Self::OAuth2Form { source } if source.is_invalid_grant())
+    }
+}
+
+impl<
+    HttpErr: crate::core::Error,
+    HttpRespErr: crate::core::Error,
+    AuthErr: crate::core::Error,
+    DPoPErr: crate::core::Error,
 > crate::core::Error for OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
 {
     fn is_retryable(&self) -> bool {

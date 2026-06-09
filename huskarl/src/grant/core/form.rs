@@ -215,6 +215,21 @@ impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: c
             } if error == "use_dpop_nonce"
         )
     }
+
+    /// Returns `true` if the server definitively rejected the grant itself with
+    /// `invalid_grant` (RFC 6749 §5.2), e.g. a revoked, expired, or otherwise
+    /// invalid refresh token or authorization code.
+    pub fn is_invalid_grant(&self) -> bool {
+        matches!(
+            self,
+            Self::Response {
+                source: HandleResponseError::OAuth2 {
+                    body: OAuth2ErrorBody { error, .. },
+                    ..
+                },
+            } if error == "invalid_grant"
+        )
+    }
 }
 
 impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
