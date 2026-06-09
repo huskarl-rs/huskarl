@@ -77,10 +77,17 @@ mod tests {
 
     use serde::Deserialize;
 
-    use crate::jwt::{ParsedJws, parse_compact_jws};
+    use crate::{
+        jwt::{ParsedJws, parse_compact_jws},
+        platform::{Duration, SystemTime},
+    };
 
     /// Tests example from
     #[test]
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "RFC 7519 §3.1 example value"
+    )]
     fn test_rfc_7519_example() {
         #[derive(Debug, Clone, Deserialize, PartialEq)]
         struct TestClaims {
@@ -98,7 +105,10 @@ mod tests {
         assert_eq!(jws.claims.sub, None);
         assert_eq!(jws.claims.aud, Vec::<String>::new());
         assert_eq!(jws.claims.iat, None);
-        assert_eq!(jws.claims.exp, Some(1_300_819_380));
+        assert_eq!(
+            jws.claims.exp,
+            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_300_819_380))
+        );
         assert_eq!(jws.claims.nbf, None);
         assert_eq!(jws.claims.jti, None);
         assert_eq!(jws.claims.claims, Cow::Owned(TestClaims { is_root: true }));

@@ -5,6 +5,26 @@ use crate::core::{
     secrets::SecretString,
 };
 
+/// Computes `received_at + expires_in - expires_margin` without panicking:
+/// `expires_in` comes from the token response, so a malicious or buggy server
+/// could supply a value that overflows `SystemTime`. Overflow clamps to a
+/// century past `received_at` (effectively never stale); underflow past the
+/// epoch clamps to the epoch (already stale).
+fn effective_expiry(
+    received_at: SystemTime,
+    expires_in: Duration,
+    expires_margin: Duration,
+) -> SystemTime {
+    const CENTURY: Duration = Duration::from_hours(100 * 365 * 24);
+
+    received_at
+        .checked_add(expires_in)
+        .or_else(|| received_at.checked_add(CENTURY))
+        .unwrap_or(received_at)
+        .checked_sub(expires_margin)
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
 /// Represents an access token, either a `DPoP` token or a `Bearer` token.
 #[derive(Debug, Clone)]
 pub enum AccessToken {
@@ -143,7 +163,7 @@ impl DpopAccessToken {
         expires_margin: Duration,
     ) -> SystemTime {
         let expires_in = self.expires_in.unwrap_or(default_expires_in);
-        self.received_at + expires_in - expires_margin
+        effective_expiry(self.received_at, expires_in, expires_margin)
     }
 
     /// Returns `true` if the underlying access token has expired.
@@ -201,12 +221,54 @@ impl BearerAccessToken {
         expires_margin: Duration,
     ) -> SystemTime {
         let expires_in = self.expires_in.unwrap_or(default_expires_in);
-        self.received_at + expires_in - expires_margin
+        effective_expiry(self.received_at, expires_in, expires_margin)
     }
 
     /// Returns `true` if the underlying access token has expired.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn huge_expires_in_does_not_panic() {
+        // A malicious AS can return expires_in values that overflow SystemTime.
+        let token = BearerAccessToken::new(
+            SecretString::new("tok"),
+            SystemTime::now(),
+            Some(Duration::from_secs(u64::MAX)),
+        );
+        assert!(!token.is_expired(Duration::from_hours(1), Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn huge_margin_does_not_panic() {
+        let token = BearerAccessToken::new(
+            SecretString::new("tok"),
+            SystemTime::now(),
+            Some(Duration::from_hours(1)),
+        );
+        // A margin larger than the expiry clamps to the epoch: already stale.
+        assert!(token.is_expired(Duration::from_hours(1), Duration::from_secs(u64::MAX)));
+    }
+
+    #[test]
+    fn normal_expiry_unchanged() {
+        let received_at = SystemTime::now();
+        let token = BearerAccessToken::new(
+            SecretString::new("tok"),
+            received_at,
+            Some(Duration::from_hours(1)),
+        );
+        assert_eq!(
+            token.effective_expiry(Duration::from_hours(1), Duration::from_secs(30)),
+            received_at + Duration::from_secs(3600 - 30)
+        );
+        assert!(!token.is_expired(Duration::from_hours(1), Duration::from_secs(30)));
     }
 }

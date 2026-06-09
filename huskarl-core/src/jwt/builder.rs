@@ -265,40 +265,23 @@ where
             extra_headers: self.extra_headers.as_ref().map(Cow::Borrowed),
         };
 
-        let iat = self
-            .issued_at
-            .map(|iat| {
-                iat.duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|dur| dur.as_secs())
-            })
-            .transpose()
-            .context(TimeSnafu)?;
-
-        let exp = self
-            .expiration
-            .map(|exp| {
-                exp.duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|dur| dur.as_secs())
-            })
-            .transpose()
-            .context(TimeSnafu)?;
-
-        let nbf = self
-            .not_before
-            .map(|nbf| {
-                nbf.duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|dur| dur.as_secs())
-            })
-            .transpose()
-            .context(TimeSnafu)?;
+        // Validate eagerly so a pre-epoch timestamp surfaces as a Time error
+        // rather than a generic claims-encoding failure during serialization.
+        for t in [self.issued_at, self.expiration, self.not_before]
+            .into_iter()
+            .flatten()
+        {
+            t.duration_since(SystemTime::UNIX_EPOCH)
+                .context(TimeSnafu)?;
+        }
 
         let jwt_claims = JwtClaims {
             iss: self.issuer.as_deref().map(Cow::Borrowed),
             sub: self.subject.as_deref().map(Cow::Borrowed),
             aud: self.audiences.clone(),
-            iat,
-            exp,
-            nbf,
+            iat: self.issued_at,
+            exp: self.expiration,
+            nbf: self.not_before,
             jti: self.jti.as_deref().map(Cow::Borrowed),
             cnf: None,
             claims: Cow::Borrowed(&self.claims),
