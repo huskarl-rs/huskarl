@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - Avoid panicking in JWT creation or validation (in time handling).
  - Timestamps in JWTs are represented by SystemTime instead of u64.
+ - Burn JTI after all other JWT checks have passed.
+ - Adds in-memory JTI uniqueness checker (especially for tests).
 
 ## [0.6.4] - 2026-05-29
 
