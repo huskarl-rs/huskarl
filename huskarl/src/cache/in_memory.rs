@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc,
+    Arc, Mutex, PoisonError,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -20,7 +20,17 @@ use crate::{
 #[derive(Builder)]
 pub struct InMemoryTokenCache<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     pub(crate) grant: G,
-    grant_parameters: Option<G::Parameters>,
+    /// Parameters used to obtain a token directly from the grant when no
+    /// cached token or refresh token is usable.
+    ///
+    /// For grants whose parameters are single-use
+    /// ([`OAuth2ExchangeGrant::REUSABLE_PARAMETERS`] is `false`, e.g. an
+    /// authorization code or device code), these are consumed by the first
+    /// exchange attempt and never replayed: re-submitting a redeemed code
+    /// always fails and may cause the authorization server to revoke the
+    /// tokens it previously issued for it (RFC 6749 §4.1.2).
+    #[builder(default, with = |params: G::Parameters| Mutex::new(Some(params)))]
+    grant_parameters: Mutex<Option<G::Parameters>>,
     refresh_store: S,
     /// How early to consider a token expired. Used by [`Self::get_token_response`].
     #[builder(default = Duration::from_secs(30))]
@@ -81,7 +91,21 @@ where
             Err(e) => e,
         };
 
-        let Some(params) = self.grant_parameters.clone() else {
+        let params = {
+            let mut guard = self
+                .grant_parameters
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if G::REUSABLE_PARAMETERS {
+                guard.clone()
+            } else {
+                // Single-use parameters (e.g. an authorization code) are
+                // consumed by this one attempt, succeed or fail; replaying
+                // them is futile and hazardous (RFC 6749 §4.1.2).
+                guard.take()
+            }
+        };
+        let Some(params) = params else {
             return match refresh_error {
                 Some(source) => Err(GetTokenError::RefreshFailed { source }),
                 None => Err(GetTokenError::NoTokenSource),
@@ -126,9 +150,16 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> InMemoryTokenCache<G, S> {
         &self.grant
     }
 
-    /// Returns `true` if grant parameters were supplied, enabling fresh token exchanges.
+    /// Returns `true` if grant parameters are available for a fresh token exchange.
+    ///
+    /// For grants with single-use parameters
+    /// ([`OAuth2ExchangeGrant::REUSABLE_PARAMETERS`] is `false`), this becomes
+    /// `false` once the parameters have been consumed by an exchange attempt.
     pub fn has_grant_parameters(&self) -> bool {
-        self.grant_parameters.is_some()
+        self.grant_parameters
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     /// Returns the cached knowledge of whether a refresh token is stored.
@@ -238,7 +269,9 @@ mod tests {
             secrets::SecretString,
         },
         grant::{
-            client_credentials::ClientCredentialsGrant, core::token_response::RawTokenResponse,
+            authorization_code::{AuthorizationCodeGrant, AuthorizationCodeGrantParameters, NoJar},
+            client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
+            core::token_response::RawTokenResponse,
         },
         token::RefreshToken,
     };
@@ -269,18 +302,28 @@ mod tests {
         }
     }
 
-    /// Mock HTTP client that returns a preconfigured response once.
+    /// Mock HTTP client serving a fixed queue of responses; any call beyond
+    /// the queue panics, proving no unexpected request was made.
     struct MockHttpClient {
-        response: std::sync::Mutex<Option<MockResponse>>,
+        responses: Mutex<std::collections::VecDeque<MockResponse>>,
     }
 
     impl MockHttpClient {
         fn new(status: StatusCode, body: &str) -> Self {
+            Self::with_responses([(status, body)])
+        }
+
+        fn with_responses<'a>(responses: impl IntoIterator<Item = (StatusCode, &'a str)>) -> Self {
             Self {
-                response: std::sync::Mutex::new(Some(MockResponse {
-                    status,
-                    body: Bytes::copy_from_slice(body.as_bytes()),
-                })),
+                responses: Mutex::new(
+                    responses
+                        .into_iter()
+                        .map(|(status, body)| MockResponse {
+                            status,
+                            body: Bytes::copy_from_slice(body.as_bytes()),
+                        })
+                        .collect(),
+                ),
             }
         }
     }
@@ -295,11 +338,11 @@ mod tests {
             _request: http::Request<Bytes>,
         ) -> Result<MockResponse, Infallible> {
             Ok(self
-                .response
+                .responses
                 .lock()
                 .unwrap()
-                .take()
-                .expect("MockHttpClient can only be called once"))
+                .pop_front()
+                .expect("unexpected extra HTTP call"))
         }
     }
 
@@ -435,5 +478,123 @@ mod tests {
 
         assert_eq!(stored_refresh_token(&store).await, None);
         assert!(!cache.has_refresh_token_cached());
+    }
+
+    /// Builds a cache around an authorization code grant (single-use
+    /// parameters) holding the code `"one-time-code"`.
+    async fn one_time_cache(
+        store: SharedRefreshStore,
+    ) -> InMemoryTokenCache<AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar>, SharedRefreshStore> {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .client_auth(NoAuth)
+            .dpop(NoDPoP)
+            .jar(NoJar)
+            .token_endpoint("https://as.example.com/token")
+            .unwrap()
+            .authorization_endpoint("https://as.example.com/authorize")
+            .unwrap()
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        InMemoryTokenCache::builder()
+            .grant(grant)
+            .grant_parameters(
+                AuthorizationCodeGrantParameters::builder()
+                    .code("one-time-code")
+                    .build(),
+            )
+            .refresh_store(store)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn one_time_parameters_consumed_by_first_exchange() {
+        let store = SharedRefreshStore::default();
+        let cache = one_time_cache(store).await;
+        assert!(cache.has_grant_parameters());
+
+        let http = MockHttpClient::new(
+            StatusCode::OK,
+            r#"{"access_token":"t1","token_type":"bearer","expires_in":3600}"#,
+        );
+        cache.get_token_response(&http).await.unwrap();
+        assert!(!cache.has_grant_parameters());
+
+        // With the cached token invalidated and no refresh token, the spent
+        // code must not be replayed: no HTTP call (empty mock would panic),
+        // and the error reports that no token source remains.
+        cache.invalidate();
+        let err = cache
+            .get_token_response(&MockHttpClient::with_responses([]))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, GetTokenError::NoTokenSource));
+    }
+
+    #[tokio::test]
+    async fn one_time_parameters_not_replayed_after_failed_refresh() {
+        let store = SharedRefreshStore::default();
+        let cache = one_time_cache(store.clone()).await;
+
+        // First acquisition redeems the code for an already-expired access
+        // token plus a refresh token.
+        let http = MockHttpClient::new(
+            StatusCode::OK,
+            r#"{"access_token":"t1","token_type":"bearer","expires_in":0,"refresh_token":"rt-1"}"#,
+        );
+        cache.get_token_response(&http).await.unwrap();
+
+        // The next call must refresh. When the refresh fails, the spent code
+        // must not be replayed as a fallback (a second request would exhaust
+        // the mock and panic); the refresh error is surfaced instead.
+        let http = MockHttpClient::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":"temporarily_unavailable"}"#,
+        );
+        let err = cache.get_token_response(&http).await.unwrap_err();
+        assert!(matches!(err, GetTokenError::RefreshFailed { .. }));
+
+        // The transiently-failed refresh token is retained for later retries.
+        assert_eq!(stored_refresh_token(&store).await.as_deref(), Some("rt-1"));
+    }
+
+    #[tokio::test]
+    async fn reusable_parameters_allow_repeated_exchange() {
+        let cache = InMemoryTokenCache::builder()
+            .grant(
+                ClientCredentialsGrant::builder()
+                    .client_id("client")
+                    .client_auth(NoAuth)
+                    .token_endpoint("https://as.example.com/token")
+                    .unwrap()
+                    .dpop(NoDPoP)
+                    .build(),
+            )
+            .grant_parameters(ClientCredentialsGrantParameters::new())
+            .refresh_store(SharedRefreshStore::default())
+            .build();
+
+        let http = MockHttpClient::with_responses([
+            (
+                StatusCode::OK,
+                r#"{"access_token":"t1","token_type":"bearer","expires_in":3600}"#,
+            ),
+            (
+                StatusCode::OK,
+                r#"{"access_token":"t2","token_type":"bearer","expires_in":3600}"#,
+            ),
+        ]);
+
+        cache.get_token_response(&http).await.unwrap();
+        cache.invalidate();
+        let token = cache.get_token_response(&http).await.unwrap();
+        assert_eq!(
+            token.raw_token_response().access_token.expose_secret(),
+            "t2"
+        );
+        assert!(cache.has_grant_parameters());
     }
 }

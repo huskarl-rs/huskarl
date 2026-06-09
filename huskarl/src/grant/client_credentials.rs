@@ -204,6 +204,9 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
     type DPoP = D;
     type Form<'a> = ClientCredentialsGrantForm;
 
+    /// Scopes and resources may be re-submitted freely.
+    const REUSABLE_PARAMETERS: bool = true;
+
     fn client_id(&self) -> &str {
         &self.client_id
     }
