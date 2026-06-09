@@ -10,8 +10,9 @@ use huskarl::{
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::{
-    dpop_nonce::NoNonceCheck, introspection::IntrospectionValidator,
+use huskarl_resource_server::{
+    core::jwt::validator::ClaimCheck,
+    validator::{dpop_nonce::NoNonceCheck, introspection::IntrospectionValidator},
 };
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
@@ -81,6 +82,7 @@ async fn introspection_validates_active_token() {
         .client_id(&client.client_id)
         .issuer(realm.issuer())
         .introspection_endpoint(introspection_endpoint)
+        .audience(ClaimCheck::required_value("huskarl-rs"))
         .client_auth(ClientSecret::new(PlainSecret::new(&client.secret)))
         .dpop_nonce_checker(NoNonceCheck)
         .http_client(http.clone())

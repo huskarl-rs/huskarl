@@ -4,7 +4,7 @@ use snafu::prelude::*;
 
 use crate::{
     TokenType,
-    error::{ToRfc6750Error, TokenValidationError},
+    error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
     introspection::IntrospectionCallError,
     validator::{error::TokenBindingError, extract::TokenExtractError},
 };
@@ -39,6 +39,20 @@ pub enum IntrospectionValidateError<
         /// The underlying introspection call error.
         source: IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>,
     },
+    /// The introspected token's audience did not satisfy the configured check
+    /// (RFC 7662 §4).
+    #[snafu(display(
+        "Token audience mismatch: expected {expected}, got [{}]",
+        actual.join(", ")
+    ))]
+    Audience {
+        /// The token type that was presented.
+        token_type: TokenType,
+        /// A description of the expected audience.
+        expected: String,
+        /// The audience values from the introspection response.
+        actual: Vec<String>,
+    },
 }
 
 impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crate::core::Error>
@@ -49,6 +63,7 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
             Self::Extract { source } => source.attempted_scheme(),
             Self::Binding { token_type, .. } => Some(*token_type),
             Self::Call { token_type, .. } => Some(*token_type),
+            Self::Audience { token_type, .. } => Some(*token_type),
         }
     }
 
@@ -57,6 +72,7 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
             Self::Extract { source } => source.token_error(),
             Self::Binding { source, .. } => source.token_error(),
             Self::Call { source, .. } => source.token_error(),
+            Self::Audience { .. } => TokenValidationError::Client(TokenErrorCode::InvalidToken),
         }
     }
 
@@ -65,6 +81,9 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
             Self::Extract { source } => source.error_description(),
             Self::Binding { source, .. } => source.error_description(),
             Self::Call { source, .. } => source.error_description(),
+            Self::Audience { .. } => {
+                Some("The access token is not intended for this resource".to_string())
+            }
         }
     }
 }
