@@ -13,6 +13,15 @@ pub struct BoxedJtiUniquenessChecker {
     inner: Arc<dyn JtiUniquenessChecker>,
 }
 
+impl BoxedJtiUniquenessChecker {
+    /// Create a boxed JTI uniqueness checker from a non-boxed.
+    pub fn new<T: JtiUniquenessChecker + 'static>(checker: T) -> Self {
+        Self {
+            inner: Arc::new(checker),
+        }
+    }
+}
+
 impl JtiUniquenessChecker for BoxedJtiUniquenessChecker {
     fn check_and_mark_seen(
         &self,

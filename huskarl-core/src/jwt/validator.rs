@@ -380,7 +380,6 @@ impl JwtValidator {
             parsed_jwt.claims.iat,
             parsed_jwt.claims.jti.as_deref(),
         )?;
-        self.validate_jti(parsed_jwt.claims.jti.as_deref()).await?;
 
         if let Some(max_token_age) = self.max_token_age {
             let issued_at = parsed_jwt
@@ -409,6 +408,9 @@ impl JwtValidator {
             parsed_jwt.claims.nbf,
             parsed_jwt.claims.iat,
         )?;
+
+        // Burn JTI after all other checks have passed.
+        self.validate_jti(parsed_jwt.claims.jti.as_deref()).await?;
 
         Ok(ValidatedJwt {
             issuer: parsed_jwt.claims.iss.map(Into::into),
@@ -1163,6 +1165,87 @@ mod tests {
             .validate_parsed_jws::<serde_json::Value>(parsed)
             .await;
         assert!(result.is_ok(), "far-future exp is valid: {result:?}");
+    }
+
+    // --- JTI uniqueness ordering ---
+
+    /// In-memory JTI store recording every `check_and_mark_seen` call.
+    #[derive(Debug, Default)]
+    struct InMemoryJtiChecker {
+        seen: std::sync::Mutex<std::collections::HashSet<String>>,
+    }
+
+    impl JtiUniquenessChecker for InMemoryJtiChecker {
+        fn check_and_mark_seen(
+            &self,
+            jti: &str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn crate::platform::MaybeSendFuture<Output = Result<bool, crate::BoxedError>> + '_,
+            >,
+        > {
+            let previously_seen = !self.seen.lock().unwrap().insert(jti.to_owned());
+            Box::pin(async move { Ok(previously_seen) })
+        }
+    }
+
+    #[tokio::test]
+    async fn temporally_invalid_token_does_not_burn_jti() {
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .jti_checker(BoxedJtiUniquenessChecker::new(InMemoryJtiChecker::default()))
+            .build();
+
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // A token presented before its `nbf` is rejected, but its `jti` must
+        // not be marked seen — the later legitimate presentation must succeed.
+        let early = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"jti": "jti-1", "nbf": now + 999_999}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(early)
+            .await;
+        assert!(matches!(
+            result,
+            Err(JwtValidationError::NotYetValid { .. })
+        ));
+
+        // Likewise for an expired token.
+        let expired = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"jti": "jti-2", "exp": 1}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(expired)
+            .await;
+        assert!(matches!(result, Err(JwtValidationError::Expired { .. })));
+
+        // The legitimate presentations succeed.
+        for jti in ["jti-1", "jti-2"] {
+            let valid = make_parsed_jws(
+                serde_json::json!({"alg": "RS256"}),
+                serde_json::json!({"jti": jti, "nbf": now - 10, "exp": now + 3600}),
+            );
+            let result = validator
+                .validate_parsed_jws::<serde_json::Value>(valid)
+                .await;
+            assert!(result.is_ok(), "{jti} should not be burned: {result:?}");
+        }
+
+        // Replay of a successfully validated token is still rejected.
+        let replay = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"jti": "jti-1", "nbf": now - 10, "exp": now + 3600}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(replay)
+            .await;
+        assert!(matches!(result, Err(JwtValidationError::JtiNotUnique)));
     }
 
     // --- JTI too long ---
