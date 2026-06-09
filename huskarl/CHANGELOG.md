@@ -7,10 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-
 ### Changes
 
  - Don't throw away refresh token in inmemory store unless invalid_grant was returned.
+ - Avoid panicking in access token expiry time calculation.
 
 ## [0.7.2] - 2026-06-04
 

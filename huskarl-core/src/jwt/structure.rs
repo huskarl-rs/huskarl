@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
-use crate::jwk::PublicJwk;
+use crate::{jwk::PublicJwk, platform::SystemTime};
 
 /// The `cnf` (confirmation) claim, used to bind a JWT to a key (RFC 7800).
 ///
@@ -23,54 +23,6 @@ pub struct ConfirmationClaim {
     /// JWK Set URL confirmation (RFC 7800 §3.5).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jku: Option<serde_json::Value>,
-}
-
-fn deserialize_whole_or_fractional<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde::de;
-
-    use crate::serde_utils::time::SecsVisitor;
-
-    struct WholeOrFractionalOrNull;
-
-    impl<'de> de::Visitor<'de> for WholeOrFractionalOrNull {
-        type Value = Option<u64>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a non-negative numeric value, or null")
-        }
-
-        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
-            SecsVisitor.visit_u64(v).map(Some)
-        }
-
-        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
-            SecsVisitor.visit_i64(v).map(Some)
-        }
-
-        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Self::Value, E> {
-            SecsVisitor.visit_f64(v).map(Some)
-        }
-
-        fn visit_some<D: Deserializer<'de>>(
-            self,
-            deserializer: D,
-        ) -> Result<Self::Value, D::Error> {
-            deserializer.deserialize_any(self)
-        }
-
-        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-            Ok(None)
-        }
-    }
-
-    deserializer.deserialize_any(WholeOrFractionalOrNull)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,21 +62,21 @@ pub struct JwtClaims<'a, Claims: Clone> {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_whole_or_fractional"
+        with = "crate::serde_utils::time::option_unix_secs"
     )]
-    pub iat: Option<u64>,
+    pub iat: Option<SystemTime>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_whole_or_fractional"
+        with = "crate::serde_utils::time::option_unix_secs"
     )]
-    pub exp: Option<u64>,
+    pub exp: Option<SystemTime>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_whole_or_fractional"
+        with = "crate::serde_utils::time::option_unix_secs"
     )]
-    pub nbf: Option<u64>,
+    pub nbf: Option<SystemTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<Cow<'a, str>>,
     /// Key confirmation claim (RFC 7800). Binds the token to a `DPoP` key or mTLS certificate.
@@ -226,18 +178,22 @@ mod tests {
 
     // --- Timestamp deserialization ---
 
+    fn epoch_plus(secs: u64) -> SystemTime {
+        SystemTime::UNIX_EPOCH + crate::platform::Duration::from_secs(secs)
+    }
+
     #[test]
     fn timestamp_integer() {
         let j = r#"{"iat":1234}"#;
         let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert_eq!(c.iat, Some(1234));
+        assert_eq!(c.iat, Some(epoch_plus(1234)));
     }
 
     #[test]
     fn timestamp_float_truncates() {
         let j = r#"{"iat":1234.5}"#;
         let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert_eq!(c.iat, Some(1234));
+        assert_eq!(c.iat, Some(epoch_plus(1234)));
     }
 
     #[test]
@@ -245,6 +201,17 @@ mod tests {
         let j = r#"{"iat":-1}"#;
         let result = serde_json::from_str::<JwtClaims<'_, ()>>(j);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn timestamp_overflowing_system_time_errors() {
+        // u64::MAX seconds is past the platform's representable SystemTime range;
+        // this must be a deserialization error, never a later panic in validation.
+        for claim in ["iat", "exp", "nbf"] {
+            let j = format!(r#"{{"{claim}":18446744073709551615}}"#);
+            let result = serde_json::from_str::<JwtClaims<'_, ()>>(&j);
+            assert!(result.is_err(), "{claim} should be rejected");
+        }
     }
 
     #[test]
@@ -267,9 +234,9 @@ mod tests {
     fn all_timestamps() {
         let j = r#"{"iat":100,"exp":200,"nbf":50}"#;
         let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert_eq!(c.iat, Some(100));
-        assert_eq!(c.exp, Some(200));
-        assert_eq!(c.nbf, Some(50));
+        assert_eq!(c.iat, Some(epoch_plus(100)));
+        assert_eq!(c.exp, Some(epoch_plus(200)));
+        assert_eq!(c.nbf, Some(epoch_plus(50)));
     }
 
     // --- ConfirmationClaim roundtrip ---

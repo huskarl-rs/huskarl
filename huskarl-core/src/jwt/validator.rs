@@ -115,10 +115,11 @@ pub struct JwtValidator {
 /// and the `application/` prefix may be omitted when there is no other `/` in the value.
 /// Normalize to the short form before comparison.
 fn normalize_typ(typ: &str) -> &str {
-    if typ.len() > 12 && typ[..12].eq_ignore_ascii_case("application/") {
-        &typ[12..]
-    } else {
-        typ
+    match typ.split_at_checked(12) {
+        Some((prefix, rest)) if !rest.is_empty() && prefix.eq_ignore_ascii_case("application/") => {
+            rest
+        }
+        _ => typ,
     }
 }
 
@@ -249,31 +250,39 @@ fn check_typ(check: &ClaimCheck, typ: Option<&str>) -> Result<(), JwtValidationE
     Ok(())
 }
 
+/// Temporal comparisons are expressed via `duration_since` rather than
+/// `SystemTime`/`Duration` addition: the claim timestamps are attacker-controlled
+/// and may sit at the edge of the representable range, where addition panics.
 fn check_temporal(
     now: SystemTime,
     clock_leeway: Duration,
-    exp: Option<u64>,
-    nbf: Option<u64>,
-    iat: Option<u64>,
+    exp: Option<SystemTime>,
+    nbf: Option<SystemTime>,
+    iat: Option<SystemTime>,
 ) -> Result<(), JwtValidationError> {
-    if let Some(exp) = exp {
-        let expiration = SystemTime::UNIX_EPOCH + Duration::from_secs(exp);
+    if let Some(expiration) = exp {
+        // Expired iff `now > expiration + leeway`.
         ensure!(
-            expiration + clock_leeway >= now,
+            !now.duration_since(expiration)
+                .is_ok_and(|past| past > clock_leeway),
             ExpiredSnafu { expiration, now }
         );
     }
-    if let Some(nbf) = nbf {
-        let not_before = SystemTime::UNIX_EPOCH + Duration::from_secs(nbf);
+    if let Some(not_before) = nbf {
+        // Not yet valid iff `not_before > now + leeway`.
         ensure!(
-            not_before <= now + clock_leeway,
+            !not_before
+                .duration_since(now)
+                .is_ok_and(|ahead| ahead > clock_leeway),
             NotYetValidSnafu { not_before, now }
         );
     }
-    if let Some(iat) = iat {
-        let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(iat);
+    if let Some(issued_at) = iat {
+        // Issued in the future iff `issued_at > now + leeway`.
         ensure!(
-            issued_at <= now + clock_leeway,
+            !issued_at
+                .duration_since(now)
+                .is_ok_and(|ahead| ahead > clock_leeway),
             IssuedInFutureSnafu { issued_at, now }
         );
     }
@@ -327,8 +336,8 @@ impl JwtValidator {
 
     fn check_required_claims(
         &self,
-        exp: Option<u64>,
-        iat: Option<u64>,
+        exp: Option<SystemTime>,
+        iat: Option<SystemTime>,
         jti: Option<&str>,
     ) -> Result<(), JwtValidationError> {
         if self.require_exp {
@@ -374,16 +383,14 @@ impl JwtValidator {
         self.validate_jti(parsed_jwt.claims.jti.as_deref()).await?;
 
         if let Some(max_token_age) = self.max_token_age {
-            let iat = parsed_jwt
+            let issued_at = parsed_jwt
                 .claims
                 .iat
                 .ok_or_else(|| RequiredClaimMissingSnafu { claim: "iat" }.build())?;
 
-            let issued_at = SystemTime::UNIX_EPOCH + Duration::from_secs(iat);
-
             ensure!(
                 now.duration_since(issued_at)
-                    .is_ok_and(|d| d <= max_token_age + self.clock_leeway),
+                    .is_ok_and(|d| d <= max_token_age.saturating_add(self.clock_leeway)),
                 TokenTooOldSnafu {
                     issued_at,
                     max_token_age
@@ -407,14 +414,8 @@ impl JwtValidator {
             issuer: parsed_jwt.claims.iss.map(Into::into),
             subject: parsed_jwt.claims.sub.map(Into::into),
             audience: parsed_jwt.claims.aud.iter().map(Into::into).collect(),
-            issued_at: parsed_jwt
-                .claims
-                .iat
-                .map(|iat| SystemTime::UNIX_EPOCH + Duration::from_secs(iat)),
-            expiration: parsed_jwt
-                .claims
-                .exp
-                .map(|exp| SystemTime::UNIX_EPOCH + Duration::from_secs(exp)),
+            issued_at: parsed_jwt.claims.iat,
+            expiration: parsed_jwt.claims.exp,
             jti: parsed_jwt.claims.jti.map(Into::into),
             cnf: parsed_jwt.claims.cnf,
             claims: match parsed_jwt.claims.claims {
@@ -1103,6 +1104,65 @@ mod tests {
             result,
             Err(JwtValidationError::RequiredClaimMissing { claim: "iat" })
         ));
+    }
+
+    // --- Panic resistance on attacker-controlled input ---
+
+    #[test]
+    fn normalize_typ_non_char_boundary() {
+        // 11 ASCII bytes followed by a two-byte UTF-8 char: byte 12 is not a
+        // char boundary. Direct `&typ[..12]` indexing would panic here.
+        let typ = "abcdefghijké-jwt";
+        assert!(!typ.is_char_boundary(12));
+        assert_eq!(normalize_typ(typ), typ);
+
+        // Normal prefix stripping still works.
+        assert_eq!(normalize_typ("application/at+jwt"), "at+jwt");
+        assert_eq!(normalize_typ("APPLICATION/at+jwt"), "at+jwt");
+        assert_eq!(normalize_typ("application/"), "application/");
+        assert_eq!(normalize_typ("JWT"), "JWT");
+    }
+
+    #[tokio::test]
+    async fn overflowing_exp_is_a_parse_error_not_a_panic() {
+        use base64::prelude::*;
+
+        // exp = u64::MAX overflows SystemTime on every platform; the token must
+        // fail structural parsing instead of panicking during validation.
+        let header = BASE64_URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#);
+        let claims = BASE64_URL_SAFE_NO_PAD.encode(r#"{"exp":18446744073709551615}"#);
+        let signature = BASE64_URL_SAFE_NO_PAD.encode([0x00]);
+        let token = [header, claims, signature].join(".");
+
+        let result = default_validator().validate::<()>(&token).await;
+        assert!(matches!(result, Err(JwtValidationError::Parse { .. })));
+    }
+
+    #[tokio::test]
+    async fn max_representable_exp_with_leeway_does_not_panic() {
+        // An `exp` at the edge of the representable SystemTime range used to
+        // panic in `expiration + clock_leeway`. Skip on platforms where the
+        // value is not representable (it then fails at deserialization instead).
+        let secs = 9_223_372_036_854_775_807_u64;
+        if SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_secs(secs))
+            .is_none()
+        {
+            return;
+        }
+
+        let validator = JwtValidator::builder()
+            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .clock_leeway(Duration::from_secs(10))
+            .build();
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({"exp": secs, "nbf": 0, "iat": 0}),
+        );
+        let result = validator
+            .validate_parsed_jws::<serde_json::Value>(parsed)
+            .await;
+        assert!(result.is_ok(), "far-future exp is valid: {result:?}");
     }
 
     // --- JTI too long ---
