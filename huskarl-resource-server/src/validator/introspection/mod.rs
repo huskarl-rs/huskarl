@@ -49,6 +49,7 @@
 //! ```rust
 //! use huskarl_resource_server::core::{
 //!     client_auth::ClientSecret,
+//!     jwt::validator::ClaimCheck,
 //!     secrets::{EnvVarSecret, encodings::StringEncoding},
 //!     server_metadata::AuthorizationServerMetadata,
 //! };
@@ -67,6 +68,7 @@
 //! let validator = IntrospectionValidator::builder_from_metadata(&metadata)
 //!     .expect("authorization server does not support token introspection")
 //!     .client_id("my-resource-server")
+//!     .audience(ClaimCheck::required_value("api://my-resource"))
 //!     .client_auth(ClientSecret::new(client_secret))
 //!     .http_client(http_client.clone())
 //!     .build()
@@ -81,6 +83,7 @@
 //! use huskarl_resource_server::core::{
 //!     IntoEndpointUrl as _,
 //!     client_auth::ClientSecret,
+//!     jwt::validator::ClaimCheck,
 //!     secrets::{EnvVarSecret, encodings::StringEncoding},
 //! };
 //! use huskarl_resource_server::validator::introspection::IntrospectionValidator;
@@ -95,6 +98,7 @@
 //!     .introspection_endpoint(
 //!         "https://my-issuer/oauth/introspect".into_endpoint_url()?,
 //!     )
+//!     .audience(ClaimCheck::required_value("api://my-resource"))
 //!     .client_auth(ClientSecret::new(client_secret))
 //!     .http_client(http_client.clone())
 //!     .build()
@@ -123,7 +127,7 @@
 //! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
 //! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //! # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-//! # let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
+//! # let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").audience(huskarl_resource_server::core::jwt::validator::ClaimCheck::required_value("api://my-resource")).client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
 //! use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 //!
 //! let mut headers = http::HeaderMap::new();
@@ -158,7 +162,7 @@ use crate::{
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         http::HttpClient,
         jwk::JwksSource,
-        jwt::BoxedJtiUniquenessChecker,
+        jwt::{BoxedJtiUniquenessChecker, validator::ClaimCheck},
         platform::{Duration, MaybeSendSync},
         server_metadata::AuthorizationServerMetadata,
     },
@@ -170,7 +174,7 @@ use crate::{
         dpop_proof::DpopProofValidator,
         extract::extract_token,
         introspection::{
-            error::{BindingSnafu, CallSnafu, ExtractSnafu},
+            error::{AudienceSnafu, BindingSnafu, CallSnafu, ExtractSnafu},
             introspection_validator_builder::{
                 SetDpopNonceChecker, SetIntrospectionEndpoint, SetIssuer, SetJwksUri, State,
             },
@@ -201,6 +205,7 @@ pub struct IntrospectionValidator<
     token_header: HeaderName,
     on_validate: Option<Arc<dyn OnValidate>>,
     issuer: Option<String>,
+    audience: ClaimCheck,
     require_mtls: bool,
     _phantom: PhantomData<Claims>,
 }
@@ -230,6 +235,17 @@ impl<
         issuer: Option<String>,
         /// The URL of the token introspection endpoint.
         introspection_endpoint: EndpointUrl,
+        /// Check applied against the audience (`aud`) of introspected tokens.
+        ///
+        /// RFC 7662 §4 directs resource servers to verify that an introspected
+        /// token was intended for them: when one authorization server serves
+        /// multiple resources, a token minted for another resource still
+        /// introspects as `active`. Use [`ClaimCheck::required_value`] with
+        /// this resource's identifier (or [`ClaimCheck::require_any`] for
+        /// several), or opt out explicitly with [`ClaimCheck::NoCheck`] when
+        /// the authorization server scopes tokens to a single resource or
+        /// omits `aud` from its introspection responses.
+        audience: ClaimCheck,
         /// The client authentication strategy.
         client_auth: Auth,
         /// If `true`, adds `Accept: application/token-introspection+jwt` to introspection
@@ -322,6 +338,7 @@ impl<
             token_header,
             on_validate,
             issuer,
+            audience,
             require_mtls,
             _phantom: PhantomData,
         })
@@ -453,6 +470,7 @@ impl<
                 Ok(None) => ValidationOutcome::NoToken,
                 Err(IntrospectionValidateError::Extract { .. }) => ValidationOutcome::ExtractError,
                 Err(IntrospectionValidateError::Binding { .. }) => ValidationOutcome::BindingError,
+                Err(IntrospectionValidateError::Audience { .. }) => ValidationOutcome::InvalidToken,
                 Err(IntrospectionValidateError::Call { source, .. }) => {
                     if matches!(source, IntrospectionCallError::TokenInactive) {
                         ValidationOutcome::InvalidToken
@@ -506,7 +524,21 @@ impl<
             Ok(v) => v,
         };
 
-        // 3. Binding check
+        // 3. Audience check (RFC 7662 §4): an active token may still have been
+        // minted for a different resource served by the same authorization server.
+        if let Err(expected) = check_audience(&self.audience, &validated.audience) {
+            return (
+                None,
+                Err(AudienceSnafu {
+                    token_type,
+                    expected,
+                    actual: validated.audience.clone(),
+                }
+                .build()),
+            );
+        }
+
+        // 4. Binding check
         let (dpop_nonce, binding_result) = check_token_binding(
             token_type,
             validated.cnf.as_ref(),
@@ -540,6 +572,32 @@ impl<
     }
 }
 
+/// Checks the introspected token's audience values against the configured
+/// [`ClaimCheck`], returning a description of the expected audience on mismatch.
+///
+/// Mirrors the `aud` semantics of [`JwtValidator`](crate::core::jwt::validator::JwtValidator):
+/// a token with no `aud` fails `Present`/`RequiredValue`/`RequireAny` but
+/// passes `IfPresent`. Unrecognized future check variants fail closed.
+fn check_audience(check: &ClaimCheck, aud: &[String]) -> Result<(), String> {
+    let ok = match check {
+        ClaimCheck::NoCheck => true,
+        ClaimCheck::Present => !aud.is_empty(),
+        ClaimCheck::RequiredValue(v) => aud.contains(v),
+        ClaimCheck::RequireAny(vs) => vs.iter().any(|v| aud.contains(v)),
+        ClaimCheck::IfPresent(v) => aud.is_empty() || aud.contains(v),
+        _ => false,
+    };
+    if ok {
+        return Ok(());
+    }
+    Err(match check {
+        ClaimCheck::Present => "any audience".to_owned(),
+        ClaimCheck::RequiredValue(v) | ClaimCheck::IfPresent(v) => v.clone(),
+        ClaimCheck::RequireAny(vs) => vs.join(" or "),
+        _ => "a supported audience check".to_owned(),
+    })
+}
+
 impl<
     Auth: ClientAuthentication,
     C: HttpClient,
@@ -563,5 +621,53 @@ impl<
     ) -> ValidationResult<Self::Claims, Self::Error> {
         self.validate_request(headers, method, uri, client_cert_der)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn auds(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn audience_no_check_accepts_anything() {
+        assert!(check_audience(&ClaimCheck::NoCheck, &[]).is_ok());
+        assert!(check_audience(&ClaimCheck::NoCheck, &auds(&["other"])).is_ok());
+    }
+
+    #[test]
+    fn audience_required_value() {
+        let check = ClaimCheck::required_value("api://rs1");
+        assert!(check_audience(&check, &auds(&["api://rs1"])).is_ok());
+        assert!(check_audience(&check, &auds(&["api://rs2", "api://rs1"])).is_ok());
+        // A token for a different resource — or with no audience at all —
+        // must be rejected.
+        assert!(check_audience(&check, &auds(&["api://rs2"])).is_err());
+        assert!(check_audience(&check, &[]).is_err());
+    }
+
+    #[test]
+    fn audience_require_any() {
+        let check = ClaimCheck::require_any(["api://a", "api://b"]);
+        assert!(check_audience(&check, &auds(&["api://b"])).is_ok());
+        assert!(check_audience(&check, &auds(&["api://c"])).is_err());
+        assert!(check_audience(&check, &[]).is_err());
+    }
+
+    #[test]
+    fn audience_if_present() {
+        let check = ClaimCheck::if_present("api://rs1");
+        assert!(check_audience(&check, &[]).is_ok());
+        assert!(check_audience(&check, &auds(&["api://rs1"])).is_ok());
+        assert!(check_audience(&check, &auds(&["api://rs2"])).is_err());
+    }
+
+    #[test]
+    fn audience_present() {
+        assert!(check_audience(&ClaimCheck::present(), &auds(&["anything"])).is_ok());
+        assert!(check_audience(&ClaimCheck::present(), &[]).is_err());
     }
 }
