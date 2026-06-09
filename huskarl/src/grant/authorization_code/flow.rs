@@ -149,20 +149,23 @@ impl<
         start_input: StartInput,
     ) -> Result<StartOutput, StartError<Auth::Error, C::Error, C::ResponseError, D::Error, J::Error>>
     {
-        let pkce = if self
-            .code_challenge_methods_supported
-            .iter()
-            .any(|m| m == "S256")
-        {
-            Some(Pkce::generate_s256_pair())
-        } else if self
-            .code_challenge_methods_supported
-            .iter()
-            .any(|m| m == "plain")
-        {
+        let supports_method = |method: &str| {
+            self.code_challenge_methods_supported
+                .iter()
+                .any(|m| m == method)
+        };
+        let pkce = if self.disable_pkce {
+            None
+        } else if supports_method("plain") && !supports_method("S256") {
+            // The server explicitly advertises `plain` but not `S256`; honor
+            // that rather than send a challenge it cannot verify.
             Some(Pkce::generate_plain_pair())
         } else {
-            None
+            // PKCE with S256 is always applied otherwise (RFC 9700 §2.1.1),
+            // even when the server metadata omits the optional
+            // `code_challenge_methods_supported` field — servers ignore
+            // unrecognized request parameters (RFC 6749 §3.1).
+            Some(Pkce::generate_s256_pair())
         };
 
         let dpop_jkt = self.dpop.get_current_thumbprint();
@@ -452,4 +455,155 @@ fn add_payload_to_uri<T: Serialize>(
     Ok(uri_string
         .parse()
         .expect("appending a query string to a valid URI should produce a valid URI"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use bytes::Bytes;
+
+    use super::*;
+    use crate::{
+        core::{
+            client_auth::NoAuth, dpop::NoDPoP, http::HttpResponse,
+            server_metadata::AuthorizationServerMetadata,
+        },
+        grant::authorization_code::{jar::NoJar, types::StartInput},
+    };
+
+    /// `start()` with direct delivery performs no HTTP; this client asserts that.
+    struct NoHttp;
+
+    struct NeverResponse;
+
+    impl HttpResponse for NeverResponse {
+        type Error = Infallible;
+
+        fn status(&self) -> http::StatusCode {
+            unreachable!()
+        }
+
+        fn headers(&self) -> http::HeaderMap {
+            unreachable!()
+        }
+
+        async fn body(self) -> Result<Bytes, Infallible> {
+            unreachable!()
+        }
+    }
+
+    impl HttpClient for NoHttp {
+        type Response = NeverResponse;
+        type Error = Infallible;
+        type ResponseError = Infallible;
+
+        async fn execute(
+            &self,
+            _request: http::Request<Bytes>,
+        ) -> Result<NeverResponse, Infallible> {
+            unreachable!("start() with direct delivery must not perform HTTP")
+        }
+    }
+
+    type Grant = AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar>;
+
+    async fn start_url(grant: &Grant) -> String {
+        grant
+            .start(&NoHttp, StartInput::scopes(["openid"]))
+            .await
+            .unwrap()
+            .authorization_url
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn default_builder_uses_s256() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .client_auth(NoAuth)
+            .dpop(NoDPoP)
+            .jar(NoJar)
+            .token_endpoint("https://as.example.com/token")
+            .unwrap()
+            .authorization_endpoint("https://as.example.com/authorize")
+            .unwrap()
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let url = start_url(&grant).await;
+        assert!(url.contains("code_challenge_method=S256"), "{url}");
+        assert!(url.contains("code_challenge="), "{url}");
+    }
+
+    #[tokio::test]
+    async fn metadata_without_code_challenge_methods_still_uses_s256() {
+        // RFC 8414 makes `code_challenge_methods_supported` optional even for
+        // servers that support PKCE; omission must not silently disable it.
+        let metadata: AuthorizationServerMetadata = serde_json::from_value(serde_json::json!({
+            "issuer": "https://as.example.com",
+            "authorization_endpoint": "https://as.example.com/authorize",
+            "token_endpoint": "https://as.example.com/token",
+            "response_types_supported": ["code"],
+        }))
+        .unwrap();
+
+        let grant: Grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
+            .unwrap()
+            .client_id("client")
+            .client_auth(NoAuth)
+            .dpop(NoDPoP)
+            .jar(NoJar)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let url = start_url(&grant).await;
+        assert!(url.contains("code_challenge_method=S256"), "{url}");
+    }
+
+    #[tokio::test]
+    async fn plain_only_metadata_uses_plain() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .client_auth(NoAuth)
+            .dpop(NoDPoP)
+            .jar(NoJar)
+            .token_endpoint("https://as.example.com/token")
+            .unwrap()
+            .authorization_endpoint("https://as.example.com/authorize")
+            .unwrap()
+            .redirect_uri("http://127.0.0.1/cb")
+            .code_challenge_methods_supported(vec!["plain".to_string()])
+            .build()
+            .await
+            .unwrap();
+
+        let url = start_url(&grant).await;
+        assert!(url.contains("code_challenge_method=plain"), "{url}");
+    }
+
+    #[tokio::test]
+    async fn disable_pkce_omits_challenge() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .client_auth(NoAuth)
+            .dpop(NoDPoP)
+            .jar(NoJar)
+            .token_endpoint("https://as.example.com/token")
+            .unwrap()
+            .authorization_endpoint("https://as.example.com/authorize")
+            .unwrap()
+            .redirect_uri("http://127.0.0.1/cb")
+            .disable_pkce(true)
+            .build()
+            .await
+            .unwrap();
+
+        let url = start_url(&grant).await;
+        assert!(!url.contains("code_challenge"), "{url}");
+    }
 }
