@@ -205,6 +205,9 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
     type DPoP = D;
     type Form<'a> = TokenExchangeGrantForm;
 
+    /// Subject and actor tokens may be exchanged repeatedly while they remain valid.
+    const REUSABLE_PARAMETERS: bool = true;
+
     fn client_id(&self) -> &str {
         &self.client_id
     }

@@ -28,6 +28,16 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Parameters exchanged when making the token request.
     type Parameters: Clone + MaybeSendSync;
 
+    /// Whether [`Self::Parameters`] may safely be submitted more than once.
+    ///
+    /// `false` for grants whose parameters contain single-use credentials —
+    /// an authorization code (RFC 6749 §4.1.2), a device code, or a possibly
+    /// rotating refresh token. Replaying those not only fails but may cause
+    /// the authorization server to revoke tokens already issued for them.
+    /// [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache) consumes such
+    /// parameters on first use instead of replaying them after a failed refresh.
+    const REUSABLE_PARAMETERS: bool = false;
+
     /// The client credentials used when making the token request.
     type ClientAuth: ClientAuthentication + 'static;
 
