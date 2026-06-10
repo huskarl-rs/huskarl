@@ -1,29 +1,17 @@
 use snafu::Snafu;
 
 /// Errors that could occur during AEAD unsealing.
+///
+/// Used as the source of [`ErrorKind::Crypto`](crate::error::ErrorKind::Crypto)
+/// errors — cipher implementations construct these to describe *why* an
+/// unseal failed without expanding the kind-level vocabulary.
 #[non_exhaustive]
 #[derive(Debug, Snafu)]
-#[snafu(visibility(pub(crate)))]
-pub enum UnsealError<E: crate::Error> {
+pub enum UnsealError {
     /// The bundle is malformed or uses an unsupported version.
     #[snafu(display("invalid bundle"))]
     InvalidBundle,
     /// The authentication tag did not match — the data may have been tampered with.
     #[snafu(display("authentication failed"))]
     AuthenticationFailed,
-    /// The underlying cipher operation failed.
-    #[snafu(transparent)]
-    Cipher {
-        /// The underlying error.
-        source: E,
-    },
-}
-
-impl<E: crate::Error> crate::Error for UnsealError<E> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            UnsealError::InvalidBundle | UnsealError::AuthenticationFailed => false,
-            UnsealError::Cipher { source } => source.is_retryable(),
-        }
-    }
 }

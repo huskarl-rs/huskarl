@@ -1,21 +1,18 @@
 //! Cipher implementations for encryption and decryption.
 
-mod boxed;
 mod error;
 mod multi;
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use bon::Builder;
-pub use boxed::{BoxedAeadCipher, BoxedAeadDecryptor, BoxedAeadEncryptor};
-pub(crate) use error::InvalidBundleSnafu;
 pub use error::UnsealError;
-pub use multi::{MultiKeyCipher, MultiKeyDecryptor, MultiKeyDecryptorError};
-use snafu::ensure;
+pub use multi::{MultiKeyCipher, MultiKeyDecryptor};
 
 use crate::{
     crypto::KeyMatchStrength,
-    platform::{MaybeSend, MaybeSendSync},
+    error::{Error, ErrorKind},
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
 
 /// The output from [`AeadEncryptor::encrypt`]
@@ -44,10 +41,11 @@ pub struct CipherMatch<'a> {
 }
 
 /// Trait for AEAD encryption.
-pub trait AeadEncryptor: MaybeSendSync {
-    /// The error type returned by encryption operations.
-    type Error: crate::Error;
-
+///
+/// This trait is dyn-capable: consumers store it as `Arc<dyn AeadEncryptor>`.
+/// Write the `encrypt` body as `Box::pin(async move { ... })`; failures
+/// classify as [`ErrorKind::Crypto`].
+pub trait AeadEncryptor: std::fmt::Debug + MaybeSendSync {
     /// Returns the content encryption algorithm identifier (e.g. `A256GCM`).
     fn enc_algorithm(&self) -> Cow<'_, str>;
 
@@ -58,22 +56,21 @@ pub trait AeadEncryptor: MaybeSendSync {
     ///
     /// # Errors
     ///
-    /// Returns [`Self::Error`] if the encryption operation fails.
-    fn encrypt(
-        &self,
-        plaintext: &[u8],
-        aad: &[u8],
-    ) -> impl Future<Output = Result<AeadOutput, Self::Error>> + MaybeSend;
+    /// Returns [`ErrorKind::Crypto`] if the encryption operation fails.
+    fn encrypt<'a>(
+        &'a self,
+        plaintext: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>>;
 }
 
 /// Trait for AEAD decryption.
 ///
 /// Exposes key selection via [`cipher_match`](Self::cipher_match) so that
 /// multi-key types can dispatch to the correct decryptor.
-pub trait AeadDecryptor: MaybeSendSync {
-    /// The error type returned by decryption operations.
-    type Error: crate::Error;
-
+///
+/// This trait is dyn-capable: consumers store it as `Arc<dyn AeadDecryptor>`.
+pub trait AeadDecryptor: std::fmt::Debug + MaybeSendSync {
     /// Returns how well this decryptor matches the given selection criteria.
     ///
     /// Implementations must return:
@@ -96,39 +93,49 @@ pub trait AeadDecryptor: MaybeSendSync {
     ///
     /// # Errors
     ///
-    /// Returns [`Self::Error`] if the decryption operation fails or if the data was tampered with.
-    fn decrypt(
-        &self,
-        cipher_match: Option<&CipherMatch<'_>>,
-        nonce: &[u8],
-        ciphertext: &[u8],
-        tag: &[u8],
-        aad: &[u8],
-    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
+    /// Returns [`ErrorKind::Crypto`] if the decryption operation fails or if
+    /// the data was tampered with.
+    fn decrypt<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>>;
 }
+
+/// Combined trait for types that can both encrypt and decrypt.
+///
+/// Automatically implemented for any type with both capabilities. Store as
+/// `Arc<dyn AeadCipher>` when both directions must come from the same source
+/// (e.g. a symmetric AEAD key).
+pub trait AeadCipher: AeadEncryptor + AeadDecryptor {}
+
+impl<T: AeadEncryptor + AeadDecryptor + ?Sized> AeadCipher for T {}
 
 /// A selector for an AEAD encryptor.
 ///
 /// Returns an encryptor with fixed identity and key material. The resulting
 /// encryptor should be held for a short period of time, as longer periods
 /// would work against system policies like key rotation.
+///
+/// This trait is dyn-capable: consumers store it as
+/// `Arc<dyn AeadCipherSelector>`.
 pub trait AeadCipherSelector: MaybeSendSync {
-    /// The type of encryptor returned by this selector.
-    type Encryptor: AeadEncryptor;
-
     /// Selects the current encryptor to use for encryption.
-    fn select_cipher(&self) -> Self::Encryptor;
+    fn select_cipher(&self) -> Arc<dyn AeadEncryptor>;
 }
 
 /// An encryptor that produces self-contained bundles with a prepended version byte and IV.
 pub trait AeadSealer: AeadEncryptor {
     /// Encrypts `plaintext` and returns a versioned bundle:
     /// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
-    fn seal(
-        &self,
-        plaintext: &[u8],
-        aad: &[u8],
-    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
+    fn seal<'a>(
+        &'a self,
+        plaintext: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>>;
 }
 
 /// A decryptor that consumes self-contained bundles produced by [`AeadSealer`].
@@ -138,16 +145,82 @@ pub trait AeadUnsealer: AeadDecryptor {
     /// `cipher_match` carries optional key selection criteria from an out-of-band
     /// source (e.g. a cookie attribute or database column). Multi-key decryptors
     /// use this to select the correct key without trying all candidates.
-    fn unseal(
-        &self,
-        cipher_match: Option<&CipherMatch<'_>>,
-        bundle: &[u8],
-        aad: &[u8],
-    ) -> impl Future<Output = Result<Vec<u8>, Self::Error>> + MaybeSend;
+    fn unseal<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        bundle: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>>;
 }
+
+macro_rules! forward_aead_encryptor {
+    ($wrapper:ty) => {
+        impl<T: AeadEncryptor + ?Sized> AeadEncryptor for $wrapper {
+            fn enc_algorithm(&self) -> Cow<'_, str> {
+                (**self).enc_algorithm()
+            }
+
+            fn key_id(&self) -> Option<Cow<'_, str>> {
+                (**self).key_id()
+            }
+
+            fn encrypt<'a>(
+                &'a self,
+                plaintext: &'a [u8],
+                aad: &'a [u8],
+            ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+                (**self).encrypt(plaintext, aad)
+            }
+        }
+    };
+}
+
+forward_aead_encryptor!(&T);
+forward_aead_encryptor!(Box<T>);
+forward_aead_encryptor!(Arc<T>);
+
+macro_rules! forward_aead_decryptor {
+    ($wrapper:ty) => {
+        impl<T: AeadDecryptor + ?Sized> AeadDecryptor for $wrapper {
+            fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+                (**self).cipher_match(m)
+            }
+
+            fn decrypt<'a>(
+                &'a self,
+                cipher_match: Option<&'a CipherMatch<'a>>,
+                nonce: &'a [u8],
+                ciphertext: &'a [u8],
+                tag: &'a [u8],
+                aad: &'a [u8],
+            ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+                (**self).decrypt(cipher_match, nonce, ciphertext, tag, aad)
+            }
+        }
+    };
+}
+
+forward_aead_decryptor!(&T);
+forward_aead_decryptor!(Box<T>);
+forward_aead_decryptor!(Arc<T>);
+
+macro_rules! forward_aead_cipher_selector {
+    ($wrapper:ty) => {
+        impl<T: AeadCipherSelector + ?Sized> AeadCipherSelector for $wrapper {
+            fn select_cipher(&self) -> Arc<dyn AeadEncryptor> {
+                (**self).select_cipher()
+            }
+        }
+    };
+}
+
+forward_aead_cipher_selector!(&T);
+forward_aead_cipher_selector!(Box<T>);
+forward_aead_cipher_selector!(Arc<T>);
 
 /// An [`AeadSealer`] using the v1 bundle format:
 /// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
+#[derive(Debug)]
 pub struct AeadV1Sealer<E: AeadEncryptor>(E);
 
 impl<E: AeadEncryptor> AeadV1Sealer<E> {
@@ -158,8 +231,6 @@ impl<E: AeadEncryptor> AeadV1Sealer<E> {
 }
 
 impl<E: AeadEncryptor> AeadEncryptor for AeadV1Sealer<E> {
-    type Error = E::Error;
-
     fn enc_algorithm(&self) -> Cow<'_, str> {
         self.0.enc_algorithm()
     }
@@ -168,41 +239,53 @@ impl<E: AeadEncryptor> AeadEncryptor for AeadV1Sealer<E> {
         self.0.key_id()
     }
 
-    async fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> Result<AeadOutput, Self::Error> {
-        self.0.encrypt(plaintext, aad).await
+    fn encrypt<'a>(
+        &'a self,
+        plaintext: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+        self.0.encrypt(plaintext, aad)
     }
 }
 
 impl<E: AeadEncryptor> AeadSealer for AeadV1Sealer<E> {
-    async fn seal(&self, plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, Self::Error> {
-        let output = self.encrypt(plaintext, aad).await?;
+    fn seal<'a>(
+        &'a self,
+        plaintext: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+        Box::pin(async move {
+            let output = self.encrypt(plaintext, aad).await?;
 
-        let nonce_len: u8 = output
-            .nonce
-            .len()
-            .try_into()
-            .expect("nonce length exceeds u8::MAX");
-        let tag_len: u8 = output
-            .tag
-            .len()
-            .try_into()
-            .expect("tag length exceeds u8::MAX");
+            let nonce_len: u8 = output
+                .nonce
+                .len()
+                .try_into()
+                .expect("nonce length exceeds u8::MAX");
+            let tag_len: u8 = output
+                .tag
+                .len()
+                .try_into()
+                .expect("tag length exceeds u8::MAX");
 
-        let mut bundle =
-            Vec::with_capacity(3 + output.nonce.len() + output.ciphertext.len() + output.tag.len());
-        bundle.push(0x01);
-        bundle.push(nonce_len);
-        bundle.push(tag_len);
-        bundle.extend_from_slice(&output.nonce);
-        bundle.extend_from_slice(&output.ciphertext);
-        bundle.extend_from_slice(&output.tag);
+            let mut bundle = Vec::with_capacity(
+                3 + output.nonce.len() + output.ciphertext.len() + output.tag.len(),
+            );
+            bundle.push(0x01);
+            bundle.push(nonce_len);
+            bundle.push(tag_len);
+            bundle.extend_from_slice(&output.nonce);
+            bundle.extend_from_slice(&output.ciphertext);
+            bundle.extend_from_slice(&output.tag);
 
-        Ok(bundle)
+            Ok(bundle)
+        })
     }
 }
 
 /// An [`AeadUnsealer`] using the v1 bundle format:
 /// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
+#[derive(Debug)]
 pub struct AeadV1Unsealer<D: AeadDecryptor>(D);
 
 impl<D: AeadDecryptor> AeadV1Unsealer<D> {
@@ -212,63 +295,64 @@ impl<D: AeadDecryptor> AeadV1Unsealer<D> {
     }
 }
 
-impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
-    type Error = UnsealError<D::Error>;
+fn invalid_bundle() -> Error {
+    Error::new(ErrorKind::Crypto, UnsealError::InvalidBundle)
+}
 
+impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.0.cipher_match(m)
     }
 
-    async fn decrypt(
-        &self,
-        cipher_match: Option<&CipherMatch<'_>>,
-        nonce: &[u8],
-        ciphertext: &[u8],
-        tag: &[u8],
-        aad: &[u8],
-    ) -> Result<Vec<u8>, Self::Error> {
-        self.0
-            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
-            .await
-            .map_err(Into::into)
+    fn decrypt<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+        self.0.decrypt(cipher_match, nonce, ciphertext, tag, aad)
     }
 }
 
 impl<D: AeadDecryptor> AeadUnsealer for AeadV1Unsealer<D> {
-    async fn unseal(
-        &self,
-        cipher_match: Option<&CipherMatch<'_>>,
-        bundle: &[u8],
-        aad: &[u8],
-    ) -> Result<Vec<u8>, Self::Error> {
-        ensure!(bundle.len() >= 3 && bundle[0] == 0x01, InvalidBundleSnafu);
+    fn unseal<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        bundle: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+        Box::pin(async move {
+            if bundle.len() < 3 || bundle[0] != 0x01 {
+                return Err(invalid_bundle());
+            }
 
-        let nonce_len = bundle[1] as usize;
-        let tag_len = bundle[2] as usize;
+            let nonce_len = bundle[1] as usize;
+            let tag_len = bundle[2] as usize;
 
-        ensure!(bundle.len() >= 3 + nonce_len + tag_len, InvalidBundleSnafu);
+            if bundle.len() < 3 + nonce_len + tag_len {
+                return Err(invalid_bundle());
+            }
 
-        let nonce = &bundle[3..3 + nonce_len];
-        let tag = &bundle[bundle.len() - tag_len..];
-        let ciphertext = &bundle[3 + nonce_len..bundle.len() - tag_len];
+            let nonce = &bundle[3..3 + nonce_len];
+            let tag = &bundle[bundle.len() - tag_len..];
+            let ciphertext = &bundle[3 + nonce_len..bundle.len() - tag_len];
 
-        self.decrypt(cipher_match, nonce, ciphertext, tag, aad)
-            .await
+            self.decrypt(cipher_match, nonce, ciphertext, tag, aad)
+                .await
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use super::*;
 
     #[derive(Debug)]
     struct MockEncryptor;
 
     impl AeadEncryptor for MockEncryptor {
-        type Error = Infallible;
-
         fn enc_algorithm(&self) -> Cow<'_, str> {
             "mock".into()
         }
@@ -277,11 +361,17 @@ mod tests {
             None
         }
 
-        async fn encrypt(&self, plaintext: &[u8], _aad: &[u8]) -> Result<AeadOutput, Infallible> {
-            Ok(AeadOutput {
-                nonce: vec![1, 2, 3],
-                ciphertext: plaintext.iter().map(|b| b ^ 0xFF).collect(),
-                tag: vec![4, 5, 6, 7],
+        fn encrypt<'a>(
+            &'a self,
+            plaintext: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+            Box::pin(async move {
+                Ok(AeadOutput {
+                    nonce: vec![1, 2, 3],
+                    ciphertext: plaintext.iter().map(|b| b ^ 0xFF).collect(),
+                    tag: vec![4, 5, 6, 7],
+                })
             })
         }
     }
@@ -290,23 +380,30 @@ mod tests {
     struct MockDecryptor;
 
     impl AeadDecryptor for MockDecryptor {
-        type Error = Infallible;
-
         fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
             Some(KeyMatchStrength::ByAlgorithm)
         }
 
-        async fn decrypt(
-            &self,
-            _cipher_match: Option<&CipherMatch<'_>>,
-            _nonce: &[u8],
-            ciphertext: &[u8],
-            _tag: &[u8],
-            _aad: &[u8],
-        ) -> Result<Vec<u8>, Infallible> {
+        fn decrypt<'a>(
+            &'a self,
+            _cipher_match: Option<&'a CipherMatch<'a>>,
+            _nonce: &'a [u8],
+            ciphertext: &'a [u8],
+            _tag: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
             // Reverse the XOR
-            Ok(ciphertext.iter().map(|b| b ^ 0xFF).collect())
+            Box::pin(async move { Ok(ciphertext.iter().map(|b| b ^ 0xFF).collect()) })
         }
+    }
+
+    fn assert_invalid_bundle(err: &Error) {
+        assert_eq!(err.kind(), ErrorKind::Crypto);
+        assert_eq!(err.to_string(), "cryptographic operation failed");
+        assert_eq!(
+            std::error::Error::source(err).expect("source").to_string(),
+            "invalid bundle"
+        );
     }
 
     #[tokio::test]
@@ -320,6 +417,16 @@ mod tests {
         let unsealer = AeadV1Unsealer::new(MockDecryptor);
         let recovered = unsealer.unseal(None, &bundle, aad).await.unwrap();
         assert_eq!(recovered, plaintext);
+    }
+
+    #[tokio::test]
+    async fn erased_cipher_roundtrip() {
+        let sealer: Arc<dyn AeadSealer> = Arc::new(AeadV1Sealer::new(MockEncryptor));
+        let bundle = sealer.seal(b"hello", b"").await.unwrap();
+
+        let unsealer: Arc<dyn AeadUnsealer> = Arc::new(AeadV1Unsealer::new(MockDecryptor));
+        let recovered = unsealer.unseal(None, &bundle, b"").await.unwrap();
+        assert_eq!(recovered, b"hello");
     }
 
     #[tokio::test]
@@ -340,29 +447,32 @@ mod tests {
     #[tokio::test]
     async fn unseal_wrong_version() {
         let unsealer = AeadV1Unsealer::new(MockDecryptor);
-        let result = unsealer.unseal(None, &[0x02, 0, 0], b"").await;
-        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+        let err = unsealer.unseal(None, &[0x02, 0, 0], b"").await.unwrap_err();
+        assert_invalid_bundle(&err);
     }
 
     #[tokio::test]
     async fn unseal_too_short() {
         let unsealer = AeadV1Unsealer::new(MockDecryptor);
-        let result = unsealer.unseal(None, &[0x01], b"").await;
-        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+        let err = unsealer.unseal(None, &[0x01], b"").await.unwrap_err();
+        assert_invalid_bundle(&err);
     }
 
     #[tokio::test]
     async fn unseal_truncated() {
         let unsealer = AeadV1Unsealer::new(MockDecryptor);
         // nonce_len=10, tag_len=10, but only 1 byte of data after header
-        let result = unsealer.unseal(None, &[0x01, 10, 10, 0x00], b"").await;
-        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+        let err = unsealer
+            .unseal(None, &[0x01, 10, 10, 0x00], b"")
+            .await
+            .unwrap_err();
+        assert_invalid_bundle(&err);
     }
 
     #[tokio::test]
     async fn unseal_empty() {
         let unsealer = AeadV1Unsealer::new(MockDecryptor);
-        let result = unsealer.unseal(None, &[], b"").await;
-        assert!(matches!(result, Err(UnsealError::InvalidBundle)));
+        let err = unsealer.unseal(None, &[], b"").await.unwrap_err();
+        assert_invalid_bundle(&err);
     }
 }

@@ -1,13 +1,12 @@
-use std::borrow::Cow;
-
-use snafu::prelude::*;
+use std::{borrow::Cow, sync::Arc};
 
 use crate::{
-    BoxedError,
     crypto::{
         KeyMatchStrength,
-        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, BoxedAeadDecryptor, CipherMatch},
+        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch},
     },
+    error::{Error, ErrorKind},
+    platform::MaybeSendBoxFuture,
 };
 
 /// An [`AeadDecryptor`] that holds multiple keys and applies [`CipherMatch`] /
@@ -25,54 +24,35 @@ use crate::{
 /// [`decrypt`](AeadDecryptor::decrypt) uses the optional [`CipherMatch`] to select
 /// the correct key when available. When no `CipherMatch` is provided, keys are
 /// tried in order.
+#[derive(Debug)]
 pub struct MultiKeyDecryptor {
-    decryptors: Vec<BoxedAeadDecryptor>,
+    decryptors: Vec<Arc<dyn AeadDecryptor>>,
 }
 
 impl MultiKeyDecryptor {
     /// Creates a new `MultiKeyDecryptor` from the given decryptors.
     #[must_use]
-    pub fn new(decryptors: Vec<BoxedAeadDecryptor>) -> Self {
+    pub fn new(decryptors: Vec<Arc<dyn AeadDecryptor>>) -> Self {
         Self { decryptors }
     }
 }
 
-/// Errors that can occur during [`MultiKeyDecryptor`] decryption.
-#[non_exhaustive]
-#[derive(Debug, Snafu)]
-pub enum MultiKeyDecryptorError {
-    /// No key could decrypt the ciphertext.
-    #[snafu(display("no matching key"))]
-    NoMatchingKey,
-    /// The single matching key failed to decrypt.
-    #[snafu(display("decryption failed"))]
-    DecryptionFailed {
-        /// The underlying error.
-        source: BoxedError,
-    },
-}
-
-impl crate::Error for MultiKeyDecryptorError {
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::NoMatchingKey => false,
-            Self::DecryptionFailed { source } => source.is_retryable(),
-        }
-    }
+fn no_matching_key() -> Error {
+    Error::from(ErrorKind::Crypto).with_context("no matching decryption key")
 }
 
 enum SelectedDecryptor<'a> {
     /// A single key matched definitively by key ID.
-    ByKeyId(&'a BoxedAeadDecryptor),
+    ByKeyId(&'a Arc<dyn AeadDecryptor>),
     /// One or more keys matched by algorithm only.
-    ByAlgorithm(Vec<&'a BoxedAeadDecryptor>),
+    ByAlgorithm(Vec<&'a Arc<dyn AeadDecryptor>>),
     /// No keys matched.
     None,
 }
 
 impl MultiKeyDecryptor {
     fn select<'a>(&'a self, m: &CipherMatch<'_>) -> SelectedDecryptor<'a> {
-        let mut by_algorithm: Vec<&'a BoxedAeadDecryptor> = Vec::new();
+        let mut by_algorithm: Vec<&'a Arc<dyn AeadDecryptor>> = Vec::new();
 
         for decryptor in &self.decryptors {
             match decryptor.cipher_match(m) {
@@ -94,14 +74,14 @@ impl MultiKeyDecryptor {
     }
 
     async fn try_decrypt(
-        decryptors: impl Iterator<Item = &BoxedAeadDecryptor>,
+        decryptors: impl Iterator<Item = &Arc<dyn AeadDecryptor>>,
         count: usize,
         cipher_match: Option<&CipherMatch<'_>>,
         nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
         aad: &[u8],
-    ) -> Result<Vec<u8>, MultiKeyDecryptorError> {
+    ) -> Result<Vec<u8>, Error> {
         let mut last_error = None;
 
         for decryptor in decryptors {
@@ -115,15 +95,15 @@ impl MultiKeyDecryptor {
         }
 
         match last_error {
-            Some(source) if count == 1 => Err(MultiKeyDecryptorError::DecryptionFailed { source }),
-            _ => NoMatchingKeySnafu.fail(),
+            // With exactly one candidate, the underlying failure is the
+            // meaningful diagnostic; with several, no single failure is.
+            Some(source) if count == 1 => Err(source),
+            _ => Err(no_matching_key()),
         }
     }
 }
 
 impl AeadDecryptor for MultiKeyDecryptor {
-    type Error = MultiKeyDecryptorError;
-
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         let mut by_algorithm = false;
 
@@ -138,50 +118,51 @@ impl AeadDecryptor for MultiKeyDecryptor {
         by_algorithm.then_some(KeyMatchStrength::ByAlgorithm)
     }
 
-    async fn decrypt(
-        &self,
-        cipher_match: Option<&CipherMatch<'_>>,
-        nonce: &[u8],
-        ciphertext: &[u8],
-        tag: &[u8],
-        aad: &[u8],
-    ) -> Result<Vec<u8>, Self::Error> {
-        if let Some(m) = cipher_match {
-            match self.select(m) {
-                SelectedDecryptor::ByKeyId(decryptor) => {
-                    return decryptor
-                        .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+    fn decrypt<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+        Box::pin(async move {
+            if let Some(m) = cipher_match {
+                return match self.select(m) {
+                    SelectedDecryptor::ByKeyId(decryptor) => {
+                        decryptor
+                            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+                            .await
+                    }
+                    SelectedDecryptor::ByAlgorithm(decryptors) => {
+                        let count = decryptors.len();
+                        Self::try_decrypt(
+                            decryptors.into_iter(),
+                            count,
+                            cipher_match,
+                            nonce,
+                            ciphertext,
+                            tag,
+                            aad,
+                        )
                         .await
-                        .map_err(|source| MultiKeyDecryptorError::DecryptionFailed { source });
-                }
-                SelectedDecryptor::ByAlgorithm(decryptors) => {
-                    let count = decryptors.len();
-                    return Self::try_decrypt(
-                        decryptors.into_iter(),
-                        count,
-                        cipher_match,
-                        nonce,
-                        ciphertext,
-                        tag,
-                        aad,
-                    )
-                    .await;
-                }
-                SelectedDecryptor::None => return NoMatchingKeySnafu.fail(),
+                    }
+                    SelectedDecryptor::None => Err(no_matching_key()),
+                };
             }
-        }
 
-        // No cipher_match — try all keys in order.
-        Self::try_decrypt(
-            self.decryptors.iter(),
-            self.decryptors.len(),
-            None,
-            nonce,
-            ciphertext,
-            tag,
-            aad,
-        )
-        .await
+            // No cipher_match — try all keys in order.
+            Self::try_decrypt(
+                self.decryptors.iter(),
+                self.decryptors.len(),
+                None,
+                nonce,
+                ciphertext,
+                tag,
+                aad,
+            )
+            .await
+        })
     }
 }
 
@@ -190,6 +171,7 @@ impl AeadDecryptor for MultiKeyDecryptor {
 ///
 /// This allows a single value to be passed where both encryption and decryption
 /// capabilities are needed (e.g. encrypted cookies with key rotation).
+#[derive(Debug)]
 pub struct MultiKeyCipher<E> {
     encryptor: E,
     decryptor: MultiKeyDecryptor,
@@ -206,8 +188,6 @@ impl<E> MultiKeyCipher<E> {
 }
 
 impl<E: AeadEncryptor> AeadEncryptor for MultiKeyCipher<E> {
-    type Error = E::Error;
-
     fn enc_algorithm(&self) -> Cow<'_, str> {
         self.encryptor.enc_algorithm()
     }
@@ -216,28 +196,29 @@ impl<E: AeadEncryptor> AeadEncryptor for MultiKeyCipher<E> {
         self.encryptor.key_id()
     }
 
-    async fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> Result<AeadOutput, Self::Error> {
-        self.encryptor.encrypt(plaintext, aad).await
+    fn encrypt<'a>(
+        &'a self,
+        plaintext: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+        self.encryptor.encrypt(plaintext, aad)
     }
 }
 
 impl<E: AeadEncryptor> AeadDecryptor for MultiKeyCipher<E> {
-    type Error = MultiKeyDecryptorError;
-
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.decryptor.cipher_match(m)
     }
 
-    async fn decrypt(
-        &self,
-        cipher_match: Option<&CipherMatch<'_>>,
-        nonce: &[u8],
-        ciphertext: &[u8],
-        tag: &[u8],
-        aad: &[u8],
-    ) -> Result<Vec<u8>, Self::Error> {
+    fn decrypt<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
         self.decryptor
             .decrypt(cipher_match, nonce, ciphertext, tag, aad)
-            .await
     }
 }
