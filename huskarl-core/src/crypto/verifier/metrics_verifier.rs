@@ -6,8 +6,9 @@ use crate::{
     platform::MaybeSendBoxFuture,
 };
 
-/// A [`JwsVerifier`] wrapper that records a `huskarl.jws.verify` counter for each
-/// verification attempt.
+/// A [`JwsVerifier`] wrapper that records a `huskarl.jws.verify` counter for
+/// each verification attempt and a `huskarl.jws.refresh` counter for each
+/// refresh attempt.
 ///
 /// Wrap your verifier with this type to instrument JWS signature verifications.
 /// The `name` parameter is included as a label on every counter, allowing metrics
@@ -16,14 +17,28 @@ use crate::{
 ///
 /// # Labels
 ///
+/// `huskarl.jws.verify`:
+///
 /// | Label     | Values                                                                       | Description                              |
 /// |-----------|------------------------------------------------------------------------------|------------------------------------------|
 /// | `name`    | user-provided                                                                | Identifies this verifier instance        |
 /// | `alg`     | `RS256`, `ES256`, etc.                                                       | Algorithm from the JWS header            |
 /// | `outcome` | `success`, `no_matching_key`, `ambiguous_key`, `signature_mismatch`, `error` | Verification result                      |
 ///
+/// `huskarl.jws.refresh`:
+///
+/// | Label     | Values                       | Description                       |
+/// |-----------|------------------------------|-----------------------------------|
+/// | `name`    | user-provided                | Identifies this verifier instance |
+/// | `outcome` | `refreshed`, `not_refreshed` | Refresh result                    |
+///
 /// `no_matching_key` and `signature_mismatch` are particularly useful for security
 /// monitoring — elevated rates may indicate key rotation in progress or an attack.
+///
+/// Note that `not_refreshed` covers "no refresh warranted", "blocked by
+/// policy", and "refresh failed" alike — the
+/// [`try_refresh`](JwsVerifier::try_refresh) contract does not distinguish
+/// them.
 ///
 /// # Example
 ///
@@ -99,6 +114,23 @@ impl<V: JwsVerifier> JwsVerifier for MetricsJwsVerifier<V> {
     }
 
     fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
-        self.inner.try_refresh()
+        Box::pin(async move {
+            let refreshed = self.inner.try_refresh().await;
+
+            let outcome = if refreshed {
+                "refreshed"
+            } else {
+                "not_refreshed"
+            };
+
+            ::metrics::counter!(
+                "huskarl.jws.refresh",
+                "name" => self.name.clone(),
+                "outcome" => outcome,
+            )
+            .increment(1);
+
+            refreshed
+        })
     }
 }
