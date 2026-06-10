@@ -40,6 +40,33 @@ pub struct CipherMatch<'a> {
     pub kid: Option<&'a str>,
 }
 
+impl CipherMatch<'_> {
+    /// Computes the match strength for a single key, applying the standard
+    /// rules documented on [`AeadDecryptor::cipher_match`].
+    ///
+    /// `enc_algorithm` is the content encryption algorithm of the key;
+    /// `registered_kid` is the key ID registered for the key, if any.
+    ///
+    /// Single-key [`AeadDecryptor`] implementations should delegate to this
+    /// from [`cipher_match`](AeadDecryptor::cipher_match) rather than
+    /// re-implementing the rules — in particular the requirement that a
+    /// `kid` mismatch returns `None` rather than `Some(ByAlgorithm)`.
+    #[must_use]
+    pub fn strength_for(
+        &self,
+        enc_algorithm: &str,
+        registered_kid: Option<&str>,
+    ) -> Option<KeyMatchStrength> {
+        if let Some(enc) = self.enc
+            && enc != enc_algorithm
+        {
+            return None;
+        }
+
+        crate::crypto::kid_match_strength(self.kid, registered_kid)
+    }
+}
+
 /// Trait for AEAD encryption.
 ///
 /// This trait is dyn-capable: consumers store it as `Arc<dyn AeadEncryptor>`.
@@ -82,6 +109,9 @@ pub trait AeadDecryptor: std::fmt::Debug + MaybeSendSync {
     ///   `kid` registered.
     /// - `None` — the algorithm is unsupported by this decryptor, **or** both the
     ///   criteria and this decryptor have a `kid` but they differ.
+    ///
+    /// Single-key implementations should delegate to
+    /// [`CipherMatch::strength_for`], which implements these rules.
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength>;
 
     /// Asynchronously decrypts the given ciphertext with the provided nonce, tag, and associated data.
@@ -474,5 +504,53 @@ mod tests {
         let unsealer = AeadV1Unsealer::new(MockDecryptor);
         let err = unsealer.unseal(None, &[], b"").await.unwrap_err();
         assert_invalid_bundle(&err);
+    }
+
+    fn cipher_match<'a>(enc: Option<&'a str>, kid: Option<&'a str>) -> CipherMatch<'a> {
+        CipherMatch { enc, kid }
+    }
+
+    #[test]
+    fn strength_for_enc_mismatch() {
+        let m = cipher_match(Some("A128GCM"), Some("kid-1"));
+        assert_eq!(m.strength_for("A256GCM", Some("kid-1")), None);
+    }
+
+    #[test]
+    fn strength_for_no_enc_is_compatible() {
+        let m = cipher_match(None, None);
+        assert_eq!(
+            m.strength_for("A256GCM", None),
+            Some(KeyMatchStrength::ByAlgorithm)
+        );
+    }
+
+    #[test]
+    fn strength_for_matching_kid() {
+        let m = cipher_match(Some("A256GCM"), Some("kid-1"));
+        assert_eq!(
+            m.strength_for("A256GCM", Some("kid-1")),
+            Some(KeyMatchStrength::ByKeyId)
+        );
+    }
+
+    #[test]
+    fn strength_for_kid_mismatch_is_none_not_by_algorithm() {
+        let m = cipher_match(None, Some("kid-1"));
+        assert_eq!(m.strength_for("A256GCM", Some("kid-2")), None);
+    }
+
+    #[test]
+    fn strength_for_missing_kid_falls_back_to_algorithm() {
+        let m = cipher_match(Some("A256GCM"), None);
+        assert_eq!(
+            m.strength_for("A256GCM", Some("kid-1")),
+            Some(KeyMatchStrength::ByAlgorithm)
+        );
+        let m = cipher_match(Some("A256GCM"), Some("kid-1"));
+        assert_eq!(
+            m.strength_for("A256GCM", None),
+            Some(KeyMatchStrength::ByAlgorithm)
+        );
     }
 }

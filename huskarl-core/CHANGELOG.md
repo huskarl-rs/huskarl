@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Adds in-memory JTI uniqueness checker (especially for tests).
  - Add concrete error type (to replace trait).
  - Update traits to be dyn traits.
+ - Add `KeyMatch::strength_for` and `CipherMatch::strength_for` helpers so
+   single-key verifier/decryptor implementations can delegate the standard
+   algorithm/kid matching rules instead of re-implementing them.
 
 ## [0.6.4] - 2026-05-29
 

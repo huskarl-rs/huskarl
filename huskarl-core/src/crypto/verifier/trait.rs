@@ -22,6 +22,31 @@ pub struct KeyMatch<'a> {
     pub kid: Option<&'a str>,
 }
 
+impl KeyMatch<'_> {
+    /// Computes the match strength for a single key, applying the standard
+    /// rules documented on [`JwsVerifier::key_match`].
+    ///
+    /// `supported_algorithms` are the JWS algorithm identifiers the key can
+    /// verify; `registered_kid` is the key ID registered for the key, if any.
+    ///
+    /// Single-key [`JwsVerifier`] implementations should delegate to this
+    /// from [`key_match`](JwsVerifier::key_match) rather than re-implementing
+    /// the rules — in particular the requirement that a `kid` mismatch
+    /// returns `None` rather than `Some(ByAlgorithm)`.
+    #[must_use]
+    pub fn strength_for(
+        &self,
+        supported_algorithms: &[&str],
+        registered_kid: Option<&str>,
+    ) -> Option<KeyMatchStrength> {
+        if !supported_algorithms.contains(&self.alg) {
+            return None;
+        }
+
+        crate::crypto::kid_match_strength(self.kid, registered_kid)
+    }
+}
+
 /// Trait for verifying RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
 ///
 /// Implementations may represent a single verification key, or a set of keys
@@ -43,6 +68,9 @@ pub trait JwsVerifier: std::fmt::Debug + MaybeSendSync {
     ///   `Some(ByAlgorithm)` — returning `ByAlgorithm` on a mismatch would cause
     ///   [`MultiKeyVerifier`](crate::crypto::verifier::MultiKeyVerifier) to attempt verification
     ///   with the wrong key.
+    ///
+    /// Single-key implementations should delegate to
+    /// [`KeyMatch::strength_for`], which implements these rules.
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength>;
 
     /// Verify the input against the provided signature.
@@ -157,5 +185,65 @@ where
         platform: Arc<dyn JwsVerifierPlatform>,
     ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
         self(jwks_uri, platform)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key_match<'a>(alg: &'a str, kid: Option<&'a str>) -> KeyMatch<'a> {
+        KeyMatch { alg, kid }
+    }
+
+    #[test]
+    fn strength_for_unsupported_algorithm() {
+        let m = key_match("RS256", Some("kid-1"));
+        assert_eq!(m.strength_for(&["ES256"], Some("kid-1")), None);
+    }
+
+    #[test]
+    fn strength_for_matching_kid() {
+        let m = key_match("ES256", Some("kid-1"));
+        assert_eq!(
+            m.strength_for(&["ES256"], Some("kid-1")),
+            Some(KeyMatchStrength::ByKeyId)
+        );
+    }
+
+    #[test]
+    fn strength_for_kid_mismatch_is_none_not_by_algorithm() {
+        let m = key_match("ES256", Some("kid-1"));
+        assert_eq!(m.strength_for(&["ES256"], Some("kid-2")), None);
+    }
+
+    #[test]
+    fn strength_for_no_requested_kid() {
+        let m = key_match("ES256", None);
+        assert_eq!(
+            m.strength_for(&["ES256"], Some("kid-1")),
+            Some(KeyMatchStrength::ByAlgorithm)
+        );
+    }
+
+    #[test]
+    fn strength_for_no_registered_kid() {
+        let m = key_match("ES256", Some("kid-1"));
+        assert_eq!(
+            m.strength_for(&["ES256"], None),
+            Some(KeyMatchStrength::ByAlgorithm)
+        );
+    }
+
+    #[test]
+    fn strength_for_multiple_supported_algorithms() {
+        let m = key_match("PS384", None);
+        assert_eq!(
+            m.strength_for(
+                &["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"],
+                None
+            ),
+            Some(KeyMatchStrength::ByAlgorithm)
+        );
     }
 }

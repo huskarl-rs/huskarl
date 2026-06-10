@@ -25,3 +25,19 @@ pub enum KeyMatchStrength {
     /// the header has no `kid`, or this key has no `kid` registered.
     ByAlgorithm,
 }
+
+/// The shared `kid` half of the key-matching rules, applied after the
+/// algorithm has already been found compatible: both sides present and equal
+/// is a `ByKeyId` match, both present and different is a mismatch, and a
+/// `kid` missing on either side falls back to `ByAlgorithm`.
+pub(crate) fn kid_match_strength(
+    requested: Option<&str>,
+    registered: Option<&str>,
+) -> Option<KeyMatchStrength> {
+    match (requested, registered) {
+        (Some(requested), Some(registered)) => {
+            (requested == registered).then_some(KeyMatchStrength::ByKeyId)
+        }
+        _ => Some(KeyMatchStrength::ByAlgorithm),
+    }
+}
