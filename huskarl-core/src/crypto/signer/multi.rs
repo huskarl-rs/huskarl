@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use crate::crypto::signer::{
-    AsymmetricJwsSigner, AsymmetricJwsSignerSelector, BoxedAsymmetricJwsSigner, JwsSignerSelector,
+    AsymmetricJwsSigner, AsymmetricJwsSignerSelector, JwsSigner, JwsSignerSelector,
 };
 
 /// A multi-key asymmetric signer selector that supports key selection by JWK thumbprint.
@@ -11,32 +13,40 @@ use crate::crypto::signer::{
 /// - [`select_signer_by_thumbprint`](AsymmetricJwsSignerSelector::select_signer_by_thumbprint)
 ///   searches the default signer first, then the additional signers.
 #[derive(Debug, Clone)]
-pub struct MultiKeySigner<S: AsymmetricJwsSigner = BoxedAsymmetricJwsSigner> {
-    default: S,
-    additional: Vec<S>,
+pub struct MultiKeySigner {
+    default: Arc<dyn AsymmetricJwsSigner>,
+    additional: Vec<Arc<dyn AsymmetricJwsSigner>>,
 }
 
-impl<S: AsymmetricJwsSigner> MultiKeySigner<S> {
+impl MultiKeySigner {
     /// Creates a new `MultiKeySigner` with a default signer and additional signers.
     #[must_use]
-    pub fn new(default: S, additional: Vec<S>) -> Self {
+    pub fn new(
+        default: impl AsymmetricJwsSigner + 'static,
+        additional: Vec<Arc<dyn AsymmetricJwsSigner>>,
+    ) -> Self {
         Self {
-            default,
+            default: Arc::new(default),
             additional,
         }
     }
 }
 
-impl<S: AsymmetricJwsSigner> JwsSignerSelector for MultiKeySigner<S> {
-    type Signer = S;
-
-    fn select_signer(&self) -> S {
+impl JwsSignerSelector for MultiKeySigner {
+    fn select_signer(&self) -> Arc<dyn JwsSigner> {
         self.default.clone()
     }
 }
 
-impl<S: AsymmetricJwsSigner> AsymmetricJwsSignerSelector for MultiKeySigner<S> {
-    fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<S> {
+impl AsymmetricJwsSignerSelector for MultiKeySigner {
+    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
+        self.default.clone()
+    }
+
+    fn select_signer_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
         let all = std::iter::once(&self.default).chain(self.additional.iter());
         for signer in all {
             if signer.public_key_jwk().thumbprint() == thumbprint {

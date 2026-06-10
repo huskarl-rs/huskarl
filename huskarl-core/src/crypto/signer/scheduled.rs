@@ -83,21 +83,25 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshSigner<S> {
 
 impl<S> JwsSignerSelector for ScheduledRefreshSigner<S>
 where
-    S: JwsSignerSelector + std::fmt::Debug + MaybeSendSync + 'static,
-    S::Signer: JwsSigner,
+    S: JwsSignerSelector + 'static,
 {
-    type Signer = S::Signer;
-
-    fn select_signer(&self) -> Self::Signer {
+    fn select_signer(&self) -> Arc<dyn JwsSigner> {
         self.inner.load().select_signer()
     }
 }
 
 impl<S> super::AsymmetricJwsSignerSelector for ScheduledRefreshSigner<S>
 where
-    S: super::AsymmetricJwsSignerSelector + std::fmt::Debug + MaybeSendSync + 'static,
+    S: super::AsymmetricJwsSignerSelector + 'static,
 {
-    fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<S::Signer> {
+    fn select_asymmetric_signer(&self) -> Arc<dyn super::AsymmetricJwsSigner> {
+        self.inner.load().select_asymmetric_signer()
+    }
+
+    fn select_signer_by_thumbprint(
+        &self,
+        thumbprint: &str,
+    ) -> Option<Arc<dyn super::AsymmetricJwsSigner>> {
         self.inner.load().select_signer_by_thumbprint(thumbprint)
     }
 }

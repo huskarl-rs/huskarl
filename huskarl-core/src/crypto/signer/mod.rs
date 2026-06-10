@@ -6,14 +6,8 @@ mod refreshable;
 mod scheduled;
 mod symmetric;
 
-pub use asymmetric::{
-    AsymmetricJwsSigner, AsymmetricJwsSignerSelector,
-    boxed::{BoxedAsymmetricJwsSigner, BoxedAsymmetricJwsSignerSelector},
-};
+pub use asymmetric::{AsymmetricJwsSigner, AsymmetricJwsSignerSelector};
 pub use multi::MultiKeySigner;
 pub use refreshable::RefreshableSigner;
 pub use scheduled::ScheduledRefreshSigner;
-pub use symmetric::{
-    JwsSigner, JwsSignerSelector,
-    boxed::{BoxedJwsSigner, BoxedJwsSignerSelector},
-};
+pub use symmetric::{JwsSigner, JwsSignerSelector};

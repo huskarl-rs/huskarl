@@ -11,31 +11,30 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    crypto::signer::{
-        AsymmetricJwsSigner, AsymmetricJwsSignerSelector, BoxedAsymmetricJwsSignerSelector,
-        JwsSigner,
-    },
+    crypto::signer::{AsymmetricJwsSigner, AsymmetricJwsSignerSelector},
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
-    jwt::{JwsSerializationError, Jwt},
+    error::{Error, ErrorKind},
+    jwt::Jwt,
     secrets::SecretString,
 };
 
 // Used internally to track the origin value for a Uri (nonces are matched by origin).
 type Origin = (Option<Scheme>, Option<String>, Option<u16>);
 
-impl<Sgn: AsymmetricJwsSignerSelector> super::sealed::Sealed for DPoP<Sgn> {}
+impl super::sealed::Sealed for DPoP {}
 
 /// This respresents a grant with the ability to create DPoP-bound tokens and sign requests with them.
 #[derive(Debug, Clone, Builder)]
-pub struct DPoP<Sgn: AsymmetricJwsSignerSelector = BoxedAsymmetricJwsSignerSelector> {
-    signer: Sgn,
+pub struct DPoP {
+    #[builder(with = |signer: impl AsymmetricJwsSignerSelector + 'static| Arc::new(signer) as Arc<dyn AsymmetricJwsSignerSelector>)]
+    signer: Arc<dyn AsymmetricJwsSignerSelector>,
     #[builder(skip)]
     nonce: Arc<Mutex<Option<Arc<String>>>>,
 }
 
-impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
-    type Error = JwsSerializationError<<Sgn::Signer as JwsSigner>::Error>;
-    type ResourceServerDPoP = ResourceDPoP<Sgn>;
+impl AuthorizationServerDPoP for DPoP {
+    type Error = Error;
+    type ResourceServerDPoP = ResourceDPoP;
 
     fn update_nonce(&self, nonce: String) {
         // If the lock is poisoned (a thread panicked while holding it), we recover
@@ -50,7 +49,12 @@ impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
     }
 
     fn get_current_thumbprint(&self) -> Option<String> {
-        Some(self.signer.select_signer().public_key_jwk().thumbprint())
+        Some(
+            self.signer
+                .select_asymmetric_signer()
+                .public_key_jwk()
+                .thumbprint(),
+        )
     }
 
     async fn proof(
@@ -67,34 +71,38 @@ impl<Sgn: AsymmetricJwsSignerSelector> AuthorizationServerDPoP for DPoP<Sgn> {
             .clone();
 
         let Some(dpop_jkt) = dpop_jkt else {
-            return Err(JwsSerializationError::NoThumbprint);
+            return Err(no_thumbprint_error());
         };
 
         let signer = self
             .signer
             .select_signer_by_thumbprint(dpop_jkt)
-            .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
+            .ok_or_else(no_matching_key_error)?;
 
-        sign_proof(&signer, method, uri, None, nonce).await
+        sign_proof(&*signer, method, uri, None, nonce).await
     }
 
     fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
-        ResourceDPoP::builder().signer(self.signer.clone()).build()
+        ResourceDPoP {
+            signer: self.signer.clone(),
+            nonces: Arc::default(),
+        }
     }
 }
 
-impl<Sgn: AsymmetricJwsSignerSelector> super::sealed::Sealed for ResourceDPoP<Sgn> {}
+impl super::sealed::Sealed for ResourceDPoP {}
 
 /// This respresents the ability to create proofs for resource servers from DPoP-bound access tokens.
 #[derive(Debug, Clone, Builder)]
-pub struct ResourceDPoP<Sgn: AsymmetricJwsSignerSelector> {
-    signer: Sgn,
+pub struct ResourceDPoP {
+    #[builder(with = |signer: impl AsymmetricJwsSignerSelector + 'static| Arc::new(signer) as Arc<dyn AsymmetricJwsSignerSelector>)]
+    signer: Arc<dyn AsymmetricJwsSignerSelector>,
     #[builder(default)]
     nonces: Arc<RwLock<HashMap<Origin, Arc<String>>>>,
 }
 
-impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> {
-    type Error = JwsSerializationError<<Sgn::Signer as JwsSigner>::Error>;
+impl ResourceServerDPoP for ResourceDPoP {
+    type Error = Error;
 
     fn update_nonce(&self, uri: &Uri, nonce: String) {
         let origin = origin_from_uri(uri);
@@ -127,10 +135,10 @@ impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> 
         let signer = self
             .signer
             .select_signer_by_thumbprint(dpop_jkt)
-            .ok_or(JwsSerializationError::NoMatchingKeyForThumbprint)?;
+            .ok_or_else(no_matching_key_error)?;
 
         sign_proof(
-            &signer,
+            &*signer,
             method,
             uri,
             Some(access_token.expose_secret()),
@@ -138,6 +146,18 @@ impl<Sgn: AsymmetricJwsSignerSelector> ResourceServerDPoP for ResourceDPoP<Sgn> 
         )
         .await
     }
+}
+
+/// No JWK thumbprint provided for proof.
+///
+/// This indicates a logic error; the caller should provide a thumbprint
+/// when `DPoP` is configured.
+fn no_thumbprint_error() -> Error {
+    Error::from(ErrorKind::Dpop).with_context("no JWK thumbprint provided for proof")
+}
+
+fn no_matching_key_error() -> Error {
+    Error::from(ErrorKind::Dpop).with_context("no matching key for the given thumbprint")
 }
 
 fn origin_from_uri(uri: &Uri) -> Origin {
@@ -148,13 +168,13 @@ fn origin_from_uri(uri: &Uri) -> Origin {
     )
 }
 
-async fn sign_proof<Sgn: AsymmetricJwsSigner>(
-    signer: &Sgn,
+async fn sign_proof(
+    signer: &dyn AsymmetricJwsSigner,
     htm: &Method,
     htu: &Uri,
     token: Option<&str>,
     nonce: Option<Arc<String>>,
-) -> Result<Option<SecretString>, JwsSerializationError<Sgn::Error>> {
+) -> Result<Option<SecretString>, Error> {
     #[derive(Debug, Clone, Serialize)]
     struct DPoPClaims<'a> {
         htm: &'a str,
@@ -168,7 +188,9 @@ async fn sign_proof<Sgn: AsymmetricJwsSigner>(
     let extra_claims = DPoPClaims {
         htm: htm.as_str(),
         htu: normalize_uri_for_dpop(htu)
-            .map_err(|source| JwsSerializationError::NormalizeUri { source })?
+            .map_err(|source| {
+                Error::new(ErrorKind::Dpop, source).with_context("normalizing URI for DPoP proof")
+            })?
             .to_string(),
         ath: token.map(hash_access_token_for_dpop),
         nonce,
@@ -213,7 +235,7 @@ pub fn hash_access_token_for_dpop(access_token: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{borrow::Cow, convert::Infallible};
+    use std::borrow::Cow;
 
     use base64::prelude::*;
 
@@ -224,6 +246,7 @@ mod tests {
         },
         dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
         jwk::{EcPublicKey, PublicJwk},
+        platform::MaybeSendBoxFuture,
     };
 
     fn mock_public_jwk() -> PublicJwk {
@@ -244,15 +267,14 @@ mod tests {
     }
 
     impl JwsSigner for MockAsymmetricJwsSigner {
-        type Error = Infallible;
         fn jws_algorithm(&self) -> Cow<'_, str> {
             "ES256".into()
         }
         fn key_id(&self) -> Option<Cow<'_, str>> {
             None
         }
-        async fn sign(&self, _input: &[u8]) -> Result<Vec<u8>, Infallible> {
-            Ok(vec![0xCA, 0xFE])
+        fn sign<'a>(&'a self, _input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+            Box::pin(async { Ok(vec![0xCA, 0xFE]) })
         }
     }
 
@@ -263,16 +285,22 @@ mod tests {
     }
 
     impl JwsSignerSelector for MockAsymmetricJwsSigner {
-        type Signer = Self;
-        fn select_signer(&self) -> Self {
-            self.clone()
+        fn select_signer(&self) -> Arc<dyn JwsSigner> {
+            self.select_asymmetric_signer()
         }
     }
 
     impl AsymmetricJwsSignerSelector for MockAsymmetricJwsSigner {
-        fn select_signer_by_thumbprint(&self, thumbprint: &str) -> Option<Self::Signer> {
+        fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
+            Arc::new(self.clone())
+        }
+
+        fn select_signer_by_thumbprint(
+            &self,
+            thumbprint: &str,
+        ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
             if thumbprint == self.jwk.thumbprint() {
-                Some(self.clone())
+                Some(Arc::new(self.clone()))
             } else {
                 None
             }
@@ -365,8 +393,9 @@ mod tests {
         let dpop = DPoP::builder().signer(signer).build();
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
 
-        let result = dpop.proof(&Method::POST, &uri, None).await;
-        assert!(matches!(result, Err(JwsSerializationError::NoThumbprint)));
+        let err = dpop.proof(&Method::POST, &uri, None).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Dpop);
+        assert!(err.to_string().contains("no JWK thumbprint"));
     }
 
     #[tokio::test]
@@ -377,13 +406,12 @@ mod tests {
         let dpop = DPoP::builder().signer(signer).build();
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
 
-        let result = dpop
+        let err = dpop
             .proof(&Method::POST, &uri, Some("wrong-thumbprint"))
-            .await;
-        assert!(matches!(
-            result,
-            Err(JwsSerializationError::NoMatchingKeyForThumbprint)
-        ));
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Dpop);
+        assert!(err.to_string().contains("no matching key"));
     }
 
     #[tokio::test]
