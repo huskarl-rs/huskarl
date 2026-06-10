@@ -1,9 +1,11 @@
 use base64::prelude::*;
-use http::{HeaderMap, Uri, header::InvalidHeaderValue};
-use snafu::prelude::*;
+use http::{HeaderMap, Uri};
 
 use crate::{
     client_auth::{AuthenticationParams, ClientAuthentication},
+    error::{Error, ErrorKind},
+    legacy_error::from_legacy,
+    platform::MaybeSendBoxFuture,
     secrets::{Secret, SecretString},
 };
 
@@ -25,7 +27,7 @@ impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
     fn basic_authentication_params<'a>(
         client_id: &'a str,
         client_secret: &SecretString,
-    ) -> Result<AuthenticationParams<'a>, ClientSecretError<Sec::Error>> {
+    ) -> Result<AuthenticationParams<'a>, Error> {
         use form_urlencoded::byte_serialize;
         let client_id: String = byte_serialize(client_id.as_bytes()).collect();
         let client_secret: String =
@@ -37,7 +39,10 @@ impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
         let mut headers = HeaderMap::new();
         headers.insert(
             http::header::AUTHORIZATION,
-            auth_header.parse().context(InvalidHeaderSnafu)?,
+            auth_header.parse().map_err(|source| {
+                Error::new(ErrorKind::Auth, source)
+                    .with_context("building Basic Authorization header")
+            })?,
         );
 
         Ok(AuthenticationParams::builder().headers(headers).build())
@@ -57,56 +62,32 @@ impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
 }
 
 impl<Sec: Secret<Output = SecretString>> ClientAuthentication for ClientSecret<Sec> {
-    type Error = ClientSecretError<Sec::Error>;
-
-    async fn authentication_params<'a>(
+    fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
         _issuer: Option<&'a str>,
         _token_endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
-    ) -> Result<super::AuthenticationParams<'a>, Self::Error> {
-        let client_secret = self
-            .client_secret
-            .get_secret_value()
-            .await
-            .context(FetchSecretSnafu)?;
+    ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
+        Box::pin(async move {
+            let client_secret = self
+                .client_secret
+                .get_secret_value()
+                .await
+                .map_err(|source| {
+                    from_legacy(ErrorKind::Auth, source).with_context("fetching client secret")
+                })?;
 
-        match select_method(allowed_methods) {
-            ClientSecretMethod::Basic => {
-                Self::basic_authentication_params(client_id, &client_secret.value)
+            match select_method(allowed_methods) {
+                ClientSecretMethod::Basic => {
+                    Self::basic_authentication_params(client_id, &client_secret.value)
+                }
+                ClientSecretMethod::Post => Ok(Self::post_authentication_params(
+                    client_id,
+                    client_secret.value,
+                )),
             }
-            ClientSecretMethod::Post => Ok(Self::post_authentication_params(
-                client_id,
-                client_secret.value,
-            )),
-        }
-    }
-}
-
-/// Errors that may occur when calculating client credentials.
-#[derive(Debug, Snafu)]
-pub enum ClientSecretError<SecErr: crate::Error> {
-    /// There was an error when fetching a secret.
-    #[snafu(display("Error fetching secret"))]
-    FetchSecret {
-        /// The underlying error.
-        source: SecErr,
-    },
-    /// The calculated header value was invalid.
-    #[snafu(display("Invalid header value"))]
-    InvalidHeader {
-        /// The underlying error.
-        source: InvalidHeaderValue,
-    },
-}
-
-impl<SecErr: crate::Error + 'static> crate::Error for ClientSecretError<SecErr> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            ClientSecretError::FetchSecret { source } => source.is_retryable(),
-            ClientSecretError::InvalidHeader { .. } => false,
-        }
+        })
     }
 }
 

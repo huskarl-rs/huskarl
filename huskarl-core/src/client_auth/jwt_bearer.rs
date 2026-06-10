@@ -5,8 +5,11 @@ use http::Uri;
 
 use crate::{
     client_auth::{AuthenticationParams, ClientAuthentication},
-    crypto::signer::{JwsSigner, JwsSignerSelector},
-    jwt::{JwsSerializationError, Jwt},
+    crypto::signer::JwsSignerSelector,
+    error::{Error, ErrorKind},
+    jwt::Jwt,
+    legacy_error::from_legacy,
+    platform::MaybeSendBoxFuture,
 };
 
 /// JWT Authentication (RFC 7521 / 7523 / `OpenID` Connect Core 1.0 §9)
@@ -86,38 +89,46 @@ pub enum Audience {
 }
 
 impl<Sgn: JwsSignerSelector> ClientAuthentication for JwtBearer<Sgn> {
-    type Error = JwsSerializationError<<Sgn::Signer as JwsSigner>::Error>;
-
-    async fn authentication_params<'a>(
+    fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
         token_endpoint: &'a Uri,
         _allowed_methods: Option<&'a [String]>,
-    ) -> Result<super::AuthenticationParams<'a>, Self::Error> {
-        let audience = match &self.audience {
-            Audience::PreferIssuer => {
-                issuer.map_or_else(|| token_endpoint.to_string(), ToString::to_string)
-            }
-            Audience::PreferTokenEndpoint => token_endpoint.to_string(),
-            Audience::Custom(custom) => custom.to_string(),
-        };
+    ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
+        Box::pin(async move {
+            let audience = match &self.audience {
+                Audience::PreferIssuer => {
+                    issuer.map_or_else(|| token_endpoint.to_string(), ToString::to_string)
+                }
+                Audience::PreferTokenEndpoint => token_endpoint.to_string(),
+                Audience::Custom(custom) => custom.to_string(),
+            };
 
-        let jwt = Jwt::builder()
-            .audience(audience)
-            .issuer(client_id)
-            .subject(self.subject.as_deref().unwrap_or(client_id))
-            .issued_now_expires_after(self.expires_after)
-            .claims(())
-            .build();
+            let jwt = Jwt::builder()
+                .audience(audience)
+                .issuer(client_id)
+                .subject(self.subject.as_deref().unwrap_or(client_id))
+                .issued_now_expires_after(self.expires_after)
+                .claims(())
+                .build();
 
-        Ok(AuthenticationParams::builder()
-            .form_params(bon::map! {
-                "client_id": client_id,
-                "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
-                "client_assertion": jwt.to_jws_compact(&self.signer.select_signer()).await?
-            })
-            .build())
+            let assertion = jwt
+                .to_jws_compact(&self.signer.select_signer())
+                .await
+                .map_err(|source| {
+                    from_legacy(ErrorKind::Auth, source)
+                        .with_context("signing client assertion JWT")
+                })?;
+
+            Ok(AuthenticationParams::builder()
+                .form_params(bon::map! {
+                    "client_id": client_id,
+                    "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+                    "client_assertion": assertion
+                })
+                .build())
+        })
     }
 }
 

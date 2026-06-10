@@ -50,3 +50,15 @@ impl Error for InvalidUri {
         false
     }
 }
+
+pub(crate) fn from_legacy<E: Error>(
+    fallback: crate::error::ErrorKind,
+    source: E,
+) -> crate::error::Error {
+    let kind = if source.is_retryable() {
+        crate::error::ErrorKind::Transport { retryable: true }
+    } else {
+        fallback
+    };
+    crate::error::Error::new(kind, source)
+}

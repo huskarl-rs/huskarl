@@ -16,23 +16,34 @@ mod no_auth;
 use std::sync::Arc;
 
 use bon::Builder;
-pub use client_secret::{ClientSecret, ClientSecretError};
+pub use client_secret::ClientSecret;
 pub use form_value::FormValue;
 use http::{HeaderMap, Uri};
 pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder};
 pub use no_auth::NoAuth;
 
-use crate::platform::{MaybeSend, MaybeSendSync};
+use crate::{
+    error::Error,
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
+};
 
 /// Abstracts over client authentication types.
 ///
 /// The client authentication provided here is mixed in with parameters
 /// specific to the grant in use when authenticating to the authorization
 /// server.
-pub trait ClientAuthentication: Clone + MaybeSendSync {
-    /// The error type that may be returned during authentication.
-    type Error: crate::Error;
-
+///
+/// This trait is dyn-capable: grants store it as
+/// `Arc<dyn ClientAuthentication>`.
+///
+/// # Implementing
+///
+/// Write the method body as `Box::pin(async move { ... })`. Failures to
+/// construct the credentials classify as
+/// [`ErrorKind::Auth`](crate::error::ErrorKind::Auth); transient failures of
+/// an underlying fetch (e.g. a secret store) as
+/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport).
+pub trait ClientAuthentication: MaybeSendSync {
     /// Returns the authentication parameters for the token request.
     fn authentication_params<'a>(
         &'a self,
@@ -40,22 +51,42 @@ pub trait ClientAuthentication: Clone + MaybeSendSync {
         issuer: Option<&'a str>,
         token_endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
-    ) -> impl Future<Output = Result<AuthenticationParams<'a>, Self::Error>> + MaybeSend;
+    ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>>;
 }
 
-impl<Auth: ClientAuthentication> ClientAuthentication for Arc<Auth> {
-    type Error = Auth::Error;
-
-    async fn authentication_params<'a>(
+impl<T: ClientAuthentication + ?Sized> ClientAuthentication for &T {
+    fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
         token_endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
-    ) -> Result<AuthenticationParams<'a>, Self::Error> {
-        self.as_ref()
-            .authentication_params(client_id, issuer, token_endpoint, allowed_methods)
-            .await
+    ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
+        (**self).authentication_params(client_id, issuer, token_endpoint, allowed_methods)
+    }
+}
+
+impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Box<T> {
+    fn authentication_params<'a>(
+        &'a self,
+        client_id: &'a str,
+        issuer: Option<&'a str>,
+        token_endpoint: &'a Uri,
+        allowed_methods: Option<&'a [String]>,
+    ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
+        (**self).authentication_params(client_id, issuer, token_endpoint, allowed_methods)
+    }
+}
+
+impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Arc<T> {
+    fn authentication_params<'a>(
+        &'a self,
+        client_id: &'a str,
+        issuer: Option<&'a str>,
+        token_endpoint: &'a Uri,
+        allowed_methods: Option<&'a [String]>,
+    ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
+        (**self).authentication_params(client_id, issuer, token_endpoint, allowed_methods)
     }
 }
 
@@ -67,4 +98,21 @@ pub struct AuthenticationParams<'a> {
     pub headers: Option<HeaderMap>,
     /// Additional form parameters to include in the request body.
     pub form_params: Option<Vec<(&'static str, FormValue<'a>)>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn erased_authentication_dispatches() {
+        let auth: Arc<dyn ClientAuthentication> = Arc::new(NoAuth);
+        let uri = Uri::from_static("https://as.example/token");
+        let params = auth
+            .authentication_params("my-client", None, &uri, None)
+            .await
+            .expect("no_auth never fails");
+        let form = params.form_params.expect("client_id form param");
+        assert!(form.iter().any(|(k, _)| *k == "client_id"));
+    }
 }
