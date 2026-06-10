@@ -85,9 +85,16 @@ impl Error {
 
     /// Attach human-readable context about the failed operation (for example
     /// the endpoint being called). Shown as a prefix in the `Display` output.
+    ///
+    /// Layers: calling this on an error that already has context prefixes the
+    /// existing context, so outer operations read first
+    /// (`"fetching client secret: reading secret file /run/secret: ..."`).
     #[must_use]
     pub fn with_context(mut self, context: impl Into<String>) -> Self {
-        self.context = Some(context.into());
+        self.context = Some(match self.context {
+            Some(existing) => format!("{}: {existing}", context.into()),
+            None => context.into(),
+        });
         self
     }
 
@@ -224,6 +231,17 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "fetching https://as.example/jwks.json: transport failure"
+        );
+    }
+
+    #[test]
+    fn context_layers_outermost_first() {
+        let err = Error::from(ErrorKind::Config)
+            .with_context("reading secret file /run/secret")
+            .with_context("fetching client secret");
+        assert_eq!(
+            err.to_string(),
+            "fetching client secret: reading secret file /run/secret: invalid configuration"
         );
     }
 

@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Burn JTI after all other JWT checks have passed.
  - Adds in-memory JTI uniqueness checker (especially for tests).
  - Add concrete error type (to replace trait).
- - Make HttpClient, ClientAuthentication dyn traits.
+ - Make HttpClient, ClientAuthentication, secrets dyn traits.
 
 ## [0.6.4] - 2026-05-29
 

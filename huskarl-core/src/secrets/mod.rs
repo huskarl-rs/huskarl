@@ -9,15 +9,20 @@ mod providers;
 
 pub mod encodings;
 
+use std::sync::Arc;
+
 pub use cached::CachedSecret;
-pub use encodings::{DecodingError, SecretDecoder};
+pub use encodings::SecretDecoder;
 pub use providers::EnvVarSecret;
 #[cfg(feature = "fs")]
-pub use providers::{FileSecret, FileSecretError};
+pub use providers::FileSecret;
 use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
 
-use crate::platform::{MaybeSend, MaybeSendSync};
+use crate::{
+    error::Error,
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
+};
 
 /// A secret string value that avoids accidental exposure in logs and debug output.
 #[derive(Debug, Clone)]
@@ -84,17 +89,54 @@ pub struct SecretOutput<T: Clone> {
 }
 
 /// Trait for secret retrieval.
-pub trait Secret: Clone + MaybeSendSync {
-    /// The error type returned by this secret source's operations.
-    type Error: crate::Error;
-
+///
+/// This trait is dyn-capable (per output type): consumers store it as
+/// `Arc<dyn Secret<Output = SecretString>>` and the like.
+///
+/// # Implementing
+///
+/// Write the method body as `Box::pin(async move { ... })`. Transient fetch
+/// failures (a vault timeout, `WouldBlock`) classify as
+/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport) with
+/// `retryable: true`; persistent ones (missing file, bad permissions, bad
+/// data) as [`ErrorKind::Config`](crate::error::ErrorKind::Config).
+pub trait Secret: MaybeSendSync {
     /// The type of secret this source provides.
     type Output: Clone + MaybeSendSync;
 
     /// Retrieves the secret value.
+    fn get_secret_value(&self)
+    -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>>;
+}
+
+impl<T: Secret + ?Sized> Secret for &T {
+    type Output = T::Output;
+
     fn get_secret_value(
         &self,
-    ) -> impl Future<Output = Result<SecretOutput<Self::Output>, Self::Error>> + MaybeSend;
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+        (**self).get_secret_value()
+    }
+}
+
+impl<T: Secret + ?Sized> Secret for Box<T> {
+    type Output = T::Output;
+
+    fn get_secret_value(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+        (**self).get_secret_value()
+    }
+}
+
+impl<T: Secret + ?Sized> Secret for Arc<T> {
+    type Output = T::Output;
+
+    fn get_secret_value(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+        (**self).get_secret_value()
+    }
 }
 
 /// A wrapper that adds an identity to an existing secret.
@@ -116,32 +158,35 @@ impl<S: Secret> WithIdentity<S> {
 
 impl<S: Secret> Secret for WithIdentity<S> {
     type Output = S::Output;
-    type Error = S::Error;
 
-    async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
-        let mut output = self.inner.get_secret_value().await?;
-        output.identity = Some(self.identity.clone());
-        Ok(output)
+    fn get_secret_value(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+        Box::pin(async move {
+            let mut output = self.inner.get_secret_value().await?;
+            output.identity = Some(self.identity.clone());
+            Ok(output)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use super::*;
 
-    #[derive(Clone)]
     struct MockSecret(SecretString);
 
     impl Secret for MockSecret {
         type Output = SecretString;
-        type Error = Infallible;
 
-        async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
-            Ok(SecretOutput {
-                value: self.0.clone(),
-                identity: None,
+        fn get_secret_value(
+            &self,
+        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+            Box::pin(async move {
+                Ok(SecretOutput {
+                    value: self.0.clone(),
+                    identity: None,
+                })
             })
         }
     }
@@ -154,5 +199,13 @@ mod tests {
         let output = with_id.get_secret_value().await.unwrap();
         assert_eq!(output.value.expose_secret(), "secret");
         assert_eq!(output.identity.unwrap(), "my-id");
+    }
+
+    #[tokio::test]
+    async fn erased_secret_dispatches() {
+        let secret: Arc<dyn Secret<Output = SecretString>> =
+            Arc::new(MockSecret(SecretString::new("erased")));
+        let output = secret.get_secret_value().await.unwrap();
+        assert_eq!(output.value.expose_secret(), "erased");
     }
 }

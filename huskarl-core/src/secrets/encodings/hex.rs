@@ -1,8 +1,6 @@
-use snafu::prelude::*;
-
-use crate::secrets::{
-    DecodingError, SecretBytes, SecretDecoder,
-    encodings::{InvalidHexSnafu, InvalidUtf8Snafu},
+use crate::{
+    error::{Error, ErrorKind},
+    secrets::{SecretBytes, SecretDecoder},
 };
 
 /// Decodes hex-encoded text into `SecretBox<[u8]>`.
@@ -15,9 +13,11 @@ pub struct HexEncoding;
 impl SecretDecoder for HexEncoding {
     type Output = SecretBytes;
 
-    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, DecodingError> {
-        let s = std::str::from_utf8(bytes).context(InvalidUtf8Snafu)?;
-        let decoded = hex::decode(s.trim()).context(InvalidHexSnafu)?;
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
+        let s =
+            std::str::from_utf8(bytes).map_err(|source| Error::new(ErrorKind::Config, source))?;
+        let decoded =
+            hex::decode(s.trim()).map_err(|source| Error::new(ErrorKind::Config, source))?;
         Ok(SecretBytes::new(decoded))
     }
 }

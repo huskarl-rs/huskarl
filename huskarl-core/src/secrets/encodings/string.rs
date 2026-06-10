@@ -1,6 +1,7 @@
-use snafu::prelude::*;
-
-use crate::secrets::{DecodingError, SecretDecoder, SecretString, encodings::InvalidUtf8Snafu};
+use crate::{
+    error::{Error, ErrorKind},
+    secrets::{SecretDecoder, SecretString},
+};
 
 /// Interprets bytes as UTF-8 text, returning a `SecretString`.
 ///
@@ -11,8 +12,9 @@ pub struct StringEncoding;
 impl SecretDecoder for StringEncoding {
     type Output = SecretString;
 
-    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, DecodingError> {
-        let s = std::str::from_utf8(bytes).context(InvalidUtf8Snafu)?;
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
+        let s =
+            std::str::from_utf8(bytes).map_err(|source| Error::new(ErrorKind::Config, source))?;
         Ok(SecretString::new(s.trim()))
     }
 }

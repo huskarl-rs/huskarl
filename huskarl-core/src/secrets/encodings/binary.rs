@@ -1,4 +1,7 @@
-use crate::secrets::{DecodingError, SecretBytes, SecretDecoder};
+use crate::{
+    error::Error,
+    secrets::{SecretBytes, SecretDecoder},
+};
 
 /// Uses raw bytes directly, returning `SecretBytes`.
 ///
@@ -9,7 +12,7 @@ pub struct BinaryEncoding;
 impl SecretDecoder for BinaryEncoding {
     type Output = SecretBytes;
 
-    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, DecodingError> {
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
         Ok(SecretBytes::new(bytes.to_vec()))
     }
 }

@@ -1,25 +1,32 @@
+use std::sync::Arc;
+
 use base64::prelude::*;
 use http::{HeaderMap, Uri};
 
 use crate::{
     client_auth::{AuthenticationParams, ClientAuthentication},
     error::{Error, ErrorKind},
-    legacy_error::from_legacy,
     platform::MaybeSendBoxFuture,
     secrets::{Secret, SecretString},
 };
 
 /// Client Secret authentication (RFC 6749 §2.3.1)
-#[derive(Debug, Clone)]
-pub struct ClientSecret<Sec: Secret<Output = SecretString>> {
-    client_secret: Sec,
+#[derive(Clone)]
+pub struct ClientSecret {
+    client_secret: Arc<dyn Secret<Output = SecretString>>,
 }
 
-impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
+impl std::fmt::Debug for ClientSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientSecret").finish_non_exhaustive()
+    }
+}
+
+impl ClientSecret {
     /// Creates a client secret which uses the underlying secret.
-    pub fn new(secret: Sec) -> ClientSecret<Sec> {
+    pub fn new(secret: impl Secret<Output = SecretString> + 'static) -> ClientSecret {
         ClientSecret {
-            client_secret: secret,
+            client_secret: Arc::new(secret),
         }
     }
 
@@ -61,7 +68,7 @@ impl<Sec: Secret<Output = SecretString>> ClientSecret<Sec> {
     }
 }
 
-impl<Sec: Secret<Output = SecretString>> ClientAuthentication for ClientSecret<Sec> {
+impl ClientAuthentication for ClientSecret {
     fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
@@ -74,9 +81,7 @@ impl<Sec: Secret<Output = SecretString>> ClientAuthentication for ClientSecret<S
                 .client_secret
                 .get_secret_value()
                 .await
-                .map_err(|source| {
-                    from_legacy(ErrorKind::Auth, source).with_context("fetching client secret")
-                })?;
+                .map_err(|err| err.with_context("fetching client secret"))?;
 
             match select_method(allowed_methods) {
                 ClientSecretMethod::Basic => {
@@ -126,25 +131,25 @@ fn select_method(allowed_methods: Option<&[String]>) -> ClientSecretMethod {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use super::*;
     use crate::{
         client_auth::ClientAuthentication,
         secrets::{Secret, SecretOutput, SecretString},
     };
 
-    #[derive(Clone)]
     struct MockSecret(SecretString);
 
     impl Secret for MockSecret {
         type Output = SecretString;
-        type Error = Infallible;
 
-        async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
-            Ok(SecretOutput {
-                value: self.0.clone(),
-                identity: None,
+        fn get_secret_value(
+            &self,
+        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+            Box::pin(async move {
+                Ok(SecretOutput {
+                    value: self.0.clone(),
+                    identity: None,
+                })
             })
         }
     }
