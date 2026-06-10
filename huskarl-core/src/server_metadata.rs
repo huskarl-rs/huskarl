@@ -6,9 +6,12 @@
 use bon::bon;
 use http::{HeaderMap, Uri};
 use serde::Deserialize;
-use snafu::prelude::*;
 
-use crate::{EndpointUrl, http::HttpClient};
+use crate::{
+    EndpointUrl,
+    error::{Error, ErrorKind},
+    http::HttpClient,
+};
 
 /// mTLS endpoint aliases from AS discovery metadata (RFC 8705 §5.1).
 #[derive(Debug, Clone, Deserialize, bon::Builder)]
@@ -169,10 +172,13 @@ impl AuthorizationServerMetadata {
         #[builder(into, default = "/.well-known/oauth-authorization-server")]
         well_known_path: String,
         #[builder(default = false)] use_legacy_transformation: bool,
-    ) -> Result<Self, AuthorizationServerMetadataFetchError<C::Error, C::ResponseError>> {
+    ) -> Result<Self, Error> {
         let configuration_endpoint =
             add_issuer_to_known_path(&issuer, &well_known_path, use_legacy_transformation)
-                .context(BadIssuerSnafu)?;
+                .map_err(|source| {
+                    Error::new(ErrorKind::Config, source)
+                        .with_context(format!("invalid issuer {issuer:?}"))
+                })?;
 
         let metadata: Self = crate::http::get(
             http_client,
@@ -180,17 +186,18 @@ impl AuthorizationServerMetadata {
             HeaderMap::new(),
         )
         .await
-        .context(GetSnafu {
-            url: configuration_endpoint,
+        .map_err(|err| {
+            err.with_context(format!(
+                "fetching authorization server metadata from {configuration_endpoint}"
+            ))
         })?;
 
-        ensure!(
-            metadata.issuer == issuer,
-            IssuerMismatchSnafu {
-                expected: issuer,
-                actual: metadata.issuer.clone(),
-            }
-        );
+        if metadata.issuer != issuer {
+            return Err(Error::from(ErrorKind::Protocol).with_context(format!(
+                "issuer mismatch (RFC 8414 §3.3): expected {issuer:?}, got {:?}",
+                metadata.issuer
+            )));
+        }
 
         Ok(metadata)
     }
@@ -212,35 +219,6 @@ impl AuthorizationServerMetadata {
             .well_known_path("/.well-known/openid-configuration")
             .use_legacy_transformation(true)
     }
-}
-
-/// Errors that may occur when attempting to fetch authorization server metadata.
-#[derive(Debug, Snafu)]
-pub enum AuthorizationServerMetadataFetchError<
-    HttpErr: crate::Error + 'static,
-    HttpRespErr: crate::Error + 'static,
-> {
-    /// Error when parsing the issuer as a URL.
-    BadIssuer {
-        /// The underlying error.
-        source: http::Error,
-    },
-    /// Error when attempting to make the HTTP request.
-    #[snafu(display("Error making HTTP request: {}", url))]
-    Get {
-        /// The URL of the HTTP request.
-        url: http::Uri,
-        /// The underlying error.
-        source: crate::http::GetError<HttpErr, HttpRespErr>,
-    },
-    /// The `issuer` in the metadata document does not match the issuer used to fetch it (RFC 8414 §3.3).
-    #[snafu(display("Issuer mismatch: expected {:?}, got {:?}", expected, actual))]
-    IssuerMismatch {
-        /// The issuer used to fetch the metadata.
-        expected: String,
-        /// The issuer returned in the metadata document.
-        actual: String,
-    },
 }
 
 fn default_response_modes_supported() -> Vec<String> {

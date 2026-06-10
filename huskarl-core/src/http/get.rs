@@ -3,55 +3,43 @@ use http::{HeaderMap, StatusCode};
 use serde::de::DeserializeOwned;
 use snafu::prelude::*;
 
-use crate::http::{HttpClient, HttpResponse};
+use crate::{
+    error::{Error, ErrorKind},
+    http::HttpClient,
+};
 
+/// Source error for non-2xx responses; the kind-level classification is
+/// [`ErrorKind::Protocol`].
 #[derive(Debug, Snafu)]
-pub enum GetError<HttpReqErr: crate::Error + 'static, HttpRespErr: crate::Error + 'static> {
-    Request {
-        source: HttpReqErr,
-    },
-    Response {
-        source: HttpRespErr,
-    },
-    Deserialize {
-        source: serde_json::Error,
-    },
-    #[snafu(display("Bad status: {}", status))]
-    BadStatus {
-        status: StatusCode,
-        body: Vec<u8>,
-    },
+#[snafu(display("bad status: {status}"))]
+pub(crate) struct BadStatusError {
+    status: StatusCode,
+    body: Bytes,
 }
 
-impl<HttpReqErr: crate::Error, HttpRespErr: crate::Error> crate::Error
-    for GetError<HttpReqErr, HttpRespErr>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            GetError::Request { source } => source.is_retryable(),
-            GetError::Response { source } => source.is_retryable(),
-            GetError::Deserialize { .. } | GetError::BadStatus { .. } => false,
-        }
-    }
-}
-
-pub(crate) async fn get<C: HttpClient, T: DeserializeOwned>(
-    http_client: &C,
+pub(crate) async fn get<T: DeserializeOwned>(
+    http_client: &dyn HttpClient,
     uri: http::Uri,
     headers: HeaderMap,
-) -> Result<T, GetError<C::Error, C::ResponseError>> {
+) -> Result<T, Error> {
     let (mut parts, ()) = http::Request::new(()).into_parts();
     parts.headers = headers;
     parts.uri = uri;
     let request = http::Request::from_parts(parts, Bytes::new());
 
-    let response = http_client.execute(request).await.context(RequestSnafu)?;
-    let status = response.status();
-    let body = response.body().await.context(ResponseSnafu)?;
+    let response = http_client.execute(request).await?;
 
-    if status.is_success() {
-        Ok(serde_json::from_slice(&body).context(DeserializeSnafu)?)
+    if response.status.is_success() {
+        serde_json::from_slice(&response.body)
+            .map_err(|source| Error::new(ErrorKind::Protocol, source))
     } else {
-        BadStatusSnafu { status, body }.fail()
+        Err(Error::new(
+            ErrorKind::Protocol,
+            BadStatusSnafu {
+                status: response.status,
+                body: response.body,
+            }
+            .build(),
+        ))
     }
 }

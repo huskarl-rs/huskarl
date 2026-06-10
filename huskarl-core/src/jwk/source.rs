@@ -1,6 +1,6 @@
 use std::{pin::Pin, sync::Arc};
 
-use bon::Builder;
+use bon::bon;
 use http::HeaderMap;
 
 use crate::{
@@ -24,13 +24,30 @@ use crate::{
 ///
 /// If you need a custom stack — for example to mix a JWKS source with KMS or enclave keys —
 /// compose the lower-level types directly and apply [`RetryingVerifier`] once at the top.
-#[derive(Builder, Debug, Clone)]
-pub struct JwksSource<C: HttpClient + Clone + 'static> {
+#[derive(Clone)]
+pub struct JwksSource {
     /// The HTTP client used to fetch the JWKS.
-    http_client: C,
+    http_client: Arc<dyn HttpClient>,
 }
 
-impl<C: HttpClient + Clone + 'static> JwsVerifierFactory for JwksSource<C> {
+#[bon]
+impl JwksSource {
+    /// Creates a new [`JwksSource`].
+    #[builder]
+    pub fn new(http_client: impl HttpClient + 'static) -> Self {
+        Self {
+            http_client: Arc::new(http_client),
+        }
+    }
+}
+
+impl std::fmt::Debug for JwksSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JwksSource").finish_non_exhaustive()
+    }
+}
+
+impl JwsVerifierFactory for JwksSource {
     fn build(
         &self,
         jwks_uri: Option<&EndpointUrl>,
@@ -50,10 +67,13 @@ impl<C: HttpClient + Clone + 'static> JwsVerifierFactory for JwksSource<C> {
                     let uri = uri.clone();
                     let platform = platform.clone();
                     Box::pin(async move {
-                        let jwks: Jwks =
-                            crate::http::get(&client, uri.as_uri().clone(), HeaderMap::new())
-                                .await
-                                .map_err(BoxedError::from_err)?;
+                        let jwks: Jwks = crate::http::get(
+                            client.as_ref(),
+                            uri.as_uri().clone(),
+                            HeaderMap::new(),
+                        )
+                        .await
+                        .map_err(BoxedError::from_err)?;
                         let public_jwks: PublicJwks = jwks.into();
 
                         MultiKeyVerifier::from_jwks(&public_jwks, platform.as_ref())

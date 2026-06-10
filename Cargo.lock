@@ -1129,7 +1129,6 @@ dependencies = [
  "httpmock",
  "metrics",
  "rand 0.10.1",
- "reqwest",
  "secrecy",
  "serde",
  "serde_json",
