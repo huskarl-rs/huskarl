@@ -1,13 +1,23 @@
 //! Cipher implementations for encryption and decryption.
 
 mod error;
+#[cfg(feature = "metrics")]
+mod metrics_decryptor;
 mod multi;
+mod refreshable;
+mod retrying;
+mod scheduled;
 
 use std::{borrow::Cow, sync::Arc};
 
 use bon::Builder;
-pub use error::UnsealError;
+pub use error::{DecryptError, UnsealError};
+#[cfg(feature = "metrics")]
+pub use metrics_decryptor::MetricsAeadDecryptor;
 pub use multi::{MultiKeyCipher, MultiKeyDecryptor};
+pub use refreshable::RefreshableCipher;
+pub use retrying::RetryingDecryptor;
+pub use scheduled::ScheduledRefreshCipher;
 
 use crate::{
     crypto::KeyMatchStrength,
@@ -123,8 +133,11 @@ pub trait AeadDecryptor: std::fmt::Debug + MaybeSendSync {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Crypto`] if the decryption operation fails or if
-    /// the data was tampered with.
+    /// Returns [`DecryptError::NoMatchingKey`] if no key matched the selection
+    /// criteria — decryption was not attempted, and
+    /// [`RetryingDecryptor`] treats this as grounds for a refresh and one
+    /// retry. All other failures — including authentication failure — classify
+    /// as [`ErrorKind::Crypto`] via [`DecryptError::Other`].
     fn decrypt<'a>(
         &'a self,
         cipher_match: Option<&'a CipherMatch<'a>>,
@@ -132,7 +145,20 @@ pub trait AeadDecryptor: std::fmt::Debug + MaybeSendSync {
         ciphertext: &'a [u8],
         tag: &'a [u8],
         aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>>;
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>>;
+
+    /// Attempts to refresh the decryptor's key material if warranted.
+    ///
+    /// This can be called manually to force a key reload (e.g. after a
+    /// rotation event), analogous to
+    /// [`JwsVerifier::try_refresh`](crate::crypto::verifier::JwsVerifier::try_refresh).
+    ///
+    /// Returns `true` if new key material was loaded (or was concurrently loaded by another
+    /// task). Returns `false` if no refresh was needed, attempted, or successful. The default
+    /// implementation always returns `false`.
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
 }
 
 /// Combined trait for types that can both encrypt and decrypt.
@@ -175,12 +201,18 @@ pub trait AeadUnsealer: AeadDecryptor {
     /// `cipher_match` carries optional key selection criteria from an out-of-band
     /// source (e.g. a cookie attribute or database column). Multi-key decryptors
     /// use this to select the correct key without trying all candidates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecryptError::NoMatchingKey`] if no key matched the selection
+    /// criteria; all other failures — malformed bundles, authentication
+    /// failure — classify as [`ErrorKind::Crypto`] via [`DecryptError::Other`].
     fn unseal<'a>(
         &'a self,
         cipher_match: Option<&'a CipherMatch<'a>>,
         bundle: &'a [u8],
         aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>>;
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>>;
 }
 
 macro_rules! forward_aead_encryptor {
@@ -223,8 +255,12 @@ macro_rules! forward_aead_decryptor {
                 ciphertext: &'a [u8],
                 tag: &'a [u8],
                 aad: &'a [u8],
-            ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+            ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
                 (**self).decrypt(cipher_match, nonce, ciphertext, tag, aad)
+            }
+
+            fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+                (**self).try_refresh()
             }
         }
     };
@@ -341,8 +377,12 @@ impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
         ciphertext: &'a [u8],
         tag: &'a [u8],
         aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         self.0.decrypt(cipher_match, nonce, ciphertext, tag, aad)
+    }
+
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        self.0.try_refresh()
     }
 }
 
@@ -352,17 +392,17 @@ impl<D: AeadDecryptor> AeadUnsealer for AeadV1Unsealer<D> {
         cipher_match: Option<&'a CipherMatch<'a>>,
         bundle: &'a [u8],
         aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         Box::pin(async move {
             if bundle.len() < 3 || bundle[0] != 0x01 {
-                return Err(invalid_bundle());
+                return Err(invalid_bundle().into());
             }
 
             let nonce_len = bundle[1] as usize;
             let tag_len = bundle[2] as usize;
 
             if bundle.len() < 3 + nonce_len + tag_len {
-                return Err(invalid_bundle());
+                return Err(invalid_bundle().into());
             }
 
             let nonce = &bundle[3..3 + nonce_len];
@@ -421,17 +461,22 @@ mod tests {
             ciphertext: &'a [u8],
             _tag: &'a [u8],
             _aad: &'a [u8],
-        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
             // Reverse the XOR
             Box::pin(async move { Ok(ciphertext.iter().map(|b| b ^ 0xFF).collect()) })
         }
     }
 
-    fn assert_invalid_bundle(err: &Error) {
-        assert_eq!(err.kind(), ErrorKind::Crypto);
-        assert_eq!(err.to_string(), "cryptographic operation failed");
+    fn assert_invalid_bundle(err: &DecryptError) {
+        let DecryptError::Other { source } = err else {
+            unreachable!("expected DecryptError::Other, got {err:?}");
+        };
+        assert_eq!(source.kind(), ErrorKind::Crypto);
+        assert_eq!(source.to_string(), "cryptographic operation failed");
         assert_eq!(
-            std::error::Error::source(err).expect("source").to_string(),
+            std::error::Error::source(source)
+                .expect("source")
+                .to_string(),
             "invalid bundle"
         );
     }

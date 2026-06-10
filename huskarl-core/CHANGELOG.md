@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Add `KeyMatch::strength_for` and `CipherMatch::strength_for` helpers so
    single-key verifier/decryptor implementations can delegate the standard
    algorithm/kid matching rules instead of re-implementing them.
+ - Add reloading support to ciphers.
 
 ## [0.6.4] - 2026-05-29
 
