@@ -1,11 +1,11 @@
 use std::{pin::Pin, sync::Arc};
 
 use crate::{
-    BoxedError,
     crypto::{
         refreshable::Refreshable,
         signer::{JwsSigner, JwsSignerSelector},
     },
+    error::Error,
     platform::{MaybeSendFuture, MaybeSendSync},
 };
 
@@ -42,10 +42,10 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> RefreshableSigner<S> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
-        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<S, BoxedError>>>>
+        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<S, Error>>>>
         + MaybeSendSync
         + 'static,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let refreshable = Refreshable::builder().factory(factory).build().await?;
         Ok(Self {
             inner: Arc::new(refreshable),
@@ -65,7 +65,7 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> RefreshableSigner<S> {
     /// # Errors
     ///
     /// Returns an error if the factory call fails.
-    pub async fn refresh(&self) -> Result<bool, crate::BoxedError> {
+    pub async fn refresh(&self) -> Result<bool, Error> {
         self.inner.refresh().await
     }
 }

@@ -1,6 +1,9 @@
-use crate::crypto::{
-    KeyMatchStrength,
-    verifier::{JwsVerifier, KeyMatch, VerifyError},
+use crate::{
+    crypto::{
+        KeyMatchStrength,
+        verifier::{JwsVerifier, KeyMatch, VerifyError},
+    },
+    platform::MaybeSendBoxFuture,
 };
 
 /// A [`JwsVerifier`] wrapper that records a `huskarl.jws.verify` counter for each
@@ -61,41 +64,41 @@ impl<V> MetricsJwsVerifier<V> {
 }
 
 impl<V: JwsVerifier> JwsVerifier for MetricsJwsVerifier<V> {
-    type Error = V::Error;
-
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
         self.inner.key_match(key_match)
     }
 
-    async fn verify(
-        &self,
-        input: &[u8],
-        signature: &[u8],
-        key_match: &KeyMatch<'_>,
-    ) -> Result<(), VerifyError<Self::Error>> {
-        let alg = key_match.alg.to_owned();
-        let result = self.inner.verify(input, signature, key_match).await;
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        Box::pin(async move {
+            let alg = key_match.alg.to_owned();
+            let result = self.inner.verify(input, signature, key_match).await;
 
-        let outcome = match &result {
-            Ok(()) => "success",
-            Err(VerifyError::NoMatchingKey) => "no_matching_key",
-            Err(VerifyError::AmbiguousKeyMatch) => "ambiguous_key",
-            Err(VerifyError::SignatureMismatch) => "signature_mismatch",
-            Err(VerifyError::Other { .. }) => "error",
-        };
+            let outcome = match &result {
+                Ok(()) => "success",
+                Err(VerifyError::NoMatchingKey) => "no_matching_key",
+                Err(VerifyError::AmbiguousKeyMatch) => "ambiguous_key",
+                Err(VerifyError::SignatureMismatch) => "signature_mismatch",
+                Err(VerifyError::Other { .. }) => "error",
+            };
 
-        ::metrics::counter!(
-            "huskarl.jws.verify",
-            "name" => self.name.clone(),
-            "alg" => alg,
-            "outcome" => outcome,
-        )
-        .increment(1);
+            ::metrics::counter!(
+                "huskarl.jws.verify",
+                "name" => self.name.clone(),
+                "alg" => alg,
+                "outcome" => outcome,
+            )
+            .increment(1);
 
-        result
+            result
+        })
     }
 
-    async fn try_refresh(&self) -> bool {
-        self.inner.try_refresh().await
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        self.inner.try_refresh()
     }
 }

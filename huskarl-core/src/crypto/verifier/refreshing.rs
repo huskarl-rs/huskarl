@@ -1,13 +1,13 @@
 use std::pin::Pin;
 
 use crate::{
-    BoxedError,
     crypto::{
         KeyMatchStrength,
         refreshable::ScheduledRefreshable,
         verifier::{JwsVerifier, KeyMatch, VerifyError},
     },
-    platform::{Duration, MaybeSendFuture, MaybeSendSync},
+    error::Error,
+    platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
 };
 
 /// A [`JwsVerifier`] that wraps a `ScheduledRefreshable` and gates
@@ -29,7 +29,7 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ScheduledRefreshVerifier<V> {
 }
 
 #[bon::bon]
-impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshVerifier<V> {
+impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
     /// Creates a new [`ScheduledRefreshVerifier`] using the given factory and policy parameters.
     ///
     /// The factory is called immediately to produce the initial verifier.
@@ -39,7 +39,7 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefres
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
-        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>>
+        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,
         /// The time-to-live for the cached verifier.
@@ -52,7 +52,7 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefres
         /// Acts as a hard ceiling on refresh frequency for abuse prevention.
         #[builder(default = Duration::from_mins(1))]
         min_refresh_interval: Duration,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let inner = ScheduledRefreshable::builder()
             .factory(factory)
             .ttl(ttl)
@@ -64,28 +64,26 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefres
     }
 }
 
-impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> JwsVerifier
-    for ScheduledRefreshVerifier<V>
-{
-    type Error = V::Error;
-
+impl<V: JwsVerifier + 'static> JwsVerifier for ScheduledRefreshVerifier<V> {
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
         self.inner.load().key_match(key_match)
     }
 
-    async fn verify(
-        &self,
-        input: &[u8],
-        signature: &[u8],
-        key_match: &KeyMatch<'_>,
-    ) -> Result<(), VerifyError<Self::Error>> {
-        self.inner
-            .load_full()
-            .verify(input, signature, key_match)
-            .await
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        Box::pin(async move {
+            self.inner
+                .load_full()
+                .verify(input, signature, key_match)
+                .await
+        })
     }
 
-    async fn try_refresh(&self) -> bool {
-        self.inner.try_refresh().await
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        Box::pin(self.inner.try_refresh())
     }
 }

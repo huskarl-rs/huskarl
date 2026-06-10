@@ -1,12 +1,19 @@
 use snafu::Snafu;
 
-use crate::BoxedError;
+use crate::error::Error;
 
 /// Errors that could occur during verification.
+///
+/// The variants are load-bearing control flow between verifier layers:
+/// [`NoMatchingKey`](Self::NoMatchingKey) drives the refresh-and-retry loop
+/// in [`RetryingVerifier`](super::RetryingVerifier) and candidate dispatch in
+/// [`MultiKeyVerifier`](super::MultiKeyVerifier), so this enum survives the
+/// dyn-first error collapse — only its `Other` source is the concrete
+/// [`Error`].
 #[non_exhaustive]
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
-pub enum VerifyError<E: crate::Error> {
+pub enum VerifyError {
     /// No key matched the requested algorithm/kid pair.
     #[snafu(display("no matching key"))]
     NoMatchingKey,
@@ -20,12 +27,14 @@ pub enum VerifyError<E: crate::Error> {
     #[snafu(transparent)]
     Other {
         /// The underlying error.
-        source: E,
+        source: Error,
     },
 }
 
-impl<E: crate::Error> crate::Error for VerifyError<E> {
-    fn is_retryable(&self) -> bool {
+impl VerifyError {
+    /// If true, a failed verification may succeed if retried.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
         match self {
             VerifyError::NoMatchingKey
             | VerifyError::AmbiguousKeyMatch
@@ -39,6 +48,9 @@ impl<E: crate::Error> crate::Error for VerifyError<E> {
 #[derive(Debug, Snafu)]
 pub enum CreateVerifierError {
     /// The key is unsupported.
+    ///
+    /// [`MultiKeyVerifier::from_jwks`](super::MultiKeyVerifier::from_jwks)
+    /// silently skips keys that fail with this variant.
     #[snafu(display("Unsupported key"))]
     UnsupportedKey,
     /// No JWKS URI was provided to the verifier factory.
@@ -48,15 +60,6 @@ pub enum CreateVerifierError {
     #[snafu(transparent)]
     Other {
         /// The underlying error.
-        source: BoxedError,
+        source: Error,
     },
-}
-
-impl crate::Error for CreateVerifierError {
-    fn is_retryable(&self) -> bool {
-        match self {
-            CreateVerifierError::UnsupportedKey | CreateVerifierError::MissingJwksUri => false,
-            CreateVerifierError::Other { source } => source.is_retryable(),
-        }
-    }
 }

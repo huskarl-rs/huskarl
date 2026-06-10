@@ -12,7 +12,7 @@ mod r#trait;
 pub use error::{CreateVerifierError, VerifyError};
 #[cfg(feature = "metrics")]
 pub use metrics_verifier::MetricsJwsVerifier;
-pub use multi::{MultiKeyVerifier, MultiKeyVerifierError};
+pub use multi::MultiKeyVerifier;
 pub use refreshing::ScheduledRefreshVerifier;
 pub use retrying::RetryingVerifier;
 pub use swappable::RefreshableVerifier;
@@ -21,6 +21,4 @@ pub use swappable::RefreshableVerifier;
 #[deprecated(note = "renamed to ScheduledRefreshVerifier")]
 pub type RefreshingVerifier<V> = ScheduledRefreshVerifier<V>;
 
-pub use r#trait::{
-    BoxedJwsVerifier, JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform, KeyMatch,
-};
+pub use r#trait::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform, KeyMatch};
