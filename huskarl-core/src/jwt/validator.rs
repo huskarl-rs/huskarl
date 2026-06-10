@@ -1,6 +1,6 @@
 //! Validation infrastructure for JWT tokens.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use bon::Builder;
 use serde::Deserialize;
@@ -9,10 +9,7 @@ use snafu::{ResultExt as _, Snafu, ensure};
 use crate::{
     BoxedError,
     crypto::verifier::{BoxedJwsVerifier, JwsVerifier, KeyMatch, VerifyError},
-    jwt::{
-        BoxedJtiUniquenessChecker, ConfirmationClaim, JtiUniquenessChecker, JwsParseError,
-        ParsedJws, parse_compact_jws,
-    },
+    jwt::{ConfirmationClaim, JtiUniquenessChecker, JwsParseError, ParsedJws, parse_compact_jws},
     platform::{Duration, SystemTime},
 };
 
@@ -88,7 +85,8 @@ pub struct JwtValidator {
     #[builder(default = 255)]
     max_jti_len: usize,
     /// Implementation of a JTI checker to check for uniqueness.
-    jti_checker: Option<BoxedJtiUniquenessChecker>,
+    #[builder(with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>)]
+    jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
     /// Maximum token age to validate against.
     max_token_age: Option<Duration>,
     #[builder(default)]
@@ -603,7 +601,7 @@ pub enum JwtValidationError {
     /// There was an internal failure when attempting to check for JTI uniqueness.
     JtiCheck {
         /// The underlying error.
-        source: BoxedError,
+        source: crate::error::Error,
     },
     /// The token is structurally valid but does not contain the required extra claims.
     ExtraClaims {
@@ -1179,11 +1177,7 @@ mod tests {
         fn check_and_mark_seen(
             &self,
             jti: &str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn crate::platform::MaybeSendFuture<Output = Result<bool, crate::BoxedError>> + '_,
-            >,
-        > {
+        ) -> crate::platform::MaybeSendBoxFuture<'_, Result<bool, crate::error::Error>> {
             let previously_seen = !self.seen.lock().unwrap().insert(jti.to_owned());
             Box::pin(async move { Ok(previously_seen) })
         }
@@ -1193,7 +1187,7 @@ mod tests {
     async fn temporally_invalid_token_does_not_burn_jti() {
         let validator = JwtValidator::builder()
             .verifier(BoxedJwsVerifier::new(MockVerifier))
-            .jti_checker(BoxedJtiUniquenessChecker::new(InMemoryJtiChecker::default()))
+            .jti_checker(InMemoryJtiChecker::default())
             .build();
 
         let now = SystemTime::now()
