@@ -5,18 +5,17 @@ mod binary;
 mod hex;
 mod string;
 
-use std::str::Utf8Error;
+use std::sync::Arc;
 
 pub use base64::Base64Encoding;
 pub use binary::BinaryEncoding;
 pub use hex::HexEncoding;
-use snafu::Snafu;
 pub use string::StringEncoding;
 
-use crate::platform::MaybeSendSync;
+use crate::{error::Error, platform::MaybeSendSync};
 
 /// Trait for decoding raw bytes into a typed secret.
-pub trait SecretDecoder: Clone + MaybeSendSync {
+pub trait SecretDecoder: MaybeSendSync {
     /// The type of secret this encoding produces.
     type Output: Clone + MaybeSendSync;
 
@@ -24,30 +23,31 @@ pub trait SecretDecoder: Clone + MaybeSendSync {
     ///
     /// # Errors
     ///
-    /// Returns an error if the bytes cannot be decoded (e.g., invalid UTF-8,
-    /// invalid hex characters).
-    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, DecodingError>;
+    /// Returns [`ErrorKind::Config`](crate::error::ErrorKind::Config) if the
+    /// bytes cannot be decoded (e.g., invalid UTF-8, invalid hex characters).
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error>;
 }
 
-/// Errors that can occur when decoding a secret.
-#[derive(Debug, Snafu)]
-pub enum DecodingError {
-    /// The bytes are not valid UTF-8.
-    #[snafu(display("Invalid UTF-8"))]
-    InvalidUtf8 {
-        /// The underlying error.
-        source: Utf8Error,
-    },
-    /// The string is not valid hexadecimal.
-    #[snafu(display("Invalid hex"))]
-    InvalidHex {
-        /// The underlying error.
-        source: ::hex::FromHexError,
-    },
-    /// The string is not valid base64.
-    #[snafu(display("Invalid base64"))]
-    InvalidBase64 {
-        /// The underlying error.
-        source: ::base64::DecodeError,
-    },
+impl<T: SecretDecoder + ?Sized> SecretDecoder for &T {
+    type Output = T::Output;
+
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
+        (**self).decode(bytes)
+    }
+}
+
+impl<T: SecretDecoder + ?Sized> SecretDecoder for Box<T> {
+    type Output = T::Output;
+
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
+        (**self).decode(bytes)
+    }
+}
+
+impl<T: SecretDecoder + ?Sized> SecretDecoder for Arc<T> {
+    type Output = T::Output;
+
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
+        (**self).decode(bytes)
+    }
 }

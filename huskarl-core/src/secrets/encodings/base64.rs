@@ -1,9 +1,8 @@
 use base64::prelude::*;
-use snafu::prelude::*;
 
-use crate::secrets::{
-    DecodingError, SecretBytes, SecretDecoder,
-    encodings::{InvalidBase64Snafu, InvalidUtf8Snafu},
+use crate::{
+    error::{Error, ErrorKind},
+    secrets::{SecretBytes, SecretDecoder},
 };
 
 /// Decodes base64-encoded text into `SecretBytes`.
@@ -16,11 +15,12 @@ pub struct Base64Encoding;
 impl SecretDecoder for Base64Encoding {
     type Output = SecretBytes;
 
-    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, DecodingError> {
-        let s = std::str::from_utf8(bytes).context(InvalidUtf8Snafu)?;
+    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
+        let s =
+            std::str::from_utf8(bytes).map_err(|source| Error::new(ErrorKind::Config, source))?;
         let decoded = BASE64_STANDARD
             .decode(s.trim())
-            .context(InvalidBase64Snafu)?;
+            .map_err(|source| Error::new(ErrorKind::Config, source))?;
         Ok(SecretBytes::new(decoded))
     }
 }

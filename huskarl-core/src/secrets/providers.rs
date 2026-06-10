@@ -1,12 +1,9 @@
-use std::{convert::Infallible, ffi::OsString};
-
-use snafu::prelude::*;
+use std::ffi::OsString;
 
 use crate::{
-    platform::MaybeSendSync,
-    secrets::{
-        DecodingError, Secret, SecretDecoder, SecretOutput, SecretString, encodings::StringEncoding,
-    },
+    error::{Error, ErrorKind},
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
+    secrets::{Secret, SecretDecoder, SecretOutput, SecretString, encodings::StringEncoding},
 };
 
 /// Retrieves secrets from environment variables with configurable encoding.
@@ -21,18 +18,26 @@ impl<O> EnvVarSecret<O> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the environment variable doesn't exist, or if the value
-    /// isn't valid UTF-8.
+    /// Returns [`ErrorKind::Config`] if the environment variable doesn't
+    /// exist, or if the value cannot be decoded.
     pub fn new<E: SecretDecoder<Output = O>>(
         var_name: impl Into<OsString>,
         encoding: &E,
-    ) -> Result<Self, EnvVarSecretError> {
+    ) -> Result<Self, Error> {
         let var_name = var_name.into();
 
-        let encoded_value = std::env::var(var_name.clone()).context(EnvAccessSnafu { var_name })?;
-        let value = encoding
-            .decode(encoded_value.as_bytes())
-            .context(DecodeSnafu)?;
+        let encoded_value = std::env::var(&var_name).map_err(|source| {
+            Error::new(ErrorKind::Config, source).with_context(format!(
+                "reading environment variable {}",
+                var_name.to_string_lossy()
+            ))
+        })?;
+        let value = encoding.decode(encoded_value.as_bytes()).map_err(|err| {
+            err.with_context(format!(
+                "decoding environment variable {}",
+                var_name.to_string_lossy()
+            ))
+        })?;
 
         Ok(Self { value })
     }
@@ -43,47 +48,25 @@ impl EnvVarSecret<SecretString> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the environment variable doesn't exist, or if the value
-    /// isn't valid UTF-8.
-    pub fn string(var_name: impl Into<OsString>) -> Result<Self, EnvVarSecretError> {
+    /// Returns [`ErrorKind::Config`] if the environment variable doesn't
+    /// exist, or if the value isn't valid UTF-8.
+    pub fn string(var_name: impl Into<OsString>) -> Result<Self, Error> {
         Self::new(var_name, &StringEncoding)
     }
 }
 
 impl<O: Clone + MaybeSendSync> Secret for EnvVarSecret<O> {
     type Output = O;
-    type Error = Infallible;
 
-    async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
-        Ok(SecretOutput {
-            value: self.value.clone(),
-            identity: None,
+    fn get_secret_value(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+        Box::pin(async move {
+            Ok(SecretOutput {
+                value: self.value.clone(),
+                identity: None,
+            })
         })
-    }
-}
-
-/// Errors that can occur when using [`EnvVarSecret`].
-#[derive(Debug, Snafu)]
-pub enum EnvVarSecretError {
-    /// The environment variable was not found or was not valid unicode.
-    #[snafu(display("Failed to read env variable '{}'", var_name.to_string_lossy()))]
-    EnvAccess {
-        /// The name of the environment variable that could not be accessed.
-        var_name: OsString,
-        /// The underlying error from the environment variable lookup.
-        source: std::env::VarError,
-    },
-    /// Failed to decode the secret.
-    #[snafu(display("Failed to decode secret"))]
-    Decode {
-        /// The encoding error.
-        source: DecodingError,
-    },
-}
-
-impl crate::Error for EnvVarSecretError {
-    fn is_retryable(&self) -> bool {
-        false
     }
 }
 
@@ -102,10 +85,10 @@ mod env_tests {
 mod file_secret {
     use std::path::PathBuf;
 
-    use snafu::prelude::*;
-
-    use crate::secrets::{
-        DecodingError, Secret, SecretDecoder, SecretOutput, encodings::StringEncoding,
+    use crate::{
+        error::{Error, ErrorKind},
+        platform::MaybeSendBoxFuture,
+        secrets::{Secret, SecretDecoder, SecretOutput, encodings::StringEncoding},
     };
 
     /// A secret read from a file on each access.
@@ -142,44 +125,31 @@ mod file_secret {
 
     impl<D: SecretDecoder> Secret for FileSecret<D> {
         type Output = D::Output;
-        type Error = FileSecretError;
 
-        async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
-            let bytes = tokio::fs::read(&self.path).await.context(ReadFileSnafu)?;
-            let value = self.decoder.decode(&bytes).context(FileDecodeSnafu)?;
-            Ok(SecretOutput {
-                value,
-                identity: None,
+        fn get_secret_value(
+            &self,
+        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+            Box::pin(async move {
+                let bytes = tokio::fs::read(&self.path).await.map_err(|source| {
+                    // Transient I/O conditions stay retryable; everything else
+                    // (missing file, permissions) is a configuration problem.
+                    let kind = match source.kind() {
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                            ErrorKind::Transport { retryable: true }
+                        }
+                        _ => ErrorKind::Config,
+                    };
+                    Error::new(kind, source)
+                        .with_context(format!("reading secret file {}", self.path.display()))
+                })?;
+                let value = self.decoder.decode(&bytes).map_err(|err| {
+                    err.with_context(format!("decoding secret file {}", self.path.display()))
+                })?;
+                Ok(SecretOutput {
+                    value,
+                    identity: None,
+                })
             })
-        }
-    }
-
-    /// Errors that can occur when using [`FileSecret`].
-    #[derive(Debug, Snafu)]
-    pub enum FileSecretError {
-        /// Failed to read the secret file.
-        #[snafu(display("Failed to read secret file"))]
-        ReadFile {
-            /// The underlying I/O error.
-            source: std::io::Error,
-        },
-        /// Failed to decode the file contents.
-        #[snafu(display("Failed to decode secret file contents"))]
-        FileDecode {
-            /// The decoding error.
-            source: DecodingError,
-        },
-    }
-
-    impl crate::Error for FileSecretError {
-        fn is_retryable(&self) -> bool {
-            match self {
-                Self::ReadFile { source } => matches!(
-                    source.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ),
-                Self::FileDecode { .. } => false,
-            }
         }
     }
 
@@ -198,8 +168,16 @@ mod file_secret {
             let output = secret.get_secret_value().await.unwrap();
             assert_eq!(output.value.expose_secret(), "my-secret");
         }
+
+        #[tokio::test]
+        async fn missing_file_is_config_error() {
+            let secret = FileSecret::string("/nonexistent/secret/path");
+            let err = secret.get_secret_value().await.unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::Config);
+            assert!(!err.is_retryable());
+        }
     }
 }
 
 #[cfg(feature = "fs")]
-pub use file_secret::{FileSecret, FileSecretError};
+pub use file_secret::FileSecret;

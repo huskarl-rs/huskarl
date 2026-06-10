@@ -4,7 +4,8 @@ use arc_swap::ArcSwapOption;
 use bon::bon;
 
 use crate::{
-    platform::{Duration, SystemTime},
+    error::Error,
+    platform::{Duration, MaybeSendBoxFuture, SystemTime},
     secrets::{Secret, SecretOutput},
 };
 
@@ -63,7 +64,7 @@ impl<S: Secret> CachedSecret<S> {
     /// # Errors
     ///
     /// Returns an error if the underlying secret source fails.
-    async fn reload(&self) -> Result<SecretOutput<S::Output>, S::Error> {
+    async fn reload(&self) -> Result<SecretOutput<S::Output>, Error> {
         let output = self.inner.secret.get_secret_value().await?;
         self.inner.cached.store(Some(Arc::new(CachedEntry {
             output: output.clone(),
@@ -87,37 +88,37 @@ impl<S: Secret> CachedSecret<S> {
 }
 
 impl<S: Secret> Secret for CachedSecret<S> {
-    type Error = S::Error;
     type Output = S::Output;
 
-    async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
-        // Fast path: return cached value if present and not expired.
-        if let Some(entry) = self.inner.cached.load_full()
-            && Self::is_valid(&entry, self.inner.ttl)
-        {
-            return Ok(entry.output.clone());
-        }
+    fn get_secret_value(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+        Box::pin(async move {
+            // Fast path: return cached value if present and not expired.
+            if let Some(entry) = self.inner.cached.load_full()
+                && Self::is_valid(&entry, self.inner.ttl)
+            {
+                return Ok(entry.output.clone());
+            }
 
-        // Slow path: serialize refreshes to avoid redundant fetches.
-        let _lock = self.inner.refresh_lock.lock().await;
+            // Slow path: serialize refreshes to avoid redundant fetches.
+            let _lock = self.inner.refresh_lock.lock().await;
 
-        // Double-check after acquiring the lock.
-        if let Some(entry) = self.inner.cached.load_full()
-            && Self::is_valid(&entry, self.inner.ttl)
-        {
-            return Ok(entry.output.clone());
-        }
+            // Double-check after acquiring the lock.
+            if let Some(entry) = self.inner.cached.load_full()
+                && Self::is_valid(&entry, self.inner.ttl)
+            {
+                return Ok(entry.output.clone());
+            }
 
-        self.reload().await
+            self.reload().await
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        convert::Infallible,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::secrets::SecretString;
@@ -129,13 +130,16 @@ mod tests {
 
     impl Secret for MockSecret {
         type Output = SecretString;
-        type Error = Infallible;
 
-        async fn get_secret_value(&self) -> Result<SecretOutput<Self::Output>, Self::Error> {
-            let count = self.counter.fetch_add(1, Ordering::SeqCst);
-            Ok(SecretOutput {
-                value: SecretString::new(format!("secret-{count}")),
-                identity: None,
+        fn get_secret_value(
+            &self,
+        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+            Box::pin(async move {
+                let count = self.counter.fetch_add(1, Ordering::SeqCst);
+                Ok(SecretOutput {
+                    value: SecretString::new(format!("secret-{count}")),
+                    identity: None,
+                })
             })
         }
     }
