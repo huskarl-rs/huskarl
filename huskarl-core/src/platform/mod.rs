@@ -23,3 +23,9 @@ pub use not_wasm32_unknown::{Duration, Instant, SystemTime, SystemTimeError, sle
 pub use wasm32::{MaybeSend, MaybeSendFuture, MaybeSendSync, MaybeSync};
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 pub use wasm32_unknown::{Duration, Instant, SystemTime, SystemTimeError, sleep};
+
+/// A pinned, boxed future that is `Send` on platforms that require it.
+///
+/// This is the return type for async methods on dyn-capable traits.
+/// Implementors typically write the method body as `Box::pin(async move { ... })`.
+pub type MaybeSendBoxFuture<'a, T> = std::pin::Pin<Box<dyn MaybeSendFuture<Output = T> + 'a>>;

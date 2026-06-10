@@ -2,7 +2,7 @@ use futures_util::future::join_all;
 use snafu::prelude::*;
 
 use crate::{
-    BoxedError,
+    BoxedError, Error as _,
     crypto::{
         KeyMatchStrength,
         verifier::{
@@ -10,7 +10,6 @@ use crate::{
             VerifyError,
         },
     },
-    error::Error as _,
     jwk::PublicJwks,
 };
 

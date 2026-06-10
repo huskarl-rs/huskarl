@@ -1,52 +1,214 @@
-//! Error types and the [`Error`] trait.
+//! The concrete [`Error`] type used across the huskarl ecosystem.
 //!
-//! All errors in this library implement the [`Error`] trait, which extends
-//! [`std::error::Error`] with retry semantics. [`BoxedError`] provides
-//! type-erased error handling while preserving retryability.
+//! This follows the [`std::io::Error`] model: one non-generic struct carrying
+//! a matchable [`ErrorKind`], optional context, and a type-erased source.
+//! Programmatic handling — retry decisions, "re-run the interactive flow",
+//! surfacing the RFC 6749 error code — goes through [`ErrorKind`] and the
+//! accessors on [`Error`]; they are the stable contract.
+//!
+//! # Source chains and downcasting
+//!
+//! [`Error::source`](std::error::Error::source) chains preserve the concrete
+//! underlying error (for example a transport crate's error type) for
+//! diagnostics, logging, and error-report rendering. Downcasting a source to
+//! a concrete type is **not** supported API surface: the type behind
+//! `source()` may change in any release. Match on [`ErrorKind`] instead.
 
-use std::convert::Infallible;
+use std::fmt;
 
-use http::uri::InvalidUri;
-use snafu::{AsErrorSource, Snafu};
+/// A type-erased error source.
+///
+/// `Send + Sync` on platforms that require it (everything except wasm32).
+#[cfg(not(target_arch = "wasm32"))]
+pub type BoxedSource = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-use crate::platform::MaybeSendSync;
+/// A type-erased error source.
+///
+/// `Send + Sync` on platforms that require it (everything except wasm32).
+#[cfg(target_arch = "wasm32")]
+pub type BoxedSource = Box<dyn std::error::Error + 'static>;
 
-/// Errors that may occur in the library.
-pub trait Error: std::error::Error + AsErrorSource + MaybeSendSync + 'static {
-    /// If true, this indicates that a failed request may succeed if retried.
-    fn is_retryable(&self) -> bool;
+/// An error from a huskarl operation.
+///
+/// Carries a classification ([`kind`](Error::kind)), the raw RFC 6749 error
+/// code when the authorization server returned one
+/// ([`oauth_error_code`](Error::oauth_error_code)), and the underlying cause
+/// ([`source`](std::error::Error::source)).
+#[derive(Debug)]
+pub struct Error {
+    kind: ErrorKind,
+    oauth_error_code: Option<String>,
+    source: Option<BoxedSource>,
 }
 
-impl Error for Infallible {
-    fn is_retryable(&self) -> bool {
-        false
+/// Classification of an [`Error`].
+///
+/// Marked `#[non_exhaustive]`: match with a wildcard arm. Variants are kept
+/// coarse deliberately — additions are non-breaking, removals are not.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// RFC 6749 §5.2 `invalid_grant` — the grant itself is dead.
+    InvalidGrant,
+    /// Refresh failed or there is no token source: the interactive flow must
+    /// re-run before another token can be obtained.
+    ReauthRequired,
+    /// Transport-level failure. `retryable` distinguishes transient failures
+    /// (timeouts, connection resets) from permanent ones (TLS configuration).
+    Transport {
+        /// If true, retrying the same request may succeed.
+        retryable: bool,
+    },
+    /// Malformed or invalid server response.
+    Protocol,
+    /// Client authentication could not be constructed.
+    Auth,
+    /// `DPoP` proof construction or handling failed.
+    Dpop,
+    /// Builder, URL, or other setup error.
+    Config,
+    /// Cryptographic operation failed.
+    Crypto,
+}
+
+impl Error {
+    /// Create an error of the given kind caused by `source`.
+    pub fn new(kind: ErrorKind, source: impl Into<BoxedSource>) -> Self {
+        Self {
+            kind,
+            oauth_error_code: None,
+            source: Some(source.into()),
+        }
+    }
+
+    /// Attach the raw RFC 6749 §5.2 error code returned by the server.
+    #[must_use]
+    pub fn with_oauth_error_code(mut self, code: impl Into<String>) -> Self {
+        self.oauth_error_code = Some(code.into());
+        self
+    }
+
+    /// The classification of this error.
+    #[must_use]
+    pub fn kind(&self) -> ErrorKind {
+        self.kind
+    }
+
+    /// The raw RFC 6749 §5.2 error code, if the server returned one.
+    #[must_use]
+    pub fn oauth_error_code(&self) -> Option<&str> {
+        self.oauth_error_code.as_deref()
+    }
+
+    /// If true, a failed request may succeed if retried.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        matches!(self.kind, ErrorKind::Transport { retryable: true })
     }
 }
 
-/// A boxed error that can be used without type parameters.
-#[derive(Debug, Snafu)]
-#[snafu(transparent)]
-pub struct BoxedError {
-    source: Box<dyn Error>,
-}
-
-impl BoxedError {
-    /// Create a new boxed error from a generic `Error`.
-    pub fn from_err<E: Error + 'static>(err: E) -> Self {
+impl From<ErrorKind> for Error {
+    fn from(kind: ErrorKind) -> Self {
         Self {
-            source: Box::new(err),
+            kind,
+            oauth_error_code: None,
+            source: None,
         }
     }
 }
 
-impl Error for BoxedError {
-    fn is_retryable(&self) -> bool {
-        self.source.is_retryable()
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(f)?;
+        if let Some(code) = &self.oauth_error_code {
+            write!(f, " (oauth error code: {code})")?;
+        }
+        Ok(())
     }
 }
 
-impl Error for InvalidUri {
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let description = match self {
+            Self::InvalidGrant => "the grant is no longer valid",
+            Self::ReauthRequired => "re-authorization is required",
+            Self::Transport { retryable: true } => "transient transport failure",
+            Self::Transport { retryable: false } => "transport failure",
+            Self::Protocol => "invalid or malformed server response",
+            Self::Auth => "client authentication construction failed",
+            Self::Dpop => "DPoP proof handling failed",
+            Self::Config => "invalid configuration",
+            Self::Crypto => "cryptographic operation failed",
+        };
+        f.write_str(description)
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|source| source.as_ref() as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// Interop with the [`crate::Error`] trait while both exist.
+///
+/// The trait is deleted in Phase 2 of the dyn-first migration, and this impl
+/// goes with it.
+impl crate::Error for Error {
     fn is_retryable(&self) -> bool {
-        false
+        matches!(self.kind, ErrorKind::Transport { retryable: true })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct Underlying;
+
+    impl fmt::Display for Underlying {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("underlying")
+        }
+    }
+
+    impl std::error::Error for Underlying {}
+
+    #[test]
+    fn kind_and_oauth_code_are_preserved() {
+        let err =
+            Error::new(ErrorKind::InvalidGrant, Underlying).with_oauth_error_code("invalid_grant");
+        assert_eq!(err.kind(), ErrorKind::InvalidGrant);
+        assert_eq!(err.oauth_error_code(), Some("invalid_grant"));
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn retryable_follows_transport_classification() {
+        assert!(Error::from(ErrorKind::Transport { retryable: true }).is_retryable());
+        assert!(!Error::from(ErrorKind::Transport { retryable: false }).is_retryable());
+        assert!(!Error::from(ErrorKind::Crypto).is_retryable());
+    }
+
+    #[test]
+    fn source_chain_preserves_concrete_error() {
+        let err = Error::new(ErrorKind::Transport { retryable: false }, Underlying);
+        let source = std::error::Error::source(&err).expect("source set");
+        assert!(source.downcast_ref::<Underlying>().is_some());
+
+        let sourceless = Error::from(ErrorKind::Config);
+        assert!(std::error::Error::source(&sourceless).is_none());
+    }
+
+    #[test]
+    fn display_includes_oauth_code() {
+        let err = Error::from(ErrorKind::InvalidGrant).with_oauth_error_code("invalid_grant");
+        assert_eq!(
+            err.to_string(),
+            "the grant is no longer valid (oauth error code: invalid_grant)"
+        );
     }
 }
