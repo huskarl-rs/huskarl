@@ -1,8 +1,10 @@
-use std::convert::Infallible;
-
 use http::Uri;
 
-use crate::client_auth::{AuthenticationParams, ClientAuthentication};
+use crate::{
+    client_auth::{AuthenticationParams, ClientAuthentication},
+    error::Error,
+    platform::MaybeSendBoxFuture,
+};
 
 /// Authentication that only provides the client ID.
 ///
@@ -11,19 +13,19 @@ use crate::client_auth::{AuthenticationParams, ClientAuthentication};
 pub struct NoAuth;
 
 impl ClientAuthentication for NoAuth {
-    type Error = Infallible;
-
-    async fn authentication_params<'a>(
+    fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
-        _audience: Option<&'a str>,
+        _issuer: Option<&'a str>,
         _token_endpoint: &'a Uri,
         _allowed_methods: Option<&'a [String]>,
-    ) -> Result<AuthenticationParams<'a>, Self::Error> {
-        Ok(AuthenticationParams::builder()
-            .form_params(bon::map! {
-                "client_id": client_id
-            })
-            .build())
+    ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
+        Box::pin(async move {
+            Ok(AuthenticationParams::builder()
+                .form_params(bon::map! {
+                    "client_id": client_id
+                })
+                .build())
+        })
     }
 }
