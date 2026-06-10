@@ -15,6 +15,7 @@ use crate::{
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     error::{Error, ErrorKind},
     jwt::Jwt,
+    platform::MaybeSendBoxFuture,
     secrets::SecretString,
 };
 
@@ -33,9 +34,6 @@ pub struct DPoP {
 }
 
 impl AuthorizationServerDPoP for DPoP {
-    type Error = Error;
-    type ResourceServerDPoP = ResourceDPoP;
-
     fn update_nonce(&self, nonce: String) {
         // If the lock is poisoned (a thread panicked while holding it), we recover
         // the guard and proceed. A stale nonce just causes the server to reject the
@@ -57,36 +55,38 @@ impl AuthorizationServerDPoP for DPoP {
         )
     }
 
-    async fn proof(
-        &self,
-        method: &Method,
-        uri: &Uri,
-        dpop_jkt: Option<&str>,
-    ) -> Result<Option<SecretString>, Self::Error> {
-        // See comment in `update_nonce` for why poison recovery is intentional here.
-        let nonce = self
-            .nonce
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        Box::pin(async move {
+            // See comment in `update_nonce` for why poison recovery is intentional here.
+            let nonce = self
+                .nonce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
 
-        let Some(dpop_jkt) = dpop_jkt else {
-            return Err(no_thumbprint_error());
-        };
+            let Some(dpop_jkt) = dpop_jkt else {
+                return Err(no_thumbprint_error());
+            };
 
-        let signer = self
-            .signer
-            .select_signer_by_thumbprint(dpop_jkt)
-            .ok_or_else(no_matching_key_error)?;
+            let signer = self
+                .signer
+                .select_signer_by_thumbprint(dpop_jkt)
+                .ok_or_else(no_matching_key_error)?;
 
-        sign_proof(&*signer, method, uri, None, nonce).await
+            sign_proof(&*signer, method, uri, None, nonce).await
+        })
     }
 
-    fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
-        ResourceDPoP {
+    fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
+        Arc::new(ResourceDPoP {
             signer: self.signer.clone(),
             nonces: Arc::default(),
-        }
+        })
     }
 }
 
@@ -102,8 +102,6 @@ pub struct ResourceDPoP {
 }
 
 impl ResourceServerDPoP for ResourceDPoP {
-    type Error = Error;
-
     fn update_nonce(&self, uri: &Uri, nonce: String) {
         let origin = origin_from_uri(uri);
         // If the lock is poisoned (a thread panicked while holding it), we recover
@@ -116,35 +114,37 @@ impl ResourceServerDPoP for ResourceDPoP {
             .insert(origin, Arc::new(nonce));
     }
 
-    async fn proof(
-        &self,
-        method: &Method,
-        uri: &Uri,
-        access_token: &SecretString,
-        dpop_jkt: &str,
-    ) -> Result<Option<SecretString>, Self::Error> {
-        let origin = origin_from_uri(uri);
-        // See comment in `update_nonce` for why poison recovery is intentional here.
-        let nonce = self
-            .nonces
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&origin)
-            .cloned();
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        Box::pin(async move {
+            let origin = origin_from_uri(uri);
+            // See comment in `update_nonce` for why poison recovery is intentional here.
+            let nonce = self
+                .nonces
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&origin)
+                .cloned();
 
-        let signer = self
-            .signer
-            .select_signer_by_thumbprint(dpop_jkt)
-            .ok_or_else(no_matching_key_error)?;
+            let signer = self
+                .signer
+                .select_signer_by_thumbprint(dpop_jkt)
+                .ok_or_else(no_matching_key_error)?;
 
-        sign_proof(
-            &*signer,
-            method,
-            uri,
-            Some(access_token.expose_secret()),
-            nonce,
-        )
-        .await
+            sign_proof(
+                &*signer,
+                method,
+                uri,
+                Some(access_token.expose_secret()),
+                nonce,
+            )
+            .await
+        })
     }
 }
 
