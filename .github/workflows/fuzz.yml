@@ -1,0 +1,63 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "huskarl-core/**"
+      - ".github/workflows/fuzz.yml"
+  pull_request:
+    paths:
+      - "huskarl-core/**"
+      - ".github/workflows/fuzz.yml"
+  schedule:
+    # Weekly long run; the corpus cache accumulates coverage across runs.
+    - cron: "14 3 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_compact_jws, unseal_v1, jwks]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install nightly --no-self-update --profile minimal && rustup default nightly
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: huskarl-core/fuzz
+      - run: cargo install cargo-fuzz --locked
+      - name: Restore corpus
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: huskarl-core/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Fuzz
+        working-directory: huskarl-core
+        env:
+          # 60s smoke on PRs/pushes; 10min on the weekly schedule.
+          MAX_TOTAL_TIME: ${{ github.event_name == 'schedule' && 600 || 60 }}
+          TARGET: ${{ matrix.target }}
+        # New inputs are written to the cached corpus dir; the checked-in
+        # seeds are read-only starting points.
+        run: |
+          mkdir -p "fuzz/corpus/$TARGET"
+          cargo fuzz run "$TARGET" "fuzz/corpus/$TARGET" "fuzz/seeds/$TARGET" -- -max_total_time="$MAX_TOTAL_TIME" -max_len=16384
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: huskarl-core/fuzz/artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
