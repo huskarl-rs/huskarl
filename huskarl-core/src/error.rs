@@ -173,16 +173,6 @@ impl std::error::Error for Error {
     }
 }
 
-/// Interop with the [`crate::Error`] trait while both exist.
-///
-/// The trait is deleted in Phase 1 of the dyn-first migration, and this impl
-/// goes with it.
-impl crate::Error for Error {
-    fn is_retryable(&self) -> bool {
-        matches!(self.kind, ErrorKind::Transport { retryable: true })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

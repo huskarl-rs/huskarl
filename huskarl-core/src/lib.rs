@@ -11,7 +11,6 @@ huskarl-core provides the base traits and implementations for the huskarl ecosys
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod endpoint_url;
-mod legacy_error;
 mod uuid;
 
 pub mod client_auth;
@@ -28,4 +27,4 @@ pub mod serde_utils;
 pub mod server_metadata;
 
 pub use endpoint_url::{EndpointUrl, IntoEndpointUrl};
-pub use legacy_error::{BoxedError, Error};
+pub use error::{Error, ErrorKind};
