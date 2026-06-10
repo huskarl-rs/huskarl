@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use http::{Method, Uri};
 use snafu::Snafu;
 
 use crate::{
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
+    error::{Error, ErrorKind},
+    platform::MaybeSendBoxFuture,
     secrets::SecretString,
 };
 
@@ -16,52 +20,70 @@ impl super::sealed::Sealed for NoDPoP {}
 #[derive(Debug, Clone, Copy, Default, Snafu)]
 pub struct DPoPNotConfigured;
 
-impl crate::Error for DPoPNotConfigured {
-    fn is_retryable(&self) -> bool {
-        false
-    }
-}
-
 impl AuthorizationServerDPoP for NoDPoP {
-    type Error = DPoPNotConfigured;
-    type ResourceServerDPoP = NoDPoP;
-
     fn update_nonce(&self, _nonce: String) {}
 
     fn get_current_thumbprint(&self) -> Option<String> {
         None
     }
 
-    async fn proof(
-        &self,
-        _method: &Method,
-        _uri: &Uri,
-        dpop_jkt: Option<&str>,
-    ) -> Result<Option<SecretString>, Self::Error> {
-        if dpop_jkt.is_some() {
-            Err(DPoPNotConfigured)
-        } else {
-            Ok(None)
-        }
+    fn proof<'a>(
+        &'a self,
+        _method: &'a Method,
+        _uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        Box::pin(async move {
+            if dpop_jkt.is_some() {
+                Err(Error::new(ErrorKind::Dpop, DPoPNotConfigured))
+            } else {
+                Ok(None)
+            }
+        })
     }
 
-    fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
-        NoDPoP
+    fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
+        Arc::new(NoDPoP)
     }
 }
 
 impl ResourceServerDPoP for NoDPoP {
-    type Error = DPoPNotConfigured;
-
     fn update_nonce(&self, _uri: &Uri, _nonce: String) {}
 
-    async fn proof(
-        &self,
-        _method: &Method,
-        _uri: &Uri,
-        _access_token: &SecretString,
-        _dpop_jkt: &str,
-    ) -> Result<Option<SecretString>, Self::Error> {
-        Err(DPoPNotConfigured)
+    fn proof<'a>(
+        &'a self,
+        _method: &'a Method,
+        _uri: &'a Uri,
+        _access_token: &'a SecretString,
+        _dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        Box::pin(async { Err(Error::new(ErrorKind::Dpop, DPoPNotConfigured)) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn erased_no_dpop_dispatches() {
+        let dpop: Arc<dyn AuthorizationServerDPoP> = Arc::new(NoDPoP);
+        let uri = Uri::from_static("https://as.example/token");
+
+        let proof = dpop.proof(&Method::POST, &uri, None).await.unwrap();
+        assert!(proof.is_none());
+
+        let err = dpop
+            .proof(&Method::POST, &uri, Some("jkt"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Dpop);
+
+        let resource = dpop.to_resource_server_dpop();
+        let err = resource
+            .proof(&Method::GET, &uri, &SecretString::new("token"), "jkt")
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Dpop);
     }
 }

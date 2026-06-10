@@ -19,17 +19,16 @@ pub use implementation::{
 pub use no_dpop::{DPoPNotConfigured, NoDPoP};
 
 use crate::{
-    platform::{MaybeSend, MaybeSendSync},
+    error::Error,
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
     secrets::SecretString,
 };
 
 /// Proof implementation for `DPoP`.
-pub trait AuthorizationServerDPoP: sealed::Sealed + Clone + MaybeSendSync {
-    /// The error type when signing proofs.
-    type Error: crate::Error;
-    /// The type of the corresponding resource server variant.
-    type ResourceServerDPoP: ResourceServerDPoP;
-
+///
+/// This trait is dyn-capable: grants store it as
+/// `Arc<dyn AuthorizationServerDPoP>`.
+pub trait AuthorizationServerDPoP: sealed::Sealed + MaybeSendSync {
     /// Set the current `DPoP` nonce value.
     fn update_nonce(&self, nonce: String);
 
@@ -39,58 +38,148 @@ pub trait AuthorizationServerDPoP: sealed::Sealed + Clone + MaybeSendSync {
     fn get_current_thumbprint(&self) -> Option<String>;
 
     /// Create a `DPoP` proof for the token endpoint.
-    fn proof(
-        &self,
-        method: &Method,
-        uri: &Uri,
-        dpop_jkt: Option<&str>,
-    ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
 
     /// Returns the corresponding resource server variant.
-    fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP;
-}
-
-impl<D: AuthorizationServerDPoP> AuthorizationServerDPoP for Arc<D> {
-    type Error = D::Error;
-
-    type ResourceServerDPoP = D::ResourceServerDPoP;
-
-    fn update_nonce(&self, nonce: String) {
-        self.as_ref().update_nonce(nonce);
-    }
-
-    fn get_current_thumbprint(&self) -> Option<String> {
-        self.as_ref().get_current_thumbprint()
-    }
-
-    async fn proof(
-        &self,
-        method: &Method,
-        uri: &Uri,
-        dpop_jkt: Option<&str>,
-    ) -> Result<Option<SecretString>, Self::Error> {
-        self.as_ref().proof(method, uri, dpop_jkt).await
-    }
-
-    fn to_resource_server_dpop(&self) -> Self::ResourceServerDPoP {
-        self.as_ref().to_resource_server_dpop()
-    }
+    fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP>;
 }
 
 /// Proof implementation for `DPoP` when calling resource servers.
+///
+/// This trait is dyn-capable: authorizers store it as
+/// `Arc<dyn ResourceServerDPoP>`.
 pub trait ResourceServerDPoP: sealed::Sealed + MaybeSendSync {
-    /// The error type when signing proofs;
-    type Error: crate::Error;
-
     /// Set the current `DPoP` nonce value.
     fn update_nonce(&self, uri: &Uri, nonce: String);
 
     /// Create a `DPoP` proof with access token binding.
-    fn proof(
-        &self,
-        method: &Method,
-        uri: &Uri,
-        access_token: &SecretString,
-        dpop_jkt: &str,
-    ) -> impl Future<Output = Result<Option<SecretString>, Self::Error>> + MaybeSend;
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
+}
+
+impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for &T {
+    fn update_nonce(&self, nonce: String) {
+        (**self).update_nonce(nonce);
+    }
+
+    fn get_current_thumbprint(&self) -> Option<String> {
+        (**self).get_current_thumbprint()
+    }
+
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof(method, uri, dpop_jkt)
+    }
+
+    fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
+        (**self).to_resource_server_dpop()
+    }
+}
+
+impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Box<T> {
+    fn update_nonce(&self, nonce: String) {
+        (**self).update_nonce(nonce);
+    }
+
+    fn get_current_thumbprint(&self) -> Option<String> {
+        (**self).get_current_thumbprint()
+    }
+
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof(method, uri, dpop_jkt)
+    }
+
+    fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
+        (**self).to_resource_server_dpop()
+    }
+}
+
+impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Arc<T> {
+    fn update_nonce(&self, nonce: String) {
+        (**self).update_nonce(nonce);
+    }
+
+    fn get_current_thumbprint(&self) -> Option<String> {
+        (**self).get_current_thumbprint()
+    }
+
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof(method, uri, dpop_jkt)
+    }
+
+    fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
+        (**self).to_resource_server_dpop()
+    }
+}
+
+impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for &T {
+    fn update_nonce(&self, uri: &Uri, nonce: String) {
+        (**self).update_nonce(uri, nonce);
+    }
+
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof(method, uri, access_token, dpop_jkt)
+    }
+}
+
+impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for Box<T> {
+    fn update_nonce(&self, uri: &Uri, nonce: String) {
+        (**self).update_nonce(uri, nonce);
+    }
+
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof(method, uri, access_token, dpop_jkt)
+    }
+}
+
+impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for Arc<T> {
+    fn update_nonce(&self, uri: &Uri, nonce: String) {
+        (**self).update_nonce(uri, nonce);
+    }
+
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof(method, uri, access_token, dpop_jkt)
+    }
 }
