@@ -12,7 +12,6 @@ use crate::error::Error;
 /// [`Error`].
 #[non_exhaustive]
 #[derive(Debug, Snafu)]
-#[snafu(visibility(pub(crate)))]
 pub enum VerifyError {
     /// No key matched the requested algorithm/kid pair.
     #[snafu(display("no matching key"))]

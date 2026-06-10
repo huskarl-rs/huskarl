@@ -4,10 +4,10 @@
 //! construct and validate endpoint URLs. It can be constructed from common
 //! string and URL types via [`IntoEndpointUrl`].
 
-use std::convert::Infallible;
-
-use http::{Uri, uri::InvalidUri};
+use http::Uri;
 use serde::{Deserialize, Serialize};
+
+use crate::error::{Error, ErrorKind};
 
 /// An endpoint URL.
 ///
@@ -46,54 +46,49 @@ impl EndpointUrl {
 
 /// Conversion trait for types that can be turned into an [`EndpointUrl`].
 pub trait IntoEndpointUrl {
-    /// The error type returned if the conversion fails.
-    type Error: crate::Error;
-
     /// Attempts to convert this value into an [`EndpointUrl`].
     ///
     /// # Errors
     ///
-    /// Returns an error if the value cannot be parsed into an [`EndpointUrl`].
-    fn into_endpoint_url(self) -> Result<EndpointUrl, Self::Error>;
+    /// Returns [`ErrorKind::Config`] if the value cannot be parsed into an
+    /// [`EndpointUrl`].
+    fn into_endpoint_url(self) -> Result<EndpointUrl, Error>;
+}
+
+fn invalid_uri(source: http::uri::InvalidUri) -> Error {
+    Error::new(ErrorKind::Config, source).with_context("invalid endpoint URL")
 }
 
 impl IntoEndpointUrl for EndpointUrl {
-    type Error = Infallible;
-
-    fn into_endpoint_url(self) -> Result<EndpointUrl, Self::Error> {
+    fn into_endpoint_url(self) -> Result<EndpointUrl, Error> {
         Ok(self)
     }
 }
 
 impl IntoEndpointUrl for Uri {
-    type Error = Infallible;
-
-    fn into_endpoint_url(self) -> Result<EndpointUrl, Self::Error> {
+    fn into_endpoint_url(self) -> Result<EndpointUrl, Error> {
         Ok(EndpointUrl(self))
     }
 }
 
 #[cfg(feature = "url")]
 impl IntoEndpointUrl for url::Url {
-    type Error = InvalidUri;
-
-    fn into_endpoint_url(self) -> Result<EndpointUrl, Self::Error> {
-        self.as_str().parse::<Uri>().map(EndpointUrl)
+    fn into_endpoint_url(self) -> Result<EndpointUrl, Error> {
+        self.as_str()
+            .parse::<Uri>()
+            .map(EndpointUrl)
+            .map_err(invalid_uri)
     }
 }
 
 impl IntoEndpointUrl for &str {
-    type Error = InvalidUri;
-
-    fn into_endpoint_url(self) -> Result<EndpointUrl, Self::Error> {
-        self.parse::<Uri>().map(EndpointUrl)
+    fn into_endpoint_url(self) -> Result<EndpointUrl, Error> {
+        self.parse::<Uri>().map(EndpointUrl).map_err(invalid_uri)
     }
 }
 
 impl IntoEndpointUrl for String {
-    type Error = InvalidUri;
-
-    fn into_endpoint_url(self) -> Result<EndpointUrl, Self::Error> {
-        self.parse::<Uri>().map(EndpointUrl)
+    fn into_endpoint_url(self) -> Result<EndpointUrl, Error> {
+        self.parse::<Uri>().map(EndpointUrl).map_err(invalid_uri)
     }
 }
