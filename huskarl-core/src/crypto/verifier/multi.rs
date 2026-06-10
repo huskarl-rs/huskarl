@@ -1,16 +1,15 @@
+use std::sync::Arc;
+
 use futures_util::future::join_all;
-use snafu::prelude::*;
 
 use crate::{
-    BoxedError, Error as _,
     crypto::{
         KeyMatchStrength,
-        verifier::{
-            BoxedJwsVerifier, CreateVerifierError, JwsVerifier, JwsVerifierPlatform, KeyMatch,
-            VerifyError,
-        },
+        verifier::{CreateVerifierError, JwsVerifier, JwsVerifierPlatform, KeyMatch, VerifyError},
     },
+    error::{Error, ErrorKind},
     jwk::PublicJwks,
+    platform::MaybeSendBoxFuture,
 };
 
 /// A [`JwsVerifier`] that holds multiple keys and applies RFC 7517 key selection semantics.
@@ -25,32 +24,13 @@ use crate::{
 /// - A single `ByAlgorithm` match is used directly.
 #[derive(Debug)]
 pub struct MultiKeyVerifier {
-    verifiers: Vec<BoxedJwsVerifier>,
+    verifiers: Vec<Arc<dyn JwsVerifier>>,
     try_all_on_ambiguous_match: bool,
 }
 
-/// Errors that can occur when building a [`MultiKeyVerifier`] from a JWKS.
-#[derive(Debug, Snafu)]
-pub enum MultiKeyVerifierError {
-    /// A supported key failed to construct a verifier.
-    #[snafu(display("Failed to create verifier from JWK"))]
-    CreateVerifier {
-        /// The underlying error.
-        source: CreateVerifierError,
-    },
-}
-
-impl crate::Error for MultiKeyVerifierError {
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::CreateVerifier { source } => source.is_retryable(),
-        }
-    }
-}
-
 enum GetVerifierResult {
-    ByKeyId(BoxedJwsVerifier),
-    ByAlgorithm(Vec<BoxedJwsVerifier>),
+    ByKeyId(Arc<dyn JwsVerifier>),
+    ByAlgorithm(Vec<Arc<dyn JwsVerifier>>),
     None,
 }
 
@@ -67,7 +47,7 @@ impl GetVerifierResult {
 impl MultiKeyVerifier {
     /// Creates a `MultiKeyVerifier` from an explicit list of verifiers.
     #[must_use]
-    pub fn new(verifiers: Vec<BoxedJwsVerifier>) -> Self {
+    pub fn new(verifiers: Vec<Arc<dyn JwsVerifier>>) -> Self {
         Self {
             verifiers,
             try_all_on_ambiguous_match: false,
@@ -80,12 +60,13 @@ impl MultiKeyVerifier {
     ///
     /// # Errors
     ///
-    /// Returns an error if a supported key fails to construct a verifier.
+    /// Returns [`ErrorKind::Crypto`] if a supported key fails to construct a
+    /// verifier.
     pub async fn from_jwks(
         jwks: &PublicJwks,
         platform: &dyn JwsVerifierPlatform,
-    ) -> Result<Self, MultiKeyVerifierError> {
-        let verifiers: Vec<BoxedJwsVerifier> = join_all(
+    ) -> Result<Self, Error> {
+        let verifiers: Vec<Arc<dyn JwsVerifier>> = join_all(
             jwks.keys
                 .iter()
                 .map(|jwk| platform.create_verifier_from_jwk(jwk.clone())),
@@ -98,7 +79,9 @@ impl MultiKeyVerifier {
             Err(e) => Some(Err(e)),
         })
         .collect::<Result<_, _>>()
-        .context(CreateVerifierSnafu)?;
+        .map_err(|source| {
+            Error::new(ErrorKind::Crypto, source).with_context("creating verifier from JWK")
+        })?;
 
         Ok(Self {
             verifiers,
@@ -123,7 +106,7 @@ impl MultiKeyVerifier {
         input: &[u8],
         signature: &[u8],
         key_match: &KeyMatch<'_>,
-    ) -> Result<(), VerifyError<BoxedError>> {
+    ) -> Result<(), VerifyError> {
         let by_algorithm_verifiers = match self.get_verifier(key_match) {
             GetVerifierResult::ByKeyId(verifier) => {
                 return verifier.verify(input, signature, key_match).await;
@@ -160,7 +143,7 @@ impl MultiKeyVerifier {
     }
 
     fn get_verifier(&self, key_match: &KeyMatch) -> GetVerifierResult {
-        let mut by_algorithm_verifiers: Vec<BoxedJwsVerifier> = Vec::new();
+        let mut by_algorithm_verifiers: Vec<Arc<dyn JwsVerifier>> = Vec::new();
 
         for verifier in &self.verifiers {
             match verifier.key_match(key_match) {
@@ -183,25 +166,25 @@ impl MultiKeyVerifier {
 }
 
 impl JwsVerifier for MultiKeyVerifier {
-    type Error = BoxedError;
-
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
         self.get_verifier(key_match).key_match_strength()
     }
 
-    async fn verify(
-        &self,
-        input: &[u8],
-        signature: &[u8],
-        key_match: &KeyMatch<'_>,
-    ) -> Result<(), VerifyError<Self::Error>> {
-        self.dispatch_verify(input, signature, key_match).await
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        Box::pin(self.dispatch_verify(input, signature, key_match))
     }
 
-    async fn try_refresh(&self) -> bool {
-        join_all(self.verifiers.iter().map(JwsVerifier::try_refresh))
-            .await
-            .into_iter()
-            .any(|b| b)
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        Box::pin(async move {
+            join_all(self.verifiers.iter().map(JwsVerifier::try_refresh))
+                .await
+                .into_iter()
+                .any(|b| b)
+        })
     }
 }

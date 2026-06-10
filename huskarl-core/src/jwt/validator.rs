@@ -7,8 +7,7 @@ use serde::Deserialize;
 use snafu::{ResultExt as _, Snafu, ensure};
 
 use crate::{
-    BoxedError,
-    crypto::verifier::{BoxedJwsVerifier, JwsVerifier, KeyMatch, VerifyError},
+    crypto::verifier::{JwsVerifier, KeyMatch, VerifyError},
     jwt::{ConfirmationClaim, JtiUniquenessChecker, JwsParseError, ParsedJws, parse_compact_jws},
     platform::{Duration, SystemTime},
 };
@@ -59,7 +58,8 @@ impl ClaimCheck {
 #[derive(Debug, Builder)]
 pub struct JwtValidator {
     /// JWS verifier to use for token validation.
-    verifier: BoxedJwsVerifier,
+    #[builder(with = |verifier: impl JwsVerifier + 'static| Arc::new(verifier) as Arc<dyn JwsVerifier>)]
+    verifier: Arc<dyn JwsVerifier>,
     /// Check on the `iss` claim.
     #[builder(default)]
     iss: ClaimCheck,
@@ -528,7 +528,7 @@ pub enum JwtValidationError {
     /// The token signature is invalid.
     Signature {
         /// The underlying error.
-        source: VerifyError<BoxedError>,
+        source: VerifyError,
     },
     /// The token is unsigned.
     UnsignedToken,
@@ -622,19 +622,17 @@ mod tests {
     struct MockVerifier;
 
     impl JwsVerifier for MockVerifier {
-        type Error = crate::BoxedError;
-
         fn key_match(&self, _key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
             Some(KeyMatchStrength::ByAlgorithm)
         }
 
-        async fn verify(
-            &self,
-            _input: &[u8],
-            _signature: &[u8],
-            _key: &KeyMatch<'_>,
-        ) -> Result<(), VerifyError<Self::Error>> {
-            Ok(())
+        fn verify<'a>(
+            &'a self,
+            _input: &'a [u8],
+            _signature: &'a [u8],
+            _key: &'a KeyMatch<'a>,
+        ) -> crate::platform::MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -646,7 +644,7 @@ mod tests {
         let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJqb2UiLCJmb28iOiJiYXIifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::required_value("joe"))
             .build();
 
@@ -665,7 +663,7 @@ mod tests {
         let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJqb2UiLCJmb28iOiJiYXIifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::required_value("joe"))
             .build();
 
@@ -688,7 +686,7 @@ mod tests {
         let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJqb2UiLCJmb28iOiJiYXIifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
 
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::required_value("joe"))
             .build();
 
@@ -718,9 +716,7 @@ mod tests {
     }
 
     fn default_validator() -> JwtValidator {
-        JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
-            .build()
+        JwtValidator::builder().verifier(MockVerifier).build()
     }
 
     // --- Algorithm checks ---
@@ -737,7 +733,7 @@ mod tests {
     #[tokio::test]
     async fn reject_disallowed_algorithm() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .allowed_algorithms(["ES256".to_string()])
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -828,7 +824,7 @@ mod tests {
             .unwrap()
             .as_secs();
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .clock_leeway(Duration::from_secs(10))
             .build();
         let parsed = make_parsed_jws(
@@ -846,7 +842,7 @@ mod tests {
     #[tokio::test]
     async fn require_exp_missing() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .require_exp(true)
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -862,7 +858,7 @@ mod tests {
     #[tokio::test]
     async fn require_iat_missing() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .require_iat(true)
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -878,7 +874,7 @@ mod tests {
     #[tokio::test]
     async fn require_jti_missing() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .require_jti(true)
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -896,7 +892,7 @@ mod tests {
     #[tokio::test]
     async fn iss_required_value_mismatch() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::required_value("expected-issuer"))
             .build();
         let parsed = make_parsed_jws(
@@ -915,7 +911,7 @@ mod tests {
     #[tokio::test]
     async fn iss_require_any_mismatch() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::require_any(["a", "b"]))
             .build();
         let parsed = make_parsed_jws(
@@ -934,7 +930,7 @@ mod tests {
     #[tokio::test]
     async fn iss_present_missing() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::present())
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -950,7 +946,7 @@ mod tests {
     #[tokio::test]
     async fn iss_if_present_mismatch() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::if_present("expected"))
             .build();
         let parsed = make_parsed_jws(
@@ -969,7 +965,7 @@ mod tests {
     #[tokio::test]
     async fn iss_if_present_absent_ok() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .iss(ClaimCheck::if_present("expected"))
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -984,7 +980,7 @@ mod tests {
     #[tokio::test]
     async fn aud_required_value_not_in_list() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .aud(ClaimCheck::required_value("expected-aud"))
             .build();
         let parsed = make_parsed_jws(
@@ -1003,7 +999,7 @@ mod tests {
     #[tokio::test]
     async fn aud_empty_when_required() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .aud(ClaimCheck::present())
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -1021,7 +1017,7 @@ mod tests {
     #[tokio::test]
     async fn typ_required_value_mismatch() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .typ(ClaimCheck::required_value("at+jwt"))
             .build();
         let parsed = make_parsed_jws(
@@ -1040,7 +1036,7 @@ mod tests {
     #[tokio::test]
     async fn typ_application_prefix_normalization() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .typ(ClaimCheck::required_value("at+jwt"))
             .build();
         let parsed = make_parsed_jws(
@@ -1056,7 +1052,7 @@ mod tests {
     #[tokio::test]
     async fn typ_case_insensitive() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .typ(ClaimCheck::required_value("AT+JWT"))
             .build();
         let parsed = make_parsed_jws(
@@ -1074,7 +1070,7 @@ mod tests {
     #[tokio::test]
     async fn max_token_age_old_token() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .max_token_age(Duration::from_mins(1))
             .build();
         let parsed = make_parsed_jws(
@@ -1093,7 +1089,7 @@ mod tests {
     #[tokio::test]
     async fn max_token_age_missing_iat() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .max_token_age(Duration::from_mins(1))
             .build();
         let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -1152,7 +1148,7 @@ mod tests {
         }
 
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .clock_leeway(Duration::from_secs(10))
             .build();
         let parsed = make_parsed_jws(
@@ -1186,7 +1182,7 @@ mod tests {
     #[tokio::test]
     async fn temporally_invalid_token_does_not_burn_jti() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .jti_checker(InMemoryJtiChecker::default())
             .build();
 
@@ -1247,7 +1243,7 @@ mod tests {
     #[tokio::test]
     async fn jti_too_long() {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(MockVerifier))
+            .verifier(MockVerifier)
             .max_jti_len(5)
             .build();
         let parsed = make_parsed_jws(

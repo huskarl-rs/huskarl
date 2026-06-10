@@ -1,11 +1,11 @@
 use std::{pin::Pin, sync::Arc};
 
 use crate::{
-    BoxedError,
     crypto::{
         refreshable::ScheduledRefreshable,
         signer::{JwsSigner, JwsSignerSelector},
     },
+    error::Error,
     platform::{Duration, MaybeSendFuture, MaybeSendSync},
 };
 
@@ -37,7 +37,7 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshSigner<S> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
-        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<S, BoxedError>>>>
+        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<S, Error>>>>
         + MaybeSendSync
         + 'static,
         /// The time-to-live for the cached signer.
@@ -49,7 +49,7 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshSigner<S> {
         /// Minimum time between any two refresh attempts, regardless of outcome.
         #[builder(default = Duration::from_mins(1))]
         min_refresh_interval: Duration,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let inner = ScheduledRefreshable::builder()
             .factory(factory)
             .ttl(ttl)
@@ -76,7 +76,7 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshSigner<S> {
     /// # Errors
     ///
     /// Returns an error if the factory call fails.
-    pub async fn refresh(&self) -> Result<bool, BoxedError> {
+    pub async fn refresh(&self) -> Result<bool, Error> {
         self.inner.refresh().await
     }
 }

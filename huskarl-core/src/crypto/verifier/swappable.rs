@@ -1,13 +1,13 @@
 use std::pin::Pin;
 
 use crate::{
-    BoxedError,
     crypto::{
         KeyMatchStrength,
         refreshable::Refreshable,
         verifier::{JwsVerifier, KeyMatch, VerifyError},
     },
-    platform::{MaybeSendFuture, MaybeSendSync},
+    error::Error,
+    platform::{MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
 };
 
 /// A [`JwsVerifier`] that holds a hot-swappable verifier behind an [`ArcSwap`](arc_swap::ArcSwap).
@@ -32,7 +32,7 @@ impl<V: std::fmt::Debug> std::fmt::Debug for RefreshableVerifier<V> {
 }
 
 #[bon::bon]
-impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> RefreshableVerifier<V> {
+impl<V: JwsVerifier + 'static> RefreshableVerifier<V> {
     /// Creates a new [`RefreshableVerifier`] using the given factory.
     ///
     /// The factory is called immediately to produce the initial verifier. The same factory
@@ -43,10 +43,10 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> RefreshableVeri
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
-        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>>
+        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let inner = Refreshable::builder().factory(factory).build().await?;
         Ok(Self { inner })
     }
@@ -64,33 +64,31 @@ impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> RefreshableVeri
     /// # Errors
     ///
     /// Returns an error if the factory call fails.
-    pub async fn refresh(&self) -> Result<bool, crate::BoxedError> {
+    pub async fn refresh(&self) -> Result<bool, Error> {
         self.inner.refresh().await
     }
 }
 
-impl<V: JwsVerifier + std::fmt::Debug + MaybeSendSync + 'static> JwsVerifier
-    for RefreshableVerifier<V>
-{
-    type Error = V::Error;
-
+impl<V: JwsVerifier + 'static> JwsVerifier for RefreshableVerifier<V> {
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
         self.inner.load().key_match(key_match)
     }
 
-    async fn verify(
-        &self,
-        input: &[u8],
-        signature: &[u8],
-        key_match: &KeyMatch<'_>,
-    ) -> Result<(), VerifyError<Self::Error>> {
-        self.inner
-            .load_full()
-            .verify(input, signature, key_match)
-            .await
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        Box::pin(async move {
+            self.inner
+                .load_full()
+                .verify(input, signature, key_match)
+                .await
+        })
     }
 
-    async fn try_refresh(&self) -> bool {
-        self.refresh().await.unwrap_or(false)
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        Box::pin(async move { self.refresh().await.unwrap_or(false) })
     }
 }

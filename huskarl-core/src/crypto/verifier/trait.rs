@@ -1,95 +1,17 @@
 //! JWS Verification traits.
 
-use std::{pin::Pin, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
-    BoxedError, EndpointUrl,
+    EndpointUrl,
     crypto::{
         KeyMatchStrength,
         verifier::error::{CreateVerifierError, VerifyError},
     },
+    error::Error,
     jwk::PublicJwk,
-    platform::{MaybeSend, MaybeSendFuture, MaybeSendSync},
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
-
-/// Boxed JWS verifier.
-#[derive(Debug, Clone)]
-pub struct BoxedJwsVerifier {
-    inner: Arc<dyn DynJwsVerifier>,
-}
-
-impl BoxedJwsVerifier {
-    /// Create a boxed JWS verifier from a non-boxed.
-    pub fn new<V: JwsVerifier + std::fmt::Debug + 'static>(verifier: V) -> Self {
-        Self {
-            inner: Arc::new(verifier),
-        }
-    }
-}
-
-impl JwsVerifier for BoxedJwsVerifier {
-    type Error = BoxedError;
-
-    fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
-        self.inner.key_match(key_match)
-    }
-
-    async fn verify(
-        &self,
-        input: &[u8],
-        signature: &[u8],
-        key_match: &KeyMatch<'_>,
-    ) -> Result<(), VerifyError<BoxedError>> {
-        self.inner.verify(input, signature, key_match).await
-    }
-
-    async fn try_refresh(&self) -> bool {
-        self.inner.try_refresh().await
-    }
-}
-
-trait DynJwsVerifier: std::fmt::Debug + MaybeSendSync {
-    fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength>;
-
-    fn verify<'a>(
-        &'a self,
-        input: &'a [u8],
-        signature: &'a [u8],
-        key_match: &'a KeyMatch,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), VerifyError<BoxedError>>> + 'a>>;
-
-    fn try_refresh(&self) -> Pin<Box<dyn MaybeSendFuture<Output = bool> + '_>>;
-}
-
-impl<V: JwsVerifier + std::fmt::Debug> DynJwsVerifier for V {
-    fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
-        JwsVerifier::key_match(self, key_match)
-    }
-
-    fn verify<'a>(
-        &'a self,
-        input: &'a [u8],
-        signature: &'a [u8],
-        key_match: &'a KeyMatch,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<(), VerifyError<BoxedError>>> + 'a>> {
-        Box::pin(async move {
-            JwsVerifier::verify(self, input, signature, key_match)
-                .await
-                .map_err(|err| match err {
-                    VerifyError::NoMatchingKey => VerifyError::NoMatchingKey,
-                    VerifyError::AmbiguousKeyMatch => VerifyError::AmbiguousKeyMatch,
-                    VerifyError::SignatureMismatch => VerifyError::SignatureMismatch,
-                    VerifyError::Other { source } => VerifyError::Other {
-                        source: BoxedError::from_err(source),
-                    },
-                })
-        })
-    }
-
-    fn try_refresh(&self) -> Pin<Box<dyn MaybeSendFuture<Output = bool> + '_>> {
-        Box::pin(JwsVerifier::try_refresh(self))
-    }
-}
 
 /// The set of JWS header parameters used to select a verification key.
 #[derive(Debug, Clone, Copy)]
@@ -104,10 +26,10 @@ pub struct KeyMatch<'a> {
 ///
 /// Implementations may represent a single verification key, or a set of keys
 /// (e.g. a JWKS endpoint).
-pub trait JwsVerifier: MaybeSendSync {
-    /// The error type returned by this signer's operations.
-    type Error: crate::Error;
-
+///
+/// This trait is dyn-capable: consumers store it as `Arc<dyn JwsVerifier>`.
+/// Write async method bodies as `Box::pin(async move { ... })`.
+pub trait JwsVerifier: std::fmt::Debug + MaybeSendSync {
     /// Returns how well this verifier matches the given key selection criteria.
     ///
     /// Implementations must return:
@@ -124,12 +46,12 @@ pub trait JwsVerifier: MaybeSendSync {
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength>;
 
     /// Verify the input against the provided signature.
-    fn verify(
-        &self,
-        input: &[u8],
-        signature: &[u8],
-        key_match: &KeyMatch<'_>,
-    ) -> impl Future<Output = Result<(), VerifyError<Self::Error>>> + MaybeSend;
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>>;
 
     /// Attempts to refresh the verifier's key material if warranted.
     ///
@@ -140,8 +62,65 @@ pub trait JwsVerifier: MaybeSendSync {
     /// Returns `true` if new key material was loaded (or was concurrently loaded by another
     /// task). Returns `false` if no refresh was needed, attempted, or successful. The default
     /// implementation always returns `false`.
-    fn try_refresh(&self) -> impl Future<Output = bool> + MaybeSend {
-        async { false }
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        Box::pin(async { false })
+    }
+}
+
+impl<T: JwsVerifier + ?Sized> JwsVerifier for &T {
+    fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
+        (**self).key_match(key_match)
+    }
+
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        (**self).verify(input, signature, key_match)
+    }
+
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        (**self).try_refresh()
+    }
+}
+
+impl<T: JwsVerifier + ?Sized> JwsVerifier for Box<T> {
+    fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
+        (**self).key_match(key_match)
+    }
+
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        (**self).verify(input, signature, key_match)
+    }
+
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        (**self).try_refresh()
+    }
+}
+
+impl<T: JwsVerifier + ?Sized> JwsVerifier for Arc<T> {
+    fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
+        (**self).key_match(key_match)
+    }
+
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        (**self).verify(input, signature, key_match)
+    }
+
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        (**self).try_refresh()
     }
 }
 
@@ -151,17 +130,17 @@ pub trait JwsVerifierPlatform: std::fmt::Debug + MaybeSendSync {
     fn create_verifier_from_jwk(
         &self,
         jwk: PublicJwk,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BoxedJwsVerifier, CreateVerifierError>>>>;
+    ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, CreateVerifierError>>;
 }
 
-/// Factory for constructing a [`BoxedJwsVerifier`] from a JWKS URI and a verifier platform.
+/// Factory for constructing a [`JwsVerifier`] from a JWKS URI and a verifier platform.
 pub trait JwsVerifierFactory: MaybeSendSync {
     /// Build a verifier using the given JWKS URI and platform.
     fn build(
         &self,
         jwks_uri: Option<&EndpointUrl>,
-        factory: Arc<dyn JwsVerifierPlatform>,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BoxedJwsVerifier, BoxedError>>>>;
+        platform: Arc<dyn JwsVerifierPlatform>,
+    ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>>;
 }
 
 impl<F> JwsVerifierFactory for F
@@ -169,14 +148,14 @@ where
     F: Fn(
             Option<&EndpointUrl>,
             Arc<dyn JwsVerifierPlatform>,
-        ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BoxedJwsVerifier, BoxedError>>>>
+        ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>>
         + MaybeSendSync,
 {
     fn build(
         &self,
         jwks_uri: Option<&EndpointUrl>,
-        factory: Arc<dyn JwsVerifierPlatform>,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BoxedJwsVerifier, BoxedError>>>> {
-        self(jwks_uri, factory)
+        platform: Arc<dyn JwsVerifierPlatform>,
+    ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
+        self(jwks_uri, platform)
     }
 }

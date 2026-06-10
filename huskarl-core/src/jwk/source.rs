@@ -1,17 +1,18 @@
-use std::{pin::Pin, sync::Arc};
+use std::sync::Arc;
 
 use bon::bon;
 use http::HeaderMap;
 
 use crate::{
-    BoxedError, EndpointUrl,
+    EndpointUrl,
     crypto::verifier::{
-        BoxedJwsVerifier, CreateVerifierError, JwsVerifierFactory, JwsVerifierPlatform,
+        CreateVerifierError, JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform,
         MultiKeyVerifier, RetryingVerifier, ScheduledRefreshVerifier,
     },
+    error::{Error, ErrorKind},
     http::HttpClient,
     jwk::{Jwks, PublicJwks},
-    platform::MaybeSendFuture,
+    platform::MaybeSendBoxFuture,
 };
 
 /// Factory for building a JWKS-backed [`JwsVerifier`](crate::crypto::verifier::JwsVerifier)
@@ -52,11 +53,14 @@ impl JwsVerifierFactory for JwksSource {
         &self,
         jwks_uri: Option<&EndpointUrl>,
         platform: Arc<dyn JwsVerifierPlatform>,
-    ) -> Pin<Box<dyn MaybeSendFuture<Output = Result<BoxedJwsVerifier, BoxedError>>>> {
+    ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
         let client = self.http_client.clone();
         let Some(uri) = jwks_uri.cloned() else {
             return Box::pin(async {
-                Err(BoxedError::from_err(CreateVerifierError::MissingJwksUri))
+                Err(Error::new(
+                    ErrorKind::Config,
+                    CreateVerifierError::MissingJwksUri,
+                ))
             });
         };
 
@@ -72,18 +76,15 @@ impl JwsVerifierFactory for JwksSource {
                             uri.as_uri().clone(),
                             HeaderMap::new(),
                         )
-                        .await
-                        .map_err(BoxedError::from_err)?;
+                        .await?;
                         let public_jwks: PublicJwks = jwks.into();
 
-                        MultiKeyVerifier::from_jwks(&public_jwks, platform.as_ref())
-                            .await
-                            .map_err(BoxedError::from_err)
+                        MultiKeyVerifier::from_jwks(&public_jwks, platform.as_ref()).await
                     })
                 })
                 .build()
                 .await?;
-            Ok(BoxedJwsVerifier::new(RetryingVerifier::new(refreshing)))
+            Ok(Arc::new(RetryingVerifier::new(refreshing)) as Arc<dyn JwsVerifier>)
         })
     }
 }

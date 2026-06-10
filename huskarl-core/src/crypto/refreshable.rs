@@ -10,20 +10,20 @@ use std::{pin::Pin, sync::Arc};
 use arc_swap::ArcSwap;
 
 use crate::{
-    BoxedError,
+    error::Error,
     platform::{Duration, Instant, MaybeSendFuture, MaybeSendSync},
 };
 
 /// Object-safe wrapper for a `MaybeSendSync` factory closure.
 pub(crate) trait RefreshFactory<V>: MaybeSendSync {
-    fn call(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>>;
+    fn call(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>;
 }
 
 impl<V, F> RefreshFactory<V> for F
 where
-    F: Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>> + MaybeSendSync,
+    F: Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>> + MaybeSendSync,
 {
-    fn call(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>> {
+    fn call(&self) -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>> {
         self()
     }
 }
@@ -55,10 +55,10 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub(crate) async fn new(
-        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>>
+        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let initial = factory().await?;
         Ok(Self {
             value: ArcSwap::from_pointee(initial),
@@ -76,7 +76,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     ///
     /// Returns `Ok(true)` if a new value was fetched by this call, or `Ok(false)`
     /// if another task already refreshed concurrently.
-    pub(crate) async fn refresh(&self) -> Result<bool, BoxedError> {
+    pub(crate) async fn refresh(&self) -> Result<bool, Error> {
         let cur = self.value.load_full();
         let _lock = self.refresh_lock.lock().await;
         if !Arc::ptr_eq(&self.value.load_full(), &cur) {
@@ -137,7 +137,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub(crate) async fn new(
-        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, BoxedError>>>>
+        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,
         /// The time-to-live for the cached value.
@@ -149,7 +149,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         /// Minimum time between any two refresh attempts, regardless of outcome.
         #[builder(default = Duration::from_mins(1))]
         min_refresh_interval: Duration,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let inner = Refreshable::builder().factory(factory).build().await?;
         Ok(Self {
             inner,
@@ -226,7 +226,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     }
 
     /// Forces a refresh bypassing the scheduling policy, but still records the outcome.
-    pub(crate) async fn refresh(&self) -> Result<bool, BoxedError> {
+    pub(crate) async fn refresh(&self) -> Result<bool, Error> {
         let result = self.inner.refresh().await;
         self.record_refresh(result.is_ok());
         result
