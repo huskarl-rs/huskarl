@@ -1,6 +1,7 @@
 [tools]
 "aqua:drager/wasm-pack" = "latest"
 "cargo:cargo-docs-rs" = "latest"
+"cargo:cargo-fuzz" = "latest"
 "cargo:cargo-geiger" = "latest"
 "cargo:cargo-llvm-cov" = "latest"
 "cargo:cargo-msrv" = "latest"
@@ -21,6 +22,50 @@ run = "wasm-pack test --headless --firefox -- --lib"
 
 [tasks."test-wasm-node"]
 run = "wasm-pack test --node -- --lib"
+
+[tasks."fuzz"]
+description = "Fuzz a huskarl-core target from its seed corpus"
+dir = "huskarl-core"
+usage = '''
+arg "<target>" help="Fuzz target" {
+  choices "parse_compact_jws" "unseal_v1" "jwks"
+}
+flag "--time <seconds>" help="Stop after this many seconds (default: run until interrupted)"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+host=$(rustc -vV | sed -n 's/host: //p')
+mkdir -p "fuzz/corpus/${usage_target?}"
+cargo fuzz run "${usage_target?}" "fuzz/corpus/${usage_target?}" "fuzz/seeds/${usage_target?}" \
+  --target "$host" -- -max_len=16384 ${usage_time:+-max_total_time=$usage_time}
+'''
+
+[tasks."fuzz-coverage"]
+description = "Report what a fuzz target's accumulated corpus actually covers"
+dir = "huskarl-core"
+usage = '''
+arg "<target>" help="Fuzz target" {
+  choices "parse_compact_jws" "unseal_v1" "jwks"
+}
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+host=$(rustc -vV | sed -n 's/host: //p')
+mkdir -p "fuzz/corpus/${usage_target?}"
+cargo fuzz coverage "${usage_target?}" "fuzz/corpus/${usage_target?}" "fuzz/seeds/${usage_target?}" --target "$host"
+# The outer triple in the binary path is cargo-fuzz's own build host (x86_64
+# under Rosetta), not necessarily $host — glob it.
+bin=$(ls -t target/*/coverage/"$host"/release/"${usage_target?}" | head -1)
+llvm_cov=$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-cov
+profdata=fuzz/coverage/${usage_target?}/coverage.profdata
+"$llvm_cov" report "$bin" -instr-profile="$profdata" -ignore-filename-regex='\.rustup|\.cargo|fuzz_targets'
+"$llvm_cov" show "$bin" --format=html -instr-profile="$profdata" \
+  -ignore-filename-regex='\.rustup|\.cargo|fuzz_targets' > "fuzz/coverage/${usage_target?}/index.html"
+echo
+echo "HTML report: huskarl-core/fuzz/coverage/${usage_target?}/index.html"
+'''
 
 [tasks."docs-rs"]
 run = "cargo +nightly docs-rs"
