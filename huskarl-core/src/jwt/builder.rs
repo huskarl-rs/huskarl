@@ -1,4 +1,4 @@
-use std::{borrow::Cow, convert::Infallible};
+use std::borrow::Cow;
 
 use base64::prelude::*;
 use bon::Builder;
@@ -7,6 +7,7 @@ use snafu::prelude::*;
 
 use crate::{
     crypto::signer::JwsSigner,
+    error::{Error, ErrorKind},
     jwk::PublicJwk,
     jwt::{
         builder::jwt_builder::{SetClaims, SetExtraHeaders},
@@ -162,6 +163,7 @@ where
     }
 }
 
+/// Errors that occur when generating the JWS signing input.
 #[derive(Debug, Snafu)]
 pub enum JwsSigningInputError {
     /// Failed to encode claims as they could not be converted to JSON.
@@ -181,45 +183,6 @@ pub enum JwsSigningInputError {
     },
 }
 
-/// Errors that occur when attempting to serialize the JWT.
-#[derive(Debug, Snafu)]
-pub enum JwsSerializationError<SgnErr: crate::Error + 'static = Infallible> {
-    /// Failed to generate the JWT signing input.
-    GenerateSigningInput {
-        /// The underlying error.
-        source: JwsSigningInputError,
-    },
-    /// Failed to sign the JWT.
-    Sign {
-        /// The underlying signing error.
-        source: SgnErr,
-    },
-    /// Failed to normalize the URI for use in a `DPoP` proof.
-    NormalizeUri {
-        /// The underlying HTTP error.
-        source: http::Error,
-    },
-    /// No JWK thumbprint provided for proof.
-    ///
-    /// This indicates a logic error; the caller should provide a thumbprint
-    /// when `DPoP` is configured.
-    NoThumbprint,
-    /// No matching key was found for the given thumbprint.
-    NoMatchingKeyForThumbprint,
-}
-
-impl<SgnErr: crate::Error> crate::Error for JwsSerializationError<SgnErr> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            JwsSerializationError::GenerateSigningInput { .. }
-            | JwsSerializationError::NormalizeUri { .. }
-            | JwsSerializationError::NoMatchingKeyForThumbprint
-            | JwsSerializationError::NoThumbprint => false,
-            JwsSerializationError::Sign { source } => source.is_retryable(),
-        }
-    }
-}
-
 impl<ExtraHeaders, Claims> Jwt<'_, ExtraHeaders, Claims>
 where
     ExtraHeaders: Serialize + Clone,
@@ -231,19 +194,20 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if the JWT could not be serialized to JSON, or signing failed.
-    pub async fn to_jws_compact<Sgn: JwsSigner>(
+    /// Returns [`ErrorKind::Config`](crate::error::ErrorKind::Config) if the
+    /// JWT could not be serialized to JSON, or the signer's error if signing
+    /// failed.
+    pub async fn to_jws_compact(
         &self,
-        signer: &Sgn,
-    ) -> Result<SecretString, JwsSerializationError<Sgn::Error>> {
+        signer: &(impl JwsSigner + ?Sized),
+    ) -> Result<SecretString, Error> {
         let signing_input = self
             .generate_jwt_signing_input(&signer.jws_algorithm(), signer.key_id().as_deref())
-            .context(GenerateSigningInputSnafu)?;
+            .map_err(|source| {
+                Error::new(ErrorKind::Config, source).with_context("generating JWS signing input")
+            })?;
 
-        let signature = signer
-            .sign(signing_input.as_bytes())
-            .await
-            .context(SignSnafu)?;
+        let signature = signer.sign(signing_input.as_bytes()).await?;
 
         let signature_b64 = BASE64_URL_SAFE_NO_PAD.encode(&signature);
         let result = [signing_input, signature_b64].join(".");
@@ -297,12 +261,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use base64::prelude::*;
     use serde::Serialize;
 
-    use crate::{crypto::signer::JwsSigner, jwt::Jwt, platform::SystemTime};
+    use crate::{
+        crypto::signer::JwsSigner,
+        error::Error,
+        jwt::Jwt,
+        platform::{MaybeSendBoxFuture, SystemTime},
+    };
 
     #[derive(Debug, Clone)]
     struct MockJwsSigner {
@@ -311,15 +278,14 @@ mod tests {
     }
 
     impl JwsSigner for MockJwsSigner {
-        type Error = Infallible;
         fn jws_algorithm(&self) -> Cow<'_, str> {
             self.alg.into()
         }
         fn key_id(&self) -> Option<Cow<'_, str>> {
             self.kid.map(Into::into)
         }
-        async fn sign(&self, _input: &[u8]) -> Result<Vec<u8>, Infallible> {
-            Ok(vec![0xDE, 0xAD])
+        fn sign<'a>(&'a self, _input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+            Box::pin(async { Ok(vec![0xDE, 0xAD]) })
         }
     }
 

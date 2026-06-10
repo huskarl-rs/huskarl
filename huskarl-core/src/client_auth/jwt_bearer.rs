@@ -6,9 +6,8 @@ use http::Uri;
 use crate::{
     client_auth::{AuthenticationParams, ClientAuthentication},
     crypto::signer::JwsSignerSelector,
-    error::{Error, ErrorKind},
+    error::Error,
     jwt::Jwt,
-    legacy_error::from_legacy,
     platform::MaybeSendBoxFuture,
 };
 
@@ -45,9 +44,10 @@ use crate::{
 /// Benefits:
 ///  - simpler setup when a shared secret is acceptable
 #[derive(Debug, Clone, Builder)]
-pub struct JwtBearer<Sgn: JwsSignerSelector> {
+pub struct JwtBearer {
     /// The signer of the JWT.
-    signer: Sgn,
+    #[builder(with = |signer: impl JwsSignerSelector + 'static| Arc::new(signer) as Arc<dyn JwsSignerSelector>)]
+    signer: Arc<dyn JwsSignerSelector>,
     /// Sets the subject, if different to the issuer.
     #[builder(into)]
     subject: Option<String>,
@@ -88,7 +88,7 @@ pub enum Audience {
     Custom(Arc<str>),
 }
 
-impl<Sgn: JwsSignerSelector> ClientAuthentication for JwtBearer<Sgn> {
+impl ClientAuthentication for JwtBearer {
     fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
@@ -114,12 +114,9 @@ impl<Sgn: JwsSignerSelector> ClientAuthentication for JwtBearer<Sgn> {
                 .build();
 
             let assertion = jwt
-                .to_jws_compact(&self.signer.select_signer())
+                .to_jws_compact(&*self.signer.select_signer())
                 .await
-                .map_err(|source| {
-                    from_legacy(ErrorKind::Auth, source)
-                        .with_context("signing client assertion JWT")
-                })?;
+                .map_err(|err| err.with_context("signing client assertion JWT"))?;
 
             Ok(AuthenticationParams::builder()
                 .form_params(bon::map! {
@@ -134,8 +131,6 @@ impl<Sgn: JwsSignerSelector> ClientAuthentication for JwtBearer<Sgn> {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use base64::Engine as _;
 
     use super::*;
@@ -150,22 +145,20 @@ mod tests {
     }
 
     impl JwsSigner for MockJwsSigner {
-        type Error = Infallible;
         fn jws_algorithm(&self) -> std::borrow::Cow<'_, str> {
             self.alg.into()
         }
         fn key_id(&self) -> Option<std::borrow::Cow<'_, str>> {
             None
         }
-        async fn sign(&self, _input: &[u8]) -> Result<Vec<u8>, Infallible> {
-            Ok(vec![0xAB])
+        fn sign<'a>(&'a self, _input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+            Box::pin(async { Ok(vec![0xAB]) })
         }
     }
 
     impl JwsSignerSelector for MockJwsSigner {
-        type Signer = Self;
-        fn select_signer(&self) -> Self {
-            self.clone()
+        fn select_signer(&self) -> Arc<dyn JwsSigner> {
+            Arc::new(self.clone())
         }
     }
 

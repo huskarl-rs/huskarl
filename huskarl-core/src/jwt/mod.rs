@@ -11,7 +11,7 @@ mod parse;
 mod structure;
 pub mod validator;
 
-pub use builder::{JwsSerializationError, Jwt, JwtBuilder};
+pub use builder::{JwsSigningInputError, Jwt, JwtBuilder};
 pub use jti::{BoxedJtiUniquenessChecker, JtiUniquenessChecker};
 pub use parse::{JwsParseError, ParsedJws, parse_compact_jws};
 pub use structure::ConfirmationClaim;
