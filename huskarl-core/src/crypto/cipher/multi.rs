@@ -1,11 +1,13 @@
 use std::{borrow::Cow, sync::Arc};
 
+use futures_util::future::join_all;
+
 use crate::{
     crypto::{
         KeyMatchStrength,
-        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch},
+        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch, DecryptError},
     },
-    error::{Error, ErrorKind},
+    error::Error,
     platform::MaybeSendBoxFuture,
 };
 
@@ -24,6 +26,21 @@ use crate::{
 /// [`decrypt`](AeadDecryptor::decrypt) uses the optional [`CipherMatch`] to select
 /// the correct key when available. When no `CipherMatch` is provided, keys are
 /// tried in order.
+///
+/// Unlike [`MultiKeyVerifier`](crate::crypto::verifier::MultiKeyVerifier), which
+/// fails closed on ambiguity, trying every candidate is safe here: an AEAD tag
+/// self-authenticates, so a wrong key fails decryption rather than risking
+/// wrong-key acceptance. Try-all is standard practice for rotated symmetric
+/// keys (e.g. cookie-key rotation).
+///
+/// # Errors
+///
+/// When no candidate matches the criteria, decryption fails with
+/// [`DecryptError::NoMatchingKey`] without attempting decryption — this is
+/// what lets [`RetryingDecryptor`](crate::crypto::cipher::RetryingDecryptor)
+/// trigger a key refresh. When candidates were attempted and all failed, the
+/// last real failure is returned (non-retryable preferred over retryable),
+/// matching the verifier's dispatch discipline.
 #[derive(Debug)]
 pub struct MultiKeyDecryptor {
     decryptors: Vec<Arc<dyn AeadDecryptor>>,
@@ -35,10 +52,6 @@ impl MultiKeyDecryptor {
     pub fn new(decryptors: Vec<Arc<dyn AeadDecryptor>>) -> Self {
         Self { decryptors }
     }
-}
-
-fn no_matching_key() -> Error {
-    Error::from(ErrorKind::Crypto).with_context("no matching decryption key")
 }
 
 enum SelectedDecryptor<'a> {
@@ -75,14 +88,14 @@ impl MultiKeyDecryptor {
 
     async fn try_decrypt(
         decryptors: impl Iterator<Item = &Arc<dyn AeadDecryptor>>,
-        count: usize,
         cipher_match: Option<&CipherMatch<'_>>,
         nonce: &[u8],
         ciphertext: &[u8],
         tag: &[u8],
         aad: &[u8],
-    ) -> Result<Vec<u8>, Error> {
-        let mut last_error = None;
+    ) -> Result<Vec<u8>, DecryptError> {
+        let mut last_retryable = None;
+        let mut last_non_retryable = None;
 
         for decryptor in decryptors {
             match decryptor
@@ -90,16 +103,22 @@ impl MultiKeyDecryptor {
                 .await
             {
                 Ok(plaintext) => return Ok(plaintext),
-                Err(e) => last_error = Some(e),
+                // NoMatchingKey means the decryptor didn't attempt decryption —
+                // it is the implicit fallback, not a result to prefer over others.
+                Err(DecryptError::NoMatchingKey) => {}
+                Err(e) => {
+                    if e.is_retryable() {
+                        last_retryable = Some(e);
+                    } else {
+                        last_non_retryable = Some(e);
+                    }
+                }
             }
         }
 
-        match last_error {
-            // With exactly one candidate, the underlying failure is the
-            // meaningful diagnostic; with several, no single failure is.
-            Some(source) if count == 1 => Err(source),
-            _ => Err(no_matching_key()),
-        }
+        Err(last_non_retryable
+            .or(last_retryable)
+            .unwrap_or(DecryptError::NoMatchingKey))
     }
 }
 
@@ -125,7 +144,7 @@ impl AeadDecryptor for MultiKeyDecryptor {
         ciphertext: &'a [u8],
         tag: &'a [u8],
         aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         Box::pin(async move {
             if let Some(m) = cipher_match {
                 return match self.select(m) {
@@ -135,10 +154,8 @@ impl AeadDecryptor for MultiKeyDecryptor {
                             .await
                     }
                     SelectedDecryptor::ByAlgorithm(decryptors) => {
-                        let count = decryptors.len();
                         Self::try_decrypt(
                             decryptors.into_iter(),
-                            count,
                             cipher_match,
                             nonce,
                             ciphertext,
@@ -147,21 +164,21 @@ impl AeadDecryptor for MultiKeyDecryptor {
                         )
                         .await
                     }
-                    SelectedDecryptor::None => Err(no_matching_key()),
+                    SelectedDecryptor::None => Err(DecryptError::NoMatchingKey),
                 };
             }
 
             // No cipher_match — try all keys in order.
-            Self::try_decrypt(
-                self.decryptors.iter(),
-                self.decryptors.len(),
-                None,
-                nonce,
-                ciphertext,
-                tag,
-                aad,
-            )
-            .await
+            Self::try_decrypt(self.decryptors.iter(), None, nonce, ciphertext, tag, aad).await
+        })
+    }
+
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        Box::pin(async move {
+            join_all(self.decryptors.iter().map(AeadDecryptor::try_refresh))
+                .await
+                .into_iter()
+                .any(|b| b)
         })
     }
 }
@@ -217,8 +234,12 @@ impl<E: AeadEncryptor> AeadDecryptor for MultiKeyCipher<E> {
         ciphertext: &'a [u8],
         tag: &'a [u8],
         aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         self.decryptor
             .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+    }
+
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        self.decryptor.try_refresh()
     }
 }
