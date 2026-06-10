@@ -37,6 +37,7 @@ pub type BoxedSource = Box<dyn std::error::Error + 'static>;
 #[derive(Debug)]
 pub struct Error {
     kind: ErrorKind,
+    context: Option<String>,
     oauth_error_code: Option<String>,
     source: Option<BoxedSource>,
 }
@@ -76,9 +77,18 @@ impl Error {
     pub fn new(kind: ErrorKind, source: impl Into<BoxedSource>) -> Self {
         Self {
             kind,
+            context: None,
             oauth_error_code: None,
             source: Some(source.into()),
         }
+    }
+
+    /// Attach human-readable context about the failed operation (for example
+    /// the endpoint being called). Shown as a prefix in the `Display` output.
+    #[must_use]
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        self.context = Some(context.into());
+        self
     }
 
     /// Attach the raw RFC 6749 §5.2 error code returned by the server.
@@ -111,6 +121,7 @@ impl From<ErrorKind> for Error {
     fn from(kind: ErrorKind) -> Self {
         Self {
             kind,
+            context: None,
             oauth_error_code: None,
             source: None,
         }
@@ -119,6 +130,9 @@ impl From<ErrorKind> for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(context) = &self.context {
+            write!(f, "{context}: ")?;
+        }
         self.kind.fmt(f)?;
         if let Some(code) = &self.oauth_error_code {
             write!(f, " (oauth error code: {code})")?;
@@ -154,7 +168,7 @@ impl std::error::Error for Error {
 
 /// Interop with the [`crate::Error`] trait while both exist.
 ///
-/// The trait is deleted in Phase 2 of the dyn-first migration, and this impl
+/// The trait is deleted in Phase 1 of the dyn-first migration, and this impl
 /// goes with it.
 impl crate::Error for Error {
     fn is_retryable(&self) -> bool {
@@ -201,6 +215,16 @@ mod tests {
 
         let sourceless = Error::from(ErrorKind::Config);
         assert!(std::error::Error::source(&sourceless).is_none());
+    }
+
+    #[test]
+    fn display_prefixes_context() {
+        let err = Error::from(ErrorKind::Transport { retryable: false })
+            .with_context("fetching https://as.example/jwks.json");
+        assert_eq!(
+            err.to_string(),
+            "fetching https://as.example/jwks.json: transport failure"
+        );
     }
 
     #[test]

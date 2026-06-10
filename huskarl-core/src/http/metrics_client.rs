@@ -2,6 +2,7 @@ use bytes::Bytes;
 use http::Request;
 
 use super::{HttpClient, HttpResponse};
+use crate::{error::Error, platform::MaybeSendBoxFuture};
 
 /// An [`HttpClient`] wrapper that records a `huskarl.http.request` counter for each request.
 ///
@@ -52,30 +53,31 @@ impl<C> MetricsHttpClient<C> {
 }
 
 impl<C: HttpClient> HttpClient for MetricsHttpClient<C> {
-    type Response = C::Response;
-    type Error = C::Error;
-    type ResponseError = C::ResponseError;
+    fn execute(
+        &self,
+        request: Request<Bytes>,
+    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+        Box::pin(async move {
+            let method = request.method().to_string();
+            let host = request.uri().host().unwrap_or("").to_owned();
 
-    async fn execute(&self, request: Request<Bytes>) -> Result<Self::Response, Self::Error> {
-        let method = request.method().to_string();
-        let host = request.uri().host().unwrap_or("").to_owned();
+            let result = self.inner.execute(request).await;
 
-        let result = self.inner.execute(request).await;
+            let outcome = match &result {
+                Ok(resp) if resp.status.is_success() => "success",
+                _ => "error",
+            };
 
-        let outcome = match &result {
-            Ok(resp) if resp.status().is_success() => "success",
-            _ => "error",
-        };
+            ::metrics::counter!(
+                "huskarl.http.request",
+                "host" => host,
+                "method" => method,
+                "outcome" => outcome,
+            )
+            .increment(1);
 
-        ::metrics::counter!(
-            "huskarl.http.request",
-            "host" => host,
-            "method" => method,
-            "outcome" => outcome,
-        )
-        .increment(1);
-
-        result
+            result
+        })
     }
 
     fn uses_mtls(&self) -> bool {

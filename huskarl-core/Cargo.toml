@@ -35,7 +35,6 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 hex = { version = "0.4", default-features = false, features = ["std"] }
 http = { version = "1", default-features = false, features = ["std"] }
 rand = { workspace = true }
-reqwest = { version = "0.13", default-features = false, optional = true }
 secrecy = { version = "0.10.3", default-features = false }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
@@ -63,6 +62,5 @@ wasm-bindgen-test = "0.3"
 ### Integration tests require multi-threaded runtime and network access.
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
 httpmock = "0.8.3"
 tempfile = "3"
