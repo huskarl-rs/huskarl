@@ -1,0 +1,42 @@
+[package]
+name = "huskarl-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+futures-executor = { version = "0.3", default-features = false, features = ["std"] }
+serde_json = "1"
+
+[dependencies.huskarl-core]
+path = ".."
+
+[[bin]]
+name = "parse_compact_jws"
+path = "fuzz_targets/parse_compact_jws.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unseal_v1"
+path = "fuzz_targets/unseal_v1.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "jwks"
+path = "fuzz_targets/jwks.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
