@@ -187,6 +187,11 @@ pub struct RefreshGrant {
     #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
     mtls_token_endpoint: Option<EndpointUrl>,
 
+    /// The endpoint used for token requests: the mTLS alias when the HTTP
+    /// client uses mTLS, the primary token endpoint otherwise.
+    #[builder(skip = crate::grant::core::resolve_mtls_alias(http_client.as_ref(), &token_endpoint, mtls_token_endpoint.as_ref()))]
+    effective_token_endpoint: EndpointUrl,
+
     /// Supported endpoint auth methods; used to auto-select basic or
     /// form auth for client secrets.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
@@ -220,12 +225,11 @@ impl OAuth2ExchangeGrant for RefreshGrant {
         self.client_auth.as_ref()
     }
 
+    // Deliberately returns the build-time-resolved endpoint, not the raw
+    // `token_endpoint` builder input.
+    #[allow(clippy::misnamed_getters)]
     fn token_endpoint(&self) -> &EndpointUrl {
-        &self.token_endpoint
-    }
-
-    fn mtls_token_endpoint(&self) -> Option<&EndpointUrl> {
-        self.mtls_token_endpoint.as_ref()
+        &self.effective_token_endpoint
     }
 
     fn dpop(&self) -> &dyn AuthorizationServerDPoP {

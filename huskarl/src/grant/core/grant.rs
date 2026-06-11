@@ -59,23 +59,11 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         None
     }
 
-    /// Returns the token endpoint URL.
+    /// Returns the token endpoint URL used for token requests.
+    ///
+    /// Already resolved at grant build time to the RFC 8705 §5 mTLS alias
+    /// when the grant's HTTP client uses mTLS.
     fn token_endpoint(&self) -> &EndpointUrl;
-
-    /// Returns the mTLS alias for the token endpoint, if any (RFC 8705 §5).
-    fn mtls_token_endpoint(&self) -> Option<&EndpointUrl> {
-        None
-    }
-
-    /// Returns the effective token endpoint, preferring the mTLS alias when `uses_mtls` is true.
-    fn effective_token_endpoint(&self, uses_mtls: bool) -> &EndpointUrl {
-        if uses_mtls {
-            self.mtls_token_endpoint()
-                .unwrap_or_else(|| self.token_endpoint())
-        } else {
-            self.token_endpoint()
-        }
-    }
 
     /// Returns the configured `DPoP` implementation (if any).
     fn dpop(&self) -> &dyn AuthorizationServerDPoP;
@@ -116,7 +104,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .or_else(|| self.dpop().get_current_thumbprint());
 
             let http_client = self.http_client();
-            let effective_endpoint = self.effective_token_endpoint(http_client.uses_mtls());
+            let endpoint = self.token_endpoint();
             let form = self.build_form(params);
 
             let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
@@ -125,7 +113,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                     .authentication_params(
                         self.client_id(),
                         self.issuer(),
-                        effective_endpoint.as_uri(),
+                        endpoint.as_uri(),
                         self.allowed_auth_methods(),
                     )
                     .await?;
@@ -135,7 +123,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                     .dpop(self.dpop())
                     .maybe_dpop_jkt(dpop_jkt.as_deref())
                     .form(&form)
-                    .uri(effective_endpoint.as_uri())
+                    .uri(endpoint.as_uri())
                     .build()
                     .execute(http_client)
                     .await
