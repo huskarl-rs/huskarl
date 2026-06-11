@@ -1,4 +1,10 @@
-use huskarl_core::platform::{MaybeSend, MaybeSendSync};
+//! mTLS configuration for [`ReqwestClient`](crate::ReqwestClient).
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "rustls-tls", feature = "native-tls")
+))]
+use huskarl_core::ErrorKind;
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
 use huskarl_core::secrets::SecretBytes;
 #[cfg(all(
@@ -6,11 +12,10 @@ use huskarl_core::secrets::SecretBytes;
     any(feature = "rustls-tls", feature = "native-tls")
 ))]
 use huskarl_core::secrets::{Secret, SecretString};
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "rustls-tls", feature = "native-tls")
-))]
-use snafu::Snafu;
+use huskarl_core::{
+    Error,
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
+};
 
 /// The result of applying an [`MtlsProvider`] to a [`reqwest::ClientBuilder`].
 pub struct MtlsApplyOutput {
@@ -28,15 +33,18 @@ pub struct MtlsApplyOutput {
 }
 
 /// Trait for configuring mTLS on a `reqwest::ClientBuilder`.
+///
+/// This trait is dyn-capable: implement it on your provider type and write
+/// the method body as `Box::pin(async move { ... })`. Secret-fetch failures
+/// should be propagated as-is (they are already classified); identity-parse
+/// failures should be classified as
+/// [`ErrorKind::Config`](huskarl_core::ErrorKind).
 pub trait MtlsProvider: MaybeSendSync {
-    /// The error type returned by this provider.
-    type Error: huskarl_core::Error + 'static;
-
     /// Applies the mTLS configuration to the provided builder.
     fn apply(
         &self,
         builder: reqwest::ClientBuilder,
-    ) -> impl Future<Output = Result<MtlsApplyOutput, Self::Error>> + MaybeSend;
+    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>>;
 
     /// Returns true if this provider configures mTLS.
     fn uses_mtls(&self) -> bool;
@@ -47,16 +55,19 @@ pub trait MtlsProvider: MaybeSendSync {
 pub struct NoMtls;
 
 impl MtlsProvider for NoMtls {
-    type Error = std::convert::Infallible;
-
-    async fn apply(&self, builder: reqwest::ClientBuilder) -> Result<MtlsApplyOutput, Self::Error> {
-        Ok(MtlsApplyOutput {
-            builder,
-            #[cfg(all(
-                not(target_arch = "wasm32"),
-                any(feature = "rustls-tls", feature = "native-tls")
-            ))]
-            identity: None,
+    fn apply(
+        &self,
+        builder: reqwest::ClientBuilder,
+    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
+        Box::pin(async move {
+            Ok(MtlsApplyOutput {
+                builder,
+                #[cfg(all(
+                    not(target_arch = "wasm32"),
+                    any(feature = "rustls-tls", feature = "native-tls")
+                ))]
+                identity: None,
+            })
         })
     }
 
@@ -84,50 +95,25 @@ impl<S: Secret<Output = SecretString>> MtlsPem<S> {
     }
 }
 
-/// Errors that can occur when configuring mTLS from a PEM identity.
-#[cfg(all(not(target_arch = "wasm32"), feature = "rustls-tls"))]
-#[derive(Debug, Snafu)]
-pub enum MtlsPemError<E: huskarl_core::Error + 'static> {
-    /// Failed to fetch the secret value.
-    #[snafu(display("Failed to fetch mTLS secret"))]
-    FetchSecret {
-        /// The underlying secret error.
-        source: E,
-    },
-    /// Failed to parse the identity.
-    #[snafu(display("Failed to parse mTLS identity"))]
-    ParseIdentity {
-        /// The underlying reqwest error.
-        source: reqwest::Error,
-    },
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "rustls-tls"))]
-impl<E: huskarl_core::Error + 'static> huskarl_core::Error for MtlsPemError<E> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::FetchSecret { source } => source.is_retryable(),
-            Self::ParseIdentity { .. } => false,
-        }
-    }
-}
-
 #[cfg(all(not(target_arch = "wasm32"), feature = "rustls-tls"))]
 impl<S: Secret<Output = SecretString>> MtlsProvider for MtlsPem<S> {
-    type Error = MtlsPemError<S::Error>;
-
-    async fn apply(&self, builder: reqwest::ClientBuilder) -> Result<MtlsApplyOutput, Self::Error> {
-        use snafu::ResultExt;
-        let secret_output = self
-            .secret
-            .get_secret_value()
-            .await
-            .context(FetchSecretSnafu)?;
-        let identity = reqwest::Identity::from_pem(secret_output.value.expose_secret().as_bytes())
-            .context(ParseIdentitySnafu)?;
-        Ok(MtlsApplyOutput {
-            builder: builder.identity(identity.clone()),
-            identity: Some(identity),
+    fn apply(
+        &self,
+        builder: reqwest::ClientBuilder,
+    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
+        Box::pin(async move {
+            let secret_output = self
+                .secret
+                .get_secret_value()
+                .await
+                .map_err(|e| e.with_context("fetching mTLS secret"))?;
+            let identity =
+                reqwest::Identity::from_pem(secret_output.value.expose_secret().as_bytes())
+                    .map_err(parse_identity_error)?;
+            Ok(MtlsApplyOutput {
+                builder: builder.identity(identity.clone()),
+                identity: Some(identity),
+            })
         })
     }
 
@@ -155,67 +141,34 @@ impl<D: Secret<Output = SecretBytes>, P: Secret<Output = SecretString>> MtlsPkcs
     }
 }
 
-/// Errors that can occur when configuring mTLS from a PKCS#12 archive.
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
-#[derive(Debug, Snafu)]
-#[snafu(module)]
-pub enum MtlsPkcs12Error<DE: huskarl_core::Error + 'static, PE: huskarl_core::Error + 'static> {
-    /// Failed to fetch the DER secret.
-    #[snafu(display("Failed to fetch mTLS DER secret"))]
-    FetchDer {
-        /// The underlying secret error.
-        source: DE,
-    },
-    /// Failed to fetch the password secret.
-    #[snafu(display("Failed to fetch mTLS password secret"))]
-    FetchPassword {
-        /// The underlying secret error.
-        source: PE,
-    },
-    /// Failed to parse the PKCS#12 identity.
-    #[snafu(display("Failed to parse mTLS identity"))]
-    ParseIdentity {
-        /// The underlying reqwest error.
-        source: reqwest::Error,
-    },
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
-impl<DE: huskarl_core::Error + 'static, PE: huskarl_core::Error + 'static> huskarl_core::Error
-    for MtlsPkcs12Error<DE, PE>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::FetchDer { source } => source.is_retryable(),
-            Self::FetchPassword { source } => source.is_retryable(),
-            Self::ParseIdentity { .. } => false,
-        }
-    }
-}
-
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
 impl<D: Secret<Output = SecretBytes>, P: Secret<Output = SecretString>> MtlsProvider
     for MtlsPkcs12<D, P>
 {
-    type Error = MtlsPkcs12Error<D::Error, P::Error>;
-
-    async fn apply(&self, builder: reqwest::ClientBuilder) -> Result<MtlsApplyOutput, Self::Error> {
-        use mtls_pkcs12_error::*;
-        use snafu::ResultExt;
-        let der = self.der.get_secret_value().await.context(FetchDerSnafu)?;
-        let password = self
-            .password
-            .get_secret_value()
-            .await
-            .context(FetchPasswordSnafu)?;
-        let identity = reqwest::Identity::from_pkcs12_der(
-            der.value.expose_secret(),
-            password.value.expose_secret(),
-        )
-        .context(ParseIdentitySnafu)?;
-        Ok(MtlsApplyOutput {
-            builder: builder.identity(identity.clone()),
-            identity: Some(identity),
+    fn apply(
+        &self,
+        builder: reqwest::ClientBuilder,
+    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
+        Box::pin(async move {
+            let der = self
+                .der
+                .get_secret_value()
+                .await
+                .map_err(|e| e.with_context("fetching mTLS DER secret"))?;
+            let password = self
+                .password
+                .get_secret_value()
+                .await
+                .map_err(|e| e.with_context("fetching mTLS password secret"))?;
+            let identity = reqwest::Identity::from_pkcs12_der(
+                der.value.expose_secret(),
+                password.value.expose_secret(),
+            )
+            .map_err(parse_identity_error)?;
+            Ok(MtlsApplyOutput {
+                builder: builder.identity(identity.clone()),
+                identity: Some(identity),
+            })
         })
     }
 
@@ -247,55 +200,39 @@ impl<K: Secret<Output = SecretString>> MtlsPkcs8Pem<K> {
     }
 }
 
-/// Errors that can occur when configuring mTLS from a PKCS#8 PEM identity.
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
-#[derive(Debug, Snafu)]
-#[snafu(module)]
-pub enum MtlsPkcs8PemError<KE: huskarl_core::Error + 'static> {
-    /// Failed to fetch the private key secret.
-    #[snafu(display("Failed to fetch mTLS private key secret"))]
-    FetchKey {
-        /// The underlying secret error.
-        source: KE,
-    },
-    /// Failed to parse the PKCS#8 PEM identity.
-    #[snafu(display("Failed to parse mTLS identity"))]
-    ParseIdentity {
-        /// The underlying reqwest error.
-        source: reqwest::Error,
-    },
-}
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
-impl<KE: huskarl_core::Error + 'static> huskarl_core::Error for MtlsPkcs8PemError<KE> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::FetchKey { source } => source.is_retryable(),
-            Self::ParseIdentity { .. } => false,
-        }
-    }
-}
-
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
 impl<K: Secret<Output = SecretString>> MtlsProvider for MtlsPkcs8Pem<K> {
-    type Error = MtlsPkcs8PemError<K::Error>;
-
-    async fn apply(&self, builder: reqwest::ClientBuilder) -> Result<MtlsApplyOutput, Self::Error> {
-        use mtls_pkcs8_pem_error::*;
-        use snafu::ResultExt;
-        let key = self.key.get_secret_value().await.context(FetchKeySnafu)?;
-        let identity = reqwest::Identity::from_pkcs8_pem(
-            self.cert_chain.as_bytes(),
-            key.value.expose_secret().as_bytes(),
-        )
-        .context(ParseIdentitySnafu)?;
-        Ok(MtlsApplyOutput {
-            builder: builder.identity(identity.clone()),
-            identity: Some(identity),
+    fn apply(
+        &self,
+        builder: reqwest::ClientBuilder,
+    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
+        Box::pin(async move {
+            let key = self
+                .key
+                .get_secret_value()
+                .await
+                .map_err(|e| e.with_context("fetching mTLS private key secret"))?;
+            let identity = reqwest::Identity::from_pkcs8_pem(
+                self.cert_chain.as_bytes(),
+                key.value.expose_secret().as_bytes(),
+            )
+            .map_err(parse_identity_error)?;
+            Ok(MtlsApplyOutput {
+                builder: builder.identity(identity.clone()),
+                identity: Some(identity),
+            })
         })
     }
 
     fn uses_mtls(&self) -> bool {
         true
     }
+}
+
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "rustls-tls", feature = "native-tls")
+))]
+fn parse_identity_error(source: reqwest::Error) -> Error {
+    Error::new(ErrorKind::Config, source).with_context("parsing mTLS identity")
 }

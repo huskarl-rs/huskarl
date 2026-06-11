@@ -3,16 +3,15 @@
 //! It provides the necessary integration to allow reqwest to make calls for
 //! huskarl. Also included is mTLS configuration.
 
-use snafu::ResultExt;
 pub mod mtls;
 
 use bytes::Bytes;
-use http::{HeaderMap, Request, StatusCode};
+use http::Request;
 use huskarl_core::{
-    BoxedError,
-    http::{HttpClient, HttpResponse},
+    Error, ErrorKind,
+    http::{HttpClient, HttpResponse, Idempotency},
+    platform::MaybeSendBoxFuture,
 };
-use snafu::Snafu;
 
 #[derive(Clone)]
 pub struct ReqwestClient {
@@ -27,20 +26,6 @@ pub struct ReqwestClient {
         any(feature = "rustls-tls", feature = "native-tls")
     ))]
     identity: Option<reqwest::Identity>,
-}
-
-#[derive(Debug, Snafu)]
-pub enum ReqwestBuilderError {
-    #[snafu(display("Failed to build HTTP client"))]
-    Build { source: reqwest::Error },
-    #[snafu(display("Failed to configure mTLS"))]
-    Mtls { source: BoxedError },
-}
-
-impl huskarl_core::Error for ReqwestBuilderError {
-    fn is_retryable(&self) -> bool {
-        false
-    }
 }
 
 impl From<reqwest::Client> for ReqwestClient {
@@ -78,18 +63,23 @@ impl ReqwestClient {
         root_certificates: Option<Vec<reqwest::Certificate>>,
 
         /// Whether to follow HTTP redirects. Defaults to `false`.
+        ///
+        /// Not available on `wasm32`, where the browser's fetch API controls
+        /// redirect handling.
+        #[cfg(not(target_arch = "wasm32"))]
         #[builder(default = false)]
         follow_redirects: bool,
 
         configure_builder: Option<
             Box<dyn FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder>,
         >,
-    ) -> Result<Self, ReqwestBuilderError> {
-        let mut reqwest_builder = if follow_redirects {
-            reqwest::Client::builder()
-        } else {
-            reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
-        };
+    ) -> Result<Self, Error> {
+        let mut reqwest_builder = reqwest::Client::builder();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if !follow_redirects {
+            reqwest_builder = reqwest_builder.redirect(reqwest::redirect::Policy::none());
+        }
 
         if let Some(user_agent) = user_agent {
             reqwest_builder = reqwest_builder.user_agent(user_agent)
@@ -108,15 +98,12 @@ impl ReqwestClient {
         }
 
         let uses_mtls = mtls.uses_mtls();
-        let mtls_output =
-            mtls.apply(reqwest_builder)
-                .await
-                .map_err(|e| ReqwestBuilderError::Mtls {
-                    source: BoxedError::from_err(e),
-                })?;
+        let mtls_output = mtls.apply(reqwest_builder).await?;
 
         Ok(Self {
-            client: mtls_output.builder.build().context(BuildSnafu)?,
+            client: mtls_output.builder.build().map_err(|e| {
+                Error::new(ErrorKind::Config, e).with_context("building HTTP client")
+            })?,
             uses_mtls,
             #[cfg(all(
                 not(target_arch = "wasm32"),
@@ -142,96 +129,72 @@ impl ReqwestClient {
     }
 }
 
-#[derive(Debug)]
-pub struct ReqwestResponse(reqwest::Response);
+/// Classifies a `reqwest::Error` as a transport failure.
+///
+/// Connection-establishment failures are always retryable: the request
+/// provably never reached the server, so a retry is safe even for requests
+/// of unknown idempotency (authorization-code exchange, refresh-token
+/// rotation). Timeouts and interrupted response bodies are retryable only
+/// for requests known to be idempotent — the first attempt may have been
+/// processed and only the response lost.
+///
+/// On `wasm32`, fetch errors are opaque, so nothing is marked retryable.
+fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
+    #[cfg(not(target_arch = "wasm32"))]
+    let retryable = source.is_connect()
+        || (matches!(idempotency, Idempotency::Idempotent)
+            && (source.is_timeout() || source.is_body()));
+    #[cfg(target_arch = "wasm32")]
+    let retryable = {
+        let _ = idempotency;
+        false
+    };
 
-impl AsRef<reqwest::Response> for ReqwestResponse {
-    fn as_ref(&self) -> &reqwest::Response {
-        &self.0
-    }
-}
-
-#[derive(Debug, Snafu)]
-#[snafu(transparent)]
-pub struct ReqwestError {
-    /// The underlying `reqwest::Error`.
-    source: reqwest::Error,
-}
-
-impl AsRef<reqwest::Error> for ReqwestError {
-    fn as_ref(&self) -> &reqwest::Error {
-        &self.source
-    }
+    Error::new(ErrorKind::Transport { retryable }, source)
 }
 
 impl HttpClient for ReqwestClient {
-    type Response = ReqwestResponse;
-    type Error = ReqwestError;
-    type ResponseError = <Self::Response as HttpResponse>::Error;
-
     fn uses_mtls(&self) -> bool {
         self.uses_mtls
     }
 
     /// Executes an `http::Request` using the `reqwest::Client`.
     ///
-    /// This method converts the generic `http::Request<Bytes>` into a `reqwest::Request`
-    /// and then sends it.
-    ///
-    /// # Arguments
-    ///
-    /// * `request`: The `http::Request` to be executed.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing the `reqwest::Response` on success, or a `reqwest::Error` on failure.
-    async fn execute(&self, request: Request<Bytes>) -> Result<Self::Response, Self::Error> {
-        let (parts, body) = request.into_parts();
-        let reqwest_request = self
-            .client
-            .request(parts.method, parts.uri.to_string())
-            .headers(parts.headers)
-            .body(body)
-            .build()?;
+    /// Converts the `http::Request<Bytes>` into a `reqwest::Request`, sends
+    /// it, and reads the full response body.
+    fn execute(
+        &self,
+        request: Request<Bytes>,
+        idempotency: Idempotency,
+    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+        Box::pin(async move {
+            let (parts, body) = request.into_parts();
+            let reqwest_request = self
+                .client
+                .request(parts.method, parts.uri.to_string())
+                .headers(parts.headers)
+                .body(body)
+                .build()
+                .map_err(|e| transport_error(e, idempotency))?;
 
-        Ok(self
-            .client
-            .execute(reqwest_request)
-            .await
-            .map(ReqwestResponse)?)
-    }
-}
+            let response = self
+                .client
+                .execute(reqwest_request)
+                .await
+                .map_err(|e| transport_error(e, idempotency))?;
 
-impl HttpResponse for ReqwestResponse {
-    type Error = ReqwestError;
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| transport_error(e, idempotency))?;
 
-    /// Returns the HTTP status code of the `reqwest::Response`.
-    fn status(&self) -> StatusCode {
-        self.0.status()
-    }
-
-    /// Returns the `reqwest::Response`'s headers.
-    fn headers(&self) -> HeaderMap {
-        self.0.headers().clone()
-    }
-
-    /// Consumes the `reqwest::Response` and asynchronously returns its body as `bytes::Bytes`.
-    ///
-    /// This method leverages `reqwest::Response::bytes()` to read the full body.
-    async fn body(self) -> Result<Bytes, Self::Error> {
-        Ok(self.0.bytes().await?)
-    }
-}
-
-impl huskarl_core::Error for ReqwestError {
-    fn is_retryable(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.source.is_connect()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            false
-        }
+            Ok(HttpResponse {
+                status,
+                headers,
+                body,
+            })
+        })
     }
 }

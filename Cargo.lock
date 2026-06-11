@@ -1231,14 +1231,13 @@ dependencies = [
 
 [[package]]
 name = "huskarl-reqwest"
-version = "0.6.0"
+version = "0.7.0-pre.0"
 dependencies = [
  "bon",
  "bytes",
  "http",
- "huskarl-core 0.6.4",
+ "huskarl-core 0.7.0-pre.0",
  "reqwest",
- "snafu",
 ]
 
 [[package]]

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changes
 
  - Bump huskarl-core to 0.7.0-pre.0 and adopt its dyn-trait design.
+ - The `follow_redirects` parameter is not present on wasm.
 
 # [0.6.0] - 2026-05-25
 

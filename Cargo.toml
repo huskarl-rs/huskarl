@@ -25,7 +25,7 @@ exclude = ["integration", "huskarl-core/fuzz"]
 [workspace.dependencies]
 huskarl-core = { version = "0.7.0-pre.0", path = "./huskarl-core" }
 huskarl-macros = { version = "0.2", path = "./huskarl-macros" }
-huskarl-reqwest = { version = "0.6", path = "./huskarl-reqwest" }
+huskarl-reqwest = { version = "0.7.0-pre.0", path = "./huskarl-reqwest" }
 huskarl-crypto-native = { version = "0.8.0-pre.0", path = "./huskarl-crypto-native" }
 huskarl-crypto-webcrypto = { version = "0.8.0-pre.0", path = "./huskarl-crypto-webcrypto" }
 
