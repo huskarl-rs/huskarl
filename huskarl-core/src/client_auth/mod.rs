@@ -44,12 +44,18 @@ use crate::{
 /// an underlying fetch (e.g. a secret store) as
 /// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport).
 pub trait ClientAuthentication: MaybeSendSync {
-    /// Returns the authentication parameters for the token request.
+    /// Returns the authentication parameters for a request.
+    ///
+    /// `endpoint` is the endpoint being authenticated to — the token endpoint
+    /// for grant exchanges, but equally the PAR, revocation, or introspection
+    /// endpoint. Implementations should not assume it is the token endpoint;
+    /// per draft-ietf-oauth-rfc7523bis, client assertions audience the
+    /// issuer, not an endpoint URL (see [`Audience`]).
     fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        token_endpoint: &'a Uri,
+        endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>>;
 }
@@ -59,10 +65,10 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for &T {
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        token_endpoint: &'a Uri,
+        endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(client_id, issuer, token_endpoint, allowed_methods)
+        (**self).authentication_params(client_id, issuer, endpoint, allowed_methods)
     }
 }
 
@@ -71,10 +77,10 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Box<T> {
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        token_endpoint: &'a Uri,
+        endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(client_id, issuer, token_endpoint, allowed_methods)
+        (**self).authentication_params(client_id, issuer, endpoint, allowed_methods)
     }
 }
 
@@ -83,10 +89,10 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Arc<T> {
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        token_endpoint: &'a Uri,
+        endpoint: &'a Uri,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(client_id, issuer, token_endpoint, allowed_methods)
+        (**self).authentication_params(client_id, issuer, endpoint, allowed_methods)
     }
 }
 

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 
+ - `ClientAuthentication::authentication_params`: the `token_endpoint`
+   parameter is renamed to `endpoint` — it is whatever endpoint is being
+   authenticated to (token, PAR, revocation, introspection).
  - Avoid panicking in JWT creation or validation (in time handling).
  - Timestamps in JWTs are represented by SystemTime instead of u64.
  - Burn JTI after all other JWT checks have passed.

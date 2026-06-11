@@ -17,7 +17,7 @@ impl ClientAuthentication for NoAuth {
         &'a self,
         client_id: &'a str,
         _issuer: Option<&'a str>,
-        _token_endpoint: &'a Uri,
+        _endpoint: &'a Uri,
         _allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {

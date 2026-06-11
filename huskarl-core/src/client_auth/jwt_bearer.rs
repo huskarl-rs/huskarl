@@ -124,7 +124,7 @@ impl ClientAuthentication for JwtBearer {
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        token_endpoint: &'a Uri,
+        endpoint: &'a Uri,
         _allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
@@ -132,7 +132,7 @@ impl ClientAuthentication for JwtBearer {
                 Audience::Issuer => issuer
                     .ok_or_else(|| Error::new(ErrorKind::Config, MissingIssuer))?
                     .to_string(),
-                Audience::TokenEndpoint => token_endpoint.to_string(),
+                Audience::TokenEndpoint => endpoint.to_string(),
                 Audience::Custom(custom) => custom.to_string(),
             };
 
