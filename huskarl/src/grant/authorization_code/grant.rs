@@ -111,7 +111,6 @@ pub struct AuthorizationCodeGrant<IdClaims: Clone + for<'de> Deserialize<'de> + 
     metadata = crate::core::server_metadata::AuthorizationServerMetadata,
     method(name = "builder_from_metadata_internal", vis = "")
 )]
-#[huskarl_macros::try_builder]
 #[bon::bon]
 impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClaims> {
     /// Creates a new [`AuthorizationCodeGrant`] instance.
@@ -151,12 +150,26 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
         #[from_metadata(path = "issuer")]
         issuer: Option<String>,
         /// The URL of the token endpoint.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "token_endpoint")]
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         token_endpoint: EndpointUrl,
         /// The mTLS alias for the token endpoint (RFC 8705 §5).
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         mtls_token_endpoint: Option<EndpointUrl>,
         /// Supported endpoint auth methods; used to auto-select basic or
         /// form auth for client secrets.
@@ -179,17 +192,45 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
             default = Arc::new(NoJar),
         )]
         jar: Arc<dyn Jar>,
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "jwks_uri?")]
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         jwks_uri: Option<EndpointUrl>,
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "authorization_endpoint?")]
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         authorization_endpoint: EndpointUrl,
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "pushed_authorization_request_endpoint?")]
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         pushed_authorization_request_endpoint: Option<EndpointUrl>,
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "mtls_endpoint_aliases?.pushed_authorization_request_endpoint?")]
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         mtls_pushed_authorization_request_endpoint: Option<EndpointUrl>,
         #[from_metadata(path = "require_pushed_authorization_requests")]
         #[builder(default)]

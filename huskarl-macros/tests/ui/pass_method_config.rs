@@ -2,8 +2,8 @@
 //! - `method(name = "…", vis = "")` config on `#[from_metadata]`
 //! - the generated `{Struct}{PascalMethod}State` alias spelled out by a
 //!   hand-written wrapper (the `userinfo.rs` / `authorization_code` pattern)
-//! - a gating field that also carries `#[try_setter]` (routed through bon's
-//!   `_internal` setter, bypassing the fallible conversion)
+//! - a gating field whose setter is a fallible bon `with` closure (routed
+//!   through the public setter; the macro unwraps the `Result`)
 
 use bon::Builder;
 
@@ -20,9 +20,17 @@ impl IntoUrl for &str {
     }
 }
 
+/// The identity case `from_metadata` relies on: metadata fields already have
+/// the target type, so the conversion cannot fail.
+impl IntoUrl for Url {
+    fn into_url(self) -> Result<Url, huskarl_core::Error> {
+        Ok(self)
+    }
+}
+
 pub struct Meta {
-    // Already the target type in the metadata — `from_metadata` bypasses the
-    // fallible conversion via the `_internal` setter.
+    // Already the target type in the metadata — `from_metadata` feeds it
+    // through the fallible public setter and unwraps the identity conversion.
     endpoint: Option<Url>,
     issuer: String,
 }
@@ -31,13 +39,14 @@ pub struct Meta {
     metadata = crate::Meta,
     method(name = "from_meta_internal", vis = "")
 )]
-#[huskarl_macros::try_builder]
 #[derive(Builder)]
 #[builder(state_mod(name = "builder"))]
 pub struct Client {
-    // Gate (required target, Option source) + try_setter on the same field.
+    // Gate (required target, Option source) + fallible setter on the same field.
     #[from_metadata(path = "endpoint?")]
-    #[try_setter(crate::IntoUrl::into_url)]
+    #[builder(with = |url: impl crate::IntoUrl| -> Result<_, huskarl_core::Error> {
+        crate::IntoUrl::into_url(url)
+    })]
     endpoint: Url,
 
     #[from_metadata(path = "issuer")]

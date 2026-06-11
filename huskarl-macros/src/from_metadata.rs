@@ -13,8 +13,11 @@
 //!   that the closure yields `Option<T>` instead; the macro then routes
 //!   through bon's `maybe_*` setter (and can also gate a required field).
 //!
-//! Fields whose `#[try_setter]` is also present use bon's `_internal` setters
-//! (so the value bypasses the fallible conversion).
+//! Fields whose bon setter is a fallible `with` closure
+//! (`#[builder(with = |…| -> Result<…> { … })]`) are routed through that
+//! setter and the `Result` is unwrapped: metadata fields already have the
+//! target type, so the conversion is required to be an infallible identity
+//! case (`impl IntoEndpointUrl for EndpointUrl` returns `Ok(self)`).
 //!
 //! Gating: if exactly one *required* field (not `Option<T>`) draws from an
 //! Option-typed extraction, the generated function returns `Option<Builder<…>>`
@@ -86,8 +89,7 @@ fn parse_macro_args(args: TokenStream) -> darling::Result<(Path, ResolvedMethod)
 /// any `syn::Error::to_compile_error()` from later stages.
 ///
 /// On error, the annotated item is re-emitted (minus our `#[from_metadata]`
-/// field attributes) so the type still exists; `#[try_setter]` attributes are
-/// left in place for `#[try_builder]` to consume as usual.
+/// field attributes) so the type still exists.
 pub fn expand(args: TokenStream, input: TokenStream) -> TokenStream {
     match expand_inner(args, input.clone()) {
         Ok(ts) => ts,
@@ -338,8 +340,10 @@ struct MetadataField {
     field_ident: Ident,
     /// `true` if the field type is `Option<…>`.
     field_optional: bool,
-    /// `true` if the same field also has `#[try_setter(…)]`.
-    is_try_setter: bool,
+    /// `true` if the field's bon setter is a fallible `with` closure
+    /// (`#[builder(with = |…| -> Result<…> { … })]`), so calling it yields a
+    /// `Result` that the generated code must unwrap.
+    fallible_setter: bool,
     extraction: Extraction,
 }
 
@@ -364,14 +368,14 @@ impl MetadataField {
         let Some(extraction) = take_from_metadata_attr(&mut field.attrs)? else {
             return Ok(None);
         };
-        let is_try_setter = field.attrs.iter().any(|a| a.path().is_ident("try_setter"));
+        let fallible_setter = crate::util::has_fallible_with(&field.attrs)?;
         let field_ident = field.ident.clone().expect("named field");
         deny_raw_ident(&field_ident, "from_metadata")?;
         let field_optional = is_option_type(&field.ty);
         Ok(Some(Self {
             field_ident,
             field_optional,
-            is_try_setter,
+            fallible_setter,
             extraction,
         }))
     }
@@ -380,7 +384,7 @@ impl MetadataField {
         let Some(extraction) = take_from_metadata_attr(&mut arg.attrs)? else {
             return Ok(None);
         };
-        let is_try_setter = arg.attrs.iter().any(|a| a.path().is_ident("try_setter"));
+        let fallible_setter = crate::util::has_fallible_with(&arg.attrs)?;
         let arg_ident = match &*arg.pat {
             Pat::Ident(pi) => pi.ident.clone(),
             other => {
@@ -395,7 +399,7 @@ impl MetadataField {
         Ok(Some(Self {
             field_ident: arg_ident,
             field_optional,
-            is_try_setter,
+            fallible_setter,
             extraction,
         }))
     }
@@ -591,7 +595,18 @@ fn build_setter_chain(
         };
 
         let setter = setter_name(f, is_gate);
-        chain.extend(quote! { .#setter(#extract) });
+        if f.fallible_setter {
+            // The setter is a fallible `with` closure, so it returns
+            // `Result<Builder, _>`. Metadata fields already have the target
+            // type and the identity conversion is infallible, so unwrap.
+            let msg = format!(
+                "metadata-sourced `{}` must convert infallibly",
+                f.field_ident
+            );
+            chain.extend(quote! { .#setter(#extract).expect(#msg) });
+        } else {
+            chain.extend(quote! { .#setter(#extract) });
+        }
     }
     chain
 }
@@ -599,7 +614,6 @@ fn build_setter_chain(
 /// Pick the bon setter to call for a field.
 ///
 /// - `is_gate`: the value is already unwrapped (local variable form).
-/// - `try_setter` fields go through bon's `_internal` setters.
 /// - `maybe_*` form is used when the extraction yields `Option<T>` AND the
 ///   grant field is `Option<T>`.
 fn setter_name(f: &MetadataField, is_gate: bool) -> Ident {
@@ -607,11 +621,10 @@ fn setter_name(f: &MetadataField, is_gate: bool) -> Ident {
     let yields_option = !is_gate && f.extraction_yields_option();
     let use_maybe = yields_option && f.field_optional;
 
-    let name = match (use_maybe, f.is_try_setter) {
-        (true, true) => format!("maybe_{base}_internal"),
-        (true, false) => format!("maybe_{base}"),
-        (false, true) => format!("{base}_internal"),
-        (false, false) => base,
+    let name = if use_maybe {
+        format!("maybe_{base}")
+    } else {
+        base
     };
     Ident::new(&name, f.field_ident.span())
 }

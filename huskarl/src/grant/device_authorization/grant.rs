@@ -30,7 +30,6 @@ use crate::{
 ///
 /// See the [module documentation][crate::grant::device_authorization] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
-#[huskarl_macros::try_builder]
 #[derive(Clone, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
 pub struct DeviceAuthorizationGrant {
@@ -57,13 +56,27 @@ pub struct DeviceAuthorizationGrant {
     issuer: Option<String>,
 
     /// The URL of the token endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "token_endpoint")]
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     token_endpoint: EndpointUrl,
 
     /// The mTLS alias for the token endpoint (RFC 8705 §5).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     mtls_token_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for token requests: the mTLS alias when the HTTP
@@ -77,13 +90,27 @@ pub struct DeviceAuthorizationGrant {
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 
     /// The device authorization endpoint (RFC 8628 §3.1).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "device_authorization_endpoint?")]
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     device_authorization_endpoint: EndpointUrl,
 
     /// The mTLS alias for the device authorization endpoint (RFC 8705 §5).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.device_authorization_endpoint?")]
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     mtls_device_authorization_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for device authorization requests: the mTLS alias

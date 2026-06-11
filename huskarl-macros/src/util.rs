@@ -1,4 +1,4 @@
-//! Shared helpers used by `try_builder` and `from_metadata`.
+//! Shared helpers used by `from_metadata`.
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -8,8 +8,8 @@ use syn::{
 };
 
 /// Rejects raw identifiers (`r#type`): the derived names we generate from a
-/// field name (`Set{Pascal}`, `{name}_internal`, `maybe_{name}`) are not
-/// representable for raw identifiers, and `Ident::new` would panic on them.
+/// field name (`Set{Pascal}`, `maybe_{name}`) are not representable for raw
+/// identifiers, and `Ident::new` would panic on them.
 pub(crate) fn deny_raw_ident(ident: &Ident, macro_name: &str) -> Result<()> {
     if ident.to_string().starts_with("r#") {
         return Err(syn::Error::new(
@@ -71,6 +71,53 @@ pub(crate) fn is_option_type(ty: &Type) -> bool {
         .segments
         .last()
         .is_some_and(|seg| seg.ident == "Option")
+}
+
+/// Returns true if a field/argument carries a fallible bon `with` closure —
+/// `#[builder(with = |…| -> Result<…> { … })]` — meaning its setter returns
+/// `Result<Builder, _>` rather than `Builder`.
+///
+/// A `#[builder(...)]` attribute that fails to parse is an error rather than
+/// a silent skip: missing a fallible setter here would generate a call that
+/// feeds a `Result` into the next setter, with a far more confusing
+/// diagnostic.
+pub(crate) fn has_fallible_with(attrs: &[Attribute]) -> Result<bool> {
+    let parser = Punctuated::<Meta, Token![,]>::parse_terminated;
+    for attr in attrs {
+        if !attr.path().is_ident("builder") {
+            continue;
+        }
+        // Bare `#[builder]` carries no `with` closure.
+        let Meta::List(_) = &attr.meta else { continue };
+        let metas = attr.parse_args_with(parser).map_err(|e| {
+            syn::Error::new(
+                e.span(),
+                format!(
+                    "could not parse this #[builder(...)] attribute (while checking for a fallible `with` closure): {e}"
+                ),
+            )
+        })?;
+        for meta in metas {
+            if let Meta::NameValue(nv) = meta
+                && nv.path.is_ident("with")
+                && let syn::Expr::Closure(closure) = nv.value
+                && let syn::ReturnType::Type(_, ty) = closure.output
+                && is_result_type(&ty)
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Returns true if `ty`'s last path segment is `Result`.
+fn is_result_type(ty: &Type) -> bool {
+    let Type::Path(tp) = ty else { return false };
+    tp.path
+        .segments
+        .last()
+        .is_some_and(|seg| seg.ident == "Result")
 }
 
 /// `snake_case_word_boundaries` → `SnakeCaseWordBoundaries` (PascalCase).

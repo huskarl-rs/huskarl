@@ -1,5 +1,0 @@
-error: #[try_builder] takes no arguments
- --> tests/ui/fail_try_builder_args.rs:4:31
-  |
-4 | #[huskarl_macros::try_builder(unexpected)]
-  |                               ^^^^^^^^^^

@@ -154,7 +154,6 @@ use crate::{
 ///
 /// See the [module documentation][crate::grant::client_credentials] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
-#[huskarl_macros::try_builder]
 #[derive(Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
 pub struct ClientCredentialsGrant {
@@ -181,13 +180,27 @@ pub struct ClientCredentialsGrant {
     issuer: Option<String>,
 
     /// The URL of the token endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "token_endpoint")]
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     token_endpoint: EndpointUrl,
 
     /// The mTLS alias for the token endpoint (RFC 8705 §5).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     mtls_token_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for token requests: the mTLS alias when the HTTP

@@ -45,7 +45,6 @@ impl RevocableToken for RefreshToken {
 
 /// Implementation of token revocation.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
-#[huskarl_macros::try_builder]
 #[derive(Clone, Builder)]
 #[builder(state_mod(name = "builder"))]
 pub struct TokenRevocation {
@@ -65,12 +64,26 @@ pub struct TokenRevocation {
     issuer: Option<String>,
 
     /// The URL of the revocation endpoint.
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     #[from_metadata(path = "revocation_endpoint?")]
     revocation_endpoint: EndpointUrl,
 
     /// The mTLS alias for the revocation endpoint (RFC 8705 §5).
-    #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the value cannot be converted via
+    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
+    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+        crate::core::IntoEndpointUrl::into_endpoint_url(url)
+    })]
     #[from_metadata(path = "mtls_endpoint_aliases?.revocation_endpoint?")]
     mtls_revocation_endpoint: Option<EndpointUrl>,
 

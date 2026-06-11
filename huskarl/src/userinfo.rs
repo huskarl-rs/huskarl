@@ -69,7 +69,6 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> core::fmt::Debug
     metadata = crate::core::server_metadata::AuthorizationServerMetadata,
     method(name = "builder_from_metadata_internal", vis = "")
 )]
-#[huskarl_macros::try_builder]
 #[bon::bon]
 impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
     /// Creates a new [`UserInfoClient`].
@@ -91,11 +90,25 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
     )]
     pub async fn new(
         /// The URL of the `UserInfo` endpoint.
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         #[from_metadata(path = "userinfo_endpoint?")]
         userinfo_endpoint: EndpointUrl,
         /// The mTLS alias for the `UserInfo` endpoint (RFC 8705 §5).
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         #[from_metadata(path = "mtls_endpoint_aliases?.userinfo_endpoint?")]
         mtls_userinfo_endpoint: Option<EndpointUrl>,
         /// The `DPoP` proof implementation for resource server requests.
@@ -110,7 +123,14 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
         ///
         /// Must be provided together with `jws_verifier_factory` to enable JWT response
         /// validation.
-        #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the value cannot be converted via
+        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
+        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
+            crate::core::IntoEndpointUrl::into_endpoint_url(url)
+        })]
         #[from_metadata(path = "jwks_uri?")]
         jwks_uri: Option<EndpointUrl>,
         /// JWS verifier factory for JWT response validation.
