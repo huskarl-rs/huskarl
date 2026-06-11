@@ -192,10 +192,43 @@ fn to_error_context(port: u16, err: &LoopbackError) -> ErrorContext {
     }
 }
 
+/// Deadline for reading a single HTTP request once a connection is accepted.
+///
+/// A connection that opens and then stalls (a port scanner, a browser
+/// preconnect, a stray `curl`) must not block the flow forever; on expiry the
+/// request is treated as bad and the server keeps waiting for the real
+/// callback. There is deliberately no deadline on `accept()` itself — how
+/// long to wait for the user to finish in the browser is the caller's
+/// decision (wrap the future in `tokio::time::timeout` to bound it).
+const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Maximum bytes accepted for the request line plus headers.
+const MAX_HEADER_BYTES: u64 = 16 * 1024;
+
+/// Maximum `Content-Length` accepted for a `form_post` callback body.
+///
+/// Real callback bodies are a few hundred bytes; this bound prevents a local
+/// peer from triggering a huge allocation via the `Content-Length` header.
+const MAX_BODY_BYTES: u64 = 16 * 1024;
+
 pub async fn complete_on_loopback_oidc(
     listener: &TcpListener,
     redirect_uri: &str,
     renderer: Option<CallbackRenderer>,
+    complete: impl AsyncFnOnce(
+        CompleteInput,
+    )
+        -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error>,
+) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), LoopbackError> {
+    complete_on_loopback_oidc_with_timeout(listener, redirect_uri, renderer, READ_TIMEOUT, complete)
+        .await
+}
+
+async fn complete_on_loopback_oidc_with_timeout(
+    listener: &TcpListener,
+    redirect_uri: &str,
+    renderer: Option<CallbackRenderer>,
+    read_timeout: std::time::Duration,
     complete: impl AsyncFnOnce(
         CompleteInput,
     )
@@ -214,7 +247,7 @@ pub async fn complete_on_loopback_oidc(
     // perform the token exchange, and redirect to a clean URL.
     let result = loop {
         let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
-        let path = read_request_path(&mut stream)
+        let path = read_request_path(&mut stream, read_timeout)
             .await
             .context(ReadRequestSnafu)?;
 
@@ -256,7 +289,7 @@ pub async fn complete_on_loopback_oidc(
     // (e.g. favicon) before the redirect arrives.
     loop {
         let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
-        let path = read_request_path(&mut stream)
+        let path = read_request_path(&mut stream, read_timeout)
             .await
             .context(ReadRequestSnafu)?;
 
@@ -282,10 +315,34 @@ pub async fn complete_on_loopback_oidc(
     }
 }
 
-async fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, std::io::Error> {
-    let mut reader = BufReader::new(&mut *stream);
+/// Reads one HTTP request and returns its path (with the `form_post` body
+/// folded in as a query string).
+///
+/// Returns `Ok(None)` for anything malformed or abusive — a stalled
+/// connection, an oversized request, a truncated body — so the caller can
+/// reply 400 and keep waiting for the real callback. `Err` is reserved for
+/// genuine I/O failures.
+async fn read_request_path(
+    stream: &mut TcpStream,
+    read_timeout: std::time::Duration,
+) -> Result<Option<String>, std::io::Error> {
+    match tokio::time::timeout(read_timeout, read_request_path_inner(stream)).await {
+        Ok(result) => result,
+        Err(_elapsed) => Ok(None),
+    }
+}
+
+async fn read_request_path_inner(stream: &mut TcpStream) -> Result<Option<String>, std::io::Error> {
+    // Bound the total bytes read for one request so a local peer cannot grow
+    // memory without bound. Header overrun is detected by the cumulative
+    // count below; hitting the outer cap mid-line surfaces as a line without
+    // a trailing newline.
+    let mut reader = BufReader::new((&mut *stream).take(MAX_HEADER_BYTES + MAX_BODY_BYTES));
     let mut request_line = String::new();
     reader.read_line(&mut request_line).await?;
+    if !request_line.ends_with('\n') {
+        return Ok(None);
+    }
 
     let parts: Vec<&str> = request_line.split_whitespace().collect();
     if parts.len() < 2 {
@@ -295,11 +352,16 @@ async fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, std
     let path = parts[1].to_owned();
 
     // Read headers, collecting Content-Length for POST bodies.
-    let mut content_length: Option<usize> = None;
+    let mut header_bytes = request_line.len() as u64;
+    let mut content_length: Option<u64> = None;
     let mut header_line = String::new();
     loop {
         header_line.clear();
-        reader.read_line(&mut header_line).await?;
+        let n = reader.read_line(&mut header_line).await?;
+        header_bytes += n as u64;
+        if header_bytes > MAX_HEADER_BYTES {
+            return Ok(None);
+        }
         if header_line.trim().is_empty() {
             break;
         }
@@ -316,8 +378,18 @@ async fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, std
     if method.eq_ignore_ascii_case("POST")
         && let Some(len) = content_length
     {
-        let mut body = vec![0u8; len];
-        reader.read_exact(&mut body).await?;
+        if len > MAX_BODY_BYTES {
+            return Ok(None);
+        }
+        #[expect(clippy::cast_possible_truncation, reason = "len <= MAX_BODY_BYTES")]
+        let mut body = vec![0u8; len as usize];
+        match reader.read_exact(&mut body).await {
+            Ok(_) => {}
+            // The peer closed (or the read cap cut it off) before sending the
+            // advertised body length.
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+        }
         let body_str = String::from_utf8(body)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         let path_base = path.split('?').next().unwrap_or(&path);
@@ -452,6 +524,12 @@ fn get_status_text(status: u16) -> &'static str {
 /// ports on the machine. This is only usable with authorization servers which
 /// allow the port value to vary for loopback redirect URLs.
 ///
+/// Only one address family is bound (IPv4 preferred, IPv6 as fallback).
+/// Register the redirect URI with a literal loopback address (`127.0.0.1` or
+/// `[::1]`) rather than `localhost`, per RFC 8252 §7.3 — a `localhost`
+/// redirect may resolve to the family this listener did not bind, in which
+/// case the callback never arrives.
+///
 /// # Errors
 ///
 /// Returns an error if the function was unable to bind to the requested port
@@ -492,13 +570,21 @@ mod tests {
     }
 
     async fn send_http_request(addr: std::net::SocketAddr, request_line: &str) {
-        let mut stream = TcpStream::connect(addr).await.unwrap();
         let raw = format!("{request_line}\r\nHost: localhost\r\n\r\n");
+        send_raw_request(addr, &raw).await;
+    }
+
+    /// Sends a raw HTTP request and returns the start of the response.
+    async fn send_raw_request(addr: std::net::SocketAddr, raw: &str) -> String {
+        let mut stream = TcpStream::connect(addr).await.unwrap();
         stream.write_all(raw.as_bytes()).await.unwrap();
         stream.flush().await.unwrap();
         // Read the full response to avoid connection reset errors
         let mut buf = vec![0u8; 4096];
-        let _ = tokio::io::AsyncReadExt::read(&mut stream, &mut buf).await;
+        let n = tokio::io::AsyncReadExt::read(&mut stream, &mut buf)
+            .await
+            .unwrap_or(0);
+        String::from_utf8_lossy(&buf[..n]).into_owned()
     }
 
     #[tokio::test]
@@ -632,6 +718,132 @@ mod tests {
         // Correct callback
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
         // Follow-up success page
+        send_http_request(addr, "GET /success HTTP/1.1").await;
+
+        let (token_response, _) = handle.await.unwrap().unwrap();
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_form_post_callback() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |input| {
+                assert_eq!(input.code, "abc");
+                assert_eq!(input.state, "xyz");
+                Ok(ok_token_response())
+            })
+            .await
+        });
+
+        let body = "code=abc&state=xyz";
+        let raw = format!(
+            "POST /callback HTTP/1.1\r\n\
+             Host: localhost\r\n\
+             Content-Type: application/x-www-form-urlencoded\r\n\
+             Content-Length: {}\r\n\
+             \r\n\
+             {body}",
+            body.len()
+        );
+        send_raw_request(addr, &raw).await;
+        send_http_request(addr, "GET /success HTTP/1.1").await;
+
+        let (token_response, _) = handle.await.unwrap().unwrap();
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_silent_connection_does_not_block_flow() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc_with_timeout(
+                &listener,
+                "http://127.0.0.1/callback",
+                None,
+                std::time::Duration::from_millis(100),
+                async |_input| Ok(ok_token_response()),
+            )
+            .await
+        });
+
+        // A connection that opens but never sends a request (port scanner,
+        // browser preconnect) must time out instead of hanging the flow.
+        let silent = TcpStream::connect(addr).await.unwrap();
+
+        send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
+        send_http_request(addr, "GET /success HTTP/1.1").await;
+
+        let (token_response, _) = handle.await.unwrap().unwrap();
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
+        drop(silent);
+    }
+
+    #[tokio::test]
+    async fn test_oversized_headers_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+                Ok(ok_token_response())
+            })
+            .await
+        });
+
+        // Headers beyond the cap get a 400 and the flow keeps waiting.
+        let filler = "a".repeat(20 * 1024);
+        let raw =
+            format!("GET /callback?code=evil&state=evil HTTP/1.1\r\nX-Filler: {filler}\r\n\r\n");
+        let response = send_raw_request(addr, &raw).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+
+        send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
+        send_http_request(addr, "GET /success HTTP/1.1").await;
+
+        let (token_response, _) = handle.await.unwrap().unwrap();
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_huge_content_length_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+                Ok(ok_token_response())
+            })
+            .await
+        });
+
+        // An attacker-sized Content-Length must be rejected before any
+        // allocation, not used as a buffer size.
+        let raw = "POST /callback HTTP/1.1\r\n\
+                   Host: localhost\r\n\
+                   Content-Type: application/x-www-form-urlencoded\r\n\
+                   Content-Length: 4000000000\r\n\
+                   \r\n";
+        let response = send_raw_request(addr, raw).await;
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+
+        send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
         let (token_response, _) = handle.await.unwrap().unwrap();

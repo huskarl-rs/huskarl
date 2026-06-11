@@ -164,11 +164,7 @@ impl AuthorizationCodeGrant {
             self.deliver_via_par(&payload.rest, request_object.as_ref(), par_url)
                 .await?
         } else {
-            self.deliver_direct(&payload, request_object.as_ref())
-                .map_err(|e| {
-                    Error::new(ErrorKind::Config, e)
-                        .with_context("encoding authorization request parameters")
-                })?
+            self.deliver_direct(&payload, request_object.as_ref())?
         };
 
         Ok(StartOutput {
@@ -188,7 +184,7 @@ impl AuthorizationCodeGrant {
         &self,
         payload: &AuthorizationPayloadWithClientId<'_>,
         request_object: Option<&SecretString>,
-    ) -> Result<(Uri, Option<u64>), serde_html_form::ser::Error> {
+    ) -> Result<(Uri, Option<u64>), Error> {
         let uri = if let Some(request_jwt) = request_object {
             #[derive(Serialize)]
             struct JarRedirect<'a> {
@@ -252,10 +248,7 @@ impl AuthorizationCodeGrant {
         };
 
         Ok((
-            add_payload_to_uri(&self.authorization_endpoint, push_payload).map_err(|e| {
-                Error::new(ErrorKind::Config, e)
-                    .with_context("encoding authorization request parameters")
-            })?,
+            add_payload_to_uri(&self.authorization_endpoint, push_payload)?,
             Some(par_response.expires_in),
         ))
     }
@@ -300,13 +293,7 @@ impl AuthorizationCodeGrant {
             .ct_ne(complete_input.state.as_bytes())
             .into()
         {
-            return Err(complete_error(
-                StateMismatchSnafu {
-                    original: pending_state.state.clone(),
-                    callback: complete_input.state,
-                }
-                .build(),
-            ));
+            return Err(complete_error(StateMismatchSnafu.build()));
         }
 
         // RFC 9207 - check issuer match.
@@ -314,6 +301,8 @@ impl AuthorizationCodeGrant {
             && let Some(config_issuer) = self.issuer.as_deref()
         {
             if let Some(issuer) = complete_input.iss {
+                // The issuer is public, not a secret, so a constant-time
+                // comparison is not required here (unlike `state` above).
                 if issuer.as_bytes() != config_issuer.as_bytes() {
                     return Err(complete_error(
                         IssuerMismatchSnafu {
@@ -387,6 +376,9 @@ fn build_authorization_payload<'a>(
             code_challenge: pkce.map(|p| p.challenge.as_ref()),
             code_challenge_method: pkce.map(|p| p.method),
             dpop_jkt,
+            // Always sent, even without the `openid` scope: servers ignore
+            // unrecognized parameters (RFC 6749 §3.1), and ID-token
+            // validation then always has a nonce to bind against.
             nonce: &start_input.nonce,
             display: start_input.display.as_ref(),
             prompt: start_input.prompt.as_ref(),
@@ -400,22 +392,25 @@ fn build_authorization_payload<'a>(
     }
 }
 
-fn add_payload_to_uri<T: Serialize>(
-    endpoint: &EndpointUrl,
-    payload: T,
-) -> Result<Uri, serde_html_form::ser::Error> {
-    let query = serde_html_form::to_string(&payload)?;
+fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Result<Uri, Error> {
+    let query = serde_html_form::to_string(&payload).map_err(|e| {
+        Error::new(ErrorKind::Config, e).with_context("encoding authorization request parameters")
+    })?;
     let separator = if endpoint.as_uri().query().is_some() {
         '&'
     } else {
         '?'
     };
     let uri_string = format!("{}{separator}{query}", endpoint.as_uri());
-    // The base URI is already valid and we're only appending a query string
-    // produced by serde_html_form, which only emits valid query characters.
-    Ok(uri_string
-        .parse()
-        .expect("appending a query string to a valid URI should produce a valid URI"))
+    // serde_html_form only emits valid query characters, so the result is
+    // well-formed — but `http::Uri` caps the total URI length at u16::MAX,
+    // which large parameters (notably `id_token_hint`, an entire JWT) can
+    // exceed. PAR is the spec-blessed delivery for oversized requests.
+    uri_string.parse().map_err(|e: http::uri::InvalidUri| {
+        Error::new(ErrorKind::Config, e).with_context(
+            "constructing authorization URL (oversized requests should be delivered via PAR)",
+        )
+    })
 }
 
 #[cfg(test)]
@@ -521,6 +516,38 @@ mod tests {
 
         let url = start_url(&grant).await;
         assert!(url.contains("code_challenge_method=plain"), "{url}");
+    }
+
+    #[tokio::test]
+    async fn oversized_authorization_url_errors_instead_of_panicking() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token")
+            .unwrap()
+            .authorization_endpoint("https://as.example.com/authorize")
+            .unwrap()
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        // `http::Uri` caps the total URI length at u16::MAX; a large
+        // `id_token_hint` (an entire JWT in a query parameter) must surface
+        // as an error rather than a panic.
+        let result = grant
+            .start(
+                StartInput::builder()
+                    .scopes(["openid"])
+                    .id_token_hint(crate::token::IdToken::from("a".repeat(70 * 1024)))
+                    .build(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(ref err) if err.kind() == ErrorKind::Config),
+            "oversized authorization URL should fail with a Config error"
+        );
     }
 
     #[tokio::test]

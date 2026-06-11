@@ -25,7 +25,7 @@ default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypt
 
 # When enabled, adds support for a loopback HTTP server that can handle
 # the callback for the authorization code flow.
-authorization-flow-loopback = ["dep:url", "tokio/net", "tokio/io-util"]
+authorization-flow-loopback = ["dep:url", "tokio/net", "tokio/io-util", "tokio/time"]
 
 # When enabled, an EndpointUrl can be constructed from a url::Url.
 url = ["huskarl-core/url"]

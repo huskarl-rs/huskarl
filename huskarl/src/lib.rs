@@ -88,6 +88,84 @@ println!(
 );
 # }
 ```
+
+### Application state and error handling
+
+Grants belong to the login path. For the request path, wrap a grant in a
+token cache and an [`HttpAuthorizer`](authorizer::HttpAuthorizer) — workflow
+types carry no type parameters, so they store directly in your application
+state, and every operation returns the one concrete
+[`Error`](core::Error) type, which embeds in your own error enum (hand-rolled
+as below, or with `thiserror`'s `#[from]`). The
+[`ReauthRequired`](core::ErrorKind::ReauthRequired) kind is the stable signal
+that the interactive flow must run again.
+
+```rust
+# use huskarl::core::client_auth::NoAuth;
+# use huskarl::core::http::HttpClient;
+# use huskarl::grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters};
+use huskarl::{
+    authorizer::HttpAuthorizer,
+    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+    core::ErrorKind,
+};
+
+/// Plain types, no parameters: this struct names cleanly in app state.
+struct App {
+    authorizer: HttpAuthorizer,
+}
+
+enum AppError {
+    /// The user must log in again.
+    LoginRequired,
+    /// Any other authorization failure.
+    Auth(huskarl::core::Error),
+}
+
+impl From<huskarl::core::Error> for AppError {
+    fn from(err: huskarl::core::Error) -> Self {
+        if err.kind() == ErrorKind::ReauthRequired {
+            AppError::LoginRequired
+        } else {
+            AppError::Auth(err)
+        }
+    }
+}
+
+# async fn example(http_client: impl HttpClient + 'static) -> Result<(), AppError> {
+# let grant = ClientCredentialsGrant::builder()
+#     .client_id("client-id")
+#     .client_auth(NoAuth)
+#     .token_endpoint("https://as.example.com/token")?
+#     .http_client(http_client)
+#     .build();
+// `grant` is any grant, built as in the example above.
+let cache = InMemoryTokenCache::builder()
+    .grant(grant)
+    .grant_parameters(ClientCredentialsGrantParameters::builder().build())
+    .refresh_store(InMemoryRefreshTokenStore::default())
+    .build();
+
+let app = App {
+    authorizer: HttpAuthorizer::builder().cache(cache).build(),
+};
+
+// Exchanges or refreshes as needed through the grant's own HTTP client;
+// `?` lands in the app's error enum, with re-login distinguished.
+let headers = app
+    .authorizer
+    .get_headers(&http::Method::GET, &"https://api.example.com/v1".parse().unwrap())
+    .await?;
+# drop(headers);
+# Ok(())
+# }
+```
+
+To survive restarts, persist only the refresh token by handing the cache a
+custom [`RefreshTokenStore`](cache::RefreshTokenStore) (keychain- or
+disk-backed); on startup the cache refreshes into a fresh access token. For
+handing a freshly-obtained token from the login path to a running cache, use
+[`prime`](cache::TokenCache::prime).
 */
 
 #![forbid(unsafe_code)]

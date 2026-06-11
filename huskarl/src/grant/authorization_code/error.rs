@@ -19,13 +19,8 @@ pub enum CompleteError {
         callback: String,
     },
     /// There was a mismatch between the required and returned state values.
-    #[snafu(display("State mismatch: original = {}, callback = {}", original, callback))]
-    StateMismatch {
-        /// The required state value.
-        original: String,
-        /// The state value returned to the callback.
-        callback: String,
-    },
+    #[snafu(display("State mismatch between original request and callback"))]
+    StateMismatch,
     /// The authorization server claimed to support issuer identification but no issuer was returned.
     #[snafu(display(
         "Authorization server claims to support issuer identification but no issuer returned."

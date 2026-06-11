@@ -145,7 +145,7 @@ pub struct CompleteInput {
 }
 
 /// The information needed to be stored from the initial flow setup, for use in the callback.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PendingState {
     /// The redirect URI.
     ///
@@ -175,6 +175,25 @@ pub struct PendingState {
     pub dpop_jkt: Option<String>,
 }
 
+// `PendingState` is designed to be persisted to a session store and is
+// therefore the most likely thing to end up in logs. The PKCE verifier
+// protects the code exchange, `state` is the CSRF token, and `nonce` binds
+// the ID token, so none of them may appear in `Debug` output.
+impl std::fmt::Debug for PendingState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingState")
+            .field("redirect_uri", &self.redirect_uri)
+            .field(
+                "pkce_verifier",
+                &self.pkce_verifier.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("state", &"[REDACTED]")
+            .field("nonce", &"[REDACTED]")
+            .field("dpop_jkt", &self.dpop_jkt)
+            .finish()
+    }
+}
+
 const RANDOM_VALUE_BYTES: usize = 32;
 
 pub(super) fn generate_random_value() -> String {
@@ -185,4 +204,28 @@ pub(super) fn generate_random_value() -> String {
         .try_fill_bytes(&mut random_bytes)
         .unwrap_or_else(|e: std::convert::Infallible| match e {});
     URL_SAFE_NO_PAD.encode(random_bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_state_debug_redacts_secrets() {
+        let state = PendingState {
+            redirect_uri: "http://127.0.0.1/cb".to_owned(),
+            pkce_verifier: Some("super-secret-verifier".to_owned()),
+            state: "csrf-state-value".to_owned(),
+            nonce: "id-token-nonce".to_owned(),
+            dpop_jkt: Some("jkt-thumbprint".to_owned()),
+        };
+
+        let debug = format!("{state:?}");
+        assert!(!debug.contains("super-secret-verifier"), "{debug}");
+        assert!(!debug.contains("csrf-state-value"), "{debug}");
+        assert!(!debug.contains("id-token-nonce"), "{debug}");
+        // Non-secret fields stay visible for debugging.
+        assert!(debug.contains("http://127.0.0.1/cb"), "{debug}");
+        assert!(debug.contains("jkt-thumbprint"), "{debug}");
+    }
 }
