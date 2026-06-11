@@ -1,0 +1,32 @@
+[package]
+name = "huskarl-crypto-webcrypto"
+version = "0.8.0-pre.0"
+edition = "2024"
+rust-version = "1.92"
+description = "WebCrypto support for huskarl (OAuth2 client) ecosystem."
+repository = "https://github.com/huskarl-rs/huskarl"
+license = "MIT OR Apache-2.0"
+keywords = ["oauth2", "security", "authentication", "wasm"]
+categories = ["authentication"]
+readme = "README.md"
+
+[dependencies]
+huskarl-core = { version = "0.7.0-pre.0", path = "../huskarl-core", default-features = false }
+
+serde-wasm-bindgen = { version = "0.6", default-features = false }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+wasm-bindgen = { version = "0.2", default-features = false }
+wasm-bindgen-futures = { version = "0.4", default-features = false }
+serde = { version = "1.0", default-features = false }
+serde_bytes = { version = "0.11", default-features = false }
+snafu = { version = "0.9", default-features = false }
+web-sys = { version = "0.3", features = [
+  "Crypto",
+  "CryptoKey",
+  "CryptoKeyPair",
+  "JsonWebKey",
+  "SubtleCrypto",
+] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
