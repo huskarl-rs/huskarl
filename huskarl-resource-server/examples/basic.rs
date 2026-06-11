@@ -13,11 +13,7 @@ pub async fn main() {
         validator::rfc9068::Rfc9068Validator,
     };
 
-    let http_client = ReqwestClient::builder()
-        .mtls(huskarl_reqwest::mtls::NoMtls)
-        .build()
-        .await
-        .unwrap();
+    let http_client = ReqwestClient::builder().build().await.unwrap();
 
     let authorization_server_metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http_client)

@@ -78,7 +78,6 @@ pub fn assert_no_failures(failures: Vec<String>) {
 /// Builds an HTTP client that accepts the conformance suite's self-signed certificate.
 pub async fn build_http_client() -> ReqwestClient {
     ReqwestClient::builder()
-        .mtls(huskarl_reqwest::mtls::NoMtls)
         .configure_builder(Box::new(|b| b.danger_accept_invalid_certs(true)))
         .build()
         .await

@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Breaking: ported to the dyn-first huskarl-core.
  - Breaking: grants hold the HTTP client as a required `http_client`.
  - Breaking: reworked error handling completely.
+ - The `dpop` builder field on all grants (and on `UserInfoClient`) defaults to
+   `NoDPoP`, and `jar` on the authorization code grant defaults to `NoJar`;
+   they no longer need to be set explicitly. `client_auth` stays required —
+   building a public client remains an explicit decision.
  - Don't throw away refresh token in inmemory store unless invalid_grant was returned.
  - Avoid panicking in access token expiry time calculation.
  - Send PKCE by default, unless AS explicitly says it doesn't support it.

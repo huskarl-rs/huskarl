@@ -8,7 +8,7 @@ use crate::{
     core::{
         EndpointUrl, Error,
         client_auth::ClientAuthentication,
-        dpop::AuthorizationServerDPoP,
+        dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         platform::{Duration, sleep},
     },
@@ -45,8 +45,11 @@ pub struct DeviceAuthorizationGrant {
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Arc<dyn ClientAuthentication>,
 
-    /// The `DPoP` signer.
-    #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+    /// The `DPoP` signer. Defaults to [`NoDPoP`] (no token sender-constraining).
+    #[builder(
+        with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>,
+        default = Arc::new(NoDPoP),
+    )]
     dpop: Arc<dyn AuthorizationServerDPoP>,
 
     /// The issuer for tokens created by the authorization server.

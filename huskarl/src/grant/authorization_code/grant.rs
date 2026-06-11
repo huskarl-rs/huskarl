@@ -8,12 +8,15 @@ use crate::{
         EndpointUrl, Error, ErrorKind,
         client_auth::ClientAuthentication,
         crypto::verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
-        dpop::AuthorizationServerDPoP,
+        dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         platform::MaybeSendSync,
     },
     grant::{
-        authorization_code::{grant::builder::State, jar::Jar},
+        authorization_code::{
+            grant::builder::State,
+            jar::{Jar, NoJar},
+        },
         core::OAuth2ExchangeGrant,
         refresh,
     },
@@ -142,8 +145,11 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
         /// The client authentication method.
         #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
         client_auth: Arc<dyn ClientAuthentication>,
-        /// The `DPoP` signer.
-        #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+        /// The `DPoP` signer. Defaults to [`NoDPoP`] (no token sender-constraining).
+        #[builder(
+            with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>,
+            default = Arc::new(NoDPoP),
+        )]
         dpop: Arc<dyn AuthorizationServerDPoP>,
         /// The issuer for tokens created by the authorization server.
         #[from_metadata(path = "issuer")]
@@ -171,8 +177,11 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
         /// - [`crate::grant::authorization_code::jar::Jar`]
         ///     This implements JAR signing (when understood by the authorization server).
         /// - [`crate::grant::authorization_code::jar::NoJar`]
-        ///     No JAR is implemented when this variant is used.
-        #[builder(with = |jar: impl Jar + 'static| Arc::new(jar) as Arc<dyn Jar>)]
+        ///     No JAR is implemented when this variant is used. This is the default.
+        #[builder(
+            with = |jar: impl Jar + 'static| Arc::new(jar) as Arc<dyn Jar>,
+            default = Arc::new(NoJar),
+        )]
         jar: Arc<dyn Jar>,
         #[from_metadata(path = "jwks_uri?")]
         #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]

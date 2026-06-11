@@ -36,11 +36,7 @@ async fn test_rfc9068_validator() {
     let jwks_uri = format!("{}/jwks.json", issuer).into_endpoint_url().unwrap();
 
     // 3. Create validator
-    let http_client = ReqwestClient::builder()
-        .mtls(huskarl_reqwest::mtls::NoMtls)
-        .build()
-        .await
-        .unwrap();
+    let http_client = ReqwestClient::builder().build().await.unwrap();
 
     let validator = Rfc9068Validator::builder()
         .issuer(issuer.clone())

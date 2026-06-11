@@ -23,7 +23,6 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .whatever_context("Failed to get CLIENT_SECRET")?;
 
     let http_client = ReqwestClient::builder()
-        .mtls(huskarl_reqwest::mtls::NoMtls)
         .build()
         .await
         .whatever_context("Failed to build client")?;
