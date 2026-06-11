@@ -10,10 +10,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
+//! use huskarl_reqwest::ReqwestClient;
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -46,16 +46,13 @@
 //! use huskarl::{
 //!     core::{
 //!         client_auth::ClientSecret,
-//!         dpop::NoDPoP,
 //!         secrets::{EnvVarSecret, encodings::StringEncoding},
 //!         server_metadata::AuthorizationServerMetadata,
 //!     },
 //!     grant::refresh::RefreshGrant,
 //! };
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .mtls(NoMtls)
 //! #     .build()
 //! #     .await?;
 //! #
@@ -72,7 +69,6 @@
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(client_auth)
-//!     .dpop(NoDPoP)
 //!     .build();
 //! # Ok(())
 //! # }
@@ -84,15 +80,12 @@
 //! use huskarl::{
 //!     core::{
 //!         client_auth::ClientSecret,
-//!         dpop::NoDPoP,
 //!         secrets::{EnvVarSecret, encodings::StringEncoding},
 //!     },
 //!     grant::refresh::RefreshGrant,
 //! };
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .mtls(NoMtls)
 //! #     .build()
 //! #     .await?;
 //! #
@@ -104,7 +97,6 @@
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(client_auth)
-//!     .dpop(NoDPoP)
 //!     .build();
 //! # Ok(())
 //! # }
@@ -137,8 +129,11 @@ use serde::Serialize;
 
 use crate::{
     core::{
-        EndpointUrl, client_auth::ClientAuthentication, dpop::AuthorizationServerDPoP,
-        http::HttpClient, secrets::SecretString,
+        EndpointUrl,
+        client_auth::ClientAuthentication,
+        dpop::{AuthorizationServerDPoP, NoDPoP},
+        http::HttpClient,
+        secrets::SecretString,
     },
     grant::core::{OAuth2ExchangeGrant, mk_scopes},
     token::RefreshToken,
@@ -171,8 +166,11 @@ pub struct RefreshGrant {
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Arc<dyn ClientAuthentication>,
 
-    /// The `DPoP` signer.
-    #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+    /// The `DPoP` signer. Defaults to [`NoDPoP`] (no token sender-constraining).
+    #[builder(
+        with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>,
+        default = Arc::new(NoDPoP),
+    )]
     dpop: Arc<dyn AuthorizationServerDPoP>,
 
     /// The issuer for tokens created by the authorization server.

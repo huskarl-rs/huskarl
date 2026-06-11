@@ -14,10 +14,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
+//! use huskarl_reqwest::ReqwestClient;
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -47,16 +47,17 @@
 //! an introspection endpoint.
 //!
 //! ```rust
-//! use huskarl_resource_server::core::{
-//!     client_auth::ClientSecret,
-//!     jwt::validator::ClaimCheck,
-//!     secrets::{EnvVarSecret, encodings::StringEncoding},
-//!     server_metadata::AuthorizationServerMetadata,
+//! use huskarl_resource_server::{
+//!     core::{
+//!         client_auth::ClientSecret,
+//!         jwt::validator::ClaimCheck,
+//!         secrets::{EnvVarSecret, encodings::StringEncoding},
+//!         server_metadata::AuthorizationServerMetadata,
+//!     },
+//!     validator::introspection::IntrospectionValidator,
 //! };
-//! use huskarl_resource_server::validator::introspection::IntrospectionValidator;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //!
 //! let metadata = AuthorizationServerMetadata::fetch()
@@ -80,24 +81,23 @@
 //! ## 3b. Alternative: Build without authorization server metadata
 //!
 //! ```rust
-//! use huskarl_resource_server::core::{
-//!     IntoEndpointUrl as _,
-//!     client_auth::ClientSecret,
-//!     jwt::validator::ClaimCheck,
-//!     secrets::{EnvVarSecret, encodings::StringEncoding},
+//! use huskarl_resource_server::{
+//!     core::{
+//!         IntoEndpointUrl as _,
+//!         client_auth::ClientSecret,
+//!         jwt::validator::ClaimCheck,
+//!         secrets::{EnvVarSecret, encodings::StringEncoding},
+//!     },
+//!     validator::introspection::IntrospectionValidator,
 //! };
-//! use huskarl_resource_server::validator::introspection::IntrospectionValidator;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //!
 //! let validator = IntrospectionValidator::builder()
 //!     .client_id("my-resource-server")
 //!     .issuer("https://my-issuer")
-//!     .introspection_endpoint(
-//!         "https://my-issuer/oauth/introspect".into_endpoint_url()?,
-//!     )
+//!     .introspection_endpoint("https://my-issuer/oauth/introspect".into_endpoint_url()?)
 //!     .audience(ClaimCheck::required_value("api://my-resource"))
 //!     .client_auth(ClientSecret::new(client_secret))
 //!     .http_client(http_client.clone())
@@ -122,9 +122,8 @@
 //! #     server_metadata::AuthorizationServerMetadata,
 //! # };
 //! # use huskarl_resource_server::validator::introspection::IntrospectionValidator;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //! # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 //! # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
 //! # let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").audience(huskarl_resource_server::core::jwt::validator::ClaimCheck::required_value("api://my-resource")).client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;

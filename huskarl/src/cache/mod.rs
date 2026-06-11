@@ -142,7 +142,7 @@ pub enum GetTokenError {
 mod tests {
     use crate::{
         cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
-        core::{client_auth::NoAuth, dpop::NoDPoP, http::HttpClient},
+        core::{client_auth::NoAuth, http::HttpClient},
         grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
     };
 
@@ -170,7 +170,6 @@ mod tests {
                     .client_auth(NoAuth)
                     .token_endpoint("https://blah")
                     .unwrap()
-                    .dpop(NoDPoP)
                     .http_client(NoHttp)
                     .build(),
             )

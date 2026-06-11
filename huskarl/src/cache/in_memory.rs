@@ -296,13 +296,12 @@ mod tests {
         cache::InMemoryRefreshTokenStore,
         core::{
             client_auth::NoAuth,
-            dpop::NoDPoP,
             http::{HttpClient, HttpResponse, Idempotency},
             platform::SystemTime,
             secrets::SecretString,
         },
         grant::{
-            authorization_code::{AuthorizationCodeGrant, AuthorizationCodeGrantParameters, NoJar},
+            authorization_code::{AuthorizationCodeGrant, AuthorizationCodeGrantParameters},
             client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
             core::token_response::RawTokenResponse,
         },
@@ -403,7 +402,6 @@ mod tests {
                     .client_auth(NoAuth)
                     .token_endpoint("https://as.example.com/token")
                     .unwrap()
-                    .dpop(NoDPoP)
                     .http_client(http)
                     .build(),
             )
@@ -520,8 +518,6 @@ mod tests {
         let grant = AuthorizationCodeGrant::builder()
             .client_id("client")
             .client_auth(NoAuth)
-            .dpop(NoDPoP)
-            .jar(NoJar)
             .http_client(http)
             .token_endpoint("https://as.example.com/token")
             .unwrap()
@@ -603,7 +599,6 @@ mod tests {
                     .client_auth(NoAuth)
                     .token_endpoint("https://as.example.com/token")
                     .unwrap()
-                    .dpop(NoDPoP)
                     .http_client(http.clone())
                     .build(),
             )

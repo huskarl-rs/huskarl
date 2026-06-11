@@ -442,12 +442,11 @@ mod tests {
     use crate::{
         core::{
             client_auth::NoAuth,
-            dpop::NoDPoP,
             http::{HttpClient, HttpResponse, Idempotency},
             platform::MaybeSendBoxFuture,
             server_metadata::AuthorizationServerMetadata,
         },
-        grant::authorization_code::{jar::NoJar, types::StartInput},
+        grant::authorization_code::types::StartInput,
     };
 
     /// `start()` with direct delivery performs no HTTP; this client asserts that.
@@ -480,8 +479,6 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .dpop(NoDPoP)
-            .jar(NoJar)
             .token_endpoint("https://as.example.com/token")
             .unwrap()
             .authorization_endpoint("https://as.example.com/authorize")
@@ -513,8 +510,6 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .dpop(NoDPoP)
-            .jar(NoJar)
             .redirect_uri("http://127.0.0.1/cb")
             .build()
             .await
@@ -530,8 +525,6 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .dpop(NoDPoP)
-            .jar(NoJar)
             .token_endpoint("https://as.example.com/token")
             .unwrap()
             .authorization_endpoint("https://as.example.com/authorize")
@@ -552,8 +545,6 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .dpop(NoDPoP)
-            .jar(NoJar)
             .token_endpoint("https://as.example.com/token")
             .unwrap()
             .authorization_endpoint("https://as.example.com/authorize")

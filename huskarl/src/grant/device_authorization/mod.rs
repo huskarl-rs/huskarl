@@ -11,10 +11,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
+//! use huskarl_reqwest::ReqwestClient;
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -40,13 +40,11 @@
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata},
+//!     core::{client_auth::NoAuth, server_metadata::AuthorizationServerMetadata},
 //!     grant::device_authorization::DeviceAuthorizationGrant,
 //! };
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .mtls(NoMtls)
 //! #     .build()
 //! #     .await?;
 //!
@@ -62,7 +60,6 @@
 //!         .client_id("client_id")
 //!         .http_client(client)
 //!         .client_auth(NoAuth)
-//!         .dpop(NoDPoP)
 //!         .build();
 //! # Ok(())
 //! # }
@@ -72,13 +69,10 @@
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP},
-//!     grant::device_authorization::DeviceAuthorizationGrant,
+//!     core::client_auth::NoAuth, grant::device_authorization::DeviceAuthorizationGrant,
 //! };
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .mtls(NoMtls)
 //! #     .build()
 //! #     .await?;
 //!
@@ -88,7 +82,6 @@
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(NoAuth)
-//!     .dpop(NoDPoP)
 //!     .build();
 //! # Ok(())
 //! # }
@@ -98,7 +91,7 @@
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP},
+//!     core::client_auth::NoAuth,
 //!     grant::device_authorization::{DeviceAuthorizationGrant, StartInput},
 //! };
 //! # async fn start_flow(
@@ -118,7 +111,7 @@
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP},
+//!     core::client_auth::NoAuth,
 //!     grant::device_authorization::{DeviceAuthorizationGrant, StartOutput},
 //!     token::AccessToken,
 //! };

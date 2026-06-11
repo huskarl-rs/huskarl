@@ -1,7 +1,6 @@
 use huskarl::{
     core::{
         client_auth::ClientSecret,
-        dpop::NoDPoP,
         secrets::{EnvVarSecret, encodings::StringEncoding},
         server_metadata::AuthorizationServerMetadata,
     },
@@ -20,7 +19,6 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .whatever_context("Failed to get CLIENT_SECRET")?;
 
     let http_client = ReqwestClient::builder()
-        .mtls(huskarl_reqwest::mtls::NoMtls)
         .build()
         .await
         .whatever_context("Failed to build client")?;
@@ -36,7 +34,6 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .client_id(client_id)
         .http_client(http_client)
         .client_auth(ClientSecret::new(client_secret))
-        .dpop(NoDPoP)
         .build();
 
     let token_response = grant

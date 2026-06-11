@@ -11,7 +11,7 @@ use crate::{
     core::{
         EndpointUrl, Error, ErrorKind,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-        dpop::ResourceServerDPoP,
+        dpop::{NoDPoP, ResourceServerDPoP},
         http::{HttpClient, Idempotency},
         jwt::{
             JwsParseError, parse_compact_jws,
@@ -100,8 +100,11 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
         mtls_userinfo_endpoint: Option<EndpointUrl>,
         /// The `DPoP` proof implementation for resource server requests.
         ///
-        /// Use [`NoDPoP`](crate::core::dpop::NoDPoP) for plain bearer token flows.
-        #[builder(with = |dpop: impl ResourceServerDPoP + 'static| Arc::new(dpop) as Arc<dyn ResourceServerDPoP>)]
+        /// Defaults to [`NoDPoP`] for plain bearer token flows.
+        #[builder(
+            with = |dpop: impl ResourceServerDPoP + 'static| Arc::new(dpop) as Arc<dyn ResourceServerDPoP>,
+            default = Arc::new(NoDPoP),
+        )]
         dpop: Arc<dyn ResourceServerDPoP>,
         /// JWKS URI for `application/jwt` `UserInfo` response validation.
         ///

@@ -49,7 +49,13 @@ impl ReqwestClient {
         #[builder(required, into, default = Some(concat!("huskarl/", env!("CARGO_PKG_VERSION")).to_string()))]
         user_agent: Option<String>,
 
-        mtls: impl mtls::MtlsProvider,
+        /// The mTLS provider (RFC 8705). Defaults to [`NoMtls`](mtls::NoMtls)
+        /// (plain TLS, no client certificate).
+        #[builder(
+            with = |provider: impl mtls::MtlsProvider + 'static| Box::new(provider) as Box<dyn mtls::MtlsProvider>,
+            default = Box::new(mtls::NoMtls),
+        )]
+        mtls: Box<dyn mtls::MtlsProvider>,
 
         /// Root certificates to trust. If `None`, the system's default root certificates are used.
         /// If `Some`, only the provided certificates are trusted — including `Some(vec![])` to

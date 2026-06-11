@@ -12,11 +12,7 @@ async fn validator_for(
     path: &str,
     audience: ClaimCheck,
 ) -> IntrospectionValidator {
-    let http_client = ReqwestClient::builder()
-        .mtls(huskarl_reqwest::mtls::NoMtls)
-        .build()
-        .await
-        .unwrap();
+    let http_client = ReqwestClient::builder().build().await.unwrap();
 
     IntrospectionValidator::builder()
         .client_id("my-resource-server")

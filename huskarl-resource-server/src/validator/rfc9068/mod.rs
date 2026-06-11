@@ -11,10 +11,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
+//! use huskarl_reqwest::ReqwestClient;
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -23,14 +23,13 @@
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use huskarl_resource_server::core::{
-//!     jwk::JwksSource,
-//!     server_metadata::AuthorizationServerMetadata,
+//!
+//! use huskarl_resource_server::{
+//!     core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata},
+//!     validator::rfc9068::Rfc9068Validator,
 //! };
-//! use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //!
 //! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&http_client)
@@ -41,7 +40,9 @@
 //! let validator = Rfc9068Validator::builder_from_metadata(&metadata)
 //!     .audience("api://my-resource")
 //!     .jws_verifier_factory(Arc::new(
-//!         JwksSource::builder().http_client(http_client.clone()).build(),
+//!         JwksSource::builder()
+//!             .http_client(http_client.clone())
+//!             .build(),
 //!     ))
 //!     .build()
 //!     .await?;
@@ -53,18 +54,22 @@
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use huskarl_resource_server::core::{IntoEndpointUrl as _, jwk::JwksSource};
-//! use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
-//! # use huskarl_reqwest::mtls::NoMtls;
+//!
+//! use huskarl_resource_server::{
+//!     core::{IntoEndpointUrl as _, jwk::JwksSource},
+//!     validator::rfc9068::Rfc9068Validator,
+//! };
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //!
 //! let validator = Rfc9068Validator::builder()
 //!     .issuer("https://my-issuer")
 //!     .audience("api://my-resource")
 //!     .jwks_uri("https://my-issuer/.well-known/jwks.json".into_endpoint_url()?)
 //!     .jws_verifier_factory(Arc::new(
-//!         JwksSource::builder().http_client(http_client.clone()).build(),
+//!         JwksSource::builder()
+//!             .http_client(http_client.clone())
+//!             .build(),
 //!     ))
 //!     .build()
 //!     .await?;
@@ -84,9 +89,8 @@
 //! # use std::sync::Arc;
 //! # use huskarl_resource_server::core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata};
 //! # use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //! # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
 //! # let validator = Rfc9068Validator::builder_from_metadata(&metadata).audience("api://my-resource").jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
 //! use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};

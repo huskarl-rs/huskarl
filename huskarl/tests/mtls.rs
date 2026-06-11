@@ -7,15 +7,13 @@ use huskarl::{
     authorizer::HttpAuthorizer,
     cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{
-        client_auth::ClientSecret, dpop::NoDPoP, jwk::JwksSource,
-        server_metadata::AuthorizationServerMetadata,
+        client_auth::ClientSecret, jwk::JwksSource, server_metadata::AuthorizationServerMetadata,
     },
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
 use huskarl_reqwest::{ReqwestClient, mtls::MtlsPem};
 use huskarl_resource_server::{
-    core::jwt::validator::ClaimCheck,
-    validator::{custom::CustomValidator, dpop_nonce::NoNonceCheck},
+    core::jwt::validator::ClaimCheck, validator::custom::CustomValidator,
 };
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
@@ -82,7 +80,6 @@ async fn client_credentials_mtls_binding() {
         .client_id(&config.client_id)
         .http_client(http.clone())
         .client_auth(ClientSecret::new(PlainSecret::new(&config.secret)))
-        .dpop(NoDPoP)
         .build();
 
     let validator = CustomValidator::builder_from_metadata(&server_metadata)
@@ -90,7 +87,6 @@ async fn client_credentials_mtls_binding() {
         .jws_verifier_factory(Arc::new(
             JwksSource::builder().http_client(http.clone()).build(),
         ))
-        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .expect("create validator");

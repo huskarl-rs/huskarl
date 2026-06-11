@@ -10,10 +10,10 @@
 //! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
 //!
 //! ```rust
-//! use huskarl_reqwest::{ReqwestClient, mtls::NoMtls};
+//! use huskarl_reqwest::ReqwestClient;
 //!
 //! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().mtls(NoMtls).build().await?;
+//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -40,18 +40,14 @@
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{
-//!         client_auth::ClientSecret, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata,
-//!     },
+//!     core::{client_auth::ClientSecret, server_metadata::AuthorizationServerMetadata},
 //!     grant::token_exchange::TokenExchangeGrant,
 //! };
 //! # use huskarl::core::http::HttpClient;
 //! # use huskarl::core::secrets::EnvVarSecret;
 //! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .mtls(NoMtls)
 //! #     .build()
 //! #     .await?;
 //! #
@@ -68,7 +64,6 @@
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(client_auth)
-//!     .dpop(NoDPoP)
 //!     .build();
 //! # Ok(())
 //! # }
@@ -77,17 +72,12 @@
 //! ## 3b. Alternative: Set up the grant without metadata
 //!
 //! ```rust
-//! use huskarl::{
-//!     core::{client_auth::ClientSecret, dpop::NoDPoP},
-//!     grant::token_exchange::TokenExchangeGrant,
-//! };
+//! use huskarl::{core::client_auth::ClientSecret, grant::token_exchange::TokenExchangeGrant};
 //! # use huskarl::core::http::HttpClient;
 //! # use huskarl::core::secrets::EnvVarSecret;
 //! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .mtls(NoMtls)
 //! #     .build()
 //! #     .await?;
 //! #
@@ -99,7 +89,6 @@
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(client_auth)
-//!     .dpop(NoDPoP)
 //!     .build();
 //! # Ok(())
 //! # }
@@ -113,14 +102,11 @@
 //! use huskarl::token::AccessToken;
 //! # use huskarl::grant::token_exchange::TokenExchangeGrant;
 //! use huskarl::core::client_auth::ClientSecret;
-//! # use huskarl::core::dpop::NoDPoP;
 //! # use huskarl::core::http::HttpClient;
 //! # use huskarl::core::secrets::EnvVarSecret;
 //! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
 //! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .mtls(NoMtls)
 //! #     .build()
 //! #     .await?;
 //! #
@@ -131,7 +117,6 @@
 //! #     .client_id("client_id")
 //! #     .http_client(client)
 //! #     .client_auth(client_auth)
-//! #     .dpop(NoDPoP)
 //! #     .build();
 //!
 //! let subject = SecurityToken::builder().token("eyToken").token_type(SecurityTokenType::AccessToken).build();
@@ -150,7 +135,9 @@ use serde::Serialize;
 
 use crate::{
     core::{
-        EndpointUrl, client_auth::ClientAuthentication, dpop::AuthorizationServerDPoP,
+        EndpointUrl,
+        client_auth::ClientAuthentication,
+        dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
     },
     grant::{
@@ -182,8 +169,11 @@ pub struct TokenExchangeGrant {
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Arc<dyn ClientAuthentication>,
 
-    /// The `DPoP` signer.
-    #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+    /// The `DPoP` signer. Defaults to [`NoDPoP`] (no token sender-constraining).
+    #[builder(
+        with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>,
+        default = Arc::new(NoDPoP),
+    )]
     dpop: Arc<dyn AuthorizationServerDPoP>,
 
     /// The issuer for tokens created by the authorization server.

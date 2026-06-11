@@ -6,13 +6,12 @@ use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
     cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
-    core::{client_auth::ClientSecret, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata},
+    core::{client_auth::ClientSecret, server_metadata::AuthorizationServerMetadata},
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
-    core::jwt::validator::ClaimCheck,
-    validator::{dpop_nonce::NoNonceCheck, introspection::IntrospectionValidator},
+    core::jwt::validator::ClaimCheck, validator::introspection::IntrospectionValidator,
 };
 use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
 
@@ -51,7 +50,6 @@ async fn introspection_validates_active_token() {
         .client_id(&client.client_id)
         .http_client(http.clone())
         .client_auth(ClientSecret::new(PlainSecret::new(&client.secret)))
-        .dpop(NoDPoP)
         .build();
 
     let authorizer = HttpAuthorizer::builder()
@@ -85,7 +83,6 @@ async fn introspection_validates_active_token() {
         .introspection_endpoint(introspection_endpoint)
         .audience(ClaimCheck::required_value("huskarl-rs"))
         .client_auth(ClientSecret::new(PlainSecret::new(&client.secret)))
-        .dpop_nonce_checker(NoNonceCheck)
         .http_client(http.clone())
         .build()
         .await

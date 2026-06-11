@@ -8,13 +8,11 @@ use huskarl::{
         client_auth::NoAuth, dpop::DPoP, jwk::JwksSource,
         server_metadata::AuthorizationServerMetadata,
     },
-    grant::authorization_code::{
-        AuthorizationCodeGrant, NoJar, StartInput, StartOutput, bind_loopback,
-    },
+    grant::authorization_code::{AuthorizationCodeGrant, StartInput, StartOutput, bind_loopback},
 };
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
-use huskarl_resource_server::validator::{dpop_nonce::NoNonceCheck, rfc9068::Rfc9068Validator};
+use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
 use snafu::prelude::*;
 
 #[snafu::report]
@@ -24,7 +22,6 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     let client_id = std::env::var("CLIENT_ID").whatever_context("Failed to get CLIENT_ID")?;
 
     let http_client = ReqwestClient::builder()
-        .mtls(huskarl_reqwest::mtls::NoMtls)
         .build()
         .await
         .whatever_context("Failed to build client")?;
@@ -51,7 +48,6 @@ pub async fn main() -> Result<(), snafu::Whatever> {
                 .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None))
                 .build(),
         )
-        .jar(NoJar)
         .jws_verifier_factory(Arc::new(
             JwksSource::builder()
                 .http_client(http_client.clone())
@@ -102,7 +98,6 @@ pub async fn main() -> Result<(), snafu::Whatever> {
                 .http_client(http_client.clone())
                 .build(),
         ))
-        .dpop_nonce_checker(NoNonceCheck)
         .build()
         .await
         .whatever_context("Failed to build resource server validator")?;
