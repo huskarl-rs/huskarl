@@ -1,0 +1,16 @@
+[package]
+name = "huskarl-downstream"
+version = "0.0.0"
+edition = "2024"
+publish = false
+description = "Scratch downstream consumer — verifies ergonomics from outside the library"
+
+[dependencies]
+huskarl = { workspace = true }
+
+bytes = { version = "1", default-features = false }
+http = { version = "1", default-features = false, features = ["std"] }
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

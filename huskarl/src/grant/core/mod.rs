@@ -10,7 +10,9 @@ pub(crate) mod token_response;
 pub(crate) mod form;
 
 pub use grant::OAuth2ExchangeGrant;
-pub use token_response::TokenResponse;
+pub use token_response::{
+    InvalidTokenResponse, RawTokenResponse, RawTokenResponseBuilder, TokenResponse,
+};
 
 /// Resolves the endpoint used for client-authenticated requests at grant
 /// build time: the RFC 8705 §5 mTLS alias when the HTTP client uses mTLS,

@@ -9,6 +9,7 @@ members = [
   "huskarl-reqwest",
   "huskarl-resource-server",
   "integration/huskarl-conformance",
+  "integration/huskarl-downstream",
   "integration/huskarl-testkit",
 ]
 # huskarl-crypto-webcrypto only compiles for wasm32-unknown-unknown (its
@@ -22,6 +23,7 @@ default-members = [
   "huskarl-reqwest",
   "huskarl-resource-server",
   "integration/huskarl-conformance",
+  "integration/huskarl-downstream",
   "integration/huskarl-testkit",
 ]
 exclude = ["huskarl-core/fuzz"]

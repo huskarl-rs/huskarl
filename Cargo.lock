@@ -1206,6 +1206,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "huskarl-downstream"
+version = "0.0.0"
+dependencies = [
+ "bytes",
+ "http",
+ "huskarl",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "huskarl-macros"
 version = "0.2.0"
 dependencies = [

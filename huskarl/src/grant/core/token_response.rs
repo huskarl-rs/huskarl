@@ -10,7 +10,16 @@ use crate::{
     token::{AccessToken, BearerAccessToken, DpopAccessToken, IdToken, RefreshToken},
 };
 
-/// The response from the token endpoint.
+/// The response from the token endpoint (RFC 6749 §5.1), as received.
+///
+/// Grants produce this internally and convert it via
+/// [`into_token_response`](Self::into_token_response). The builder exists so
+/// tests and integrations can fabricate a [`TokenResponse`] — e.g. to
+/// [`prime`](crate::cache::TokenCache::prime) a token cache without running
+/// a real exchange. Production cold-start should still persist only the
+/// refresh token (via a
+/// [`RefreshTokenStore`](crate::cache::RefreshTokenStore)) and refresh into
+/// a fresh access token, rather than persisting responses.
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 pub struct RawTokenResponse {
     /// The access token.
@@ -93,6 +102,19 @@ impl RawTokenResponse {
         self.extra.as_ref().and_then(|extra| extra.get(key))
     }
 
+    /// Converts the raw response into a validated [`TokenResponse`].
+    ///
+    /// Resolves the `token_type` (`bearer` or `DPoP`, case-insensitive) and
+    /// builds the typed access and refresh tokens. `received_at` anchors
+    /// `expires_in` to wall-clock expiry; `dpop_jkt` is the `DPoP` key
+    /// thumbprint the token is bound to, required when `token_type` is
+    /// `DPoP`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidTokenResponse::InvalidTokenType`] for an unknown
+    /// `token_type`, and [`InvalidTokenResponse::NoDpopThumbprint`] for a
+    /// `DPoP` response without a thumbprint.
     pub fn into_token_response(
         self,
         dpop_jkt: Option<String>,
@@ -159,15 +181,23 @@ impl RawTokenResponse {
     }
 }
 
+/// A [`RawTokenResponse`] that cannot be converted into a [`TokenResponse`].
 #[derive(Debug, Clone, PartialEq, Snafu)]
 pub enum InvalidTokenResponse {
+    /// The response is `DPoP`-typed but no `DPoP` key thumbprint was provided.
     #[snafu(display("No DPoP thumbprint provided"))]
     NoDpopThumbprint,
+    /// The `token_type` is neither `bearer` nor `DPoP`.
     #[snafu(display("Invalid token type: {}", token_type))]
-    InvalidTokenType { token_type: String },
+    InvalidTokenType {
+        /// The unrecognized `token_type` value.
+        token_type: String,
+    },
 }
 
 impl InvalidTokenResponse {
+    /// Whether retrying the conversion could succeed (it cannot — the
+    /// response itself is malformed).
     #[must_use]
     #[allow(clippy::unused_self)]
     pub fn is_retryable(&self) -> bool {

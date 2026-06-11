@@ -196,6 +196,31 @@ pub trait RefreshTokenStore: MaybeSendSync {
     fn clear(&self) -> MaybeSendBoxFuture<'_, Result<(), Error>>;
 }
 
+macro_rules! forward_refresh_token_store {
+    ($wrapper:ty) => {
+        impl<T: RefreshTokenStore + ?Sized> RefreshTokenStore for $wrapper {
+            fn get(&self) -> MaybeSendBoxFuture<'_, Result<Option<RefreshToken>, Error>> {
+                (**self).get()
+            }
+
+            fn set<'a>(
+                &'a self,
+                token: &'a RefreshToken,
+            ) -> MaybeSendBoxFuture<'a, Result<(), Error>> {
+                (**self).set(token)
+            }
+
+            fn clear(&self) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
+                (**self).clear()
+            }
+        }
+    };
+}
+
+forward_refresh_token_store!(&T);
+forward_refresh_token_store!(Box<T>);
+forward_refresh_token_store!(std::sync::Arc<T>);
+
 /// An in-memory store for refresh tokens.
 #[derive(Debug, Default)]
 pub struct InMemoryRefreshTokenStore {
