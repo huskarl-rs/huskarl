@@ -116,7 +116,7 @@ async fn run_fapi2_plan<J: Jar + Clone + 'static>(
 
         let client_auth = JwtBearer::builder()
             .signer(client_key.clone())
-            .audience(Audience::PreferIssuer)
+            .audience(Audience::Issuer)
             .build();
 
         let dpop = DPoP::builder().signer(dpop_key.clone()).build();

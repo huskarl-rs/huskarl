@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - `HttpClient::execute` takes a new `Idempotency` parameter declaring
    whether the request is known to be safe to re-send.
  - Add `Error::is_dpop_nonce_required` accessor.
+ - Breaking: `Audience::PreferIssuer` is now `Audience::Issuer` and fails
+   closed (`ErrorKind::Config`, `MissingIssuer` source) when no issuer is
+   configured, per draft-ietf-oauth-rfc7523bis (endpoint URLs are disallowed
+   as client-assertion audiences). `Audience::PreferTokenEndpoint` is renamed
+   to `Audience::TokenEndpoint` and documented as legacy.
+ - Client assertion JWTs are explicitly typed `client-authentication+jwt`
+   (draft-ietf-oauth-rfc7523bis); opt out with `explicit_typ(false)` on the
+   `JwtBearer` builder for servers that reject it.
 
 ## [0.6.4] - 2026-05-29
 

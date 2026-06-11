@@ -43,11 +43,9 @@ pub struct AuthorizationCodeGrant<IdClaims: Clone + for<'de> Deserialize<'de> + 
     /// The issuer for tokens created by the authorization server.
     pub(super) issuer: Option<String>,
 
-    /// The URL of the token endpoint.
+    /// The URL of the token endpoint, resolved at build time to the
+    /// RFC 8705 §5 mTLS alias when the HTTP client uses mTLS.
     pub(super) token_endpoint: EndpointUrl,
-
-    /// The mTLS alias for the token endpoint (RFC 8705 §5).
-    pub(super) mtls_token_endpoint: Option<EndpointUrl>,
 
     /// Supported endpoint auth methods; used to auto-select basic or
     /// form auth for client secrets.
@@ -64,11 +62,9 @@ pub struct AuthorizationCodeGrant<IdClaims: Clone + for<'de> Deserialize<'de> + 
     /// The authorization endpoint (RFC 6749 §3.1).
     pub(super) authorization_endpoint: EndpointUrl,
 
-    /// The pushed authorization request endpoint (RFC 9126 §5).
+    /// The pushed authorization request endpoint (RFC 9126 §5), resolved at
+    /// build time to the RFC 8705 §5 mTLS alias when the HTTP client uses mTLS.
     pub(super) pushed_authorization_request_endpoint: Option<EndpointUrl>,
-
-    /// The mTLS alias for the pushed authorization request endpoint (RFC 8705 §5).
-    pub(super) mtls_pushed_authorization_request_endpoint: Option<EndpointUrl>,
 
     /// Set to true if the provider requires PAR requests only (RFC 9126 §5).
     ///
@@ -238,6 +234,20 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
             (Some(_) | None, None) => None,
         };
 
+        let token_endpoint = crate::grant::core::resolve_mtls_alias(
+            http_client.as_ref(),
+            &token_endpoint,
+            mtls_token_endpoint.as_ref(),
+        );
+        let pushed_authorization_request_endpoint =
+            pushed_authorization_request_endpoint.map(|par| {
+                crate::grant::core::resolve_mtls_alias(
+                    http_client.as_ref(),
+                    &par,
+                    mtls_pushed_authorization_request_endpoint.as_ref(),
+                )
+            });
+
         Ok(AuthorizationCodeGrant {
             jws_verifier,
             client_id,
@@ -250,8 +260,6 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
             authorization_endpoint,
             issuer,
             pushed_authorization_request_endpoint,
-            mtls_token_endpoint,
-            mtls_pushed_authorization_request_endpoint,
             require_pushed_authorization_requests,
             authorization_response_iss_parameter_supported,
             code_challenge_methods_supported,
@@ -355,10 +363,6 @@ impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static> OAut
 
     fn token_endpoint(&self) -> &EndpointUrl {
         &self.token_endpoint
-    }
-
-    fn mtls_token_endpoint(&self) -> Option<&EndpointUrl> {
-        self.mtls_token_endpoint.as_ref()
     }
 
     fn dpop(&self) -> &dyn AuthorizationServerDPoP {

@@ -19,7 +19,7 @@ use bon::Builder;
 pub use client_secret::ClientSecret;
 pub use form_value::FormValue;
 use http::{HeaderMap, Uri};
-pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder};
+pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder, MissingIssuer};
 pub use no_auth::NoAuth;
 
 use crate::{

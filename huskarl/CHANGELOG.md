@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Breaking: ported to the dyn-first huskarl-core.
  - Breaking: grants hold the HTTP client as a required `http_client`.
  - Breaking: reworked error handling completely.
+ - Breaking: mTLS endpoint aliases (RFC 8705 §5) are resolved at grant build
+   time against the grant's HTTP client. `OAuth2ExchangeGrant` loses
+   `mtls_token_endpoint`/`effective_token_endpoint`; `token_endpoint()` returns
+   the already-resolved endpoint. Also fixes `to_refresh_grant()` dropping the
+   mTLS alias, and client assertions now consistently use the effective
+   endpoint as their audience.
  - The `dpop` builder field on all grants (and on `UserInfoClient`) defaults to
    `NoDPoP`, and `jar` on the authorization code grant defaults to `NoJar`;
    they no longer need to be set explicitly. `client_auth` stays required —

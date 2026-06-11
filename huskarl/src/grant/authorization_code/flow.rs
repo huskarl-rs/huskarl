@@ -219,14 +219,6 @@ impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>
         request_object: Option<&SecretString>,
         par_url: &EndpointUrl,
     ) -> Result<(Uri, Option<u64>), Error> {
-        let effective_par_url = if self.http_client.uses_mtls() {
-            self.mtls_pushed_authorization_request_endpoint
-                .as_ref()
-                .unwrap_or(par_url)
-        } else {
-            par_url
-        };
-
         let par_body = match request_object {
             Some(jwt) => par::ParBody::Jar {
                 request: jwt.expose_secret(),
@@ -242,14 +234,14 @@ impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>
                 .authentication_params(
                     &self.client_id,
                     self.issuer.as_deref(),
-                    effective_par_url.as_uri(),
+                    par_url.as_uri(),
                     self.token_endpoint_auth_methods_supported.as_deref(),
                 )
                 .await?;
 
             par::make_par_call(
                 self.http_client.as_ref(),
-                effective_par_url,
+                par_url,
                 auth_params,
                 &par_body,
                 self.dpop.as_ref(),
