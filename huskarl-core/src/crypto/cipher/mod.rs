@@ -215,6 +215,16 @@ pub trait AeadUnsealer: AeadDecryptor {
     ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>>;
 }
 
+/// Combined trait for types that can both seal and unseal bundles.
+///
+/// Automatically implemented for any type with both capabilities — the
+/// bundle-level analogue of [`AeadCipher`]. Store as
+/// `Arc<dyn SealedAeadCipher>` when both directions must come from the same
+/// source (e.g. [`AeadV1Cipher`] over a symmetric or KMS-backed key).
+pub trait SealedAeadCipher: AeadSealer + AeadUnsealer {}
+
+impl<T: AeadSealer + AeadUnsealer + ?Sized> SealedAeadCipher for T {}
+
 macro_rules! forward_aead_encryptor {
     ($wrapper:ty) => {
         impl<T: AeadEncryptor + ?Sized> AeadEncryptor for $wrapper {
@@ -284,19 +294,63 @@ forward_aead_cipher_selector!(&T);
 forward_aead_cipher_selector!(Box<T>);
 forward_aead_cipher_selector!(Arc<T>);
 
-/// An [`AeadSealer`] using the v1 bundle format:
-/// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
-#[derive(Debug)]
-pub struct AeadV1Sealer<E: AeadEncryptor>(E);
+macro_rules! forward_aead_sealer {
+    ($wrapper:ty) => {
+        impl<T: AeadSealer + ?Sized> AeadSealer for $wrapper {
+            fn seal<'a>(
+                &'a self,
+                plaintext: &'a [u8],
+                aad: &'a [u8],
+            ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+                (**self).seal(plaintext, aad)
+            }
+        }
+    };
+}
 
-impl<E: AeadEncryptor> AeadV1Sealer<E> {
-    /// Creates a new sealer.
-    pub fn new(encryptor: E) -> Self {
-        Self(encryptor)
+forward_aead_sealer!(&T);
+forward_aead_sealer!(Box<T>);
+forward_aead_sealer!(Arc<T>);
+
+macro_rules! forward_aead_unsealer {
+    ($wrapper:ty) => {
+        impl<T: AeadUnsealer + ?Sized> AeadUnsealer for $wrapper {
+            fn unseal<'a>(
+                &'a self,
+                cipher_match: Option<&'a CipherMatch<'a>>,
+                bundle: &'a [u8],
+                aad: &'a [u8],
+            ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+                (**self).unseal(cipher_match, bundle, aad)
+            }
+        }
+    };
+}
+
+forward_aead_unsealer!(&T);
+forward_aead_unsealer!(Box<T>);
+forward_aead_unsealer!(Arc<T>);
+
+/// A bundle wrapper over an AEAD cipher using the v1 format:
+/// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
+///
+/// The implementations are conditional on the inner type's capabilities:
+/// wrapping an [`AeadCipher`] (e.g. a symmetric key, or a KMS-backed cipher
+/// that handles both directions as one consistent object) yields a
+/// [`SealedAeadCipher`]; wrapping an encrypt-only [`AeadEncryptor`] yields
+/// only an [`AeadSealer`], and a decrypt-only [`AeadDecryptor`] (e.g. a
+/// retired rotation key) only an [`AeadUnsealer`].
+#[derive(Debug)]
+pub struct AeadV1Cipher<C>(C);
+
+impl<C> AeadV1Cipher<C> {
+    /// Wraps a cipher in the v1 bundle format.
+    pub fn new(cipher: C) -> Self {
+        Self(cipher)
     }
 }
 
-impl<E: AeadEncryptor> AeadEncryptor for AeadV1Sealer<E> {
+impl<C: AeadEncryptor> AeadEncryptor for AeadV1Cipher<C> {
     fn enc_algorithm(&self) -> Cow<'_, str> {
         self.0.enc_algorithm()
     }
@@ -314,7 +368,7 @@ impl<E: AeadEncryptor> AeadEncryptor for AeadV1Sealer<E> {
     }
 }
 
-impl<E: AeadEncryptor> AeadSealer for AeadV1Sealer<E> {
+impl<C: AeadEncryptor> AeadSealer for AeadV1Cipher<C> {
     fn seal<'a>(
         &'a self,
         plaintext: &'a [u8],
@@ -349,23 +403,11 @@ impl<E: AeadEncryptor> AeadSealer for AeadV1Sealer<E> {
     }
 }
 
-/// An [`AeadUnsealer`] using the v1 bundle format:
-/// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
-#[derive(Debug)]
-pub struct AeadV1Unsealer<D: AeadDecryptor>(D);
-
-impl<D: AeadDecryptor> AeadV1Unsealer<D> {
-    /// Creates a new unsealer.
-    pub fn new(decryptor: D) -> Self {
-        Self(decryptor)
-    }
-}
-
 fn invalid_bundle() -> Error {
     Error::new(ErrorKind::Crypto, UnsealError::InvalidBundle)
 }
 
-impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
+impl<C: AeadDecryptor> AeadDecryptor for AeadV1Cipher<C> {
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.0.cipher_match(m)
     }
@@ -386,7 +428,7 @@ impl<D: AeadDecryptor> AeadDecryptor for AeadV1Unsealer<D> {
     }
 }
 
-impl<D: AeadDecryptor> AeadUnsealer for AeadV1Unsealer<D> {
+impl<C: AeadDecryptor> AeadUnsealer for AeadV1Cipher<C> {
     fn unseal<'a>(
         &'a self,
         cipher_match: Option<&'a CipherMatch<'a>>,
@@ -467,6 +509,49 @@ mod tests {
         }
     }
 
+    /// One object with both capabilities (the symmetric-key / KMS shape).
+    #[derive(Debug)]
+    struct MockCipher;
+
+    impl AeadEncryptor for MockCipher {
+        fn enc_algorithm(&self) -> Cow<'_, str> {
+            MockEncryptor.enc_algorithm()
+        }
+
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            MockEncryptor.key_id()
+        }
+
+        fn encrypt<'a>(
+            &'a self,
+            plaintext: &'a [u8],
+            aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+            Box::pin(async move { MockEncryptor.encrypt(plaintext, aad).await })
+        }
+    }
+
+    impl AeadDecryptor for MockCipher {
+        fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+            MockDecryptor.cipher_match(m)
+        }
+
+        fn decrypt<'a>(
+            &'a self,
+            cipher_match: Option<&'a CipherMatch<'a>>,
+            nonce: &'a [u8],
+            ciphertext: &'a [u8],
+            tag: &'a [u8],
+            aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+            Box::pin(async move {
+                MockDecryptor
+                    .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+                    .await
+            })
+        }
+    }
+
     fn assert_invalid_bundle(err: &DecryptError) {
         let DecryptError::Other { source } = err else {
             unreachable!("expected DecryptError::Other, got {err:?}");
@@ -486,28 +571,45 @@ mod tests {
         let plaintext = b"hello world";
         let aad = b"associated";
 
-        let sealer = AeadV1Sealer::new(MockEncryptor);
+        let sealer = AeadV1Cipher::new(MockEncryptor);
         let bundle = sealer.seal(plaintext, aad).await.unwrap();
 
-        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let unsealer = AeadV1Cipher::new(MockDecryptor);
         let recovered = unsealer.unseal(None, &bundle, aad).await.unwrap();
         assert_eq!(recovered, plaintext);
     }
 
     #[tokio::test]
     async fn erased_cipher_roundtrip() {
-        let sealer: Arc<dyn AeadSealer> = Arc::new(AeadV1Sealer::new(MockEncryptor));
+        let sealer: Arc<dyn AeadSealer> = Arc::new(AeadV1Cipher::new(MockEncryptor));
         let bundle = sealer.seal(b"hello", b"").await.unwrap();
 
-        let unsealer: Arc<dyn AeadUnsealer> = Arc::new(AeadV1Unsealer::new(MockDecryptor));
+        let unsealer: Arc<dyn AeadUnsealer> = Arc::new(AeadV1Cipher::new(MockDecryptor));
         let recovered = unsealer.unseal(None, &bundle, b"").await.unwrap();
         assert_eq!(recovered, b"hello");
+    }
+
+    /// One object covering both directions (the symmetric-key / KMS shape):
+    /// `AeadV1Cipher<C: AeadCipher>` satisfies `SealedAeadCipher`, both
+    /// concretely and erased, including through generic bounds.
+    #[tokio::test]
+    async fn one_object_sealed_cipher_roundtrip() {
+        async fn roundtrip(cipher: impl AeadSealer + AeadUnsealer) {
+            let bundle = cipher.seal(b"hello", b"aad").await.unwrap();
+            let recovered = cipher.unseal(None, &bundle, b"aad").await.unwrap();
+            assert_eq!(recovered, b"hello");
+        }
+
+        roundtrip(AeadV1Cipher::new(MockCipher)).await;
+
+        let erased: Arc<dyn SealedAeadCipher> = Arc::new(AeadV1Cipher::new(MockCipher));
+        roundtrip(erased).await;
     }
 
     #[tokio::test]
     async fn bundle_format() {
         let plaintext = b"AB";
-        let sealer = AeadV1Sealer::new(MockEncryptor);
+        let sealer = AeadV1Cipher::new(MockEncryptor);
         let bundle = sealer.seal(plaintext, b"").await.unwrap();
 
         // [0x01, nonce_len=3, tag_len=4, nonce=[1,2,3], ciphertext=[0xBE, 0xBD], tag=[4,5,6,7]]
@@ -521,21 +623,21 @@ mod tests {
 
     #[tokio::test]
     async fn unseal_wrong_version() {
-        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let unsealer = AeadV1Cipher::new(MockDecryptor);
         let err = unsealer.unseal(None, &[0x02, 0, 0], b"").await.unwrap_err();
         assert_invalid_bundle(&err);
     }
 
     #[tokio::test]
     async fn unseal_too_short() {
-        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let unsealer = AeadV1Cipher::new(MockDecryptor);
         let err = unsealer.unseal(None, &[0x01], b"").await.unwrap_err();
         assert_invalid_bundle(&err);
     }
 
     #[tokio::test]
     async fn unseal_truncated() {
-        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let unsealer = AeadV1Cipher::new(MockDecryptor);
         // nonce_len=10, tag_len=10, but only 1 byte of data after header
         let err = unsealer
             .unseal(None, &[0x01, 10, 10, 0x00], b"")
@@ -546,7 +648,7 @@ mod tests {
 
     #[tokio::test]
     async fn unseal_empty() {
-        let unsealer = AeadV1Unsealer::new(MockDecryptor);
+        let unsealer = AeadV1Cipher::new(MockDecryptor);
         let err = unsealer.unseal(None, &[], b"").await.unwrap_err();
         assert_invalid_bundle(&err);
     }

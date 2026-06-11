@@ -76,6 +76,12 @@ impl<T: DpopNonceChecker + ?Sized> DpopNonceChecker for Arc<T> {
 #[derive(Debug, Builder)]
 pub struct SealedTimestampNonce<S: AeadSealer + AeadUnsealer> {
     /// The AEAD sealer/unsealer used to encrypt and decrypt nonce timestamps.
+    ///
+    /// Both directions must come from one object — typically
+    /// [`AeadV1Cipher`](crate::core::crypto::cipher::AeadV1Cipher) over an
+    /// [`AeadCipher`](crate::core::crypto::cipher::AeadCipher) (a symmetric
+    /// key, or a KMS-backed cipher), or an erased
+    /// `Arc<dyn SealedAeadCipher>`.
     sealer: S,
     /// The maximum age of a valid nonce. Defaults to 1 hour.
     #[builder(into, default = Duration::from_secs(3600))]
@@ -138,5 +144,140 @@ impl<S: AeadSealer + AeadUnsealer> DpopNonceChecker for SealedTimestampNonce<S> 
                 _ => Ok(NonceCheck::Invalid(self.generate_nonce().await?)),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use base64::prelude::*;
+
+    use super::*;
+    use crate::core::crypto::{
+        KeyMatchStrength,
+        cipher::{AeadOutput, AeadV1Cipher, CipherMatch, DecryptError, SealedAeadCipher},
+    };
+
+    /// XOR "cipher" with both capabilities on one object — the shape a
+    /// symmetric key or KMS-backed cipher provides.
+    #[derive(Debug)]
+    struct MockCipher;
+
+    impl crate::core::crypto::cipher::AeadEncryptor for MockCipher {
+        fn enc_algorithm(&self) -> Cow<'_, str> {
+            "mock".into()
+        }
+
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            None
+        }
+
+        fn encrypt<'a>(
+            &'a self,
+            plaintext: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+            Box::pin(async move {
+                Ok(AeadOutput {
+                    nonce: vec![1, 2, 3],
+                    ciphertext: plaintext.iter().map(|b| b ^ 0xFF).collect(),
+                    tag: vec![4, 5, 6, 7],
+                })
+            })
+        }
+    }
+
+    impl crate::core::crypto::cipher::AeadDecryptor for MockCipher {
+        fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+            Some(KeyMatchStrength::ByAlgorithm)
+        }
+
+        fn decrypt<'a>(
+            &'a self,
+            _cipher_match: Option<&'a CipherMatch<'a>>,
+            _nonce: &'a [u8],
+            ciphertext: &'a [u8],
+            _tag: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+            Box::pin(async move { Ok(ciphertext.iter().map(|b| b ^ 0xFF).collect()) })
+        }
+    }
+
+    fn checker() -> SealedTimestampNonce<AeadV1Cipher<MockCipher>> {
+        SealedTimestampNonce::builder()
+            .sealer(AeadV1Cipher::new(MockCipher))
+            .build()
+    }
+
+    /// Forge a nonce whose sealed timestamp lies `age_secs` in the past.
+    async fn nonce_with_age(
+        checker: &SealedTimestampNonce<AeadV1Cipher<MockCipher>>,
+        age_secs: u64,
+    ) -> String {
+        let issued_at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            - age_secs;
+        let sealed = checker
+            .sealer
+            .seal(&issued_at.to_be_bytes(), &checker.aad)
+            .await
+            .unwrap();
+        BASE64_URL_SAFE_NO_PAD.encode(sealed)
+    }
+
+    #[tokio::test]
+    async fn missing_nonce_is_invalid_and_issues_one_that_validates() {
+        let checker = checker();
+        let NonceCheck::Invalid(new_nonce) = checker.check_nonce(None).await.unwrap() else {
+            panic!("missing nonce must be Invalid");
+        };
+        assert_eq!(
+            checker.check_nonce(Some(&new_nonce)).await.unwrap(),
+            NonceCheck::Valid
+        );
+    }
+
+    #[tokio::test]
+    async fn garbage_nonce_is_invalid() {
+        let checker = checker();
+        assert!(matches!(
+            checker.check_nonce(Some("not-a-nonce")).await.unwrap(),
+            NonceCheck::Invalid(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn expired_nonce_is_invalid() {
+        let checker = checker();
+        let old = nonce_with_age(&checker, 3601).await;
+        assert!(matches!(
+            checker.check_nonce(Some(&old)).await.unwrap(),
+            NonceCheck::Invalid(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn nonce_in_renewal_window_rotates() {
+        let checker = checker();
+        let aging = nonce_with_age(&checker, 3000).await; // past the 2700s renewal threshold
+        assert!(matches!(
+            checker.check_nonce(Some(&aging)).await.unwrap(),
+            NonceCheck::ValidWithNewNonce(_)
+        ));
+    }
+
+    /// The erased one-object form also satisfies the bound.
+    #[tokio::test]
+    async fn erased_sealed_cipher_constructs() {
+        let cipher: Arc<dyn SealedAeadCipher> = Arc::new(AeadV1Cipher::new(MockCipher));
+        let checker = SealedTimestampNonce::builder().sealer(cipher).build();
+        assert!(matches!(
+            checker.check_nonce(None).await.unwrap(),
+            NonceCheck::Invalid(_)
+        ));
     }
 }

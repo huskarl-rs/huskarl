@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 
+ - `AeadV1Sealer`/`AeadV1Unsealer` are replaced by a single `AeadV1Cipher<C>`.
  - `ClientAuthentication::authentication_params`: the `token_endpoint`
    parameter is renamed to `endpoint` — it is whatever endpoint is being
    authenticated to (token, PAR, revocation, introspection).
