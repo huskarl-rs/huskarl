@@ -9,14 +9,17 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    core::{jwt::validator::ValidatedJwt, platform::MaybeSendSync},
+    core::{Error, jwt::validator::ValidatedJwt, platform::MaybeSendSync},
     grant::{authorization_code::CompleteInput, core::TokenResponse},
     token::id_token::IdTokenClaims,
 };
 
 /// Errors that can occur when handling the authorization code callback with the loopback implementation.
+///
+/// The `OAuthError` variant is control flow for login UIs (e.g. the user
+/// denied access); the rest carry the underlying failure.
 #[derive(Debug, Snafu)]
-pub enum LoopbackError<CompleteErr: crate::core::Error> {
+pub enum LoopbackError {
     /// Invalid redirect URI in callback.
     #[snafu(display("Invalid redirect URI in callback state: {source}"))]
     InvalidRedirectUri {
@@ -53,12 +56,14 @@ pub enum LoopbackError<CompleteErr: crate::core::Error> {
     #[snafu(display("Failed to complete authorization: {source}"))]
     Complete {
         /// The underlying error.
-        source: CompleteErr,
+        source: Error,
     },
 }
 
-impl<CompleteErr: crate::core::Error + 'static> crate::core::Error for LoopbackError<CompleteErr> {
-    fn is_retryable(&self) -> bool {
+impl LoopbackError {
+    /// If true, a failed callback handling attempt may succeed if retried.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
         match self {
             LoopbackError::InvalidRedirectUri { .. }
             | LoopbackError::OAuthError { .. }
@@ -171,7 +176,7 @@ fn error_query_string(ctx: &ErrorContext) -> String {
     serde_html_form::to_string(&params).unwrap_or_default()
 }
 
-fn to_error_context<E: crate::core::Error>(port: u16, err: &LoopbackError<E>) -> ErrorContext {
+fn to_error_context(port: u16, err: &LoopbackError) -> ErrorContext {
     match err {
         LoopbackError::OAuthError {
             error,
@@ -189,7 +194,6 @@ fn to_error_context<E: crate::core::Error>(port: u16, err: &LoopbackError<E>) ->
 }
 
 pub async fn complete_on_loopback_oidc<
-    E: crate::core::Error + 'static,
     Extra: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static,
 >(
     listener: &TcpListener,
@@ -197,9 +201,11 @@ pub async fn complete_on_loopback_oidc<
     renderer: Option<CallbackRenderer>,
     complete: impl AsyncFnOnce(
         CompleteInput,
-    )
-        -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>), E>,
-) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>), LoopbackError<E>> {
+    ) -> Result<
+        (TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>),
+        Error,
+    >,
+) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>), LoopbackError> {
     let port = listener.local_addr().map_or(0, |a| a.port());
 
     let expected_path = Url::parse(redirect_uri)
@@ -229,7 +235,7 @@ pub async fn complete_on_loopback_oidc<
             continue;
         }
 
-        let complete_input = match parse_callback_params::<E>(&path) {
+        let complete_input = match parse_callback_params(&path) {
             Ok(input) => input,
             Err(e) => {
                 let _ = send_redirect(&mut stream, "/failure").await;
@@ -326,9 +332,7 @@ async fn read_request_path(stream: &mut TcpStream) -> Result<Option<String>, std
     Ok(Some(path))
 }
 
-fn parse_callback_params<E: crate::core::Error + 'static>(
-    path_and_query: &str,
-) -> Result<CompleteInput, LoopbackError<E>> {
+fn parse_callback_params(path_and_query: &str) -> Result<CompleteInput, LoopbackError> {
     // Parse the URL to extract query parameters
     // This parse shouldn't fail since we control the format, but we handle it gracefully
     let url = Url::parse(&format!("http://localhost{path_and_query}"))
@@ -480,16 +484,6 @@ mod tests {
     use super::*;
     use crate::token::{AccessToken, id_token::IdTokenClaims};
 
-    #[derive(Debug, snafu::Snafu)]
-    #[snafu(display("mock error"))]
-    struct MockError;
-
-    impl crate::core::Error for MockError {
-        fn is_retryable(&self) -> bool {
-            false
-        }
-    }
-
     fn ok_token_response() -> (TokenResponse, Option<ValidatedJwt<IdTokenClaims>>) {
         (
             crate::grant::core::token_response::RawTokenResponse::builder()
@@ -518,7 +512,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc::<MockError, _>(
+            complete_on_loopback_oidc(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -551,7 +545,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc::<MockError, _>(
+            complete_on_loopback_oidc(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -583,12 +577,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc::<MockError, _>(
-                &listener,
-                "http://127.0.0.1/callback",
-                None,
-                async |_| Ok(ok_token_response()),
-            )
+            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+                Ok(ok_token_response())
+            })
             .await
         });
 
@@ -612,12 +603,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc::<MockError, _>(
-                &listener,
-                "http://127.0.0.1/callback",
-                None,
-                async |_| Ok(ok_token_response()),
-            )
+            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+                Ok(ok_token_response())
+            })
             .await
         });
 
@@ -638,12 +626,9 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc::<MockError, _>(
-                &listener,
-                "http://127.0.0.1/callback",
-                None,
-                async |_| Ok(ok_token_response()),
-            )
+            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+                Ok(ok_token_response())
+            })
             .await
         });
 

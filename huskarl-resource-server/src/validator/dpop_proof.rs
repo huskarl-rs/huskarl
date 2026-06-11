@@ -14,7 +14,7 @@ use snafu::prelude::*;
 use crate::core::{
     crypto::verifier::{CreateVerifierError, JwsVerifierPlatform},
     jwt::{
-        BoxedJtiUniquenessChecker, JwsParseError, parse_compact_jws,
+        JtiUniquenessChecker, JwsParseError, parse_compact_jws,
         validator::{ClaimCheck, JwtValidationError, JwtValidator},
     },
     platform::{Duration, SystemTime},
@@ -76,7 +76,7 @@ pub struct DpopProofValidator {
     /// Allowed signing algorithms. `None` permits any asymmetric algorithm.
     allowed_signing_algorithms: Option<Vec<String>>,
     /// Optional JTI uniqueness checker for replay protection.
-    jti_checker: Option<BoxedJtiUniquenessChecker>,
+    jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
 }
 
 impl DpopProofValidator {

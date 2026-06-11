@@ -1,12 +1,13 @@
 //! DPoP nonce checking traits and implementations.
 
-use std::convert::Infallible;
+use std::sync::Arc;
 
 use bon::Builder;
 
 use crate::core::{
-    crypto::cipher::{AeadEncryptor, AeadSealer, AeadUnsealer},
-    platform::{Duration, MaybeSend, MaybeSendSync, SystemTime},
+    Error,
+    crypto::cipher::{AeadSealer, AeadUnsealer},
+    platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime},
 };
 
 /// The outcome of a DPoP nonce check.
@@ -26,35 +27,58 @@ pub enum NonceCheck {
 ///
 /// Implement this trait to enforce nonce-based replay protection on DPoP proofs,
 /// as described in RFC 9449 §8.
+///
+/// This trait is dyn-capable: validators store it as `Arc<dyn DpopNonceChecker>`.
+/// Write the method body as `Box::pin(async move { ... })`.
 pub trait DpopNonceChecker: MaybeSendSync {
-    /// The error type returned when nonce checking fails.
-    type Error: crate::core::Error;
-
     /// Checks whether the presented nonce is valid.
     ///
     /// Returns a [`NonceCheck`] indicating whether the nonce is valid, approaching
     /// expiry, or invalid, along with any new nonce to include in the response.
-    fn check_nonce(
-        &self,
-        nonce: Option<&str>,
-    ) -> impl Future<Output = Result<NonceCheck, Self::Error>> + MaybeSend;
+    fn check_nonce<'a>(
+        &'a self,
+        nonce: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<NonceCheck, Error>>;
 }
 
-/// A [`DpopNonceChecker`] that always accepts any nonce (i.e. disables nonce checking).
-///
-/// This is currently not called as the ergonomics of bon require an `Option` to make
-/// the nonce check parameter optional.
-///
-/// Do not construct manually.
-#[doc(hidden)]
+impl<T: DpopNonceChecker + ?Sized> DpopNonceChecker for &T {
+    fn check_nonce<'a>(
+        &'a self,
+        nonce: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<NonceCheck, Error>> {
+        (**self).check_nonce(nonce)
+    }
+}
+
+impl<T: DpopNonceChecker + ?Sized> DpopNonceChecker for Box<T> {
+    fn check_nonce<'a>(
+        &'a self,
+        nonce: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<NonceCheck, Error>> {
+        (**self).check_nonce(nonce)
+    }
+}
+
+impl<T: DpopNonceChecker + ?Sized> DpopNonceChecker for Arc<T> {
+    fn check_nonce<'a>(
+        &'a self,
+        nonce: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<NonceCheck, Error>> {
+        (**self).check_nonce(nonce)
+    }
+}
+
+/// A [`DpopNonceChecker`] that always accepts any nonce (i.e. disables nonce
+/// checking) — equivalent to not configuring a checker at all.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoNonceCheck;
 
 impl DpopNonceChecker for NoNonceCheck {
-    type Error = Infallible;
-
-    async fn check_nonce(&self, _nonce: Option<&str>) -> Result<NonceCheck, Self::Error> {
-        Ok(NonceCheck::Valid)
+    fn check_nonce<'a>(
+        &'a self,
+        _nonce: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<NonceCheck, Error>> {
+        Box::pin(async { Ok(NonceCheck::Valid) })
     }
 }
 
@@ -79,7 +103,7 @@ pub struct SealedTimestampNonce<S: AeadSealer + AeadUnsealer> {
 }
 
 impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
-    async fn generate_nonce(&self) -> Result<String, <S as AeadEncryptor>::Error> {
+    async fn generate_nonce(&self) -> Result<String, Error> {
         use base64::prelude::*;
         let current_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -109,21 +133,24 @@ impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
 }
 
 impl<S: AeadSealer + AeadUnsealer> DpopNonceChecker for SealedTimestampNonce<S> {
-    type Error = <S as AeadEncryptor>::Error;
+    fn check_nonce<'a>(
+        &'a self,
+        nonce: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<NonceCheck, Error>> {
+        Box::pin(async move {
+            let lifetime = self.nonce_lifetime.as_secs();
+            let renewal_threshold = lifetime.saturating_sub(self.renewal_window.as_secs());
 
-    async fn check_nonce(&self, nonce: Option<&str>) -> Result<NonceCheck, Self::Error> {
-        let lifetime = self.nonce_lifetime.as_secs();
-        let renewal_threshold = lifetime.saturating_sub(self.renewal_window.as_secs());
-
-        match self.nonce_age_secs(nonce).await {
-            Some(age) if age <= lifetime => {
-                if age >= renewal_threshold {
-                    Ok(NonceCheck::ValidWithNewNonce(self.generate_nonce().await?))
-                } else {
-                    Ok(NonceCheck::Valid)
+            match self.nonce_age_secs(nonce).await {
+                Some(age) if age <= lifetime => {
+                    if age >= renewal_threshold {
+                        Ok(NonceCheck::ValidWithNewNonce(self.generate_nonce().await?))
+                    } else {
+                        Ok(NonceCheck::Valid)
+                    }
                 }
+                _ => Ok(NonceCheck::Invalid(self.generate_nonce().await?)),
             }
-            _ => Ok(NonceCheck::Invalid(self.generate_nonce().await?)),
-        }
+        })
     }
 }

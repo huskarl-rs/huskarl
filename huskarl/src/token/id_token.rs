@@ -1,13 +1,16 @@
 //! `OpenID` Connect ID token support.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, prelude::*};
 
 use crate::core::{
-    crypto::verifier::BoxedJwsVerifier,
+    crypto::verifier::JwsVerifier,
     jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt},
     platform::{Duration, SystemTime},
 };
@@ -157,7 +160,8 @@ pub struct StandardOidcAddressClaims {
 #[derive(Debug, Builder)]
 pub struct IdTokenValidator {
     /// The JWS verifier to use for validating the ID token.
-    verifier: BoxedJwsVerifier,
+    #[builder(with = |verifier: impl JwsVerifier + 'static| Arc::new(verifier) as Arc<dyn JwsVerifier>)]
+    verifier: Arc<dyn JwsVerifier>,
     /// The issuer to validate against.
     #[builder(into)]
     issuer: String,

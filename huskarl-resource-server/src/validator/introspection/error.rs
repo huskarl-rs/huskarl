@@ -12,11 +12,7 @@ use crate::{
 /// Error returned by [`super::IntrospectionValidator::validate_request`].
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
-pub enum IntrospectionValidateError<
-    AuthErr: crate::core::Error,
-    HttpErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-> {
+pub enum IntrospectionValidateError {
     /// Failed to extract the access token from the request headers.
     #[snafu(display("Token presentation error"))]
     Extract {
@@ -37,7 +33,7 @@ pub enum IntrospectionValidateError<
         /// The token type that was presented.
         token_type: TokenType,
         /// The underlying introspection call error.
-        source: IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>,
+        source: IntrospectionCallError,
     },
     /// The introspected token's audience did not satisfy the configured check
     /// (RFC 7662 §4).
@@ -55,9 +51,7 @@ pub enum IntrospectionValidateError<
     },
 }
 
-impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crate::core::Error>
-    ToRfc6750Error for IntrospectionValidateError<AuthErr, HttpErr, HttpRespErr>
-{
+impl ToRfc6750Error for IntrospectionValidateError {
     fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
             Self::Extract { source } => source.attempted_scheme(),

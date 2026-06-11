@@ -27,17 +27,16 @@
 //! ## 3a. Create a refresh grant from an existing grant (most common)
 //!
 //! The most common way to create a refresh grant is from another grant that has
-//! already been configured. This inherits the same client authentication and `DPoP`
-//! settings without needing to repeat them.
+//! already been configured. This inherits the same client authentication, `DPoP`,
+//! and HTTP client settings without needing to repeat them.
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP},
 //!     grant::{client_credentials::ClientCredentialsGrant, refresh::RefreshGrant},
 //!     prelude::*,
 //! };
-//! # fn example(grant: &ClientCredentialsGrant<NoAuth, NoDPoP>) {
-//! let refresh_grant: RefreshGrant<NoAuth, NoDPoP> = grant.to_refresh_grant();
+//! # fn example(grant: &ClientCredentialsGrant) {
+//! let refresh_grant: RefreshGrant = grant.to_refresh_grant();
 //! # }
 //! ```
 //!
@@ -61,7 +60,7 @@
 //! #     .await?;
 //! #
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //!
 //! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&client)
@@ -69,12 +68,12 @@
 //!     .call()
 //!     .await?;
 //!
-//! let refresh_grant: RefreshGrant<ClientSecret<EnvVarSecret>, NoDPoP> =
-//!     RefreshGrant::builder_from_metadata(&metadata)
-//!         .client_id("client_id")
-//!         .client_auth(client_auth)
-//!         .dpop(NoDPoP)
-//!         .build();
+//! let refresh_grant: RefreshGrant = RefreshGrant::builder_from_metadata(&metadata)
+//!     .client_id("client_id")
+//!     .http_client(client)
+//!     .client_auth(client_auth)
+//!     .dpop(NoDPoP)
+//!     .build();
 //! # Ok(())
 //! # }
 //! ```
@@ -90,14 +89,20 @@
 //!     },
 //!     grant::refresh::RefreshGrant,
 //! };
+//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
 //! #
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //!
-//! let refresh_grant: RefreshGrant<ClientSecret<EnvVarSecret>, NoDPoP> = RefreshGrant::builder()
+//! let refresh_grant: RefreshGrant = RefreshGrant::builder()
 //!     .token_endpoint("https://my-server/token")?
 //!     .client_id("client_id")
+//!     .http_client(client)
 //!     .client_auth(client_auth)
 //!     .dpop(NoDPoP)
 //!     .build();
@@ -109,33 +114,31 @@
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP},
 //!     grant::refresh::{RefreshGrant, RefreshGrantParameters},
 //!     prelude::*,
 //!     token::{AccessToken, RefreshToken},
 //! };
 //! # async fn exchange(
-//! #     client: &huskarl_reqwest::ReqwestClient,
-//! #     refresh_grant: &RefreshGrant<NoAuth, NoDPoP>,
+//! #     refresh_grant: &RefreshGrant,
 //! #     refresh_token: RefreshToken,
 //! # ) -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! let params = RefreshGrantParameters::refresh_token(refresh_token);
-//! let response = refresh_grant.exchange(client, params).await?;
+//! let response = refresh_grant.exchange(params).await?;
 //! let token: &AccessToken = response.access_token();
 //! # Ok(())
 //! # }
 //! ```
+
+use std::sync::Arc;
 
 use bon::Builder;
 use serde::Serialize;
 
 use crate::{
     core::{
-        EndpointUrl,
-        client_auth::ClientAuthentication,
-        dpop::{AuthorizationServerDPoP, NoDPoP},
-        secrets::SecretString,
+        EndpointUrl, client_auth::ClientAuthentication, dpop::AuthorizationServerDPoP,
+        http::HttpClient, secrets::SecretString,
     },
     grant::core::{OAuth2ExchangeGrant, mk_scopes},
     token::RefreshToken,
@@ -154,17 +157,23 @@ use crate::{
 /// See the [module documentation][crate::grant::refresh] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[huskarl_macros::try_builder]
-#[derive(Debug, Clone, Builder)]
+#[derive(Clone, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
-pub struct RefreshGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP> {
+pub struct RefreshGrant {
     /// The client ID.
     client_id: String,
 
+    /// The HTTP client used for token requests.
+    #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
+    http_client: Arc<dyn HttpClient>,
+
     /// The client authentication method.
-    client_auth: Auth,
+    #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
+    client_auth: Arc<dyn ClientAuthentication>,
 
     /// The `DPoP` signer.
-    dpop: D,
+    #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+    dpop: Arc<dyn AuthorizationServerDPoP>,
 
     /// The issuer for tokens created by the authorization server.
     #[from_metadata(path = "issuer")]
@@ -186,12 +195,19 @@ pub struct RefreshGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP =
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
-impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 'static>
-    OAuth2ExchangeGrant for RefreshGrant<Auth, D>
-{
+impl core::fmt::Debug for RefreshGrant {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RefreshGrant")
+            .field("client_id", &self.client_id)
+            .field("issuer", &self.issuer)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("mtls_token_endpoint", &self.mtls_token_endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OAuth2ExchangeGrant for RefreshGrant {
     type Parameters = RefreshGrantParameters;
-    type ClientAuth = Auth;
-    type DPoP = D;
     type Form<'a> = RefreshGrantForm;
 
     fn client_id(&self) -> &str {
@@ -202,8 +218,8 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &Self::ClientAuth {
-        &self.client_auth
+    fn client_auth(&self) -> &dyn ClientAuthentication {
+        self.client_auth.as_ref()
     }
 
     fn token_endpoint(&self) -> &EndpointUrl {
@@ -214,15 +230,19 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
         self.mtls_token_endpoint.as_ref()
     }
 
-    fn dpop(&self) -> &Self::DPoP {
-        &self.dpop
+    fn dpop(&self) -> &dyn AuthorizationServerDPoP {
+        self.dpop.as_ref()
+    }
+
+    fn http_client(&self) -> &dyn HttpClient {
+        self.http_client.as_ref()
     }
 
     fn allowed_auth_methods(&self) -> Option<&[String]> {
         self.token_endpoint_auth_methods_supported.as_deref()
     }
 
-    fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
+    fn to_refresh_grant(&self) -> RefreshGrant {
         self.clone()
     }
 

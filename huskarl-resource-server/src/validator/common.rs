@@ -8,21 +8,20 @@ use crate::{
     validator::{
         ValidationResult,
         binding::{DPoPBindingChecker, check_token_binding},
-        dpop_nonce::DpopNonceChecker,
         error::{BindingSnafu, ExtractSnafu, InvalidJwtSnafu, ValidateHeadersError},
         extract::extract_token,
     },
 };
 
-pub(super) struct ValidatorInner<N: DpopNonceChecker> {
+pub(super) struct ValidatorInner {
     pub jwt_validator: JwtValidator,
-    pub dpop_binding_checker: DPoPBindingChecker<N>,
+    pub dpop_binding_checker: DPoPBindingChecker,
     pub token_header: HeaderName,
     /// If `true`, tokens without a `cnf.x5t#S256` certificate binding are rejected.
     pub require_mtls: bool,
 }
 
-impl<N: DpopNonceChecker> ValidatorInner<N> {
+impl ValidatorInner {
     pub async fn validate_request<Claims: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         headers: &http::HeaderMap,

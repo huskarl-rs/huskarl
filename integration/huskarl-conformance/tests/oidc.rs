@@ -17,7 +17,7 @@ fn client_secret() -> String {
     std::env::var("CONFORMANCE_CLIENT_SECRET").unwrap_or_else(|_| "client-secret".to_string())
 }
 
-fn client_auth() -> ClientSecret<PlainSecret> {
+fn client_auth() -> ClientSecret {
     ClientSecret::new(PlainSecret::new(client_secret()))
 }
 

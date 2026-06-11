@@ -5,17 +5,15 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     core::{
-        BoxedError, EndpointUrl,
+        EndpointUrl, Error, ErrorKind,
         client_auth::ClientAuthentication,
-        crypto::verifier::{BoxedJwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
-        dpop::{AuthorizationServerDPoP, NoDPoP},
+        crypto::verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
+        dpop::AuthorizationServerDPoP,
+        http::HttpClient,
         platform::MaybeSendSync,
     },
     grant::{
-        authorization_code::{
-            grant::builder::State,
-            jar::{Jar, NoJar},
-        },
+        authorization_code::{grant::builder::State, jar::Jar},
         core::OAuth2ExchangeGrant,
         refresh,
     },
@@ -26,20 +24,18 @@ use crate::{
 /// See the [module documentation][crate::grant::authorization_code] for a usage guide.
 #[allow(clippy::struct_excessive_bools)] // independent protocol switches, not a state machine
 #[derive(Clone)]
-pub struct AuthorizationCodeGrant<
-    Auth: ClientAuthentication,
-    D: AuthorizationServerDPoP = NoDPoP,
-    J: Jar = NoJar,
-    IdClaims: Clone + for<'de> Deserialize<'de> + 'static = (),
-> {
+pub struct AuthorizationCodeGrant<IdClaims: Clone + for<'de> Deserialize<'de> + 'static = ()> {
     /// The client ID.
     pub(super) client_id: String,
 
+    /// The HTTP client used for token and PAR requests.
+    pub(super) http_client: Arc<dyn HttpClient>,
+
     /// The client authentication method.
-    pub(super) client_auth: Auth,
+    pub(super) client_auth: Arc<dyn ClientAuthentication>,
 
     /// The `DPoP` signer.
-    pub(super) dpop: D,
+    pub(super) dpop: Arc<dyn AuthorizationServerDPoP>,
 
     /// The issuer for tokens created by the authorization server.
     pub(super) issuer: Option<String>,
@@ -58,9 +54,9 @@ pub struct AuthorizationCodeGrant<
     ///
     /// This field is populated from the values of `jwks_uri`, `jws_verifier_platform`,
     /// and `jws_verifier_factory` at build time.
-    pub(super) jws_verifier: Option<BoxedJwsVerifier>,
+    pub(super) jws_verifier: Option<Arc<dyn JwsVerifier>>,
 
-    pub(super) jar: J,
+    pub(super) jar: Arc<dyn Jar>,
 
     /// The authorization endpoint (RFC 6749 §3.1).
     pub(super) authorization_endpoint: EndpointUrl,
@@ -118,13 +114,7 @@ pub struct AuthorizationCodeGrant<
 )]
 #[huskarl_macros::try_builder]
 #[bon::bon]
-impl<
-    Auth: ClientAuthentication + 'static,
-    D: AuthorizationServerDPoP + 'static,
-    J: Jar + 'static,
-    IdClaims: Clone + DeserializeOwned + 'static,
-> AuthorizationCodeGrant<Auth, D, J, IdClaims>
-{
+impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClaims> {
     /// Creates a new [`AuthorizationCodeGrant`] instance.
     ///
     /// This is the workhorse constructor; callers use [`Self::builder()`]
@@ -146,10 +136,15 @@ impl<
     pub async fn new(
         /// The client ID.
         client_id: String,
+        /// The HTTP client used for token and PAR requests.
+        #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
+        http_client: Arc<dyn HttpClient>,
         /// The client authentication method.
-        client_auth: Auth,
+        #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
+        client_auth: Arc<dyn ClientAuthentication>,
         /// The `DPoP` signer.
-        dpop: D,
+        #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+        dpop: Arc<dyn AuthorizationServerDPoP>,
         /// The issuer for tokens created by the authorization server.
         #[from_metadata(path = "issuer")]
         issuer: Option<String>,
@@ -177,7 +172,8 @@ impl<
         ///     This implements JAR signing (when understood by the authorization server).
         /// - [`crate::grant::authorization_code::jar::NoJar`]
         ///     No JAR is implemented when this variant is used.
-        jar: J,
+        #[builder(with = |jar: impl Jar + 'static| Arc::new(jar) as Arc<dyn Jar>)]
+        jar: Arc<dyn Jar>,
         #[from_metadata(path = "jwks_uri?")]
         #[try_setter(crate::core::IntoEndpointUrl::into_endpoint_url)]
         jwks_uri: Option<EndpointUrl>,
@@ -216,7 +212,7 @@ impl<
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
         jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
@@ -225,7 +221,8 @@ impl<
                 Some(factory.build(jwks_uri.as_ref(), platform).await?)
             }
             (None, Some(_)) => {
-                return Err(BoxedError::from_err(
+                return Err(Error::new(
+                    ErrorKind::Config,
                     super::error::MissingJwsVerifierPlatformSnafu.build(),
                 ));
             }
@@ -235,6 +232,7 @@ impl<
         Ok(AuthorizationCodeGrant {
             jws_verifier,
             client_id,
+            http_client,
             client_auth,
             dpop,
             jar,
@@ -264,13 +262,11 @@ impl<
 /// `IdClaims` is fixed to `()` here so callers don't need to turbofish. Users
 /// who want a typed claim set chain `with_id_claims::<C>()` on the returned
 /// builder before any other setter.
-impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static, J: Jar + 'static>
-    AuthorizationCodeGrant<Auth, D, J, ()>
-{
+impl AuthorizationCodeGrant<()> {
     /// Returns a builder for an authorization code grant, with `IdClaims`
     /// defaulting to `()` (call [`with_id_claims`][AuthorizationCodeGrantBuilder::with_id_claims]
     /// to switch to a typed claim set).
-    pub fn builder() -> AuthorizationCodeGrantBuilder<Auth, D, J, ()> {
+    pub fn builder() -> AuthorizationCodeGrantBuilder<()> {
         Self::builder_internal()
     }
 
@@ -281,13 +277,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static,
     pub fn builder_from_metadata(
         metadata: &crate::core::server_metadata::AuthorizationServerMetadata,
     ) -> Option<
-        AuthorizationCodeGrantBuilder<
-            Auth,
-            D,
-            J,
-            (),
-            AuthorizationCodeGrantBuilderFromMetadataInternalState,
-        >,
+        AuthorizationCodeGrantBuilder<(), AuthorizationCodeGrantBuilderFromMetadataInternalState>,
     > {
         Self::builder_from_metadata_internal(metadata)
     }
@@ -297,18 +287,13 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static,
 /// builder before any setter is called. Works because bon's experimental
 /// `generics(setters(...))` on `fn new` generated `with_id_claims_internal`
 /// to perform the type-state move.
-impl<
-    Auth: ClientAuthentication + 'static,
-    D: AuthorizationServerDPoP + 'static,
-    J: Jar + 'static,
-    IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static,
-    S: State,
-> AuthorizationCodeGrantBuilder<Auth, D, J, IdClaims, S>
+impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static, S: State>
+    AuthorizationCodeGrantBuilder<IdClaims, S>
 {
     /// Sets the ID claims type for the authorization code grant.
     pub fn with_id_claims<C: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>(
         self,
-    ) -> AuthorizationCodeGrantBuilder<Auth, D, J, C, S> {
+    ) -> AuthorizationCodeGrantBuilder<C, S> {
         self.with_id_claims_internal()
     }
 }
@@ -341,16 +326,10 @@ pub struct AuthorizationCodeGrantForm<'a> {
     resource: Option<Vec<String>>,
 }
 
-impl<
-    Auth: ClientAuthentication + Clone + 'static,
-    D: AuthorizationServerDPoP + 'static,
-    J: Jar + 'static,
-    IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static,
-> OAuth2ExchangeGrant for AuthorizationCodeGrant<Auth, D, J, IdClaims>
+impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static> OAuth2ExchangeGrant
+    for AuthorizationCodeGrant<IdClaims>
 {
     type Parameters = AuthorizationCodeGrantParameters;
-    type ClientAuth = Auth;
-    type DPoP = D;
     type Form<'a> = AuthorizationCodeGrantForm<'a>;
 
     fn client_id(&self) -> &str {
@@ -361,8 +340,8 @@ impl<
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &Self::ClientAuth {
-        &self.client_auth
+    fn client_auth(&self) -> &dyn ClientAuthentication {
+        self.client_auth.as_ref()
     }
 
     fn token_endpoint(&self) -> &EndpointUrl {
@@ -373,8 +352,12 @@ impl<
         self.mtls_token_endpoint.as_ref()
     }
 
-    fn dpop(&self) -> &Self::DPoP {
-        &self.dpop
+    fn dpop(&self) -> &dyn AuthorizationServerDPoP {
+        self.dpop.as_ref()
+    }
+
+    fn http_client(&self) -> &dyn HttpClient {
+        self.http_client.as_ref()
     }
 
     fn allowed_auth_methods(&self) -> Option<&[String]> {
@@ -385,14 +368,15 @@ impl<
         params.dpop_jkt.as_deref()
     }
 
-    fn to_refresh_grant(&self) -> refresh::RefreshGrant<Self::ClientAuth, Self::DPoP> {
+    fn to_refresh_grant(&self) -> refresh::RefreshGrant {
         refresh::RefreshGrant::builder()
             .client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
+            .http_client(self.http_client.clone())
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.token_endpoint.clone())
-            .unwrap_or_else(|e| match e {})
+            .expect("an EndpointUrl converts to itself infallibly")
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )

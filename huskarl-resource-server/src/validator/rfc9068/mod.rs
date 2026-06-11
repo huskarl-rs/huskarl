@@ -119,10 +119,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AccessTokenValidator,
     core::{
-        BoxedError, EndpointUrl,
+        EndpointUrl, Error,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         jwt::{
-            BoxedJtiUniquenessChecker,
+            JtiUniquenessChecker,
             validator::{ClaimCheck, JwtValidator},
         },
         platform::MaybeSendSync,
@@ -132,12 +132,11 @@ use crate::{
         ValidationResult,
         binding::DPoPBindingChecker,
         common::ValidatorInner,
-        dpop_nonce::{DpopNonceChecker, NoNonceCheck},
+        dpop_nonce::DpopNonceChecker,
         dpop_proof::DpopProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
         observe::{OnValidate, ValidationOutcome},
-        rfc9068::rfc9068_validator_builder::SetDpopNonceChecker,
     },
 };
 
@@ -150,17 +149,15 @@ use crate::{
 ///
 /// For authorization servers that do not issue RFC 9068-compliant tokens, use
 /// [`crate::validator::custom::CustomValidator`] instead.
-pub struct Rfc9068Validator<N: DpopNonceChecker, Claims = ()> {
-    inner: ValidatorInner<N>,
+pub struct Rfc9068Validator<Claims = ()> {
+    inner: ValidatorInner,
     issuer: String,
     on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
 
 #[bon::bon]
-impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
-    Rfc9068Validator<N, Claims>
-{
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claims> {
     /// Creates a new [`Rfc9068Validator`].
     ///
     /// For a more convenient constructor when you have authorization server metadata,
@@ -211,12 +208,12 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
         /// Access token JTI uniqueness checker.
-        jti_checker: Option<BoxedJtiUniquenessChecker>,
+        jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// DPoP nonce checker.
-        #[builder(setters(vis = "", name = "dpop_nonce_checker_internal"))]
-        dpop_nonce_checker: Option<N>,
+        #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
+        dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
         /// JTI uniqueness checker.
-        dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
+        dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// The HTTP header to extract the access token from.
         ///
         /// Defaults to `Authorization`.
@@ -226,7 +223,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         ///
         /// Use this to record metrics, emit log events, or trigger alerts.
         on_validate: Option<Arc<dyn OnValidate>>,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let jws_verifier = jws_verifier_factory
             .build(jwks_uri.as_ref(), jws_verifier_platform.clone())
             .await?;
@@ -267,12 +264,12 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     }
 }
 
-impl Rfc9068Validator<NoNonceCheck, ()> {
+impl Rfc9068Validator<()> {
     /// Creates a builder for [`Rfc9068Validator`].
     ///
     /// Call [`.with_claims::<T>()`][Rfc9068ValidatorBuilder::with_claims] on the builder
     /// to specify a custom claims type. The default is `()` (no extra claims).
-    pub fn builder() -> Rfc9068ValidatorBuilder<NoNonceCheck, ()> {
+    pub fn builder() -> Rfc9068ValidatorBuilder<()> {
         Rfc9068Validator::builder_internal()
     }
 
@@ -283,7 +280,6 @@ impl Rfc9068Validator<NoNonceCheck, ()> {
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> Rfc9068ValidatorBuilder<
-        NoNonceCheck,
         (),
         rfc9068_validator_builder::SetJwksUri<rfc9068_validator_builder::SetIssuer>,
     > {
@@ -293,35 +289,18 @@ impl Rfc9068Validator<NoNonceCheck, ()> {
     }
 }
 
-impl<
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + 'static,
-    S: rfc9068_validator_builder::State,
-> Rfc9068ValidatorBuilder<N, Claims, S>
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: rfc9068_validator_builder::State>
+    Rfc9068ValidatorBuilder<Claims, S>
 {
     /// Sets the claims type for the validator.
     pub fn with_claims<Claims1: for<'de> Deserialize<'de> + Clone + 'static>(
         self,
-    ) -> Rfc9068ValidatorBuilder<N, Claims1, S> {
+    ) -> Rfc9068ValidatorBuilder<Claims1, S> {
         self.with_claims_internal()
-    }
-
-    /// Sets the DPoP nonce checker for the validator.
-    pub fn dpop_nonce_checker<N1: DpopNonceChecker>(
-        self,
-        dpop_nonce_checker: N1,
-    ) -> Rfc9068ValidatorBuilder<N1, Claims, SetDpopNonceChecker<S>>
-    where
-        S::DpopNonceChecker: rfc9068_validator_builder::IsUnset,
-    {
-        self.with_n_internal()
-            .dpop_nonce_checker_internal(dpop_nonce_checker)
     }
 }
 
-impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
-    Rfc9068Validator<N, Claims>
-{
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claims> {
     /// Returns metadata describing how this validator is configured.
     ///
     /// The resource is the URL of the protected resource.
@@ -372,8 +351,8 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     }
 }
 
-impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static>
-    AccessTokenValidator for Rfc9068Validator<N, ExtraClaims>
+impl<ExtraClaims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static> AccessTokenValidator
+    for Rfc9068Validator<ExtraClaims>
 {
     type Claims = Rfc9068AccessTokenClaims<ExtraClaims>;
     type Error = ValidateHeadersError;
@@ -390,8 +369,8 @@ impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + Maybe
     }
 }
 
-impl<N: DpopNonceChecker, ExtraClaims: for<'de> Deserialize<'de> + Clone + 'static>
-    ProvideValidatorMetadata for Rfc9068Validator<N, ExtraClaims>
+impl<ExtraClaims: for<'de> Deserialize<'de> + Clone + 'static> ProvideValidatorMetadata
+    for Rfc9068Validator<ExtraClaims>
 {
     fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         self.validator_metadata(resource)

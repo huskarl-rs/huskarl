@@ -9,10 +9,10 @@ use snafu::{ResultExt as _, Snafu, ensure};
 
 use crate::{
     core::{
-        BoxedError, EndpointUrl,
+        EndpointUrl, Error,
         client_auth::{ClientAuthentication, FormValue},
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-        http::{HttpClient, HttpResponse},
+        http::{HttpClient, Idempotency},
         jwt::{
             ConfirmationClaim,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
@@ -30,17 +30,17 @@ use crate::{
 /// and returns the result.
 ///
 /// Use [`TokenIntrospection::builder`] to construct an instance.
-pub struct TokenIntrospection<Auth: ClientAuthentication> {
+pub struct TokenIntrospection {
     client_id: String,
     issuer: Option<String>,
     introspection_endpoint: EndpointUrl,
-    client_auth: Auth,
+    client_auth: Arc<dyn ClientAuthentication>,
     request_jwt_response: bool,
     jwt_validator: Option<JwtValidator>,
 }
 
 #[bon::bon]
-impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
+impl TokenIntrospection {
     /// Creates a new [`TokenIntrospection`].
     #[builder]
     pub async fn new(
@@ -57,7 +57,8 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
         /// The URL of the token introspection endpoint.
         introspection_endpoint: EndpointUrl,
         /// The client authentication strategy.
-        client_auth: Auth,
+        #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
+        client_auth: Arc<dyn ClientAuthentication>,
         /// If `true`, adds `Accept: application/token-introspection+jwt` to introspection
         /// requests, requesting an RFC 9701 JWT response.
         ///
@@ -85,7 +86,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
         #[cfg(feature = "default-jws-verifier-platform")]
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
@@ -128,7 +129,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
     }
 }
 
-impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
+impl TokenIntrospection {
     /// Calls the introspection endpoint and returns a [`ValidatedRequest`] if the token is active.
     ///
     /// Returns [`IntrospectionCallError::TokenInactive`] if the token exists but is not active.
@@ -136,10 +137,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
         &self,
         http_client: &C,
         access_token: &SecretString,
-    ) -> Result<
-        ValidatedRequest<Claims>,
-        IntrospectionCallError<Auth::Error, C::Error, C::ResponseError>,
-    > {
+    ) -> Result<ValidatedRequest<Claims>, IntrospectionCallError> {
         let auth_params = self
             .client_auth
             .authentication_params(
@@ -186,14 +184,15 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
         }
         let request = Request::from_parts(parts, body);
 
+        // RFC 7662 introspection is a read-only query — safe to re-send.
         let response = http_client
-            .execute(request)
+            .execute(request, Idempotency::Idempotent)
             .await
             .context(HttpRequestSnafu)?;
 
-        let status = response.status();
+        let status = response.status;
         let is_jwt_response = response
-            .headers()
+            .headers
             .get(http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(|ct| {
@@ -202,7 +201,7 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
                     || ct.starts_with("token-introspection+jwt")
             })
             .unwrap_or(false);
-        let body = response.body().await.context(HttpResponseBodySnafu)?;
+        let body = response.body;
 
         if !status.is_success() {
             return BadStatusSnafu {
@@ -255,14 +254,10 @@ impl<Auth: ClientAuthentication> TokenIntrospection<Auth> {
 }
 
 /// Converts an optional `i64` timestamp to `Option<SystemTime>`.
-fn parse_optional_timestamp<
-    AuthErr: crate::core::Error,
-    HttpErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
->(
+fn parse_optional_timestamp(
     field: &'static str,
     value: Option<i64>,
-) -> Result<Option<SystemTime>, IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>> {
+) -> Result<Option<SystemTime>, IntrospectionCallError> {
     value
         .map(|ts| {
             u64::try_from(ts)
@@ -362,28 +357,19 @@ where
 
 /// Error returned by [`TokenIntrospection::introspect`].
 #[derive(Debug, Snafu)]
-pub enum IntrospectionCallError<
-    AuthErr: crate::core::Error,
-    HttpErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-> {
+pub enum IntrospectionCallError {
     /// Client authentication failed.
     #[snafu(display("Client authentication failed"))]
     ClientAuth {
         /// The underlying authentication error.
-        source: AuthErr,
+        source: Error,
     },
-    /// Failed to build or execute the HTTP request to the introspection endpoint.
+    /// Failed to build or execute the HTTP request to the introspection endpoint,
+    /// or to read its response body.
     #[snafu(display("HTTP request to introspection endpoint failed"))]
     HttpRequest {
         /// The underlying HTTP error.
-        source: HttpErr,
-    },
-    /// Failed to read the introspection response body.
-    #[snafu(display("Failed to read introspection response body"))]
-    HttpResponseBody {
-        /// The underlying response body error.
-        source: HttpRespErr,
+        source: Error,
     },
     /// The introspection endpoint returned a non-2xx status code.
     #[snafu(display("Introspection endpoint returned status {status}"))]
@@ -426,9 +412,7 @@ pub enum IntrospectionCallError<
     },
 }
 
-impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crate::core::Error>
-    IntrospectionCallError<AuthErr, HttpErr, HttpRespErr>
-{
+impl IntrospectionCallError {
     /// Classifies this error as a client-side or server-side failure.
     ///
     /// Only [`Self::TokenInactive`] is a client error. All other variants represent
@@ -438,10 +422,7 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
         use crate::error::{TokenErrorCode, TokenValidationError};
         match self {
             Self::TokenInactive => TokenValidationError::Client(TokenErrorCode::InvalidToken),
-            Self::ClientAuth { .. }
-            | Self::HttpRequest { .. }
-            | Self::HttpResponseBody { .. }
-            | Self::BadStatus { .. } => {
+            Self::ClientAuth { .. } | Self::HttpRequest { .. } | Self::BadStatus { .. } => {
                 TokenValidationError::Server(http::StatusCode::SERVICE_UNAVAILABLE)
             }
             Self::ParseJsonResponse { .. }
@@ -460,7 +441,6 @@ impl<AuthErr: crate::core::Error, HttpErr: crate::core::Error, HttpRespErr: crat
             Self::TokenInactive => Some("The access token is revoked".to_string()),
             Self::ClientAuth { .. }
             | Self::HttpRequest { .. }
-            | Self::HttpResponseBody { .. }
             | Self::BadStatus { .. }
             | Self::ParseJsonResponse { .. }
             | Self::UnexpectedJwtResponse

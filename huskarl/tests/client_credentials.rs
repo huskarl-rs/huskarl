@@ -49,6 +49,7 @@ async fn client_credentials_exchange() {
 
     let grant = ClientCredentialsGrant::builder_from_metadata(&server_metadata)
         .client_id(&client.client_id)
+        .http_client(http.clone())
         .client_auth(ClientSecret::new(PlainSecret::new(&client.secret)))
         .dpop(NoDPoP)
         .build();
@@ -77,7 +78,7 @@ async fn client_credentials_exchange() {
     let request_uri = "https://test".parse().expect("url");
 
     let headers = authorizer
-        .get_headers(&http, &request_method, &request_uri)
+        .get_headers(&request_method, &request_uri)
         .await
         .unwrap();
 

@@ -9,7 +9,7 @@ pub(crate) mod token_response;
 
 pub(crate) mod form;
 
-pub use grant::{OAuth2ExchangeGrant, OAuth2ExchangeGrantError};
+pub use grant::OAuth2ExchangeGrant;
 pub use token_response::TokenResponse;
 
 /// Standard implementation for converting a sequence of scopes into a scope string.
@@ -24,11 +24,3 @@ pub(crate) fn mk_scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> 
 
     (!maybe_scopes.is_empty()).then(|| maybe_scopes.join(" "))
 }
-
-/// Simplified type alias for [`OAuth2ExchangeGrantError`] with generic [`crate::core::http::HttpClient`] error types.
-pub type ExchangeError<C, Grant> = OAuth2ExchangeGrantError<
-    <C as crate::core::http::HttpClient>::Error,
-    <C as crate::core::http::HttpClient>::ResponseError,
-    <<Grant as OAuth2ExchangeGrant>::ClientAuth as crate::core::client_auth::ClientAuthentication>::Error,
-    <<Grant as OAuth2ExchangeGrant>::DPoP as crate::core::dpop::AuthorizationServerDPoP>::Error,
->;

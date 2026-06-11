@@ -36,7 +36,7 @@
 //!
 //! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
 //! let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(client_secret);
+//! let client_auth: ClientSecret = ClientSecret::new(client_secret);
 //! # Ok(())
 //! # }
 //! ```
@@ -157,12 +157,12 @@ use snafu::ResultExt as _;
 
 use crate::{
     core::{
-        BoxedError, EndpointUrl,
+        EndpointUrl, Error,
         client_auth::ClientAuthentication,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         http::HttpClient,
         jwk::JwksSource,
-        jwt::{BoxedJtiUniquenessChecker, validator::ClaimCheck},
+        jwt::{JtiUniquenessChecker, validator::ClaimCheck},
         platform::{Duration, MaybeSendSync},
         server_metadata::AuthorizationServerMetadata,
     },
@@ -170,13 +170,13 @@ use crate::{
     validator::{
         AccessTokenValidator, ValidatedRequest, ValidationResult,
         binding::{DPoPBindingChecker, check_token_binding},
-        dpop_nonce::{DpopNonceChecker, NoNonceCheck},
+        dpop_nonce::DpopNonceChecker,
         dpop_proof::DpopProofValidator,
         extract::extract_token,
         introspection::{
             error::{AudienceSnafu, BindingSnafu, CallSnafu, ExtractSnafu},
             introspection_validator_builder::{
-                SetDpopNonceChecker, SetIntrospectionEndpoint, SetIssuer, SetJwksUri, State,
+                SetIntrospectionEndpoint, SetIssuer, SetJwksUri, State,
             },
         },
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
@@ -193,15 +193,10 @@ use crate::{
 /// Supports DPoP token binding validation when configured with a `jws_verifier_platform`.
 ///
 /// Use [`IntrospectionValidator::builder`] to construct an instance.
-pub struct IntrospectionValidator<
-    Auth: ClientAuthentication,
-    C: HttpClient,
-    N: DpopNonceChecker,
-    Claims = (),
-> {
-    token_introspection: TokenIntrospection<Auth>,
-    http_client: C,
-    dpop_binding_checker: DPoPBindingChecker<N>,
+pub struct IntrospectionValidator<Claims = ()> {
+    token_introspection: TokenIntrospection,
+    http_client: Arc<dyn HttpClient>,
+    dpop_binding_checker: DPoPBindingChecker,
     token_header: HeaderName,
     on_validate: Option<Arc<dyn OnValidate>>,
     issuer: Option<String>,
@@ -211,13 +206,7 @@ pub struct IntrospectionValidator<
 }
 
 #[bon::bon]
-impl<
-    Auth: ClientAuthentication,
-    C: HttpClient + Clone + 'static,
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + 'static,
-> IntrospectionValidator<Auth, C, N, Claims>
-{
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator<Claims> {
     /// Creates a new [`IntrospectionValidator`].
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
@@ -247,7 +236,8 @@ impl<
         /// omits `aud` from its introspection responses.
         audience: ClaimCheck,
         /// The client authentication strategy.
-        client_auth: Auth,
+        #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
+        client_auth: Arc<dyn ClientAuthentication>,
         /// If `true`, adds `Accept: application/token-introspection+jwt` to introspection
         /// requests, requesting an RFC 9701 JWT response.
         ///
@@ -255,7 +245,8 @@ impl<
         #[builder(default)]
         request_jwt_response: bool,
         /// HTTP client for calling the introspection endpoint (also used by default to get JWKS keys).
-        http_client: C,
+        #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
+        http_client: Arc<dyn HttpClient>,
         /// Allowed algorithms for DPoP proof signature verification.
         ///
         /// If `None`, any algorithm supported by the verifier is accepted.
@@ -286,10 +277,10 @@ impl<
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
         /// DPoP nonce checker.
-        #[builder(setters(vis = "", name = "dpop_nonce_checker_internal"))]
-        dpop_nonce_checker: Option<N>,
+        #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
+        dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
         /// DPoP JTI uniqueness checker.
-        dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
+        dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// JWS verifier factory for RFC 9701 JWT response validation.
         ///
         /// When provided (along with `jwks_uri`), a [`JwtValidator`] is built that validates
@@ -309,7 +300,7 @@ impl<
         ///
         /// Use this to record metrics, emit log events, or trigger alerts.
         on_validate: Option<Arc<dyn OnValidate>>,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let token_introspection = TokenIntrospection::builder()
             .client_id(client_id.clone())
             .maybe_issuer(issuer.clone())
@@ -345,14 +336,12 @@ impl<
     }
 }
 
-impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static>
-    IntrospectionValidator<Auth, C, NoNonceCheck, ()>
-{
+impl IntrospectionValidator<()> {
     /// Creates a builder for [`IntrospectionValidator`].
     ///
     /// Call [`.with_claims::<T>()`][IntrospectionValidatorBuilder::with_claims] on the builder
     /// to specify a custom claims type. The default is `()` (no extra claims).
-    pub fn builder() -> IntrospectionValidatorBuilder<Auth, C, NoNonceCheck, ()> {
+    pub fn builder() -> IntrospectionValidatorBuilder<()> {
         IntrospectionValidator::builder_internal()
     }
 
@@ -364,15 +353,8 @@ impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static>
     #[allow(clippy::type_complexity)]
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> Option<
-        IntrospectionValidatorBuilder<
-            Auth,
-            C,
-            NoNonceCheck,
-            (),
-            SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>,
-        >,
-    > {
+    ) -> Option<IntrospectionValidatorBuilder<(), SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>>>
+    {
         metadata
             .introspection_endpoint
             .as_ref()
@@ -385,41 +367,18 @@ impl<Auth: ClientAuthentication, C: HttpClient + Clone + 'static>
     }
 }
 
-impl<
-    Auth: ClientAuthentication,
-    C: HttpClient + Clone + 'static,
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + 'static,
-    S: State,
-> IntrospectionValidatorBuilder<Auth, C, N, Claims, S>
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: State>
+    IntrospectionValidatorBuilder<Claims, S>
 {
     /// Sets the claims type for the validator.
     pub fn with_claims<Claims1: for<'de> Deserialize<'de> + Clone + 'static>(
         self,
-    ) -> IntrospectionValidatorBuilder<Auth, C, N, Claims1, S> {
+    ) -> IntrospectionValidatorBuilder<Claims1, S> {
         self.with_claims_internal()
-    }
-
-    /// Sets the DPoP nonce checker for the validator.
-    pub fn dpop_nonce_checker<N1: DpopNonceChecker>(
-        self,
-        dpop_nonce_checker: N1,
-    ) -> IntrospectionValidatorBuilder<Auth, C, N1, Claims, SetDpopNonceChecker<S>>
-    where
-        S::DpopNonceChecker: introspection_validator_builder::IsUnset,
-    {
-        self.with_n_internal()
-            .dpop_nonce_checker_internal(dpop_nonce_checker)
     }
 }
 
-impl<
-    Auth: ClientAuthentication,
-    C: HttpClient,
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + 'static,
-> IntrospectionValidator<Auth, C, N, Claims>
-{
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator<Claims> {
     /// Returns metadata describing how this validator is configured.
     ///
     /// The resource is the URL of the protected resource.
@@ -451,14 +410,7 @@ impl<
         http_method: &http::Method,
         http_uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
-    ) -> ValidationResult<
-        Claims,
-        IntrospectionValidateError<
-            <Auth as ClientAuthentication>::Error,
-            C::Error,
-            C::ResponseError,
-        >,
-    > {
+    ) -> ValidationResult<Claims, IntrospectionValidateError> {
         let (dpop_nonce, outcome) = self
             .validate_inner(headers, http_method, http_uri, client_cert_der)
             .await;
@@ -496,14 +448,7 @@ impl<
         client_cert_der: Option<&[u8]>,
     ) -> (
         Option<String>,
-        Result<
-            Option<ValidatedRequest<Claims>>,
-            IntrospectionValidateError<
-                <Auth as ClientAuthentication>::Error,
-                C::Error,
-                C::ResponseError,
-            >,
-        >,
+        Result<Option<ValidatedRequest<Claims>>, IntrospectionValidateError>,
     ) {
         // 1. Extract token
         let (token_type, access_token) =
@@ -560,12 +505,8 @@ impl<
     }
 }
 
-impl<
-    Auth: ClientAuthentication,
-    C: HttpClient,
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + 'static,
-> ProvideValidatorMetadata for IntrospectionValidator<Auth, C, N, Claims>
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> ProvideValidatorMetadata
+    for IntrospectionValidator<Claims>
 {
     fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         self.validator_metadata(resource)
@@ -598,19 +539,11 @@ fn check_audience(check: &ClaimCheck, aud: &[String]) -> Result<(), String> {
     })
 }
 
-impl<
-    Auth: ClientAuthentication,
-    C: HttpClient,
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static,
-> AccessTokenValidator for IntrospectionValidator<Auth, C, N, Claims>
+impl<Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static> AccessTokenValidator
+    for IntrospectionValidator<Claims>
 {
     type Claims = Claims;
-    type Error = IntrospectionValidateError<
-        <Auth as ClientAuthentication>::Error,
-        C::Error,
-        C::ResponseError,
-    >;
+    type Error = IntrospectionValidateError;
 
     async fn validate_request(
         &self,

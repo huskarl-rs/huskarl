@@ -34,13 +34,13 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
         .client_id(client_id)
+        .http_client(http_client)
         .client_auth(ClientSecret::new(client_secret))
         .dpop(NoDPoP)
         .build();
 
     let token_response = grant
         .exchange(
-            &http_client,
             ClientCredentialsGrantParameters::builder()
                 .scopes(vec!["test"])
                 .build(),

@@ -1,56 +1,15 @@
 use snafu::Snafu;
 
-use crate::{
-    grant::core::form::{DPoPNonceError, OAuth2FormError},
-    token::id_token::IdTokenValidationError,
-};
-
-/// An error that occurs when attempting to start an authorization code flow.
+/// Source vocabulary for authorization-code completion failures.
+///
+/// Carried as the source of [`ErrorKind::Protocol`](crate::core::ErrorKind::Protocol)
+/// errors returned by
+/// [`complete`](super::AuthorizationCodeGrant::complete) /
+/// [`complete_oidc`](super::AuthorizationCodeGrant::complete_oidc) — match on
+/// the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
-pub enum StartError<
-    AuthErr: crate::core::Error + 'static,
-    HttpErr: crate::core::Error + 'static,
-    HttpRespErr: crate::core::Error + 'static,
-    DPoPErr: crate::core::Error + 'static,
-    JarErr: crate::core::Error + 'static,
-> {
-    /// An error occurred when attempting to encode the parameters in `x-www-form-urlencoded` format.
-    #[snafu(display("Encoding of the request parameters failed"))]
-    EncodeUrlEncoded {
-        /// The underlying error.
-        source: serde_html_form::ser::Error,
-    },
-    /// An error occurred when attempting to make a PAR request.
-    #[snafu(display("Failed to make PAR request"))]
-    ParRequest {
-        /// The underlying error.
-        source: OAuth2FormError<HttpErr, HttpRespErr, DPoPErr>,
-    },
-    /// An error occurred when creating the JAR request.
-    #[snafu(display("Failed to create JAR (JWT-secured authorization request)"))]
-    Jar {
-        /// The underlying error.
-        source: JarErr,
-    },
-    /// An error occurred when calculating the client authentication parameters.
-    #[snafu(display("Failed to get client authentication parameters"))]
-    ClientAuth {
-        /// The underlying error.
-        source: AuthErr,
-    },
-}
-
-/// Errors that occur while attempting to complete the flow.
-#[derive(Debug, Snafu)]
-#[snafu(visibility(pub(super)))]
-pub enum CompleteError<GrantErr: crate::core::Error + 'static> {
-    /// An error occurred when making the token call.
-    #[snafu(display("Failed to make token call"))]
-    Grant {
-        /// The underlying error.
-        source: GrantErr,
-    },
+pub enum CompleteError {
     /// There was a mismatch between the required and returned issuer values.
     #[snafu(display("Issuer mismatch: original = {}, callback = {}", original, callback))]
     IssuerMismatch {
@@ -83,46 +42,12 @@ pub enum CompleteError<GrantErr: crate::core::Error + 'static> {
         "ID token received but grant has no issuer configured; provide an issuer via server metadata or builder"
     ))]
     IdTokenIssuerNotConfigured,
-    /// ID token validation failed.
-    #[snafu(display("ID token validation failed"))]
-    IdTokenValidation {
-        /// The underlying validation error.
-        source: IdTokenValidationError,
-    },
-}
-
-impl<
-    AuthErr: crate::core::Error + 'static,
-    HttpErr: crate::core::Error + 'static,
-    HttpRespErr: crate::core::Error + 'static,
-    DPoPErr: crate::core::Error + 'static,
-    JarErr: crate::core::Error + 'static,
-> DPoPNonceError for StartError<AuthErr, HttpErr, HttpRespErr, DPoPErr, JarErr>
-{
-    fn is_dpop_nonce_required(&self) -> bool {
-        matches!(self, Self::ParRequest { source } if source.is_dpop_nonce_required())
-    }
-}
-
-impl<
-    AuthErr: crate::core::Error + 'static,
-    HttpErr: crate::core::Error + 'static,
-    HttpRespErr: crate::core::Error + 'static,
-    DPoPErr: crate::core::Error + 'static,
-    JarErr: crate::core::Error + 'static,
-> crate::core::Error for StartError<AuthErr, HttpErr, HttpRespErr, DPoPErr, JarErr>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            StartError::EncodeUrlEncoded { .. } => false,
-            StartError::ParRequest { source } => source.is_retryable(),
-            StartError::Jar { source } => source.is_retryable(),
-            StartError::ClientAuth { source } => source.is_retryable(),
-        }
-    }
 }
 
 /// An error that occurs when building an [`AuthorizationCodeGrant`](super::AuthorizationCodeGrant).
+///
+/// Carried as the source of [`ErrorKind::Config`](crate::core::ErrorKind::Config)
+/// errors returned by the grant builder.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 pub enum BuildError {
@@ -133,24 +58,4 @@ pub enum BuildError {
          `.jws_verifier_platform(...)` on the builder"
     ))]
     MissingJwsVerifierPlatform,
-}
-
-impl crate::core::Error for BuildError {
-    fn is_retryable(&self) -> bool {
-        false
-    }
-}
-
-impl<GrantErr: crate::core::Error + 'static> crate::core::Error for CompleteError<GrantErr> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            CompleteError::Grant { source } => source.is_retryable(),
-            CompleteError::IssuerMismatch { .. }
-            | CompleteError::StateMismatch { .. }
-            | CompleteError::MissingIssuer
-            | CompleteError::IdTokenVerifierNotConfigured
-            | CompleteError::IdTokenIssuerNotConfigured
-            | CompleteError::IdTokenValidation { .. } => false,
-        }
-    }
 }

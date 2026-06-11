@@ -284,7 +284,7 @@ impl TrySetter {
         let return_ty = quote! {
             ::core::result::Result<
                 #builder_ident<#type_args #state_mod::#state_set<#state_param>>,
-                <#value_param as #trait_path>::Error,
+                ::huskarl_core::Error,
             >
         };
 

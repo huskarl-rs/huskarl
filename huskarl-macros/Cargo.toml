@@ -22,4 +22,6 @@ syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
 bon = { workspace = true }
+huskarl-core = { path = "../huskarl-core" }
+rustversion = "1"
 trybuild = { version = "1", features = ["diff"] }

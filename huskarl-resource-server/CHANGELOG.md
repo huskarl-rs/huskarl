@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-- Check for audience with claims received from introspection.
+ - Breaking: ported to the dyn-first huskarl-core.
+ - Check for audience with claims received from introspection.
 
 ## [0.7.0] - 2026-05-26
 

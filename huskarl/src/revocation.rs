@@ -3,20 +3,14 @@
 //! Provides the ability to revoke access tokens and refresh tokens at an
 //! authorization server's revocation endpoint.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use bon::Builder;
 use serde::Serialize;
-use snafu::prelude::*;
 
 use crate::{
-    core::{
-        EndpointUrl,
-        client_auth::ClientAuthentication,
-        dpop::{DPoPNotConfigured, NoDPoP},
-        http::HttpClient,
-    },
-    grant::core::form::{OAuth2FormError, OAuth2FormRequest},
+    core::{EndpointUrl, Error, client_auth::ClientAuthentication, dpop::NoDPoP, http::HttpClient},
+    grant::core::form::OAuth2FormRequest,
     token::{AccessToken, RefreshToken},
 };
 
@@ -52,16 +46,17 @@ impl RevocableToken for RefreshToken {
 /// Implementation of token revocation.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[huskarl_macros::try_builder]
-#[derive(Debug, Clone, Builder)]
+#[derive(Clone, Builder)]
 #[builder(state_mod(name = "builder"))]
-pub struct TokenRevocation<Auth: ClientAuthentication + 'static> {
+pub struct TokenRevocation {
     // -- User-supplied fields --
     /// The client ID.
     #[builder(into)]
     client_id: Cow<'static, str>,
 
     /// The client authentication method.
-    client_auth: Auth,
+    #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
+    client_auth: Arc<dyn ClientAuthentication>,
 
     // -- Metadata fields --
     /// The issuer for tokens created by the authorization server.
@@ -84,7 +79,18 @@ pub struct TokenRevocation<Auth: ClientAuthentication + 'static> {
     revocation_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
-impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
+impl core::fmt::Debug for TokenRevocation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TokenRevocation")
+            .field("client_id", &self.client_id)
+            .field("issuer", &self.issuer)
+            .field("revocation_endpoint", &self.revocation_endpoint)
+            .field("mtls_revocation_endpoint", &self.mtls_revocation_endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TokenRevocation {
     /// Revoke a token at the authorization server's revocation endpoint.
     ///
     /// Sends a POST request to the revocation endpoint with the token and
@@ -93,16 +99,15 @@ impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
     ///
     /// # Errors
     ///
-    /// Returns [`RevocationError::Auth`] if client authentication fails, or
-    /// [`RevocationError::Revocation`] if the HTTP request or server response fails.
-    pub async fn revoke<C: HttpClient>(
+    /// Returns an error of kind
+    /// [`ErrorKind::Auth`](crate::core::ErrorKind::Auth) if client
+    /// authentication fails; other kinds propagate from the HTTP request or
+    /// server response.
+    pub async fn revoke(
         &self,
-        http_client: &C,
+        http_client: &impl HttpClient,
         token: &impl RevocableToken,
-    ) -> Result<
-        (),
-        RevocationError<C::Error, C::ResponseError, <Auth as ClientAuthentication>::Error>,
-    > {
+    ) -> Result<(), Error> {
         let effective_endpoint = if http_client.uses_mtls() {
             self.mtls_revocation_endpoint
                 .as_ref()
@@ -119,8 +124,7 @@ impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
                 effective_endpoint.as_uri(),
                 self.revocation_endpoint_auth_methods_supported.as_deref(),
             )
-            .await
-            .context(AuthSnafu)?;
+            .await?;
 
         let form = RevocationForm {
             token: token.token_value(),
@@ -135,9 +139,6 @@ impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
             .build()
             .execute_empty_response(http_client)
             .await
-            .context(RevocationSnafu)?;
-
-        Ok(())
     }
 }
 
@@ -145,34 +146,4 @@ impl<Auth: ClientAuthentication + 'static> TokenRevocation<Auth> {
 struct RevocationForm<'a> {
     token: &'a str,
     token_type_hint: &'static str,
-}
-
-/// Errors that can occur when revoking a token.
-#[derive(Debug, Snafu)]
-pub enum RevocationError<
-    HttpReqErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-    AuthErr: crate::core::Error,
-> {
-    /// An error occurred during client authentication.
-    Auth {
-        /// The underlying error.
-        source: AuthErr,
-    },
-    /// An error occurred during the revocation request.
-    Revocation {
-        /// The underlying error.
-        source: OAuth2FormError<HttpReqErr, HttpRespErr, DPoPNotConfigured>,
-    },
-}
-
-impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, AuthErr: crate::core::Error>
-    crate::core::Error for RevocationError<HttpReqErr, HttpRespErr, AuthErr>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::Auth { source } => source.is_retryable(),
-            Self::Revocation { source } => source.is_retryable(),
-        }
-    }
 }

@@ -41,7 +41,7 @@ huskarl-crypto-native = { workspace = true, optional = true }
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]
 huskarl-crypto-webcrypto = { workspace = true, optional = true }
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
-gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
+gloo-timers = { version = "0.4", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false }
 
 [dev-dependencies]

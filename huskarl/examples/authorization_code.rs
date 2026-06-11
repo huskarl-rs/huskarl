@@ -43,6 +43,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     let grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
         .whatever_context("Authorization server metadata didn't include authorization URL")?
         .client_id(client_id)
+        .http_client(http_client.clone())
         .client_auth(NoAuth)
         .redirect_uri("http://localhost:8080/login/callback")
         .dpop(
@@ -65,14 +66,14 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         expires_in: _,
         pending_state,
     } = grant
-        .start(&http_client, StartInput::scopes(["test"]))
+        .start(StartInput::scopes(["test"]))
         .await
         .whatever_context("Getting authorization URL failed")?;
 
     println!("Open this URL in your browser:\n{}", authorization_url);
 
     let (token_response, id_token) = grant
-        .complete_on_loopback_oidc(&http_client, &listener, &pending_state, None)
+        .complete_on_loopback_oidc(&listener, &pending_state, None)
         .await
         .whatever_context("Getting token failed")?;
 
@@ -89,7 +90,10 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         )
         .build();
 
-    authorizer.prime(Arc::new(token_response)).await;
+    authorizer
+        .prime(Arc::new(token_response))
+        .await
+        .whatever_context("Failed to prime the token cache")?;
 
     let resource_server_validator = Rfc9068Validator::builder_from_metadata(&metadata)
         .audience("api://default")
@@ -109,7 +113,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .whatever_context("Invalid resource server URL")?;
 
     let headers = authorizer
-        .get_headers(&http_client, &Method::GET, &resource_server_url)
+        .get_headers(&Method::GET, &resource_server_url)
         .await
         .whatever_context("Failed to get authorization headers")?;
 
