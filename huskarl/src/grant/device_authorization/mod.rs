@@ -56,10 +56,11 @@
 //!     .call()
 //!     .await?;
 //!
-//! let grant: DeviceAuthorizationGrant<NoAuth, NoDPoP> =
+//! let grant: DeviceAuthorizationGrant =
 //!     DeviceAuthorizationGrant::builder_from_metadata(&metadata)
 //!         .expect("server does not support device authorization")
 //!         .client_id("client_id")
+//!         .http_client(client)
 //!         .client_auth(NoAuth)
 //!         .dpop(NoDPoP)
 //!         .build();
@@ -74,12 +75,18 @@
 //!     core::{client_auth::NoAuth, dpop::NoDPoP},
 //!     grant::device_authorization::DeviceAuthorizationGrant,
 //! };
+//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder()
+//! #     .mtls(NoMtls)
+//! #     .build()
+//! #     .await?;
 //!
-//! let grant: DeviceAuthorizationGrant<NoAuth, NoDPoP> = DeviceAuthorizationGrant::builder()
+//! let grant: DeviceAuthorizationGrant = DeviceAuthorizationGrant::builder()
 //!     .device_authorization_endpoint("https://my-server/device_authorization")?
 //!     .token_endpoint("https://my-server/token")?
 //!     .client_id("client_id")
+//!     .http_client(client)
 //!     .client_auth(NoAuth)
 //!     .dpop(NoDPoP)
 //!     .build();
@@ -95,13 +102,10 @@
 //!     grant::device_authorization::{DeviceAuthorizationGrant, StartInput},
 //! };
 //! # async fn start_flow(
-//! #     client: &huskarl_reqwest::ReqwestClient,
-//! #     grant: &DeviceAuthorizationGrant<NoAuth, NoDPoP>,
+//! #     grant: &DeviceAuthorizationGrant,
 //! # ) -> Result<(), Box<dyn std::error::Error>> {
 //!
-//! let start_output = grant
-//!     .start(client, StartInput::scopes(["read", "write"]))
-//!     .await?;
+//! let start_output = grant.start(StartInput::scopes(["read", "write"])).await?;
 //!
 //! // Display to the user — they visit the URL and enter the code on another device.
 //! println!("Visit: {}", start_output.verification_uri);
@@ -119,15 +123,12 @@
 //!     token::AccessToken,
 //! };
 //! # async fn poll_flow(
-//! #     client: &huskarl_reqwest::ReqwestClient,
-//! #     grant: &DeviceAuthorizationGrant<NoAuth, NoDPoP>,
+//! #     grant: &DeviceAuthorizationGrant,
 //! #     start_output: StartOutput,
 //! # ) -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! let mut pending_state = start_output.pending_state;
-//! let response = grant
-//!     .poll_to_completion(client, &mut pending_state, None)
-//!     .await?;
+//! let response = grant.poll_to_completion(&mut pending_state, None).await?;
 //! let token: &AccessToken = response.access_token();
 //! # Ok(())
 //! # }

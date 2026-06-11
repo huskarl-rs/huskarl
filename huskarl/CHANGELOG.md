@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 
+ - Breaking: ported to the dyn-first huskarl-core.
+ - Breaking: grants hold the HTTP client as a required `http_client`.
+ - Breaking: reworked error handling completely.
  - Don't throw away refresh token in inmemory store unless invalid_grant was returned.
  - Avoid panicking in access token expiry time calculation.
  - Send PKCE by default, unless AS explicitly says it doesn't support it.

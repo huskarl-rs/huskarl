@@ -8,13 +8,13 @@ mod in_memory;
 use std::sync::{Arc, PoisonError, RwLock};
 
 pub use in_memory::{InMemoryTokenCache, InMemoryTokenCacheBuilder};
-use snafu::prelude::*;
+use snafu::Snafu;
 
 use crate::{
     core::{
+        Error,
         dpop::ResourceServerDPoP,
-        http::HttpClient,
-        platform::{MaybeSend, MaybeSendSync},
+        platform::{MaybeSendBoxFuture, MaybeSendSync},
     },
     grant::core::TokenResponse,
     token::RefreshToken,
@@ -22,80 +22,144 @@ use crate::{
 
 /// A cache for OAuth tokens that supports retrieving tokens, attempting to refresh them,
 /// and allows priming with a valid [`TokenResponse`].
-pub trait TokenCache {
-    /// The error type returned by the token cache for a failed request.
-    type Error<C: HttpClient>: crate::core::Error + 'static;
-
-    /// The `DPoP` proof implementation used for resource server requests.
-    ///
-    /// Use [`NoDPoP`](crate::core::dpop::NoDPoP) when the grant does not use `DPoP`.
-    type DPoP: ResourceServerDPoP;
-
+///
+/// This trait is dyn-capable: implement it on your cache type and the library
+/// consumes it as `Arc<dyn TokenCache>`.
+pub trait TokenCache: MaybeSendSync {
     /// Retrieves the token response from the cache, refreshing it if necessary and possible.
-    fn get_token_response<C: HttpClient>(
-        &self,
-        http_client: &C,
-    ) -> impl Future<Output = Result<Arc<TokenResponse>, GetTokenError<Self::Error<C>>>> + MaybeSend;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error of kind
+    /// [`ErrorKind::ReauthRequired`](crate::core::ErrorKind::ReauthRequired)
+    /// when no token can be obtained without re-running the interactive flow
+    /// (see [`GetTokenError`] for the cases). Other kinds propagate from the
+    /// underlying exchange.
+    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>>;
 
     /// Returns a reference to the resource server `DPoP` proof implementation.
-    fn resource_server_dpop(&self) -> &Self::DPoP;
+    ///
+    /// Use [`NoDPoP`](crate::core::dpop::NoDPoP) when the grant does not use `DPoP`.
+    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP;
 
     /// Primes the cache with a valid [`TokenResponse`].
-    fn prime(&self, response: Arc<TokenResponse>) -> impl Future<Output = ()> + MaybeSend;
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if persisting the response's refresh token to the
+    /// underlying [`RefreshTokenStore`] fails.
+    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>>;
 
     /// Invalidates the cache, forcing a refresh on the next [`TokenCache::get_token_response`] call.
     fn invalidate(&self);
 }
 
-/// Errors that can occur when getting a token from the cache.
+impl<T: TokenCache + ?Sized> TokenCache for &T {
+    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
+        (**self).get_token_response()
+    }
+
+    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
+        (**self).resource_server_dpop()
+    }
+
+    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
+        (**self).prime(response)
+    }
+
+    fn invalidate(&self) {
+        (**self).invalidate();
+    }
+}
+
+impl<T: TokenCache + ?Sized> TokenCache for Box<T> {
+    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
+        (**self).get_token_response()
+    }
+
+    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
+        (**self).resource_server_dpop()
+    }
+
+    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
+        (**self).prime(response)
+    }
+
+    fn invalidate(&self) {
+        (**self).invalidate();
+    }
+}
+
+impl<T: TokenCache + ?Sized> TokenCache for Arc<T> {
+    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
+        (**self).get_token_response()
+    }
+
+    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
+        (**self).resource_server_dpop()
+    }
+
+    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
+        (**self).prime(response)
+    }
+
+    fn invalidate(&self) {
+        (**self).invalidate();
+    }
+}
+
+/// Source vocabulary for token acquisition failures.
+///
+/// Carried as the source of
+/// [`ErrorKind::ReauthRequired`](crate::core::ErrorKind::ReauthRequired)
+/// errors returned by [`TokenCache::get_token_response`] — match on the error
+/// kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
-pub enum GetTokenError<E: crate::core::Error + 'static> {
+pub enum GetTokenError {
     /// Token refresh failed and no grant parameters were available to fall back to.
+    #[snafu(display("token refresh failed and no grant parameters were available: {source}"))]
     RefreshFailed {
         /// The underlying refresh error.
-        source: E,
+        source: Error,
     },
     /// Token refresh failed and the subsequent fresh exchange also failed.
     #[snafu(display(
-        "Token refresh failed and exchange also failed: refresh={refresh_source}, exchange={exchange_source}"
+        "token refresh failed and exchange also failed: refresh={refresh_source}, exchange={exchange_source}"
     ))]
     BothFailed {
         /// The error from the failed refresh attempt.
-        refresh_source: E,
+        refresh_source: Error,
         /// The error from the failed exchange attempt.
-        exchange_source: E,
-    },
-    /// No refresh token was available and the fresh exchange failed.
-    ExchangeFailed {
-        /// The underlying exchange error.
-        source: E,
+        exchange_source: Error,
     },
     /// No refresh token is stored and no grant parameters were provided —
     /// there is no way to obtain a token.
+    #[snafu(display("no refresh token is stored and no grant parameters were provided"))]
     NoTokenSource,
-}
-
-impl<E: crate::core::Error + 'static> crate::core::Error for GetTokenError<E> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            GetTokenError::RefreshFailed { source } | GetTokenError::ExchangeFailed { source } => {
-                source.is_retryable()
-            }
-            GetTokenError::BothFailed {
-                exchange_source, ..
-            } => exchange_source.is_retryable(),
-            GetTokenError::NoTokenSource => false,
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
         cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
-        core::{client_auth::NoAuth, dpop::NoDPoP},
+        core::{client_auth::NoAuth, dpop::NoDPoP, http::HttpClient},
         grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
     };
+
+    struct NoHttp;
+
+    impl HttpClient for NoHttp {
+        fn execute(
+            &self,
+            _request: http::Request<bytes::Bytes>,
+            _idempotency: crate::core::http::Idempotency,
+        ) -> crate::core::platform::MaybeSendBoxFuture<
+            '_,
+            Result<crate::core::http::HttpResponse, crate::core::Error>,
+        > {
+            unreachable!("test only builds the cache, no HTTP expected")
+        }
+    }
 
     #[test]
     fn test_setup() {
@@ -107,6 +171,7 @@ mod tests {
                     .token_endpoint("https://blah")
                     .unwrap()
                     .dpop(NoDPoP)
+                    .http_client(NoHttp)
                     .build(),
             )
             .grant_parameters(
@@ -120,13 +185,16 @@ mod tests {
 }
 
 /// A store for refresh tokens.
+///
+/// This trait is dyn-capable: implement it on your store type (for example a
+/// keychain- or disk-backed store) and hand it to a cache builder.
 pub trait RefreshTokenStore: MaybeSendSync {
     /// Returns the current refresh token, if one exists.
-    fn get(&self) -> impl Future<Output = Option<RefreshToken>> + MaybeSend;
+    fn get(&self) -> MaybeSendBoxFuture<'_, Result<Option<RefreshToken>, Error>>;
     /// Sets the current refresh token.
-    fn set(&self, token: &RefreshToken) -> impl Future<Output = ()> + MaybeSend;
+    fn set<'a>(&'a self, token: &'a RefreshToken) -> MaybeSendBoxFuture<'a, Result<(), Error>>;
     /// Clears the current refresh token.
-    fn clear(&self) -> impl Future<Output = ()> + MaybeSend;
+    fn clear(&self) -> MaybeSendBoxFuture<'_, Result<(), Error>>;
 }
 
 /// An in-memory store for refresh tokens.
@@ -136,23 +204,33 @@ pub struct InMemoryRefreshTokenStore {
 }
 
 impl RefreshTokenStore for InMemoryRefreshTokenStore {
-    async fn get(&self) -> Option<RefreshToken> {
-        self.refresh_token
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    fn get(&self) -> MaybeSendBoxFuture<'_, Result<Option<RefreshToken>, Error>> {
+        Box::pin(async {
+            Ok(self
+                .refresh_token
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone())
+        })
     }
 
-    async fn set(&self, token: &RefreshToken) {
-        *self
-            .refresh_token
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = Some(token.clone());
+    fn set<'a>(&'a self, token: &'a RefreshToken) -> MaybeSendBoxFuture<'a, Result<(), Error>> {
+        Box::pin(async {
+            *self
+                .refresh_token
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = Some(token.clone());
+            Ok(())
+        })
     }
-    async fn clear(&self) {
-        *self
-            .refresh_token
-            .write()
-            .unwrap_or_else(PoisonError::into_inner) = None;
+
+    fn clear(&self) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
+        Box::pin(async {
+            *self
+                .refresh_token
+                .write()
+                .unwrap_or_else(PoisonError::into_inner) = None;
+            Ok(())
+        })
     }
 }

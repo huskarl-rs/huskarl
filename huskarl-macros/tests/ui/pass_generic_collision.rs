@@ -7,13 +7,11 @@ use bon::Builder;
 struct Url(String);
 
 trait IntoUrl {
-    type Error;
-    fn into_url(self) -> Result<Url, Self::Error>;
+    fn into_url(self) -> Result<Url, huskarl_core::Error>;
 }
 
 impl IntoUrl for &str {
-    type Error = std::convert::Infallible;
-    fn into_url(self) -> Result<Url, Self::Error> {
+    fn into_url(self) -> Result<Url, huskarl_core::Error> {
         Ok(Url(self.to_owned()))
     }
 }

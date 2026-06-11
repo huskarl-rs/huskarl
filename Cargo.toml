@@ -8,6 +8,8 @@ members = [
   "huskarl-macros",
   "huskarl-reqwest",
   "huskarl-resource-server",
+  "integration/huskarl-conformance",
+  "integration/huskarl-testkit",
 ]
 # huskarl-crypto-webcrypto only compiles for wasm32-unknown-unknown (its
 # futures are !Send), so host-target builds skip it by default. Check it with
@@ -19,10 +21,13 @@ default-members = [
   "huskarl-macros",
   "huskarl-reqwest",
   "huskarl-resource-server",
+  "integration/huskarl-conformance",
+  "integration/huskarl-testkit",
 ]
-exclude = ["integration", "huskarl-core/fuzz"]
+exclude = ["huskarl-core/fuzz"]
 
 [workspace.dependencies]
+huskarl = { version = "0.8.0-pre.0", path = "./huskarl" }
 huskarl-core = { version = "0.7.0-pre.0", path = "./huskarl-core" }
 huskarl-macros = { version = "0.2", path = "./huskarl-macros" }
 huskarl-reqwest = { version = "0.7.0-pre.0", path = "./huskarl-reqwest" }

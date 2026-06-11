@@ -126,6 +126,17 @@ impl Error {
     pub fn is_retryable(&self) -> bool {
         matches!(self.kind, ErrorKind::Transport { retryable: true })
     }
+
+    /// If true, the server requires a `DPoP` nonce (RFC 9449 §8) — the error
+    /// carries the `use_dpop_nonce` OAuth error code.
+    ///
+    /// The nonce value itself has already been recorded from the `DPoP-Nonce`
+    /// response header by the time this error propagates; retry the request
+    /// with freshly generated authentication parameters.
+    #[must_use]
+    pub fn is_dpop_nonce_required(&self) -> bool {
+        self.oauth_error_code.as_deref() == Some("use_dpop_nonce")
+    }
 }
 
 impl From<ErrorKind> for Error {

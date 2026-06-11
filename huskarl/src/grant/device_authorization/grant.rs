@@ -1,22 +1,21 @@
+use std::sync::Arc;
+
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt as _, Snafu};
 
 use crate::{
     core::{
-        EndpointUrl,
+        EndpointUrl, Error,
         client_auth::ClientAuthentication,
-        dpop::{AuthorizationServerDPoP, NoDPoP},
+        dpop::AuthorizationServerDPoP,
         http::HttpClient,
         platform::{Duration, sleep},
     },
     grant::{
         core::{
-            ExchangeError, OAuth2ExchangeGrant, OAuth2ExchangeGrantError, TokenResponse,
-            form::{
-                DPoPNonceError, HandleResponseError, OAuth2ErrorBody, OAuth2FormError,
-                OAuth2FormRequest, with_dpop_nonce_retry,
-            },
+            OAuth2ExchangeGrant, TokenResponse,
+            form::{OAuth2FormRequest, with_dpop_nonce_retry},
         },
         refresh::RefreshGrant,
     },
@@ -32,18 +31,23 @@ use crate::{
 /// See the [module documentation][crate::grant::device_authorization] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[huskarl_macros::try_builder]
-#[derive(Debug, Clone, Builder)]
+#[derive(Clone, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
-pub struct DeviceAuthorizationGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP>
-{
+pub struct DeviceAuthorizationGrant {
     /// The client ID.
     client_id: String,
 
+    /// The HTTP client used for token requests.
+    #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
+    http_client: Arc<dyn HttpClient>,
+
     /// The client authentication method.
-    client_auth: Auth,
+    #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
+    client_auth: Arc<dyn ClientAuthentication>,
 
     /// The `DPoP` signer.
-    dpop: D,
+    #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+    dpop: Arc<dyn AuthorizationServerDPoP>,
 
     /// The issuer for tokens created by the authorization server.
     #[from_metadata(path = "issuer")]
@@ -75,9 +79,26 @@ pub struct DeviceAuthorizationGrant<Auth: ClientAuthentication, D: Authorization
     mtls_device_authorization_endpoint: Option<EndpointUrl>,
 }
 
-impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
-    DeviceAuthorizationGrant<Auth, D>
-{
+impl core::fmt::Debug for DeviceAuthorizationGrant {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DeviceAuthorizationGrant")
+            .field("client_id", &self.client_id)
+            .field("issuer", &self.issuer)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("mtls_token_endpoint", &self.mtls_token_endpoint)
+            .field(
+                "device_authorization_endpoint",
+                &self.device_authorization_endpoint,
+            )
+            .field(
+                "mtls_device_authorization_endpoint",
+                &self.mtls_device_authorization_endpoint,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl DeviceAuthorizationGrant {
     /// Begin a device authorization request.
     ///
     /// This sends a request to the device authorization endpoint. The endpoint
@@ -88,17 +109,13 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     ///
     /// Returns an error if one is returned when attempting to make the device
     /// authorization request.
-    pub async fn start<C: HttpClient>(
-        &self,
-        http_client: &C,
-        start_input: StartInput,
-    ) -> Result<StartOutput, StartError<Auth::Error, C::Error, C::ResponseError, D::Error>> {
+    pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
         let payload = DeviceAuthorizationRequest {
             scope: start_input.scopes.as_deref(),
             resource: start_input.resource.as_deref(),
         };
 
-        let effective_device_auth_endpoint = if http_client.uses_mtls() {
+        let effective_device_auth_endpoint = if self.http_client.uses_mtls() {
             self.mtls_device_authorization_endpoint
                 .as_ref()
                 .unwrap_or(&self.device_authorization_endpoint)
@@ -109,10 +126,7 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
         let dpop_jkt = self.dpop().get_current_thumbprint();
 
         let response: DeviceAuthorizationResponse = with_dpop_nonce_retry!({
-            let auth_params = self
-                .authentication_params()
-                .await
-                .context(ClientAuthSnafu)?;
+            let auth_params = self.authentication_params().await?;
 
             OAuth2FormRequest::builder()
                 .form(&payload)
@@ -121,9 +135,8 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
                 .dpop(self.dpop())
                 .maybe_dpop_jkt(dpop_jkt.as_deref())
                 .build()
-                .execute(http_client)
+                .execute(self.http_client.as_ref())
                 .await
-                .context(FormSnafu)
         })?;
 
         Ok(StartOutput::builder()
@@ -150,18 +163,16 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     /// Returns an error if one is returned when attempting to poll. This
     /// can be an error like access denied, token expiry, or an error
     /// when making the token request.
-    pub async fn poll_to_completion<C: HttpClient>(
+    pub async fn poll_to_completion(
         &self,
-        http_client: &C,
         pending_state: &mut PendingState,
         resource: Option<Vec<String>>,
-    ) -> Result<TokenResponse, PollError<ExchangeError<C, Self>>> {
+    ) -> Result<TokenResponse, PollError> {
         loop {
             sleep(Duration::from_secs(pending_state.interval_secs.into())).await;
 
-            if let PollResult::Complete(token_response) = self
-                .poll(http_client, pending_state, resource.clone())
-                .await?
+            if let PollResult::Complete(token_response) =
+                self.poll(pending_state, resource.clone()).await?
             {
                 return Ok(*token_response);
             }
@@ -175,44 +186,28 @@ impl<Auth: ClientAuthentication + 'static, D: AuthorizationServerDPoP + 'static>
     /// Returns an error if one is returned when attempting to poll. This
     /// can be an error like access denied, token expiry, or an error
     /// when making the token request.
-    pub async fn poll<C: HttpClient>(
+    pub async fn poll(
         &self,
-        http_client: &C,
         pending_state: &mut PendingState,
         resource: Option<Vec<String>>,
-    ) -> Result<PollResult, PollError<ExchangeError<C, Self>>> {
+    ) -> Result<PollResult, PollError> {
         let token_or_err = self
-            .exchange(
-                http_client,
-                super::grant::DeviceAuthorizationGrantParameters {
-                    device_code: pending_state.device_code.clone(),
-                    resource,
-                },
-            )
+            .exchange(super::grant::DeviceAuthorizationGrantParameters {
+                device_code: pending_state.device_code.clone(),
+                resource,
+            })
             .await;
 
         match token_or_err {
             Ok(token) => Ok(PollResult::Complete(Box::new(token))),
-            Err(err) => match &err {
-                OAuth2ExchangeGrantError::OAuth2Form {
-                    source:
-                        OAuth2FormError::Response {
-                            source:
-                                HandleResponseError::OAuth2 {
-                                    body: OAuth2ErrorBody { error, .. },
-                                    ..
-                                },
-                        },
-                } => match error.as_ref() {
-                    "slow_down" => {
-                        pending_state.interval_secs = pending_state.interval_secs.saturating_add(5);
-                        Ok(PollResult::Pending)
-                    }
-                    "authorization_pending" => Ok(PollResult::Pending),
-                    "access_denied" => AccessDeniedSnafu.fail(),
-                    "expired_token" => TokenExpiredSnafu.fail(),
-                    _ => Err(err).context(ExchangeSnafu),
-                },
+            Err(err) => match err.oauth_error_code() {
+                Some("slow_down") => {
+                    pending_state.interval_secs = pending_state.interval_secs.saturating_add(5);
+                    Ok(PollResult::Pending)
+                }
+                Some("authorization_pending") => Ok(PollResult::Pending),
+                Some("access_denied") => AccessDeniedSnafu.fail(),
+                Some("expired_token") => TokenExpiredSnafu.fail(),
                 _ => Err(err).context(ExchangeSnafu),
             },
         }
@@ -239,12 +234,8 @@ pub struct DeviceAuthorizationGrantForm {
     resource: Option<Vec<String>>,
 }
 
-impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 'static>
-    OAuth2ExchangeGrant for DeviceAuthorizationGrant<Auth, D>
-{
+impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
     type Parameters = DeviceAuthorizationGrantParameters;
-    type ClientAuth = Auth;
-    type DPoP = D;
     type Form<'a> = DeviceAuthorizationGrantForm;
 
     fn client_id(&self) -> &str {
@@ -255,8 +246,8 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &Self::ClientAuth {
-        &self.client_auth
+    fn client_auth(&self) -> &dyn ClientAuthentication {
+        self.client_auth.as_ref()
     }
 
     fn token_endpoint(&self) -> &EndpointUrl {
@@ -267,22 +258,27 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
         self.mtls_token_endpoint.as_ref()
     }
 
-    fn dpop(&self) -> &Self::DPoP {
-        &self.dpop
+    fn dpop(&self) -> &dyn AuthorizationServerDPoP {
+        self.dpop.as_ref()
+    }
+
+    fn http_client(&self) -> &dyn HttpClient {
+        self.http_client.as_ref()
     }
 
     fn allowed_auth_methods(&self) -> Option<&[String]> {
         self.token_endpoint_auth_methods_supported.as_deref()
     }
 
-    fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
+    fn to_refresh_grant(&self) -> RefreshGrant {
         RefreshGrant::builder()
             .client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
+            .http_client(self.http_client.clone())
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.token_endpoint.clone())
-            .unwrap_or_else(|e: std::convert::Infallible| match e {})
+            .expect("an EndpointUrl converts to itself infallibly")
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )
@@ -362,8 +358,11 @@ pub struct PendingState {
 }
 
 /// Errors that may occur during polling for a token.
+///
+/// The `AccessDenied` and `TokenExpired` variants are control flow for
+/// device-flow UIs; everything else carries the underlying [`Error`].
 #[derive(Debug, Snafu)]
-pub enum PollError<ExchangeErr: crate::core::Error + 'static> {
+pub enum PollError {
     /// Access was denied.
     AccessDenied,
     /// The token expired.
@@ -371,7 +370,7 @@ pub enum PollError<ExchangeErr: crate::core::Error + 'static> {
     /// There was an error while attempting to exchange the code for a token.
     Exchange {
         /// The underlying error.
-        source: ExchangeErr,
+        source: Error,
     },
 }
 
@@ -399,32 +398,5 @@ impl StartInput {
     #[must_use]
     pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self::builder().scopes(scopes).build()
-    }
-}
-
-#[derive(Debug, Snafu)]
-pub enum StartError<
-    AuthErr: crate::core::Error + 'static,
-    HttpErr: crate::core::Error + 'static,
-    HttpRespErr: crate::core::Error + 'static,
-    DPoPErr: crate::core::Error + 'static,
-> {
-    Form {
-        source: OAuth2FormError<HttpErr, HttpRespErr, DPoPErr>,
-    },
-    ClientAuth {
-        source: AuthErr,
-    },
-}
-
-impl<
-    AuthErr: crate::core::Error + 'static,
-    HttpErr: crate::core::Error + 'static,
-    HttpRespErr: crate::core::Error + 'static,
-    DPoPErr: crate::core::Error + 'static,
-> DPoPNonceError for StartError<AuthErr, HttpErr, HttpRespErr, DPoPErr>
-{
-    fn is_dpop_nonce_required(&self) -> bool {
-        matches!(self, Self::Form { source } if source.is_dpop_nonce_required())
     }
 }

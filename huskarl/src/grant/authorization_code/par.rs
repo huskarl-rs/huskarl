@@ -2,13 +2,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     core::{
-        EndpointUrl, client_auth::AuthenticationParams, dpop::AuthorizationServerDPoP,
+        EndpointUrl, Error, client_auth::AuthenticationParams, dpop::AuthorizationServerDPoP,
         http::HttpClient,
     },
-    grant::{
-        authorization_code::types::AuthorizationPayload,
-        core::form::{OAuth2FormError, OAuth2FormRequest},
-    },
+    grant::{authorization_code::types::AuthorizationPayload, core::form::OAuth2FormRequest},
 };
 
 #[derive(Debug, Serialize)]
@@ -30,14 +27,14 @@ pub(super) struct AuthorizationPushResponse {
     pub expires_in: u64,
 }
 
-pub(super) async fn make_par_call<C: HttpClient, D: AuthorizationServerDPoP>(
-    http_client: &C,
+pub(super) async fn make_par_call(
+    http_client: &dyn HttpClient,
     par_url: &EndpointUrl,
     auth_params: AuthenticationParams<'_>,
     payload: &ParBody<'_>,
-    dpop: &D,
+    dpop: &dyn AuthorizationServerDPoP,
     dpop_jkt: Option<&str>,
-) -> Result<AuthorizationPushResponse, OAuth2FormError<C::Error, C::ResponseError, D::Error>> {
+) -> Result<AuthorizationPushResponse, Error> {
     OAuth2FormRequest::builder()
         .form(payload)
         .auth_params(auth_params)

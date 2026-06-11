@@ -31,7 +31,7 @@
 //!
 //! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
 //! let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//! let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //! # Ok(())
 //! # }
 //! ```
@@ -56,7 +56,7 @@
 //! #     .await?;
 //! #
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //!
 //! let metadata = AuthorizationServerMetadata::fetch()
 //!     .http_client(&client)
@@ -64,12 +64,12 @@
 //!     .call()
 //!     .await?;
 //!
-//! let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> =
-//!     TokenExchangeGrant::builder_from_metadata(&metadata)
-//!         .client_id("client_id")
-//!         .client_auth(client_auth)
-//!         .dpop(NoDPoP)
-//!         .build();
+//! let grant: TokenExchangeGrant = TokenExchangeGrant::builder_from_metadata(&metadata)
+//!     .client_id("client_id")
+//!     .http_client(client)
+//!     .client_auth(client_auth)
+//!     .dpop(NoDPoP)
+//!     .build();
 //! # Ok(())
 //! # }
 //! ```
@@ -92,11 +92,12 @@
 //! #     .await?;
 //! #
 //! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(env_secret);
+//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //!
-//! let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> = TokenExchangeGrant::builder()
+//! let grant: TokenExchangeGrant = TokenExchangeGrant::builder()
 //!     .token_endpoint("https://my-server/token")?
 //!     .client_id("client_id")
+//!     .http_client(client)
 //!     .client_auth(client_auth)
 //!     .dpop(NoDPoP)
 //!     .build();
@@ -123,32 +124,34 @@
 //! #     .build()
 //! #     .await?;
 //! #
-//! # let client_auth: ClientSecret<EnvVarSecret> = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
+//! # let client_auth: ClientSecret = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
 //! #
-//! # let grant: TokenExchangeGrant<ClientSecret<EnvVarSecret>> = TokenExchangeGrant::builder()
+//! # let grant: TokenExchangeGrant = TokenExchangeGrant::builder()
 //! #     .token_endpoint("https://my-server/token")?
 //! #     .client_id("client_id")
+//! #     .http_client(client)
 //! #     .client_auth(client_auth)
 //! #     .dpop(NoDPoP)
 //! #     .build();
 //!
 //! let subject = SecurityToken::builder().token("eyToken").token_type(SecurityTokenType::AccessToken).build();
 //! let params = TokenExchangeGrantParameters::builder().subject(subject).build();
-//! let response = grant.exchange(&client, params).await?;
+//! let response = grant.exchange(params).await?;
 //! let token: &AccessToken = response.access_token();
 //!
 //! # Ok(())
 //! # }
 //! ```
 
+use std::sync::Arc;
+
 use bon::Builder;
 use serde::Serialize;
 
 use crate::{
     core::{
-        EndpointUrl,
-        client_auth::ClientAuthentication,
-        dpop::{AuthorizationServerDPoP, NoDPoP},
+        EndpointUrl, client_auth::ClientAuthentication, dpop::AuthorizationServerDPoP,
+        http::HttpClient,
     },
     grant::{
         core::{OAuth2ExchangeGrant, mk_scopes},
@@ -165,17 +168,23 @@ use crate::{
 /// See the [module documentation][crate::grant::token_exchange] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[huskarl_macros::try_builder]
-#[derive(Debug, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
-pub struct TokenExchangeGrant<Auth: ClientAuthentication, D: AuthorizationServerDPoP = NoDPoP> {
+pub struct TokenExchangeGrant {
     /// The client ID.
     client_id: String,
 
+    /// The HTTP client used for token requests.
+    #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
+    http_client: Arc<dyn HttpClient>,
+
     /// The client authentication method.
-    client_auth: Auth,
+    #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
+    client_auth: Arc<dyn ClientAuthentication>,
 
     /// The `DPoP` signer.
-    dpop: D,
+    #[builder(with = |dpop: impl AuthorizationServerDPoP + 'static| Arc::new(dpop) as Arc<dyn AuthorizationServerDPoP>)]
+    dpop: Arc<dyn AuthorizationServerDPoP>,
 
     /// The issuer for tokens created by the authorization server.
     #[from_metadata(path = "issuer")]
@@ -197,16 +206,25 @@ pub struct TokenExchangeGrant<Auth: ClientAuthentication, D: AuthorizationServer
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
 
-impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 'static>
-    OAuth2ExchangeGrant for TokenExchangeGrant<Auth, D>
-{
+impl core::fmt::Debug for TokenExchangeGrant {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TokenExchangeGrant")
+            .field("client_id", &self.client_id)
+            .field("issuer", &self.issuer)
+            .field("token_endpoint", &self.token_endpoint)
+            .field("mtls_token_endpoint", &self.mtls_token_endpoint)
+            .finish_non_exhaustive()
+    }
+}
+
+impl OAuth2ExchangeGrant for TokenExchangeGrant {
     type Parameters = TokenExchangeGrantParameters;
-    type ClientAuth = Auth;
-    type DPoP = D;
     type Form<'a> = TokenExchangeGrantForm;
 
     /// Subject and actor tokens may be exchanged repeatedly while they remain valid.
-    const REUSABLE_PARAMETERS: bool = true;
+    fn reusable_parameters(&self) -> bool {
+        true
+    }
 
     fn client_id(&self) -> &str {
         &self.client_id
@@ -216,8 +234,8 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &Self::ClientAuth {
-        &self.client_auth
+    fn client_auth(&self) -> &dyn ClientAuthentication {
+        self.client_auth.as_ref()
     }
 
     fn token_endpoint(&self) -> &EndpointUrl {
@@ -228,22 +246,27 @@ impl<Auth: ClientAuthentication + Clone + 'static, D: AuthorizationServerDPoP + 
         self.mtls_token_endpoint.as_ref()
     }
 
-    fn dpop(&self) -> &Self::DPoP {
-        &self.dpop
+    fn dpop(&self) -> &dyn AuthorizationServerDPoP {
+        self.dpop.as_ref()
+    }
+
+    fn http_client(&self) -> &dyn HttpClient {
+        self.http_client.as_ref()
     }
 
     fn allowed_auth_methods(&self) -> Option<&[String]> {
         self.token_endpoint_auth_methods_supported.as_deref()
     }
 
-    fn to_refresh_grant(&self) -> RefreshGrant<Auth, D> {
+    fn to_refresh_grant(&self) -> RefreshGrant {
         RefreshGrant::builder()
             .client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
+            .http_client(self.http_client.clone())
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.token_endpoint.clone())
-            .unwrap_or_else(|e| match e {})
+            .expect("an EndpointUrl converts to itself infallibly")
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )

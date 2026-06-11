@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Add reloading support to ciphers.
  - `HttpClient::execute` takes a new `Idempotency` parameter declaring
    whether the request is known to be safe to re-send.
+ - Add `Error::is_dpop_nonce_required` accessor.
 
 ## [0.6.4] - 2026-05-29
 

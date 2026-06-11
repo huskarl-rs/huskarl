@@ -51,7 +51,7 @@ tokio = { version = "1", default-features = false, features = ["time"] }
 ### Dependencies available on browser WASM (wasm32-unknown-unknown)
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
-gloo-timers = { version = "0.3", default-features = false, features = ["futures"] }
+gloo-timers = { version = "0.4", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false, features = ["serde"] }
 
 [dev-dependencies]

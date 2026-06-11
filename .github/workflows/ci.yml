@@ -33,9 +33,9 @@ jobs:
           persist-credentials: false
       - run: rustup update stable --no-self-update && rustup component add clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo clippy --workspace --exclude huskarl-crypto-webcrypto --all-features --all-targets -- -D warnings
+      - run: cargo clippy-host -- -D warnings
       - run: rustup target add wasm32-unknown-unknown
-      - run: cargo clippy -p huskarl-crypto-webcrypto --target wasm32-unknown-unknown --all-features --all-targets -- -D warnings
+      - run: cargo clippy-wasm -- -D warnings
 
   fmt:
     name: Format
@@ -93,7 +93,7 @@ jobs:
           persist-credentials: false
       - run: rustup update stable --no-self-update && rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo check --target wasm32-unknown-unknown --workspace
+      - run: cargo check-wasm
 
   semver:
     name: Semver
@@ -105,6 +105,11 @@ jobs:
       - run: rustup update stable --no-self-update
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2
+        with:
+          # huskarl-crypto-webcrypto is wasm32-only and cannot be rustdoc'd on
+          # the host target; cargo-semver-checks' wasm32 --target probe also
+          # fails (cargo --print=file-names quirk), so skip it entirely.
+          exclude: huskarl-crypto-webcrypto
 
   integration:
     name: Integration (Keycloak)

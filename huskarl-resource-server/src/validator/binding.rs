@@ -11,7 +11,7 @@ use snafu::{ensure, prelude::*};
 use crate::{
     TokenType,
     core::{
-        BoxedError,
+        Error,
         dpop::{hash_access_token_for_dpop, normalize_uri_for_dpop},
         jwt::ConfirmationClaim,
         secrets::SecretString,
@@ -61,11 +61,11 @@ pub(crate) fn check_mtls_binding(
 /// It is present even when the binding result is `Err`, so callers can always set the
 /// `DPoP-Nonce` response header regardless of outcome.
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn check_token_binding<N: DpopNonceChecker>(
+pub(crate) async fn check_token_binding(
     token_type: TokenType,
     cnf: Option<&ConfirmationClaim>,
     access_token: &SecretString,
-    dpop_binding_checker: &DPoPBindingChecker<N>,
+    dpop_binding_checker: &DPoPBindingChecker,
     require_mtls: bool,
     headers: &http::HeaderMap,
     http_method: &http::Method,
@@ -153,14 +153,14 @@ pub enum MtlsBindingError {
 /// Verifies the DPoP proof signature, checks the `htm`/`htu`/`ath` claims
 /// against the request, and confirms the proof key matches the `cnf.jkt`
 /// thumbprint in the token. Also validates the provided DPoP nonce.
-pub(crate) struct DPoPBindingChecker<N: DpopNonceChecker> {
-    pub(crate) dpop_nonce_checker: Option<N>,
+pub(crate) struct DPoPBindingChecker {
+    pub(crate) dpop_nonce_checker: Option<std::sync::Arc<dyn DpopNonceChecker>>,
     pub(crate) proof_validator: DpopProofValidator,
     /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
     pub(crate) required: bool,
 }
 
-impl<N: DpopNonceChecker> DPoPBindingChecker<N> {
+impl DPoPBindingChecker {
     pub(crate) async fn check(
         &self,
         cnf: Option<&ConfirmationClaim>,
@@ -181,9 +181,7 @@ impl<N: DpopNonceChecker> DPoPBindingChecker<N> {
             Some(c) => c.check_nonce(proof_nonce).await,
             None => Ok(NonceCheck::Valid),
         }
-        .map_err(|e| DPoPBindingError::NonceCheckFailed {
-            source: BoxedError::from_err(e),
-        })?;
+        .map_err(|source| DPoPBindingError::NonceCheckFailed { source })?;
 
         let new_nonce = match nonce_check {
             NonceCheck::Valid => None,
@@ -261,7 +259,7 @@ pub enum DPoPBindingError {
     MalformedUrl { source: http::Error },
     /// The nonce checker returned an error (server-side failure).
     #[snafu(display("DPoP nonce check failed"))]
-    NonceCheckFailed { source: BoxedError },
+    NonceCheckFailed { source: Error },
     /// The DPoP proof nonce is missing or invalid. The client must retry with the provided nonce.
     #[snafu(display("A DPoP nonce is required"))]
     NonceRequired { nonce: String },

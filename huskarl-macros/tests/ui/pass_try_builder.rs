@@ -1,5 +1,5 @@
 //! Verifies that `#[try_builder]` produces a working builder for both required
-//! and optional fields, propagating the converter's error type unchanged.
+//! and optional fields, surfacing the converter's error as `huskarl_core::Error`.
 
 use bon::Builder;
 
@@ -9,18 +9,13 @@ struct Url(String);
 /// A minimal fallible conversion trait — proves the macro is generic over
 /// the trait, not hard-coded to `IntoEndpointUrl`.
 trait IntoUrl {
-    type Error;
-    fn into_url(self) -> Result<Url, Self::Error>;
+    fn into_url(self) -> Result<Url, huskarl_core::Error>;
 }
 
-#[derive(Debug)]
-struct ParseError;
-
 impl IntoUrl for &str {
-    type Error = ParseError;
-    fn into_url(self) -> Result<Url, Self::Error> {
+    fn into_url(self) -> Result<Url, huskarl_core::Error> {
         if self.is_empty() {
-            Err(ParseError)
+            Err(huskarl_core::ErrorKind::Config.into())
         } else {
             Ok(Url(self.to_owned()))
         }
@@ -28,8 +23,7 @@ impl IntoUrl for &str {
 }
 
 impl IntoUrl for Url {
-    type Error = std::convert::Infallible;
-    fn into_url(self) -> Result<Url, Self::Error> {
+    fn into_url(self) -> Result<Url, huskarl_core::Error> {
         Ok(self)
     }
 }

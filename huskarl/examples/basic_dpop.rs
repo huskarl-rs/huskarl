@@ -2,7 +2,7 @@ use http::Method;
 use huskarl::{
     core::{
         client_auth::ClientSecret,
-        dpop::{AuthorizationServerDPoP, DPoP, ResourceServerDPoP},
+        dpop::{DPoP, ResourceServerDPoP},
         secrets::{EnvVarSecret, encodings::StringEncoding},
         server_metadata::AuthorizationServerMetadata,
     },
@@ -37,6 +37,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
         .client_id(client_id)
+        .http_client(http_client.clone())
         .client_auth(ClientSecret::new(client_secret))
         .dpop(
             DPoP::builder()
@@ -47,7 +48,6 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     let token_response = grant
         .exchange(
-            &http_client,
             ClientCredentialsGrantParameters::builder()
                 .scopes(vec!["test"])
                 .build(),

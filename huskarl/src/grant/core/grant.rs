@@ -1,9 +1,8 @@
 use serde::Serialize;
-use snafu::prelude::*;
 
 use crate::{
     core::{
-        EndpointUrl,
+        EndpointUrl, Error, ErrorKind,
         client_auth::{AuthenticationParams, ClientAuthentication},
         dpop::AuthorizationServerDPoP,
         http::HttpClient,
@@ -11,9 +10,8 @@ use crate::{
     },
     grant::{
         core::{
-            ExchangeError,
-            form::{DPoPNonceError, OAuth2FormError, OAuth2FormRequest, with_dpop_nonce_retry},
-            token_response::{InvalidTokenResponse, RawTokenResponse, TokenResponse},
+            form::{OAuth2FormRequest, with_dpop_nonce_retry},
+            token_response::{RawTokenResponse, TokenResponse},
         },
         refresh::RefreshGrant,
     },
@@ -28,6 +26,11 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Parameters exchanged when making the token request.
     type Parameters: Clone + MaybeSendSync;
 
+    /// The request body.
+    type Form<'a>: MaybeSendSync + Serialize
+    where
+        Self: 'a;
+
     /// Whether [`Self::Parameters`] may safely be submitted more than once.
     ///
     /// `false` for grants whose parameters contain single-use credentials —
@@ -36,18 +39,9 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// the authorization server to revoke tokens already issued for them.
     /// [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache) consumes such
     /// parameters on first use instead of replaying them after a failed refresh.
-    const REUSABLE_PARAMETERS: bool = false;
-
-    /// The client credentials used when making the token request.
-    type ClientAuth: ClientAuthentication + 'static;
-
-    /// The proof implementation used when adding a `DPoP` token binding.
-    type DPoP: AuthorizationServerDPoP + 'static;
-
-    /// The request body.
-    type Form<'a>: MaybeSendSync + Serialize
-    where
-        Self: 'a;
+    fn reusable_parameters(&self) -> bool {
+        false
+    }
 
     /// Returns the configured client ID.
     fn client_id(&self) -> &str;
@@ -56,7 +50,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     fn issuer(&self) -> Option<&str>;
 
     /// Returns the configured client auth.
-    fn client_auth(&self) -> &Self::ClientAuth;
+    fn client_auth(&self) -> &dyn ClientAuthentication;
 
     /// Returns the bound `DPoP` thumbprint for the session.
     ///
@@ -84,7 +78,10 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     }
 
     /// Returns the configured `DPoP` implementation (if any).
-    fn dpop(&self) -> &Self::DPoP;
+    fn dpop(&self) -> &dyn AuthorizationServerDPoP;
+
+    /// Returns the HTTP client used for token requests.
+    fn http_client(&self) -> &dyn HttpClient;
 
     /// Builds the body for the request.
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_>;
@@ -95,12 +92,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns the authentication parameters for this grant.
     fn authentication_params(
         &self,
-    ) -> impl Future<
-        Output = Result<
-            AuthenticationParams<'_>,
-            <Self::ClientAuth as ClientAuthentication>::Error,
-        >,
-    > + MaybeSend {
+    ) -> impl Future<Output = Result<AuthenticationParams<'_>, Error>> + MaybeSend {
         async {
             self.client_auth()
                 .authentication_params(
@@ -114,16 +106,16 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     }
 
     /// Exchange the parameters for an access token.
-    fn exchange<C: HttpClient>(
+    fn exchange(
         &self,
-        http_client: &C,
         params: Self::Parameters,
-    ) -> impl Future<Output = Result<TokenResponse, ExchangeError<C, Self>>> + MaybeSend {
+    ) -> impl Future<Output = Result<TokenResponse, Error>> + MaybeSend {
         async move {
             let dpop_jkt = Self::bound_dpop_jkt(&params)
                 .map(ToString::to_string)
                 .or_else(|| self.dpop().get_current_thumbprint());
 
+            let http_client = self.http_client();
             let effective_endpoint = self.effective_token_endpoint(http_client.uses_mtls());
             let form = self.build_form(params);
 
@@ -136,8 +128,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                         effective_endpoint.as_uri(),
                         self.allowed_auth_methods(),
                     )
-                    .await
-                    .context(AuthSnafu)?;
+                    .await?;
 
                 OAuth2FormRequest::builder()
                     .auth_params(auth_params)
@@ -148,83 +139,14 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                     .build()
                     .execute(http_client)
                     .await
-                    .context(OAuth2FormSnafu)
             })?;
 
             raw_token_response
                 .into_token_response(dpop_jkt, crate::core::platform::SystemTime::now())
-                .context(InvalidTokenResponseSnafu)
+                .map_err(|source| Error::new(ErrorKind::Protocol, source))
         }
     }
 
     /// Creates a refresh grant from this grant's configuration.
-    fn to_refresh_grant(&self) -> RefreshGrant<Self::ClientAuth, Self::DPoP>;
-}
-
-/// Errors that can occur when making a token request.
-#[derive(Debug, Snafu)]
-pub enum OAuth2ExchangeGrantError<
-    HttpReqErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-    AuthErr: crate::core::Error,
-    DPoPErr: crate::core::Error,
-> {
-    /// There was a failure to get client authentication details.
-    Auth {
-        /// The underlying error.
-        source: AuthErr,
-    },
-    /// There was a failure to submit the form.
-    OAuth2Form {
-        /// The underlying error.
-        source: OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>,
-    },
-    /// The token response was not valid.
-    InvalidTokenResponse {
-        /// The underlying error.
-        source: InvalidTokenResponse,
-    },
-}
-
-impl<
-    HttpErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-    AuthErr: crate::core::Error,
-    DPoPErr: crate::core::Error,
-> DPoPNonceError for OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
-{
-    fn is_dpop_nonce_required(&self) -> bool {
-        matches!(self, Self::OAuth2Form { source } if source.is_dpop_nonce_required())
-    }
-}
-
-impl<
-    HttpErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-    AuthErr: crate::core::Error,
-    DPoPErr: crate::core::Error,
-> OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
-{
-    /// Returns `true` if the server definitively rejected the grant itself with
-    /// `invalid_grant` (RFC 6749 §5.2), e.g. a revoked, expired, or otherwise
-    /// invalid refresh token or authorization code.
-    pub fn is_invalid_grant(&self) -> bool {
-        matches!(self, Self::OAuth2Form { source } if source.is_invalid_grant())
-    }
-}
-
-impl<
-    HttpErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-    AuthErr: crate::core::Error,
-    DPoPErr: crate::core::Error,
-> crate::core::Error for OAuth2ExchangeGrantError<HttpErr, HttpRespErr, AuthErr, DPoPErr>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::Auth { source } => source.is_retryable(),
-            Self::OAuth2Form { source } => source.is_retryable(),
-            Self::InvalidTokenResponse { source } => source.is_retryable(),
-        }
-    }
+    fn to_refresh_grant(&self) -> RefreshGrant;
 }

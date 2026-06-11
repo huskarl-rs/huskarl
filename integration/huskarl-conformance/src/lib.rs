@@ -8,18 +8,17 @@ use bytes::Bytes;
 use http::{Method, StatusCode, Uri};
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache, TokenCache},
+    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{
         client_auth::ClientAuthentication,
         dpop::AuthorizationServerDPoP,
-        http::{HttpClient, HttpResponse},
+        http::{HttpClient, Idempotency},
         jwk::JwksSource,
         server_metadata::AuthorizationServerMetadata,
     },
     grant::{
         authorization_code::{AuthorizationCodeGrant, Jar, StartInput, StartOutput, bind_loopback},
         core::{OAuth2ExchangeGrant, TokenResponse},
-        refresh::RefreshGrant,
     },
 };
 use huskarl_reqwest::ReqwestClient;
@@ -76,10 +75,6 @@ pub fn assert_no_failures(failures: Vec<String>) {
     }
 }
 
-/// The `HttpAuthorizer` type returned from the auth-code flow helpers.
-pub type FlowAuthorizer<Auth, D> =
-    HttpAuthorizer<InMemoryTokenCache<RefreshGrant<Auth, D>, InMemoryRefreshTokenStore>>;
-
 /// Builds an HTTP client that accepts the conformance suite's self-signed certificate.
 pub async fn build_http_client() -> ReqwestClient {
     ReqwestClient::builder()
@@ -106,18 +101,14 @@ pub fn build_browser() -> Browser {
 /// Each call to `get_headers` generates a fresh DPoP proof (including the current nonce).
 /// After each response, `update_from_response_headers` persists any new `DPoP-Nonce` so
 /// the retry carries the correct nonce.
-pub async fn call_resource_get<T>(
+pub async fn call_resource_get(
     http_client: &ReqwestClient,
-    authorizer: &HttpAuthorizer<T>,
+    authorizer: &HttpAuthorizer,
     uri: &Uri,
-) where
-    T: TokenCache,
-    T::Error<ReqwestClient>: std::fmt::Debug,
-    <T::DPoP as huskarl::core::dpop::ResourceServerDPoP>::Error: std::fmt::Debug,
-{
+) {
     let mut retry = false;
     loop {
-        let headers = match authorizer.get_headers(http_client, &Method::GET, uri).await {
+        let headers = match authorizer.get_headers(&Method::GET, uri).await {
             Ok(h) => h,
             Err(_) => break,
         };
@@ -127,14 +118,13 @@ pub async fn call_resource_get<T>(
         parts.uri = uri.clone();
         let request = http::Request::from_parts(parts, Bytes::new());
 
-        let response = match http_client.execute(request).await {
+        let response = match http_client.execute(request, Idempotency::Idempotent).await {
             Ok(r) => r,
             Err(_) => break,
         };
 
-        let status = response.status();
-        authorizer.update_from_response_headers(uri, &response.headers());
-        let _ = response.body().await;
+        let status = response.status;
+        authorizer.update_from_response_headers(uri, &response.headers);
 
         if status.is_success() || retry {
             break;
@@ -151,10 +141,11 @@ pub async fn call_resource_get<T>(
 ///
 /// Convenience wrapper for standalone use where the redirect URI doesn't need
 /// to match a pre-registered value.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_auth_code_flow<
-    Auth: ClientAuthentication + Clone + 'static,
-    D: AuthorizationServerDPoP + Clone + 'static,
-    J: Jar + Clone + 'static,
+    Auth: ClientAuthentication + 'static,
+    D: AuthorizationServerDPoP + 'static,
+    J: Jar + 'static,
 >(
     http_client: &ReqwestClient,
     browser: &Browser,
@@ -165,7 +156,7 @@ pub async fn run_auth_code_flow<
     scopes: impl IntoIterator<Item = impl Into<String>>,
     allowed_id_token_signed_response_algs: Option<std::collections::HashSet<String>>,
     jar: J,
-) -> Result<(TokenResponse, FlowAuthorizer<Auth, D>), String> {
+) -> Result<(TokenResponse, HttpAuthorizer), String> {
     let listener = bind_loopback(0)
         .await
         .map_err(|e| format!("failed to bind loopback: {e}"))?;
@@ -192,10 +183,11 @@ pub async fn run_auth_code_flow<
 /// Use this when running multiple modules within a conformance suite plan — bind
 /// once, configure the plan with the resulting redirect URI, then call this for
 /// each module. The listener is not consumed and can be reused across modules.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_auth_code_flow_with_listener<
-    Auth: ClientAuthentication + Clone + 'static,
-    D: AuthorizationServerDPoP + Clone + 'static,
-    J: Jar + Clone + 'static,
+    Auth: ClientAuthentication + 'static,
+    D: AuthorizationServerDPoP + 'static,
+    J: Jar + 'static,
 >(
     http_client: &ReqwestClient,
     browser: &Browser,
@@ -208,7 +200,7 @@ pub async fn run_auth_code_flow_with_listener<
     redirect_uri: &str,
     allowed_id_token_signed_response_algs: Option<std::collections::HashSet<String>>,
     jar: J,
-) -> Result<(TokenResponse, FlowAuthorizer<Auth, D>), String> {
+) -> Result<(TokenResponse, HttpAuthorizer), String> {
     let metadata = AuthorizationServerMetadata::oidc_fetch()
         .issuer(issuer)
         .http_client(http_client)
@@ -225,23 +217,23 @@ pub async fn run_auth_code_flow_with_listener<
             msg
         })?;
 
-    let grant: AuthorizationCodeGrant<Auth, D, J> =
-        AuthorizationCodeGrant::builder_from_metadata(&metadata)
-            .ok_or("authorization server does not advertise an authorization endpoint")?
-            .client_id(client_id)
-            .client_auth(client_auth)
-            .redirect_uri(redirect_uri)
-            .dpop(dpop)
-            .jar(jar)
-            .jws_verifier_factory(Arc::new(
-                JwksSource::builder()
-                    .http_client(http_client.clone())
-                    .build(),
-            ))
-            .maybe_allowed_id_token_signed_response_algs(allowed_id_token_signed_response_algs)
-            .build()
-            .await
-            .map_err(|e| format!("failed to build grant: {e}"))?;
+    let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
+        .ok_or("authorization server does not advertise an authorization endpoint")?
+        .client_id(client_id)
+        .http_client(http_client.clone())
+        .client_auth(client_auth)
+        .redirect_uri(redirect_uri)
+        .dpop(dpop)
+        .jar(jar)
+        .jws_verifier_factory(Arc::new(
+            JwksSource::builder()
+                .http_client(http_client.clone())
+                .build(),
+        ))
+        .maybe_allowed_id_token_signed_response_algs(allowed_id_token_signed_response_algs)
+        .build()
+        .await
+        .map_err(|e| format!("failed to build grant: {e}"))?;
 
     // Build the token cache from the refresh grant (takes &self, so `grant` is still usable).
     // The cache's resource_server_dpop is derived from grant.dpop() at this point.
@@ -256,7 +248,7 @@ pub async fn run_auth_code_flow_with_listener<
         pending_state,
         ..
     } = grant
-        .start(http_client, StartInput::scopes(scopes))
+        .start(StartInput::scopes(scopes))
         .await
         .map_err(|e| format!("failed to start authorization: {e}"))?;
 
@@ -264,7 +256,7 @@ pub async fn run_auth_code_flow_with_listener<
     let browser_result = browser.navigate(authorization_url.to_string()).await;
 
     let token_response = tokio::select! {
-        result = grant.complete_on_loopback(http_client, listener, &pending_state, None) => {
+        result = grant.complete_on_loopback(listener, &pending_state, None) => {
             println!("    loopback completed: {}", result.as_ref().map(|_| "ok").unwrap_or_else(|_e| "err"));
             result.map_err(|e| format!("failed to complete authorization: {e}"))
         }
@@ -283,7 +275,10 @@ pub async fn run_auth_code_flow_with_listener<
     }?;
 
     // Prime the cache so get_headers() immediately returns the fresh token.
-    authorizer.prime(Arc::new(token_response.clone())).await;
+    authorizer
+        .prime(Arc::new(token_response.clone()))
+        .await
+        .map_err(|e| format!("failed to prime token cache: {e}"))?;
 
     Ok((token_response, authorizer))
 }

@@ -4,17 +4,14 @@ use httpmock::prelude::*;
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
     core::{IntoEndpointUrl, client_auth::NoAuth, jwt::validator::ClaimCheck},
-    validator::{
-        dpop_nonce::NoNonceCheck,
-        introspection::{IntrospectionValidateError, IntrospectionValidator},
-    },
+    validator::introspection::{IntrospectionValidateError, IntrospectionValidator},
 };
 
 async fn validator_for(
     server: &MockServer,
     path: &str,
     audience: ClaimCheck,
-) -> IntrospectionValidator<NoAuth, ReqwestClient, NoNonceCheck, ()> {
+) -> IntrospectionValidator {
     let http_client = ReqwestClient::builder()
         .mtls(huskarl_reqwest::mtls::NoMtls)
         .build()
@@ -45,15 +42,12 @@ fn bearer_headers() -> http::HeaderMap {
     headers
 }
 
-type ValidateError = IntrospectionValidateError<
-    <NoAuth as huskarl_resource_server::core::client_auth::ClientAuthentication>::Error,
-    <ReqwestClient as huskarl_resource_server::core::http::HttpClient>::Error,
-    <ReqwestClient as huskarl_resource_server::core::http::HttpClient>::ResponseError,
->;
-
 async fn validate(
-    validator: &IntrospectionValidator<NoAuth, ReqwestClient, NoNonceCheck, ()>,
-) -> Result<Option<huskarl_resource_server::validator::ValidatedRequest<()>>, ValidateError> {
+    validator: &IntrospectionValidator,
+) -> Result<
+    Option<huskarl_resource_server::validator::ValidatedRequest<()>>,
+    IntrospectionValidateError,
+> {
     validator
         .validate_request(
             &bearer_headers(),

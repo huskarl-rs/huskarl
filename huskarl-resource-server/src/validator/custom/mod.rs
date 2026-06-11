@@ -127,10 +127,10 @@ use serde::Deserialize;
 use crate::{
     AccessTokenValidator,
     core::{
-        BoxedError, EndpointUrl,
+        EndpointUrl, Error,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         jwt::{
-            BoxedJtiUniquenessChecker,
+            JtiUniquenessChecker,
             validator::{ClaimCheck, JwtValidator},
         },
         platform::MaybeSendSync,
@@ -140,10 +140,8 @@ use crate::{
         ValidationResult,
         binding::DPoPBindingChecker,
         common::ValidatorInner,
-        custom::custom_validator_builder::{
-            SetAuthorizationServer, SetDpopNonceChecker, SetJwksUri,
-        },
-        dpop_nonce::{DpopNonceChecker, NoNonceCheck},
+        custom::custom_validator_builder::{SetAuthorizationServer, SetJwksUri},
+        dpop_nonce::DpopNonceChecker,
         dpop_proof::DpopProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
@@ -156,17 +154,15 @@ use crate::{
 /// Use [`AccessTokenValidationRules`] to configure which claims are required and how
 /// they are validated. For RFC 9068-compliant authorization servers, prefer
 /// [`crate::validator::rfc9068::Rfc9068Validator`].
-pub struct CustomValidator<N: DpopNonceChecker, Claims = ()> {
-    inner: ValidatorInner<N>,
+pub struct CustomValidator<Claims = ()> {
+    inner: ValidatorInner,
     authorization_server: Option<String>,
     on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
 
 #[bon::bon]
-impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
-    CustomValidator<N, Claims>
-{
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims> {
     /// Creates a new [`CustomValidator`].
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
@@ -210,12 +206,12 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         /// Factory for creating JWS verifiers for access token signature verification.
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
         /// Access token JTI uniqueness checker.
-        token_jti_checker: Option<BoxedJtiUniquenessChecker>,
+        token_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// DPoP nonce checker.
-        #[builder(setters(vis = "", name = "dpop_nonce_checker_internal"))]
-        dpop_nonce_checker: Option<N>,
+        #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
+        dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
         /// DPoP JTI uniqueness checker.
-        dpop_jti_checker: Option<BoxedJtiUniquenessChecker>,
+        dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// Cryptographic platform for JWS verification.
         ///
         /// Used for both access token and DPoP proof verification. When the
@@ -231,7 +227,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
         ///
         /// Use this to record metrics, emit log events, or trigger alerts.
         on_validate: Option<Arc<dyn OnValidate>>,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         let jws_verifier = jws_verifier_factory
             .build(jwks_uri.as_ref(), jws_verifier_platform.clone())
             .await?;
@@ -272,12 +268,12 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     }
 }
 
-impl CustomValidator<NoNonceCheck, ()> {
+impl CustomValidator<()> {
     /// Creates a builder for [`CustomValidator`].
     ///
     /// Call [`.with_claims::<T>()`][CustomValidatorBuilder::with_claims] on the builder
     /// to specify a custom claims type. The default is `()` (no extra claims).
-    pub fn builder() -> CustomValidatorBuilder<NoNonceCheck, ()> {
+    pub fn builder() -> CustomValidatorBuilder<()> {
         CustomValidator::builder_internal()
     }
 
@@ -290,36 +286,21 @@ impl CustomValidator<NoNonceCheck, ()> {
     /// claims type.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> CustomValidatorBuilder<NoNonceCheck, (), SetJwksUri<SetAuthorizationServer>> {
+    ) -> CustomValidatorBuilder<(), SetJwksUri<SetAuthorizationServer>> {
         Self::builder()
             .authorization_server(metadata.issuer.clone())
             .maybe_jwks_uri(metadata.jwks_uri.clone())
     }
 }
 
-impl<
-    N: DpopNonceChecker,
-    Claims: for<'de> Deserialize<'de> + Clone + 'static,
-    S: custom_validator_builder::State,
-> CustomValidatorBuilder<N, Claims, S>
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_builder::State>
+    CustomValidatorBuilder<Claims, S>
 {
     /// Sets the claims type for the validator.
     pub fn with_claims<Claims1: for<'de> Deserialize<'de> + Clone + 'static>(
         self,
-    ) -> CustomValidatorBuilder<N, Claims1, S> {
+    ) -> CustomValidatorBuilder<Claims1, S> {
         self.with_claims_internal()
-    }
-
-    /// Sets the DPoP nonce checker for the validator.
-    pub fn dpop_nonce_checker<N1: DpopNonceChecker>(
-        self,
-        dpop_nonce_checker: N1,
-    ) -> CustomValidatorBuilder<N1, Claims, SetDpopNonceChecker<S>>
-    where
-        S::DpopNonceChecker: custom_validator_builder::IsUnset,
-    {
-        self.with_n_internal()
-            .dpop_nonce_checker_internal(dpop_nonce_checker)
     }
 
     /// Replaces all validation rules at once.
@@ -373,8 +354,8 @@ impl<
     }
 }
 
-impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static>
-    AccessTokenValidator for CustomValidator<N, Claims>
+impl<Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static> AccessTokenValidator
+    for CustomValidator<Claims>
 {
     type Claims = Claims;
     type Error = ValidateHeadersError;
@@ -391,9 +372,7 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + MaybeSendS
     }
 }
 
-impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
-    CustomValidator<N, Claims>
-{
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims> {
     /// Returns metadata describing how this validator is configured.
     ///
     /// See [`ProvideValidatorMetadata`] for use in generic contexts.
@@ -442,8 +421,8 @@ impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
     }
 }
 
-impl<N: DpopNonceChecker, Claims: for<'de> Deserialize<'de> + Clone + 'static>
-    ProvideValidatorMetadata for CustomValidator<N, Claims>
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> ProvideValidatorMetadata
+    for CustomValidator<Claims>
 {
     fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         self.validator_metadata(resource)

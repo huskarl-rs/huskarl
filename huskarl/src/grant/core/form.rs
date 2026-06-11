@@ -2,38 +2,40 @@ use bon::Builder;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, Uri, header::CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use snafu::{ResultExt as _, Snafu};
+use snafu::Snafu;
 
 use crate::core::{
+    Error, ErrorKind,
     client_auth::AuthenticationParams,
-    dpop::{AuthorizationServerDPoP, NoDPoP},
-    http::{HttpClient, HttpResponse},
+    dpop::AuthorizationServerDPoP,
+    http::{HttpClient, Idempotency},
 };
 
-#[derive(Debug, Builder)]
+#[derive(Builder)]
 #[builder(state_mod(name = builder))]
-pub struct OAuth2FormRequest<'a, F: Serialize, D: AuthorizationServerDPoP = NoDPoP> {
+pub struct OAuth2FormRequest<'a, F: Serialize> {
     uri: &'a Uri,
     form: &'a F,
     auth_params: AuthenticationParams<'a>,
-    dpop: &'a D,
+    dpop: &'a dyn AuthorizationServerDPoP,
     dpop_jkt: Option<&'a str>,
 }
 
-impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
-    pub async fn build_request(
-        &self,
-    ) -> Result<Request<Bytes>, SerializeOAuth2FormError<D::Error>> {
+impl<F: Serialize> OAuth2FormRequest<'_, F> {
+    pub async fn build_request(&self) -> Result<Request<Bytes>, Error> {
         let headers = self.auth_params.headers.clone().unwrap_or_default();
 
-        let mut body = serde_html_form::to_string(self.form).context(SerializeFormSnafu)?;
+        let mut body = serde_html_form::to_string(self.form)
+            .map_err(|e| serialize_form_error(e).with_context("serializing exchange parameters"))?;
 
         if let Some(kv) = &self.auth_params.form_params {
             if !body.is_empty() {
                 body.push('&');
             }
 
-            serde_html_form::push_to_string(&mut body, kv).context(SerializeFormSnafu)?;
+            serde_html_form::push_to_string(&mut body, kv).map_err(|e| {
+                serialize_form_error(e).with_context("serializing authentication parameters")
+            })?;
         }
 
         let (mut parts, ()) = http::Request::new(()).into_parts();
@@ -43,12 +45,14 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
         if let Some(proof) = self
             .dpop
             .proof(&parts.method, &parts.uri, self.dpop_jkt)
-            .await
-            .context(DPoPSignSnafu)?
+            .await?
         {
             parts.headers.insert(
                 "DPoP",
-                HeaderValue::from_str(proof.expose_secret()).context(BadHeaderSnafu)?,
+                HeaderValue::from_str(proof.expose_secret()).map_err(|e| {
+                    Error::new(ErrorKind::Dpop, e)
+                        .with_context("DPoP proof is not a valid header value")
+                })?,
             );
         }
 
@@ -69,31 +73,28 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
     /// with [`with_dpop_nonce_retry!`] to retry with freshly generated `auth_params`
     /// (required to avoid `jti` reuse in `private_key_jwt` client assertions per
     /// RFC 7523 §3).
-    pub async fn execute<C: HttpClient, R: for<'de> Deserialize<'de>>(
+    pub async fn execute<R: for<'de> Deserialize<'de>>(
         &self,
-        http_client: &C,
-    ) -> Result<R, OAuth2FormError<C::Error, C::ResponseError, D::Error>> {
-        let request = self.build_request().await.context(SerializeSnafu)?;
-        let response = http_client.execute(request).await.context(RequestSnafu)?;
-        let status = response.status();
-        let content_type = if status.is_success() {
+        http_client: &dyn HttpClient,
+    ) -> Result<R, Error> {
+        let request = self.build_request().await?;
+        // Token requests may consume one-shot state (an authorization code,
+        // a rotating refresh token) — never known-idempotent.
+        let response = http_client.execute(request, Idempotency::Unknown).await?;
+
+        let content_type = if response.status.is_success() {
             None
         } else {
-            response.headers().get(CONTENT_TYPE).cloned()
+            response.headers.get(CONTENT_TYPE).cloned()
         };
 
-        if let Some(nonce) = response.headers().get("DPoP-Nonce")
+        if let Some(nonce) = response.headers.get("DPoP-Nonce")
             && let Ok(nonce_str) = nonce.to_str()
         {
             self.dpop.update_nonce(nonce_str.to_string());
         }
 
-        let body = response.body().await.context(ResponseBodyReadSnafu)?;
-
-        let parsed_response =
-            parse_oauth2_response(status, content_type, &body).context(ResponseSnafu)?;
-
-        Ok(parsed_response)
+        parse_oauth2_response(response.status, content_type, &response.body)
     }
 
     /// Executes the form request, expecting an empty response body on success.
@@ -103,50 +104,74 @@ impl<F: Serialize, D: AuthorizationServerDPoP> OAuth2FormRequest<'_, F, D> {
     ///
     /// The main current use of this endpoint is the revocation endpoint, which is
     /// not expected to require a `DPoP` nonce.
-    pub async fn execute_empty_response<C: HttpClient>(
-        &self,
-        http_client: &C,
-    ) -> Result<(), OAuth2FormError<C::Error, C::ResponseError, D::Error>> {
-        let request = self.build_request().await.context(SerializeSnafu)?;
-        let response = http_client.execute(request).await.context(RequestSnafu)?;
-        let status = response.status();
-        let content_type = if status.is_success() {
-            None
-        } else {
-            response.headers().get(CONTENT_TYPE).cloned()
-        };
+    pub async fn execute_empty_response(&self, http_client: &dyn HttpClient) -> Result<(), Error> {
+        let request = self.build_request().await?;
+        let response = http_client.execute(request, Idempotency::Unknown).await?;
 
-        // Consume the body even if we ignore it in the success case.
-        let body = response.body().await.context(ResponseBodyReadSnafu)?;
-
-        if status.is_success() {
+        if response.status.is_success() {
             return Ok(());
         }
 
-        Err(OAuth2FormError::Response {
-            source: parse_oauth2_error_response(status, content_type, &body),
-        })
+        let content_type = response.headers.get(CONTENT_TYPE).cloned();
+
+        Err(parse_oauth2_error_response(
+            response.status,
+            content_type,
+            &response.body,
+        ))
     }
 }
 
-/// Parses an error response body as an `OAuth2` error. Always returns `Err`.
+fn serialize_form_error(source: serde_html_form::ser::Error) -> Error {
+    Error::new(ErrorKind::Config, source)
+}
+
+/// Parses an error response body as an `OAuth2` error. Always returns an error.
+///
+/// Classification: `invalid_grant` → [`ErrorKind::InvalidGrant`],
+/// `use_dpop_nonce` → [`ErrorKind::Dpop`], any 5xx →
+/// [`ErrorKind::Transport`] (retryable), other `OAuth2` errors →
+/// [`ErrorKind::Protocol`]. The raw OAuth error code is carried on the error.
 fn parse_oauth2_error_response(
     status: http::StatusCode,
     content_type: Option<HeaderValue>,
     body: &Bytes,
-) -> HandleResponseError {
+) -> Error {
     match serde_json::from_slice::<OAuth2ErrorBody>(body) {
-        Ok(error_body) => HandleResponseError::OAuth2 {
-            body: error_body,
-            status,
-            content_type,
-        },
-        Err(source) => HandleResponseError::UnparseableErrorResponse {
-            body: String::from_utf8_lossy(body).into_owned(),
-            status,
-            content_type,
-            source,
-        },
+        Ok(error_body) => {
+            let code = error_body.error.clone();
+            let kind = match code.as_str() {
+                "invalid_grant" => ErrorKind::InvalidGrant,
+                "use_dpop_nonce" => ErrorKind::Dpop,
+                _ if status.is_server_error() => ErrorKind::Transport { retryable: true },
+                _ => ErrorKind::Protocol,
+            };
+            Error::new(
+                kind,
+                HandleResponseError::OAuth2 {
+                    body: error_body,
+                    status,
+                    content_type,
+                },
+            )
+            .with_oauth_error_code(code)
+        }
+        Err(source) => {
+            let kind = if status.is_server_error() {
+                ErrorKind::Transport { retryable: true }
+            } else {
+                ErrorKind::Protocol
+            };
+            Error::new(
+                kind,
+                HandleResponseError::UnparseableErrorResponse {
+                    body: String::from_utf8_lossy(body).into_owned(),
+                    status,
+                    content_type,
+                    source,
+                },
+            )
+        }
     }
 }
 
@@ -154,130 +179,27 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
     status: http::StatusCode,
     content_type: Option<HeaderValue>,
     body: &Bytes,
-) -> Result<T, HandleResponseError> {
+) -> Result<T, Error> {
     if !status.is_success() {
         return Err(parse_oauth2_error_response(status, content_type, body));
     }
 
-    serde_json::from_slice(body).context(UnparseableSuccessResponseSnafu {
-        body: String::from_utf8_lossy(body),
+    serde_json::from_slice(body).map_err(|source| {
+        Error::new(
+            ErrorKind::Protocol,
+            HandleResponseError::UnparseableSuccessResponse {
+                body: String::from_utf8_lossy(body).into_owned(),
+                source,
+            },
+        )
     })
 }
 
-/// Errors that can occur when attempting to get a token using `OAuth2`.
-#[derive(Debug, Snafu)]
-pub enum OAuth2FormError<
-    HttpReqErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-    DPoPErr: crate::core::Error,
-> {
-    /// There was an error when attempting to serialize the form.
-    Serialize {
-        /// The underlying serialization error.
-        source: SerializeOAuth2FormError<DPoPErr>,
-    },
-    /// There was an error when reading the response body.
-    #[snafu(display("Failed to read response body"))]
-    ResponseBodyRead {
-        /// The underlying error when reading the respone body.
-        source: HttpRespErr,
-    },
-    /// An error occurred when making the HTTP request.
-    #[snafu(display("Failed to make HTTP request"))]
-    Request {
-        /// An error when handling the response.
-        source: HttpReqErr,
-    },
-    /// An error occurred when parsing the HTTP response.
-    Response {
-        /// An error when handling the response.
-        source: HandleResponseError,
-    },
-}
-
-impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
-    OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>
-{
-    /// Returns `true` if the error indicates the server requires a `DPoP` nonce.
-    ///
-    /// When this returns `true`, the `DPoP` nonce state has already been updated by the
-    /// most recent request. Callers should retry with freshly generated authentication
-    /// parameters to avoid reusing the same `jti` in `private_key_jwt` assertions
-    /// (RFC 7523 §3).
-    pub fn is_dpop_nonce_required(&self) -> bool {
-        matches!(
-            self,
-            Self::Response {
-                source: HandleResponseError::OAuth2 {
-                    body: OAuth2ErrorBody { error, .. },
-                    ..
-                },
-            } if error == "use_dpop_nonce"
-        )
-    }
-
-    /// Returns `true` if the server definitively rejected the grant itself with
-    /// `invalid_grant` (RFC 6749 §5.2), e.g. a revoked, expired, or otherwise
-    /// invalid refresh token or authorization code.
-    pub fn is_invalid_grant(&self) -> bool {
-        matches!(
-            self,
-            Self::Response {
-                source: HandleResponseError::OAuth2 {
-                    body: OAuth2ErrorBody { error, .. },
-                    ..
-                },
-            } if error == "invalid_grant"
-        )
-    }
-}
-
-impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
-    crate::core::Error for OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::Serialize { source } => source.is_retryable(),
-            Self::Request { source } => source.is_retryable(),
-            Self::Response { source } => source.is_retryable(),
-            Self::ResponseBodyRead { source } => source.is_retryable(),
-        }
-    }
-}
-
-#[derive(Debug, Snafu)]
-pub enum SerializeOAuth2FormError<DPoPErr: crate::core::Error> {
-    /// There was an error when attempting to serialize the form parameters.
-    #[snafu(display("Failed to serialize exchange parameters"))]
-    SerializeForm {
-        /// The underlying error.
-        source: serde_html_form::ser::Error,
-    },
-    /// The provided header value was invalid.
-    #[snafu(display("Provided header value was invalid"))]
-    BadHeader {
-        /// The underlying error.
-        source: http::header::InvalidHeaderValue,
-    },
-    /// The `DPoP` proof could not be signed.
-    #[snafu(display("Failed to sign DPoP proof"))]
-    DPoPSign {
-        /// The underlying error.
-        source: DPoPErr,
-    },
-}
-
-impl<DPoPErr: crate::core::Error + 'static> crate::core::Error
-    for SerializeOAuth2FormError<DPoPErr>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::SerializeForm { .. } | Self::BadHeader { .. } => false,
-            Self::DPoPSign { source } => source.is_retryable(),
-        }
-    }
-}
-
+/// Source vocabulary for `OAuth2` token-endpoint response failures.
+///
+/// Carried as the source of the [`Error`]s produced by the form machinery —
+/// match on [`ErrorKind`] and [`Error::oauth_error_code`] instead of
+/// downcasting to this type.
 #[derive(Debug, Snafu)]
 pub enum HandleResponseError {
     /// The response was an error response code, but could not be parsed as an `OAuth2` error.
@@ -304,7 +226,7 @@ pub enum HandleResponseError {
         source: serde_json::Error,
     },
     /// An `OAuth2` error was returned.
-    #[snafu(display("OAuth2 request failed with an OAuth2 error payload: {:?}", body))]
+    #[snafu(display("OAuth2 request failed with an OAuth2 error payload: {body}"))]
     OAuth2 {
         /// The `OAuth2` error body.
         body: OAuth2ErrorBody,
@@ -313,18 +235,6 @@ pub enum HandleResponseError {
         /// The content type of the `OAuth2` error response.
         content_type: Option<http::HeaderValue>,
     },
-}
-
-impl crate::core::Error for HandleResponseError {
-    fn is_retryable(&self) -> bool {
-        match self {
-            HandleResponseError::UnparseableErrorResponse { status, .. } => {
-                status.is_server_error()
-            }
-            HandleResponseError::UnparseableSuccessResponse { .. } => false,
-            HandleResponseError::OAuth2 { status, .. } => status.is_server_error(),
-        }
-    }
 }
 
 /// The `OAuth2` error response.
@@ -338,17 +248,16 @@ pub struct OAuth2ErrorBody {
     pub error_uri: Option<String>,
 }
 
-/// Trait for error types that may indicate a `DPoP` nonce is required.
-pub(crate) trait DPoPNonceError {
-    /// Returns `true` if the error indicates the server requires a `DPoP` nonce.
-    fn is_dpop_nonce_required(&self) -> bool;
-}
-
-impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
-    DPoPNonceError for OAuth2FormError<HttpReqErr, HttpRespErr, DPoPErr>
-{
-    fn is_dpop_nonce_required(&self) -> bool {
-        self.is_dpop_nonce_required()
+impl std::fmt::Display for OAuth2ErrorBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.error)?;
+        if let Some(description) = &self.error_description {
+            write!(f, ": {description}")?;
+        }
+        if let Some(uri) = &self.error_uri {
+            write!(f, " (see {uri})")?;
+        }
+        Ok(())
     }
 }
 
@@ -360,7 +269,7 @@ macro_rules! with_dpop_nonce_retry {
     ($body:block) => {{
         let result = $body;
         if let Err(ref e) = result
-            && $crate::grant::core::form::DPoPNonceError::is_dpop_nonce_required(e)
+            && e.is_dpop_nonce_required()
         {
             $body
         } else {

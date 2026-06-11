@@ -80,6 +80,7 @@ async fn client_credentials_mtls_binding() {
 
     let grant = ClientCredentialsGrant::builder_from_metadata(&server_metadata)
         .client_id(&config.client_id)
+        .http_client(http.clone())
         .client_auth(ClientSecret::new(PlainSecret::new(&config.secret)))
         .dpop(NoDPoP)
         .build();
@@ -108,7 +109,7 @@ async fn client_credentials_mtls_binding() {
     let request_uri = "https://test".parse().expect("url");
 
     let headers = authorizer
-        .get_headers(&http, &request_method, &request_uri)
+        .get_headers(&request_method, &request_uri)
         .await
         .unwrap();
 

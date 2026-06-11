@@ -1,6 +1,8 @@
-use std::convert::Infallible;
-
-use huskarl_core::secrets::{Secret, SecretOutput, SecretString};
+use huskarl_core::{
+    Error,
+    platform::MaybeSendBoxFuture,
+    secrets::{Secret, SecretOutput, SecretString},
+};
 
 /// A [`Secret`] that returns a fixed string — for use with [`huskarl_core::client_auth::ClientSecret`]
 /// in integration tests where the secret value is known up front.
@@ -14,13 +16,16 @@ impl PlainSecret {
 }
 
 impl Secret for PlainSecret {
-    type Error = Infallible;
     type Output = SecretString;
 
-    async fn get_secret_value(&self) -> Result<SecretOutput<SecretString>, Infallible> {
-        Ok(SecretOutput {
-            value: self.0.clone(),
-            identity: None,
+    fn get_secret_value(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<SecretString>, Error>> {
+        Box::pin(async {
+            Ok(SecretOutput {
+                value: self.0.clone(),
+                identity: None,
+            })
         })
     }
 }

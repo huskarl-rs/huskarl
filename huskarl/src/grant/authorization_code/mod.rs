@@ -39,29 +39,30 @@
 //! an authorization endpoint.
 //!
 //! ```rust
-//! use huskarl::core::server_metadata::AuthorizationServerMetadata;
-//! use huskarl::grant::authorization_code::{AuthorizationCodeGrant, NoJar};
-//! use huskarl::core::client_auth::NoAuth;
-//! use huskarl::core::dpop::NoDPoP;
+//! use huskarl::{
+//!     core::{client_auth::NoAuth, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata},
+//!     grant::authorization_code::{AuthorizationCodeGrant, NoJar},
+//! };
 //! # use huskarl_reqwest::mtls::NoMtls;
-//! # async fn setup_grant(client: &huskarl_reqwest::ReqwestClient) -> Result<(), Box<dyn std::error::Error>> {
+//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
 //!
 //! let metadata = AuthorizationServerMetadata::fetch()
-//!     .http_client(client)
+//!     .http_client(&client)
 //!     .issuer("https://my-issuer")
 //!     .call()
 //!     .await?;
 //!
-//! let grant: AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar> =
-//!     AuthorizationCodeGrant::builder_from_metadata(&metadata)
-//!         .expect("server does not support authorization code grant")
-//!         .client_id("client_id")
-//!         .client_auth(NoAuth)
-//!         .redirect_uri("https://my-app/callback")
-//!         .dpop(NoDPoP)
-//!         .jar(NoJar)
-//!         .build()
-//!         .await?;
+//! let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
+//!     .expect("server does not support authorization code grant")
+//!     .client_id("client_id")
+//!     .http_client(client)
+//!     .client_auth(NoAuth)
+//!     .redirect_uri("https://my-app/callback")
+//!     .dpop(NoDPoP)
+//!     .jar(NoJar)
+//!     .build()
+//!     .await?;
 //! # Ok(())
 //! # }
 //! ```
@@ -73,12 +74,15 @@
 //!     core::{client_auth::NoAuth, dpop::NoDPoP},
 //!     grant::authorization_code::{AuthorizationCodeGrant, NoJar},
 //! };
+//! # use huskarl_reqwest::mtls::NoMtls;
 //! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
+//! # let client = huskarl_reqwest::ReqwestClient::builder().mtls(NoMtls).build().await?;
 //!
-//! let grant: AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar> = AuthorizationCodeGrant::builder()
+//! let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder()
 //!     .authorization_endpoint("https://my-server/authorize")?
 //!     .token_endpoint("https://my-server/token")?
 //!     .client_id("client_id")
+//!     .http_client(client)
 //!     .client_auth(NoAuth)
 //!     .redirect_uri("https://my-app/callback")
 //!     .dpop(NoDPoP)
@@ -96,18 +100,12 @@
 //! `Serialize`/`Deserialize` and can be stored in a session or database.
 //!
 //! ```rust
-//! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP},
-//!     grant::authorization_code::{AuthorizationCodeGrant, NoJar, StartInput},
-//! };
+//! use huskarl::grant::authorization_code::{AuthorizationCodeGrant, StartInput};
 //! # async fn start_flow(
-//! #     client: &huskarl_reqwest::ReqwestClient,
-//! #     grant: &AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar>,
+//! #     grant: &AuthorizationCodeGrant,
 //! # ) -> Result<(), Box<dyn std::error::Error>> {
 //!
-//! let start_output = grant
-//!     .start(client, StartInput::scopes(["read", "write"]))
-//!     .await?;
+//! let start_output = grant.start(StartInput::scopes(["read", "write"])).await?;
 //!
 //! // Redirect the user to this URL to authorize.
 //! let authorization_url = start_output.authorization_url;
@@ -125,13 +123,11 @@
 //!
 //! ```rust
 //! use huskarl::{
-//!     core::{client_auth::NoAuth, dpop::NoDPoP},
-//!     grant::authorization_code::{AuthorizationCodeGrant, CompleteInput, NoJar, PendingState},
+//!     grant::authorization_code::{AuthorizationCodeGrant, CompleteInput, PendingState},
 //!     token::AccessToken,
 //! };
 //! # async fn complete_flow(
-//! #     client: &huskarl_reqwest::ReqwestClient,
-//! #     grant: &AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar>,
+//! #     grant: &AuthorizationCodeGrant,
 //! #     pending_state: &PendingState,
 //! #     code_from_callback: String,
 //! #     state_from_callback: String,
@@ -143,9 +139,7 @@
 //!     .state(state_from_callback)
 //!     .build();
 //!
-//! let response = grant
-//!     .complete(client, pending_state, complete_input)
-//!     .await?;
+//! let response = grant.complete(pending_state, complete_input).await?;
 //! let token: &AccessToken = response.access_token();
 //! # Ok(())
 //! # }
@@ -177,7 +171,7 @@ mod types;
 
 pub mod pkce;
 
-pub use error::{CompleteError, StartError};
+pub use error::{BuildError, CompleteError};
 pub use grant::{
     AuthorizationCodeGrant, AuthorizationCodeGrantBuilder, AuthorizationCodeGrantParameters,
 };

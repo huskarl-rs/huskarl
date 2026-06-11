@@ -56,7 +56,7 @@ implemented by external crates. Examples include CIBA, JWT authorization, or pro
 # use huskarl::core::client_auth::ClientSecret;
 # use huskarl::core::dpop::NoDPoP;
 #
-# async fn example(http_client: impl HttpClient) {
+# async fn example(http_client: impl HttpClient + 'static) {
 # let issuer = "https://issuer";
 # let client_id = "client_id";
 # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding).unwrap();
@@ -70,13 +70,13 @@ let metadata = AuthorizationServerMetadata::fetch()
 
 let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
     .client_id(client_id)
+    .http_client(http_client)
     .client_auth(ClientSecret::new(client_secret))
     .dpop(NoDPoP)
     .build();
 
 let token_response = grant
     .exchange(
-        &http_client,
         ClientCredentialsGrantParameters::builder()
             .scopes(vec!["test"])
             .build(),

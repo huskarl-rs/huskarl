@@ -6,18 +6,13 @@
 struct Url(String);
 
 trait IntoUrl {
-    type Error;
-    fn into_url(self) -> Result<Url, Self::Error>;
+    fn into_url(self) -> Result<Url, huskarl_core::Error>;
 }
 
-#[derive(Debug)]
-struct ParseError;
-
 impl IntoUrl for &str {
-    type Error = ParseError;
-    fn into_url(self) -> Result<Url, Self::Error> {
+    fn into_url(self) -> Result<Url, huskarl_core::Error> {
         if self.is_empty() {
-            Err(ParseError)
+            Err(huskarl_core::ErrorKind::Config.into())
         } else {
             Ok(Url(self.to_owned()))
         }

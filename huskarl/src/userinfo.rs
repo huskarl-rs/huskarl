@@ -5,14 +5,14 @@ use std::{marker::PhantomData, sync::Arc};
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header::InvalidHeaderValue};
 use serde::Deserialize;
-use snafu::prelude::*;
+use snafu::Snafu;
 
 use crate::{
     core::{
-        BoxedError, EndpointUrl,
+        EndpointUrl, Error, ErrorKind,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-        dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
-        http::{HttpClient, HttpResponse},
+        dpop::ResourceServerDPoP,
+        http::{HttpClient, Idempotency},
         jwt::{
             JwsParseError, parse_compact_jws,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
@@ -23,16 +23,22 @@ use crate::{
     token::AccessToken,
 };
 
+/// Wraps a `UserInfo` failure with its error kind.
+fn userinfo_error(source: UserInfoError) -> Error {
+    let kind = match &source {
+        UserInfoError::JwtResponseNotSupported => ErrorKind::Config,
+        UserInfoError::DPoPHeader { .. } => ErrorKind::Dpop,
+        _ => ErrorKind::Protocol,
+    };
+    Error::new(kind, source)
+}
+
 /// `OpenID` Connect `UserInfo` client.
 ///
 /// The `Extra` type parameter controls the claims type returned by [`get`](Self::get).
 /// It defaults to `()` (standard claims only). Specify a custom type to capture
 /// additional provider-specific claims.
-#[derive(Debug)]
-pub struct UserInfoClient<
-    D: ResourceServerDPoP,
-    Extra: Clone + for<'de> Deserialize<'de> + 'static = (),
-> {
+pub struct UserInfoClient<Extra: Clone + for<'de> Deserialize<'de> + 'static = ()> {
     /// The URL of the `UserInfo` endpoint.
     userinfo_endpoint: EndpointUrl,
 
@@ -40,12 +46,23 @@ pub struct UserInfoClient<
     mtls_userinfo_endpoint: Option<EndpointUrl>,
 
     /// The `DPoP` proof implementation for resource server requests.
-    dpop: D,
+    dpop: Arc<dyn ResourceServerDPoP>,
 
     /// Optional JWT validator for `application/jwt` `UserInfo` responses (OIDC Core §5.3.2).
     jwt_validator: Option<JwtValidator>,
 
     _phantom: PhantomData<Extra>,
+}
+
+impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> core::fmt::Debug
+    for UserInfoClient<Extra>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UserInfoClient")
+            .field("userinfo_endpoint", &self.userinfo_endpoint)
+            .field("mtls_userinfo_endpoint", &self.mtls_userinfo_endpoint)
+            .finish_non_exhaustive()
+    }
 }
 
 #[huskarl_macros::from_metadata(
@@ -54,9 +71,7 @@ pub struct UserInfoClient<
 )]
 #[huskarl_macros::try_builder]
 #[bon::bon]
-impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
-    UserInfoClient<D, Extra>
-{
+impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
     /// Creates a new [`UserInfoClient`].
     ///
     /// This is the workhorse constructor; callers use [`Self::builder()`]
@@ -65,9 +80,10 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
     ///
     /// # Errors
     ///
-    /// Returns an error if JWT-response validation is misconfigured (a
-    /// `jws_verifier_factory` is supplied without `issuer` or `client_id`),
-    /// or if building the JWS verifier from `jwks_uri` fails.
+    /// Returns an error of kind [`ErrorKind::Config`] if JWT-response
+    /// validation is misconfigured (a `jws_verifier_factory` is supplied
+    /// without `issuer` or `client_id`), or propagates the failure if
+    /// building the JWS verifier from `jwks_uri` fails.
     #[builder(
         start_fn(name = "builder_internal", vis = ""),
         state_mod(name = "builder"),
@@ -85,7 +101,8 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
         /// The `DPoP` proof implementation for resource server requests.
         ///
         /// Use [`NoDPoP`](crate::core::dpop::NoDPoP) for plain bearer token flows.
-        dpop: D,
+        #[builder(with = |dpop: impl ResourceServerDPoP + 'static| Arc::new(dpop) as Arc<dyn ResourceServerDPoP>)]
+        dpop: Arc<dyn ResourceServerDPoP>,
         /// JWKS URI for `application/jwt` `UserInfo` response validation.
         ///
         /// Must be provided together with `jws_verifier_factory` to enable JWT response
@@ -121,7 +138,7 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
         /// `jws_verifier_factory` are provided).
         #[builder(into)]
         client_id: Option<String>,
-    ) -> Result<Self, BoxedError> {
+    ) -> Result<Self, Error> {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
@@ -129,9 +146,11 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
             && let Some(factory) = jws_verifier_factory
             && jwks_uri.is_some()
         {
-            let issuer = issuer.ok_or_else(|| BoxedError::from_err(MissingIssuerSnafu.build()))?;
-            let client_id =
-                client_id.ok_or_else(|| BoxedError::from_err(MissingClientIdSnafu.build()))?;
+            let issuer = issuer
+                .ok_or_else(|| Error::new(ErrorKind::Config, UserInfoBuildError::MissingIssuer))?;
+            let client_id = client_id.ok_or_else(|| {
+                Error::new(ErrorKind::Config, UserInfoBuildError::MissingClientId)
+            })?;
 
             let verifier = factory
                 .build(jwks_uri.as_ref(), jws_verifier_platform)
@@ -164,11 +183,11 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
 /// macro-generated `_internal` workhorses living on the fully-generic impl;
 /// `Extra` is fixed to `()` here so callers don't need to turbofish. Users who
 /// want a typed claim set chain `with_extra::<E>()` on the returned builder.
-impl<D: ResourceServerDPoP + 'static> UserInfoClient<D, ()> {
+impl UserInfoClient<()> {
     /// Returns a builder for a `UserInfoClient`, with `Extra` defaulting to
     /// `()` (call [`with_extra`][UserInfoClientBuilder::with_extra] on the
     /// returned builder to switch to a typed claim set).
-    pub fn builder() -> UserInfoClientBuilder<D, ()> {
+    pub fn builder() -> UserInfoClientBuilder<()> {
         Self::builder_internal()
     }
 
@@ -178,7 +197,7 @@ impl<D: ResourceServerDPoP + 'static> UserInfoClient<D, ()> {
     #[must_use]
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> Option<UserInfoClientBuilder<D, (), UserInfoClientBuilderFromMetadataInternalState>> {
+    ) -> Option<UserInfoClientBuilder<(), UserInfoClientBuilderFromMetadataInternalState>> {
         Self::builder_from_metadata_internal(metadata)
     }
 
@@ -188,11 +207,10 @@ impl<D: ResourceServerDPoP + 'static> UserInfoClient<D, ()> {
     /// server form — the same pattern used by [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache).
     ///
     /// Returns `None` if the metadata does not include a `userinfo_endpoint`.
-    pub fn from_grant<G>(grant: &G, metadata: &AuthorizationServerMetadata) -> Option<Self>
-    where
-        G: OAuth2ExchangeGrant,
-        G::DPoP: AuthorizationServerDPoP<ResourceServerDPoP = D>,
-    {
+    pub fn from_grant(
+        grant: &impl OAuth2ExchangeGrant,
+        metadata: &AuthorizationServerMetadata,
+    ) -> Option<Self> {
         let userinfo_endpoint = metadata.userinfo_endpoint.clone()?;
 
         Some(Self {
@@ -212,43 +230,37 @@ impl<D: ResourceServerDPoP + 'static> UserInfoClient<D, ()> {
 /// before any setter is called. Works because bon's experimental
 /// `generics(setters(...))` on `fn new` generated `with_extra_internal` to
 /// perform the type-state move.
-impl<
-    D: ResourceServerDPoP + 'static,
-    Extra: Clone + for<'de> Deserialize<'de> + 'static,
-    S: builder::State,
-> UserInfoClientBuilder<D, Extra, S>
+impl<Extra: Clone + for<'de> Deserialize<'de> + 'static, S: builder::State>
+    UserInfoClientBuilder<Extra, S>
 {
     /// Sets the typed claim extension for the `UserInfo` response.
     pub fn with_extra<E: Clone + for<'de> Deserialize<'de> + 'static>(
         self,
-    ) -> UserInfoClientBuilder<D, E, S> {
+    ) -> UserInfoClientBuilder<E, S> {
         self.with_extra_internal()
     }
 }
 
-impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
-    UserInfoClient<D, Extra>
-{
+impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
     /// Call the `UserInfo` endpoint with the given access token.
     ///
     /// The `expected_sub` parameter is the `sub` claim from the ID Token. Per
     /// OIDC Core §5.3.2, the `sub` in the `UserInfo` response MUST exactly match
-    /// the `sub` in the ID Token; if they differ, this method returns
-    /// [`UserInfoError::SubMismatch`].
+    /// the `sub` in the ID Token; if they differ, this method returns an error
+    /// carrying [`UserInfoError::SubMismatch`].
     ///
     /// # Errors
     ///
-    /// Returns [`UserInfoError::SubMismatch`] if the response `sub` does not match
-    /// `expected_sub`, [`UserInfoError::BadAuthorizationHeader`] if the access token
-    /// cannot be represented as a valid HTTP header value, [`UserInfoError::DPoP`] if
-    /// the `DPoP` proof cannot be generated, or [`UserInfoError::Request`] /
-    /// [`UserInfoError::BadStatus`] if the HTTP request fails.
-    pub async fn get<C: HttpClient>(
+    /// Returns an error of kind [`ErrorKind::Protocol`] with a
+    /// [`UserInfoError`] source for response-validation failures (status,
+    /// content type, `sub` mismatch, deserialization, JWT validation);
+    /// transport and `DPoP` proof failures propagate with their own kinds.
+    pub async fn get(
         &self,
-        http_client: &C,
+        http_client: &impl HttpClient,
         access_token: &AccessToken,
         expected_sub: &str,
-    ) -> Result<UserInfo<Extra>, UserInfoError<C::Error, C::ResponseError, D::Error>> {
+    ) -> Result<UserInfo<Extra>, Error> {
         let endpoint = if http_client.uses_mtls() {
             self.mtls_userinfo_endpoint
                 .as_ref()
@@ -259,7 +271,7 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
 
         let header_value = access_token
             .expose_header_value()
-            .context(BadAuthorizationHeaderSnafu)?;
+            .map_err(|source| userinfo_error(UserInfoError::BadAuthorizationHeader { source }))?;
 
         let dpop_jkt = access_token.dpop_jkt();
         let mut retried = false;
@@ -274,11 +286,12 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
                     .dpop
                     .proof(&Method::GET, endpoint.as_uri(), access_token.token(), jkt)
                     .await
-                    .context(DPoPSnafu)?
+                    .map_err(|e| e.with_context("generating DPoP proof for UserInfo request"))?
             {
                 headers.insert(
                     "DPoP",
-                    HeaderValue::from_str(proof.expose_secret()).context(DPoPHeaderSnafu)?,
+                    HeaderValue::from_str(proof.expose_secret())
+                        .map_err(|source| userinfo_error(UserInfoError::DPoPHeader { source }))?,
                 );
             }
 
@@ -287,11 +300,14 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
             parts.uri = endpoint.as_uri().clone();
             let request = http::Request::from_parts(parts, Bytes::new());
 
-            let response = http_client.execute(request).await.context(RequestSnafu)?;
+            let response = http_client
+                .execute(request, Idempotency::Idempotent)
+                .await
+                .map_err(|e| e.with_context("UserInfo request failed"))?;
 
-            let status = response.status();
-            let response_headers = response.headers();
-            let body = response.body().await.context(ResponseBodySnafu)?;
+            let status = response.status;
+            let response_headers = response.headers;
+            let body = response.body;
 
             // Retry once if the server challenges with a DPoP nonce (RFC 9449 §7.2).
             if !retried
@@ -305,81 +321,72 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
                 continue;
             }
 
-            ensure!(
-                status.is_success(),
-                BadStatusSnafu {
+            if !status.is_success() {
+                return Err(userinfo_error(UserInfoError::BadStatus {
                     status,
                     headers: response_headers,
                     body: body.to_vec(),
-                }
-            );
+                }));
+            }
 
             // OIDC Core §5.3.2: content-type MUST be "application/json" for plain
             // JSON responses, or "application/jwt" for signed/encrypted responses.
             let ct_header = response_headers
                 .get(http::header::CONTENT_TYPE)
-                .context(MissingContentTypeSnafu)?;
-            let ct_str = ct_header
-                .to_str()
-                .ok()
-                .context(UnexpectedContentTypeSnafu {
-                    content_type: String::from_utf8_lossy(ct_header.as_bytes()),
-                })?;
+                .ok_or_else(|| userinfo_error(UserInfoError::MissingContentType))?;
+            let ct_str = ct_header.to_str().ok().ok_or_else(|| {
+                userinfo_error(UserInfoError::UnexpectedContentType {
+                    content_type: String::from_utf8_lossy(ct_header.as_bytes()).into_owned(),
+                })
+            })?;
 
             let media_type = ct_str.split(';').next().unwrap_or(ct_str).trim();
             let is_jwt_response = media_type.eq_ignore_ascii_case("application/jwt");
 
-            if !is_jwt_response {
-                ensure!(
-                    media_type.eq_ignore_ascii_case("application/json"),
-                    UnexpectedContentTypeSnafu {
-                        content_type: media_type,
-                    }
-                );
+            if !is_jwt_response && !media_type.eq_ignore_ascii_case("application/json") {
+                return Err(userinfo_error(UserInfoError::UnexpectedContentType {
+                    content_type: media_type.to_owned(),
+                }));
             }
 
             let user_info: UserInfo<Extra> = if is_jwt_response {
-                self.decode_jwt_response::<C>(&body).await?
+                self.decode_jwt_response(&body).await?
             } else {
-                serde_json::from_slice(&body).context(DeserializeSnafu)?
+                serde_json::from_slice(&body)
+                    .map_err(|source| userinfo_error(UserInfoError::Deserialize { source }))?
             };
 
-            ensure!(
-                user_info.sub == expected_sub,
-                SubMismatchSnafu {
-                    expected: expected_sub,
-                    actual: &user_info.sub,
-                }
-            );
+            if user_info.sub != expected_sub {
+                return Err(userinfo_error(UserInfoError::SubMismatch {
+                    expected: expected_sub.to_owned(),
+                    actual: user_info.sub.clone(),
+                }));
+            }
 
             return Ok(user_info);
         }
     }
 
     /// Decode and validate a JWT-encoded `UserInfo` response body.
-    async fn decode_jwt_response<C: HttpClient>(
-        &self,
-        body: &[u8],
-    ) -> Result<UserInfo<Extra>, UserInfoError<C::Error, C::ResponseError, D::Error>> {
+    async fn decode_jwt_response(&self, body: &[u8]) -> Result<UserInfo<Extra>, Error> {
         let jwt_validator = self
             .jwt_validator
             .as_ref()
-            .context(JwtResponseNotSupportedSnafu)?;
+            .ok_or_else(|| userinfo_error(UserInfoError::JwtResponseNotSupported))?;
 
         let jwt_str = std::str::from_utf8(body)
-            .ok()
-            .context(MalformedJwtResponseBodySnafu)?;
+            .map_err(|_| userinfo_error(UserInfoError::MalformedJwtResponseBody))?;
 
         // Parse and validate the JWT (signature, iss, aud, exp) with
         // claims as a raw Value. `JwtClaims` splits standard JWT claims
         // (sub, iss, aud, …) from the rest via `#[serde(flatten)]`, so
         // `validated.claims` is everything *except* the registered set.
-        let parsed =
-            parse_compact_jws::<(), serde_json::Value>(jwt_str.trim()).context(JwtParseSnafu)?;
+        let parsed = parse_compact_jws::<(), serde_json::Value>(jwt_str.trim())
+            .map_err(|source| userinfo_error(UserInfoError::JwtParse { source }))?;
         let validated = jwt_validator
             .validate_parsed_jws(parsed)
             .await
-            .context(JwtValidationSnafu)?;
+            .map_err(|source| userinfo_error(UserInfoError::JwtValidation { source }))?;
 
         // Reconstruct the full claim set: re-insert `sub` (which
         // `JwtClaims` consumed) so `UserInfo` can deserialize it.
@@ -391,7 +398,8 @@ impl<D: ResourceServerDPoP, Extra: Clone + for<'de> Deserialize<'de> + 'static>
             claims_map.insert("sub".to_owned(), serde_json::Value::String(sub.clone()));
         }
 
-        serde_json::from_value(serde_json::Value::Object(claims_map)).context(DeserializeSnafu)
+        serde_json::from_value(serde_json::Value::Object(claims_map))
+            .map_err(|source| userinfo_error(UserInfoError::Deserialize { source }))
     }
 }
 
@@ -465,7 +473,10 @@ pub struct Address {
     pub country: Option<String>,
 }
 
-/// An error that occurs when building a [`UserInfoClient`].
+/// Source vocabulary for [`UserInfoClient`] build failures.
+///
+/// Carried as the source of [`ErrorKind::Config`] errors returned by the builder —
+/// match on the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
 pub enum UserInfoBuildError {
     /// `issuer` is required when JWT validation is configured.
@@ -476,48 +487,23 @@ pub enum UserInfoBuildError {
     MissingClientId,
 }
 
-impl crate::core::Error for UserInfoBuildError {
-    fn is_retryable(&self) -> bool {
-        false
-    }
-}
-
-/// Errors that can occur when calling the `UserInfo` endpoint.
+/// Source vocabulary for `UserInfo` request failures.
+///
+/// Carried as the source of errors returned by [`UserInfoClient::get`] —
+/// match on the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
-pub enum UserInfoError<
-    HttpReqErr: crate::core::Error,
-    HttpRespErr: crate::core::Error,
-    DPoPErr: crate::core::Error,
-> {
+pub enum UserInfoError {
     /// Could not build the Authorization header from the access token.
     #[snafu(display("Failed to build Authorization header for UserInfo request"))]
     BadAuthorizationHeader {
         /// The underlying error.
         source: InvalidHeaderValue,
     },
-    /// `DPoP` proof generation failed.
-    #[snafu(display("Failed to generate DPoP proof for UserInfo request"))]
-    DPoP {
-        /// The underlying error.
-        source: DPoPErr,
-    },
     /// `DPoP` proof could not be set as an HTTP header.
     #[snafu(display("Failed to set DPoP proof as HTTP header"))]
     DPoPHeader {
         /// The underlying error.
         source: InvalidHeaderValue,
-    },
-    /// The HTTP request to the `UserInfo` endpoint failed.
-    #[snafu(display("UserInfo request failed"))]
-    Request {
-        /// The underlying error.
-        source: HttpReqErr,
-    },
-    /// Reading the HTTP response body failed.
-    #[snafu(display("Failed to read UserInfo response body"))]
-    ResponseBody {
-        /// The underlying error.
-        source: HttpRespErr,
     },
     /// The `UserInfo` endpoint returned `application/jwt` but no JWT validator was configured.
     ///
@@ -583,77 +569,31 @@ pub enum UserInfoError<
     },
 }
 
-impl<HttpReqErr: crate::core::Error, HttpRespErr: crate::core::Error, DPoPErr: crate::core::Error>
-    crate::core::Error for UserInfoError<HttpReqErr, HttpRespErr, DPoPErr>
-{
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::BadAuthorizationHeader { .. }
-            | Self::DPoP { .. }
-            | Self::DPoPHeader { .. }
-            | Self::JwtResponseNotSupported
-            | Self::JwtParse { .. }
-            | Self::JwtValidation { .. }
-            | Self::MalformedJwtResponseBody
-            | Self::MissingContentType
-            | Self::UnexpectedContentType { .. }
-            | Self::Deserialize { .. }
-            | Self::SubMismatch { .. }
-            | Self::BadStatus { .. } => false,
-            Self::Request { source } => source.is_retryable(),
-            Self::ResponseBody { source } => source.is_retryable(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use super::*;
     use crate::{
         core::{
             IntoEndpointUrl,
             crypto::{
                 KeyMatchStrength,
-                verifier::{BoxedJwsVerifier, JwsVerifier, KeyMatch, VerifyError},
+                verifier::{JwsVerifier, KeyMatch, VerifyError},
             },
             dpop::NoDPoP,
+            http::HttpResponse,
+            platform::MaybeSendBoxFuture,
             secrets::SecretString,
         },
         token::BearerAccessToken,
     };
 
-    /// Mock HTTP response with configurable status, headers, and body.
-    struct MockResponse {
-        status: StatusCode,
-        headers: HeaderMap,
-        body: Bytes,
-    }
-
-    impl HttpResponse for MockResponse {
-        type Error = Infallible;
-
-        fn status(&self) -> StatusCode {
-            self.status
-        }
-
-        fn headers(&self) -> HeaderMap {
-            self.headers.clone()
-        }
-
-        async fn body(self) -> Result<Bytes, Infallible> {
-            Ok(self.body)
-        }
-    }
-
     /// Mock HTTP client that returns a preconfigured response.
     struct MockHttpClient {
-        response: std::sync::Mutex<Option<MockResponse>>,
+        response: std::sync::Mutex<Option<HttpResponse>>,
     }
 
     impl MockHttpClient {
-        fn new(response: MockResponse) -> Self {
+        fn new(response: HttpResponse) -> Self {
             Self {
                 response: std::sync::Mutex::new(Some(response)),
             }
@@ -661,21 +601,27 @@ mod tests {
     }
 
     impl HttpClient for MockHttpClient {
-        type Response = MockResponse;
-        type Error = Infallible;
-        type ResponseError = Infallible;
-
-        async fn execute(
+        fn execute(
             &self,
             _request: http::Request<Bytes>,
-        ) -> Result<MockResponse, Infallible> {
-            Ok(self
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            let response = self
                 .response
                 .lock()
                 .unwrap()
                 .take()
-                .expect("MockHttpClient can only be called once"))
+                .expect("MockHttpClient can only be called once");
+            Box::pin(async move { Ok(response) })
         }
+    }
+
+    /// Extracts the [`UserInfoError`] source from a wrapped error.
+    fn userinfo_source(err: &Error) -> &UserInfoError {
+        std::error::Error::source(err)
+            .expect("UserInfo errors carry a source")
+            .downcast_ref::<UserInfoError>()
+            .expect("source is a UserInfoError")
     }
 
     fn bearer_token(token: &str) -> AccessToken {
@@ -695,13 +641,13 @@ mod tests {
         h
     }
 
-    fn client() -> UserInfoClient<NoDPoP> {
+    fn client() -> UserInfoClient {
         UserInfoClient {
             userinfo_endpoint: "https://op.example.com/userinfo"
                 .into_endpoint_url()
                 .unwrap(),
             mtls_userinfo_endpoint: None,
-            dpop: NoDPoP,
+            dpop: Arc::new(NoDPoP),
             jwt_validator: None,
             _phantom: PhantomData,
         }
@@ -719,7 +665,7 @@ mod tests {
             "picture": "http://example.com/janedoe/me.jpg"
         });
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -746,7 +692,7 @@ mod tests {
     async fn sub_mismatch_returns_error() {
         let body = serde_json::json!({ "sub": "wrong-subject" });
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -757,16 +703,19 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::SubMismatch { .. }));
+        assert_eq!(err.kind(), ErrorKind::Protocol);
+        let source = userinfo_source(&err);
+        assert!(matches!(source, UserInfoError::SubMismatch { .. }));
         assert!(
-            err.to_string()
+            source
+                .to_string()
                 .contains("expected expected-subject, got wrong-subject")
         );
     }
 
     #[tokio::test]
     async fn non_success_status_returns_bad_status() {
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::FORBIDDEN,
             headers: HeaderMap::new(),
             body: Bytes::from_static(b"access denied"),
@@ -778,7 +727,7 @@ mod tests {
             .unwrap_err();
 
         assert!(
-            matches!(&err, UserInfoError::BadStatus { status, body, .. }
+            matches!(userinfo_source(&err), UserInfoError::BadStatus { status, body, .. }
                 if *status == StatusCode::FORBIDDEN && body == b"access denied"),
             "expected BadStatus with FORBIDDEN, got {err:?}"
         );
@@ -786,7 +735,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_json_returns_deserialize_error() {
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from_static(b"not json"),
@@ -797,14 +746,17 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::Deserialize { .. }));
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::Deserialize { .. }
+        ));
     }
 
     #[tokio::test]
     async fn missing_sub_returns_deserialize_error() {
         let body = serde_json::json!({ "name": "Jane Doe" });
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -815,7 +767,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::Deserialize { .. }));
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::Deserialize { .. }
+        ));
     }
 
     #[tokio::test]
@@ -826,7 +781,7 @@ mod tests {
             "org_id": 42
         });
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -856,18 +811,18 @@ mod tests {
             "role": "admin"
         });
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
         });
 
-        let client: UserInfoClient<NoDPoP, MyClaims> = UserInfoClient {
+        let client: UserInfoClient<MyClaims> = UserInfoClient {
             userinfo_endpoint: "https://op.example.com/userinfo"
                 .into_endpoint_url()
                 .unwrap(),
             mtls_userinfo_endpoint: None,
-            dpop: NoDPoP,
+            dpop: Arc::new(NoDPoP),
             jwt_validator: None,
             _phantom: PhantomData,
         };
@@ -896,7 +851,7 @@ mod tests {
             }
         });
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -922,7 +877,7 @@ mod tests {
             HeaderValue::from_static("application/jwt"),
         );
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers,
             body: Bytes::from_static(b"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.sig"),
@@ -933,8 +888,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::JwtResponseNotSupported));
-        assert!(err.to_string().contains("application/jwt"));
+        assert_eq!(err.kind(), ErrorKind::Config);
+        let source = userinfo_source(&err);
+        assert!(matches!(source, UserInfoError::JwtResponseNotSupported));
+        assert!(source.to_string().contains("application/jwt"));
     }
 
     #[tokio::test]
@@ -945,7 +902,7 @@ mod tests {
             HeaderValue::from_static("application/jwt; charset=utf-8"),
         );
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers,
             body: Bytes::from_static(b"eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.sig"),
@@ -956,7 +913,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::JwtResponseNotSupported));
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::JwtResponseNotSupported
+        ));
     }
 
     #[tokio::test]
@@ -967,7 +927,7 @@ mod tests {
             HeaderValue::from_static("text/html"),
         );
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers,
             body: Bytes::from_static(b"<html>not json</html>"),
@@ -978,8 +938,12 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::UnexpectedContentType { .. }));
-        assert!(err.to_string().contains("text/html"));
+        let source = userinfo_source(&err);
+        assert!(matches!(
+            source,
+            UserInfoError::UnexpectedContentType { .. }
+        ));
+        assert!(source.to_string().contains("text/html"));
     }
 
     #[tokio::test]
@@ -992,7 +956,7 @@ mod tests {
             HeaderValue::from_static("application/json; charset=utf-8"),
         );
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers,
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -1010,7 +974,7 @@ mod tests {
     async fn all_optional_claims_absent() {
         let body = serde_json::json!({ "sub": "minimal" });
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: json_headers(),
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
@@ -1030,7 +994,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_content_type_returns_error() {
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers: HeaderMap::new(),
             body: Bytes::from_static(b"{\"sub\":\"user1\"}"),
@@ -1041,7 +1005,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::MissingContentType));
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::MissingContentType
+        ));
     }
 
     // --- JWT response tests ---
@@ -1051,19 +1018,17 @@ mod tests {
     struct AcceptAllVerifier;
 
     impl JwsVerifier for AcceptAllVerifier {
-        type Error = crate::core::BoxedError;
-
         fn key_match(&self, _key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
             Some(KeyMatchStrength::ByAlgorithm)
         }
 
-        async fn verify(
-            &self,
-            _input: &[u8],
-            _signature: &[u8],
-            _key: &KeyMatch<'_>,
-        ) -> Result<(), VerifyError<Self::Error>> {
-            Ok(())
+        fn verify<'a>(
+            &'a self,
+            _input: &'a [u8],
+            _signature: &'a [u8],
+            _key_match: &'a KeyMatch<'a>,
+        ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -1078,9 +1043,9 @@ mod tests {
         format!("{h}.{c}.{s}")
     }
 
-    fn jwt_client() -> UserInfoClient<NoDPoP> {
+    fn jwt_client() -> UserInfoClient {
         let validator = JwtValidator::builder()
-            .verifier(BoxedJwsVerifier::new(AcceptAllVerifier))
+            .verifier(AcceptAllVerifier)
             .iss(ClaimCheck::required_value("https://op.example.com"))
             .aud(ClaimCheck::required_value("my-client"))
             .build();
@@ -1089,19 +1054,19 @@ mod tests {
                 .into_endpoint_url()
                 .unwrap(),
             mtls_userinfo_endpoint: None,
-            dpop: NoDPoP,
+            dpop: Arc::new(NoDPoP),
             jwt_validator: Some(validator),
             _phantom: PhantomData,
         }
     }
 
-    fn jwt_response(jwt: &str) -> MockResponse {
+    fn jwt_response(jwt: &str) -> HttpResponse {
         let mut headers = HeaderMap::new();
         headers.insert(
             http::header::CONTENT_TYPE,
             HeaderValue::from_static("application/jwt"),
         );
-        MockResponse {
+        HttpResponse {
             status: StatusCode::OK,
             headers,
             body: Bytes::from(jwt.to_owned()),
@@ -1147,7 +1112,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::JwtResponseNotSupported));
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::JwtResponseNotSupported
+        ));
     }
 
     #[tokio::test]
@@ -1158,7 +1126,7 @@ mod tests {
             HeaderValue::from_static("application/jwt"),
         );
 
-        let http = MockHttpClient::new(MockResponse {
+        let http = MockHttpClient::new(HttpResponse {
             status: StatusCode::OK,
             headers,
             body: Bytes::from_static(b"\xff\xfe"),
@@ -1169,7 +1137,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::MalformedJwtResponseBody));
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::MalformedJwtResponseBody
+        ));
     }
 
     #[tokio::test]
@@ -1189,6 +1160,9 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(err, UserInfoError::SubMismatch { .. }));
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::SubMismatch { .. }
+        ));
     }
 }

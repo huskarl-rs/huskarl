@@ -49,6 +49,7 @@ async fn introspection_validates_active_token() {
     // Obtain an access token via client credentials grant.
     let grant = ClientCredentialsGrant::builder_from_metadata(&server_metadata)
         .client_id(&client.client_id)
+        .http_client(http.clone())
         .client_auth(ClientSecret::new(PlainSecret::new(&client.secret)))
         .dpop(NoDPoP)
         .build();
@@ -67,7 +68,7 @@ async fn introspection_validates_active_token() {
     let request_uri = "https://test".parse().expect("parse uri");
 
     let headers = authorizer
-        .get_headers(&http, &request_method, &request_uri)
+        .get_headers(&request_method, &request_uri)
         .await
         .expect("get headers");
 

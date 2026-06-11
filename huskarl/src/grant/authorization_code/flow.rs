@@ -1,6 +1,5 @@
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use snafu::ResultExt;
 use subtle::ConstantTimeEq;
 
 #[cfg(all(
@@ -13,21 +12,17 @@ use subtle::ConstantTimeEq;
 use crate::grant::authorization_code::{LoopbackError, loopback};
 use crate::{
     core::{
-        EndpointUrl, client_auth::ClientAuthentication, dpop::AuthorizationServerDPoP,
-        http::HttpClient, jwt::validator::ValidatedJwt, platform::MaybeSendSync,
+        EndpointUrl, Error, ErrorKind, jwt::validator::ValidatedJwt, platform::MaybeSendSync,
         secrets::SecretString,
     },
     grant::{
         authorization_code::{
             AuthorizationCodeGrantParameters,
             error::{
-                ClientAuthSnafu, CompleteError, EncodeUrlEncodedSnafu, GrantSnafu,
-                IdTokenIssuerNotConfiguredSnafu, IdTokenValidationSnafu,
-                IdTokenVerifierNotConfiguredSnafu, IssuerMismatchSnafu, JarSnafu,
-                MissingIssuerSnafu, ParRequestSnafu, StartError, StateMismatchSnafu,
+                IdTokenIssuerNotConfiguredSnafu, IdTokenVerifierNotConfiguredSnafu,
+                IssuerMismatchSnafu, MissingIssuerSnafu, StateMismatchSnafu,
             },
             grant::AuthorizationCodeGrant,
-            jar::Jar,
             par,
             pkce::Pkce,
             types::{
@@ -35,17 +30,18 @@ use crate::{
                 PendingState, StartInput, StartOutput,
             },
         },
-        core::{ExchangeError, OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry},
+        core::{OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry},
     },
     token::id_token::{IdTokenClaims, IdTokenValidator},
 };
 
-impl<
-    Auth: ClientAuthentication + 'static,
-    D: AuthorizationServerDPoP + Clone + 'static,
-    J: Jar + 'static,
-    IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static,
-> AuthorizationCodeGrant<Auth, D, J, IdClaims>
+/// Wraps a completion-check failure as a protocol error.
+fn complete_error(source: super::error::CompleteError) -> Error {
+    Error::new(ErrorKind::Protocol, source)
+}
+
+impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>
+    AuthorizationCodeGrant<IdClaims>
 {
     /// Completes the authorization code flow on the provided listener, possibly returning a token response.
     ///
@@ -67,14 +63,13 @@ impl<
             all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
         )
     ))]
-    pub async fn complete_on_loopback<C: HttpClient>(
+    pub async fn complete_on_loopback(
         &self,
-        http_client: &C,
         listener: &tokio::net::TcpListener,
         pending_state: &PendingState,
         renderer: Option<loopback::CallbackRenderer>,
-    ) -> Result<TokenResponse, LoopbackError<CompleteError<ExchangeError<C, Self>>>> {
-        self.complete_on_loopback_oidc(http_client, listener, pending_state, renderer)
+    ) -> Result<TokenResponse, LoopbackError> {
+        self.complete_on_loopback_oidc(listener, pending_state, renderer)
             .await
             .map(|v| v.0)
     }
@@ -96,24 +91,17 @@ impl<
             all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
         )
     ))]
-    pub async fn complete_on_loopback_oidc<C: HttpClient>(
+    pub async fn complete_on_loopback_oidc(
         &self,
-        http_client: &C,
         listener: &tokio::net::TcpListener,
         pending_state: &PendingState,
         renderer: Option<loopback::CallbackRenderer>,
-    ) -> Result<
-        (TokenResponse, Option<ValidatedJwt<IdTokenClaims<IdClaims>>>),
-        LoopbackError<CompleteError<ExchangeError<C, Self>>>,
-    > {
+    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<IdClaims>>>), LoopbackError> {
         loopback::complete_on_loopback_oidc(
             listener,
             &pending_state.redirect_uri,
             renderer,
-            async |complete_input| {
-                self.complete_oidc(http_client, pending_state, complete_input)
-                    .await
-            },
+            async |complete_input| self.complete_oidc(pending_state, complete_input).await,
         )
         .await
     }
@@ -121,7 +109,7 @@ impl<
     async fn request_object(
         &self,
         payload: AuthorizationPayloadWithClientId<'_>,
-    ) -> Result<Option<SecretString>, J::Error> {
+    ) -> Result<Option<SecretString>, Error> {
         self.jar
             .generate_request_object(
                 self.issuer
@@ -143,12 +131,7 @@ impl<
     /// # Errors
     ///
     /// May return an error if the configuration is invalid, or the PAR endpoint returns an error.
-    pub async fn start<C: HttpClient>(
-        &self,
-        http_client: &C,
-        start_input: StartInput,
-    ) -> Result<StartOutput, StartError<Auth::Error, C::Error, C::ResponseError, D::Error, J::Error>>
-    {
+    pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
         let supports_method = |method: &str| {
             self.code_challenge_methods_supported
                 .iter()
@@ -176,18 +159,21 @@ impl<
         let request_object = self
             .request_object(payload.clone())
             .await
-            .context(JarSnafu)?;
+            .map_err(|e| e.with_context("creating JAR request object"))?;
 
         let (authorization_url, expires_in) = if let Some(par_url) =
             &self.pushed_authorization_request_endpoint
             && (self.prefer_pushed_authorization_requests
                 || self.require_pushed_authorization_requests)
         {
-            self.deliver_via_par(http_client, &payload.rest, request_object.as_ref(), par_url)
+            self.deliver_via_par(&payload.rest, request_object.as_ref(), par_url)
                 .await?
         } else {
             self.deliver_direct(&payload, request_object.as_ref())
-                .context(EncodeUrlEncodedSnafu)?
+                .map_err(|e| {
+                    Error::new(ErrorKind::Config, e)
+                        .with_context("encoding authorization request parameters")
+                })?
         };
 
         Ok(StartOutput {
@@ -227,17 +213,13 @@ impl<
         Ok((uri, None))
     }
 
-    async fn deliver_via_par<C: HttpClient>(
+    async fn deliver_via_par(
         &self,
-        http_client: &C,
         payload: &AuthorizationPayload<'_>,
         request_object: Option<&SecretString>,
         par_url: &EndpointUrl,
-    ) -> Result<
-        (Uri, Option<u64>),
-        StartError<Auth::Error, C::Error, C::ResponseError, D::Error, J::Error>,
-    > {
-        let effective_par_url = if http_client.uses_mtls() {
+    ) -> Result<(Uri, Option<u64>), Error> {
+        let effective_par_url = if self.http_client.uses_mtls() {
             self.mtls_pushed_authorization_request_endpoint
                 .as_ref()
                 .unwrap_or(par_url)
@@ -263,19 +245,18 @@ impl<
                     effective_par_url.as_uri(),
                     self.token_endpoint_auth_methods_supported.as_deref(),
                 )
-                .await
-                .context(ClientAuthSnafu)?;
+                .await?;
 
             par::make_par_call(
-                http_client,
+                self.http_client.as_ref(),
                 effective_par_url,
                 auth_params,
                 &par_body,
-                &self.dpop,
+                self.dpop.as_ref(),
                 dpop_jkt.as_deref(),
             )
             .await
-            .context(ParRequestSnafu)
+            .map_err(|e| e.with_context("making PAR request"))
         })?;
 
         let push_payload = par::AuthorizationPushPayload {
@@ -284,8 +265,10 @@ impl<
         };
 
         Ok((
-            add_payload_to_uri(&self.authorization_endpoint, push_payload)
-                .context(EncodeUrlEncodedSnafu)?,
+            add_payload_to_uri(&self.authorization_endpoint, push_payload).map_err(|e| {
+                Error::new(ErrorKind::Config, e)
+                    .with_context("encoding authorization request parameters")
+            })?,
             Some(par_response.expires_in),
         ))
     }
@@ -299,13 +282,12 @@ impl<
     ///
     /// Note that if an ID token is returned by the authorization server, this indicates that an
     /// OIDC flow was requested in the authorization request, and the ID token will be validated.
-    pub async fn complete<C: HttpClient>(
+    pub async fn complete(
         &self,
-        http_client: &C,
         pending_state: &PendingState,
         complete_input: CompleteInput,
-    ) -> Result<TokenResponse, CompleteError<ExchangeError<C, Self>>> {
-        self.complete_oidc(http_client, pending_state, complete_input)
+    ) -> Result<TokenResponse, Error> {
+        self.complete_oidc(pending_state, complete_input)
             .await
             .map(|(token_response, _)| token_response)
     }
@@ -319,15 +301,11 @@ impl<
     ///
     /// Note that if an ID token is returned by the authorization server, this indicates that an
     /// OIDC flow was requested in the authorization request, and the ID token will be validated.
-    pub async fn complete_oidc<C: HttpClient>(
+    pub async fn complete_oidc(
         &self,
-        http_client: &C,
         pending_state: &PendingState,
         complete_input: CompleteInput,
-    ) -> Result<
-        (TokenResponse, Option<ValidatedJwt<IdTokenClaims<IdClaims>>>),
-        CompleteError<ExchangeError<C, Self>>,
-    > {
+    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<IdClaims>>>), Error> {
         // Required state check (one layer of CSRF protection).
         if pending_state
             .state
@@ -335,11 +313,13 @@ impl<
             .ct_ne(complete_input.state.as_bytes())
             .into()
         {
-            return StateMismatchSnafu {
-                original: pending_state.state.clone(),
-                callback: complete_input.state,
-            }
-            .fail();
+            return Err(complete_error(
+                StateMismatchSnafu {
+                    original: pending_state.state.clone(),
+                    callback: complete_input.state,
+                }
+                .build(),
+            ));
         }
 
         // RFC 9207 - check issuer match.
@@ -348,41 +328,39 @@ impl<
         {
             if let Some(issuer) = complete_input.iss {
                 if issuer.as_bytes() != config_issuer.as_bytes() {
-                    return IssuerMismatchSnafu {
-                        original: config_issuer,
-                        callback: issuer,
-                    }
-                    .fail();
+                    return Err(complete_error(
+                        IssuerMismatchSnafu {
+                            original: config_issuer,
+                            callback: issuer,
+                        }
+                        .build(),
+                    ));
                 }
             } else {
                 // Server claimed to support RFC 9207 but no issuer received.
-                return MissingIssuerSnafu.fail();
+                return Err(complete_error(MissingIssuerSnafu.build()));
             }
         }
 
         let token = self
-            .exchange(
-                http_client,
-                AuthorizationCodeGrantParameters {
-                    dpop_jkt: pending_state.dpop_jkt.clone(),
-                    code: complete_input.code.clone(),
-                    pkce_verifier: pending_state.pkce_verifier.clone(),
-                    resource: complete_input.resource.clone(),
-                },
-            )
-            .await
-            .context(GrantSnafu)?;
+            .exchange(AuthorizationCodeGrantParameters {
+                dpop_jkt: pending_state.dpop_jkt.clone(),
+                code: complete_input.code.clone(),
+                pkce_verifier: pending_state.pkce_verifier.clone(),
+                resource: complete_input.resource.clone(),
+            })
+            .await?;
 
         if let Some(id_token) = &token.id_token() {
             let verifier = self
                 .jws_verifier
                 .as_ref()
-                .ok_or_else(|| IdTokenVerifierNotConfiguredSnafu.build())?
+                .ok_or_else(|| complete_error(IdTokenVerifierNotConfiguredSnafu.build()))?
                 .clone();
             let issuer = self
                 .issuer
                 .as_deref()
-                .ok_or_else(|| IdTokenIssuerNotConfiguredSnafu.build())?
+                .ok_or_else(|| complete_error(IdTokenIssuerNotConfiguredSnafu.build()))?
                 .to_owned();
 
             let validator = IdTokenValidator::builder()
@@ -395,7 +373,9 @@ impl<
             let verified_token = validator
                 .validate(id_token, Some(pending_state.nonce.as_str()))
                 .await
-                .context(IdTokenValidationSnafu)?;
+                .map_err(|e| {
+                    Error::new(ErrorKind::Protocol, e).with_context("validating ID token")
+                })?;
 
             Ok((token, Some(verified_token)))
         } else {
@@ -406,12 +386,9 @@ impl<
 
 fn build_authorization_payload<
     'a,
-    Auth: ClientAuthentication + 'static,
-    DPoP: AuthorizationServerDPoP + 'static,
-    J: Jar + 'static,
     IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static,
 >(
-    grant: &'a AuthorizationCodeGrant<Auth, DPoP, J, IdClaims>,
+    grant: &'a AuthorizationCodeGrant<IdClaims>,
     start_input: &'a StartInput,
     pkce: Option<&'a Pkce>,
     dpop_jkt: Option<String>,
@@ -459,14 +436,15 @@ fn add_payload_to_uri<T: Serialize>(
 
 #[cfg(test)]
 mod tests {
-    use std::convert::Infallible;
-
     use bytes::Bytes;
 
     use super::*;
     use crate::{
         core::{
-            client_auth::NoAuth, dpop::NoDPoP, http::HttpResponse,
+            client_auth::NoAuth,
+            dpop::NoDPoP,
+            http::{HttpClient, HttpResponse, Idempotency},
+            platform::MaybeSendBoxFuture,
             server_metadata::AuthorizationServerMetadata,
         },
         grant::authorization_code::{jar::NoJar, types::StartInput},
@@ -475,42 +453,21 @@ mod tests {
     /// `start()` with direct delivery performs no HTTP; this client asserts that.
     struct NoHttp;
 
-    struct NeverResponse;
-
-    impl HttpResponse for NeverResponse {
-        type Error = Infallible;
-
-        fn status(&self) -> http::StatusCode {
-            unreachable!()
-        }
-
-        fn headers(&self) -> http::HeaderMap {
-            unreachable!()
-        }
-
-        async fn body(self) -> Result<Bytes, Infallible> {
-            unreachable!()
-        }
-    }
-
     impl HttpClient for NoHttp {
-        type Response = NeverResponse;
-        type Error = Infallible;
-        type ResponseError = Infallible;
-
-        async fn execute(
+        fn execute(
             &self,
             _request: http::Request<Bytes>,
-        ) -> Result<NeverResponse, Infallible> {
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
             unreachable!("start() with direct delivery must not perform HTTP")
         }
     }
 
-    type Grant = AuthorizationCodeGrant<NoAuth, NoDPoP, NoJar>;
+    type Grant = AuthorizationCodeGrant;
 
     async fn start_url(grant: &Grant) -> String {
         grant
-            .start(&NoHttp, StartInput::scopes(["openid"]))
+            .start(StartInput::scopes(["openid"]))
             .await
             .unwrap()
             .authorization_url
@@ -521,6 +478,7 @@ mod tests {
     async fn default_builder_uses_s256() {
         let grant = AuthorizationCodeGrant::builder()
             .client_id("client")
+            .http_client(NoHttp)
             .client_auth(NoAuth)
             .dpop(NoDPoP)
             .jar(NoJar)
@@ -553,6 +511,7 @@ mod tests {
         let grant: Grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
             .unwrap()
             .client_id("client")
+            .http_client(NoHttp)
             .client_auth(NoAuth)
             .dpop(NoDPoP)
             .jar(NoJar)
@@ -569,6 +528,7 @@ mod tests {
     async fn plain_only_metadata_uses_plain() {
         let grant = AuthorizationCodeGrant::builder()
             .client_id("client")
+            .http_client(NoHttp)
             .client_auth(NoAuth)
             .dpop(NoDPoP)
             .jar(NoJar)
@@ -590,6 +550,7 @@ mod tests {
     async fn disable_pkce_omits_challenge() {
         let grant = AuthorizationCodeGrant::builder()
             .client_id("client")
+            .http_client(NoHttp)
             .client_auth(NoAuth)
             .dpop(NoDPoP)
             .jar(NoJar)
