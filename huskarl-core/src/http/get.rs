@@ -5,7 +5,7 @@ use snafu::prelude::*;
 
 use crate::{
     error::{Error, ErrorKind},
-    http::HttpClient,
+    http::{HttpClient, Idempotency},
 };
 
 /// Source error for non-2xx responses; the kind-level classification is
@@ -27,7 +27,9 @@ pub(crate) async fn get<T: DeserializeOwned>(
     parts.uri = uri;
     let request = http::Request::from_parts(parts, Bytes::new());
 
-    let response = http_client.execute(request).await?;
+    let response = http_client
+        .execute(request, Idempotency::Idempotent)
+        .await?;
 
     if response.status.is_success() {
         serde_json::from_slice(&response.body)

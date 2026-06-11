@@ -50,6 +50,28 @@ impl std::fmt::Debug for HttpResponse {
     }
 }
 
+/// Whether a request is known to be safe to re-send.
+///
+/// Set by the call site, which knows the operation's semantics; consumed by
+/// [`HttpClient`] implementations when classifying transport failures as
+/// retryable. The distinction matters for failures where the request may
+/// have reached the server (a timeout, an interrupted response): re-sending
+/// is only safe when the operation is known not to be affected by a first
+/// attempt the server may already have processed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Idempotency {
+    /// The request is known to be idempotent: a re-send is not affected by
+    /// whether the server processed an earlier attempt. Transports may mark
+    /// transient failures retryable even when delivery of the first attempt
+    /// is unknown.
+    Idempotent,
+    /// Not known to be idempotent. A first attempt may have consumed
+    /// one-shot state (an authorization code, a rotated refresh token), so
+    /// transports must mark a failure retryable only when the request
+    /// provably never reached the server.
+    Unknown,
+}
+
 /// Defines the common interface for HTTP requests.
 ///
 /// This trait is dyn-capable: implement it on your client type and the
@@ -60,18 +82,26 @@ impl std::fmt::Debug for HttpResponse {
 /// Write the method body as `Box::pin(async move { ... })`. Read the full
 /// response body inside [`execute`](Self::execute), and classify both
 /// request and body-read failures as
-/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport), using
-/// `retryable` to distinguish transient failures (timeouts, connection
-/// resets) from permanent ones (TLS configuration).
+/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport). Mark a
+/// failure `retryable` only when re-sending the request is known to be
+/// safe: either the request provably never reached the server (a
+/// connection-establishment failure), or the caller declared it
+/// [`Idempotency::Idempotent`] and the failure is transient (a timeout, an
+/// interrupted response). With [`Idempotency::Unknown`], the server may
+/// have processed a first attempt that a re-send would replay, so only
+/// never-delivered failures are retryable.
 pub trait HttpClient: MaybeSendSync {
     /// Executes an HTTP request and returns the fully-read response.
     ///
     /// # Arguments
     ///
     /// * `request`: The `http::Request` to be executed. The body is provided as `bytes::Bytes`.
+    /// * `idempotency`: Whether the request is known to be safe to re-send,
+    ///   used to classify retryability of transport failures.
     fn execute(
         &self,
         request: Request<Bytes>,
+        idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>>;
 
     /// Indicates whether this client uses mTLS for authentication.
@@ -87,8 +117,9 @@ impl<T: HttpClient + ?Sized> HttpClient for &T {
     fn execute(
         &self,
         request: Request<Bytes>,
+        idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-        (**self).execute(request)
+        (**self).execute(request, idempotency)
     }
 
     fn uses_mtls(&self) -> bool {
@@ -100,8 +131,9 @@ impl<T: HttpClient + ?Sized> HttpClient for Box<T> {
     fn execute(
         &self,
         request: Request<Bytes>,
+        idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-        (**self).execute(request)
+        (**self).execute(request, idempotency)
     }
 
     fn uses_mtls(&self) -> bool {
@@ -113,8 +145,9 @@ impl<T: HttpClient + ?Sized> HttpClient for Arc<T> {
     fn execute(
         &self,
         request: Request<Bytes>,
+        idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-        (**self).execute(request)
+        (**self).execute(request, idempotency)
     }
 
     fn uses_mtls(&self) -> bool {
@@ -136,6 +169,7 @@ mod tests {
         fn execute(
             &self,
             _request: Request<Bytes>,
+            _idempotency: Idempotency,
         ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
             Box::pin(async move {
                 Ok(HttpResponse {

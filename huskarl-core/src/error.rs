@@ -54,10 +54,14 @@ pub enum ErrorKind {
     /// Refresh failed or there is no token source: the interactive flow must
     /// re-run before another token can be obtained.
     ReauthRequired,
-    /// Transport-level failure. `retryable` distinguishes transient failures
-    /// (timeouts, connection resets) from permanent ones (TLS configuration).
+    /// Transport-level failure.
     Transport {
-        /// If true, retrying the same request may succeed.
+        /// If true, re-sending the request is known to be safe and may
+        /// succeed: either the request never reached the server, or it was
+        /// declared [`Idempotency::Idempotent`](crate::http::Idempotency)
+        /// and the failure was transient. Requests of
+        /// [unknown idempotency](crate::http::Idempotency::Unknown) are
+        /// only retryable when they provably never reached the server.
         retryable: bool,
     },
     /// Malformed or invalid server response.

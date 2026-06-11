@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use http::Request;
 
-use super::{HttpClient, HttpResponse};
+use super::{HttpClient, HttpResponse, Idempotency};
 use crate::{error::Error, platform::MaybeSendBoxFuture};
 
 /// An [`HttpClient`] wrapper that records a `huskarl.http.request` counter for each request.
@@ -56,12 +56,13 @@ impl<C: HttpClient> HttpClient for MetricsHttpClient<C> {
     fn execute(
         &self,
         request: Request<Bytes>,
+        idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
         Box::pin(async move {
             let method = request.method().to_string();
             let host = request.uri().host().unwrap_or("").to_owned();
 
-            let result = self.inner.execute(request).await;
+            let result = self.inner.execute(request, idempotency).await;
 
             let outcome = match &result {
                 Ok(resp) if resp.status.is_success() => "success",
