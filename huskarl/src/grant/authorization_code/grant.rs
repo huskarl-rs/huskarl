@@ -1,7 +1,7 @@
-use std::{collections::HashSet, marker::PhantomData, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use bon::Builder;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::Serialize;
 
 use crate::{
     core::{
@@ -10,13 +10,9 @@ use crate::{
         crypto::verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
-        platform::MaybeSendSync,
     },
     grant::{
-        authorization_code::{
-            grant::builder::State,
-            jar::{Jar, NoJar},
-        },
+        authorization_code::jar::{Jar, NoJar},
         core::OAuth2ExchangeGrant,
         refresh,
     },
@@ -27,7 +23,7 @@ use crate::{
 /// See the [module documentation][crate::grant::authorization_code] for a usage guide.
 #[allow(clippy::struct_excessive_bools)] // independent protocol switches, not a state machine
 #[derive(Clone)]
-pub struct AuthorizationCodeGrant<IdClaims: Clone + for<'de> Deserialize<'de> + 'static = ()> {
+pub struct AuthorizationCodeGrant {
     /// The client ID.
     pub(super) client_id: String,
 
@@ -103,34 +99,24 @@ pub struct AuthorizationCodeGrant<IdClaims: Clone + for<'de> Deserialize<'de> + 
     /// algorithm (`id_token_signed_response_alg`), or a multi-element set to enforce
     /// a policy (e.g. the FAPI 2.0 allowed algorithms: PS256, ES256, `EdDSA`).
     pub(super) allowed_id_token_signed_response_algs: Option<HashSet<String>>,
-
-    _phantom: PhantomData<IdClaims>,
 }
 
 #[huskarl_macros::from_metadata(
-    metadata = crate::core::server_metadata::AuthorizationServerMetadata,
-    method(name = "builder_from_metadata_internal", vis = "")
+    metadata = crate::core::server_metadata::AuthorizationServerMetadata
 )]
 #[bon::bon]
-impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClaims> {
+impl AuthorizationCodeGrant {
     /// Creates a new [`AuthorizationCodeGrant`] instance.
     ///
-    /// This is the workhorse constructor; callers use [`Self::builder()`]
-    /// (which starts with `IdClaims = ()`) and can switch to a typed claim
-    /// set via [`with_id_claims`][AuthorizationCodeGrantBuilder::with_id_claims]
-    /// on the builder.
+    /// Callers use [`Self::builder()`], or [`Self::builder_from_metadata()`]
+    /// to pre-populate the endpoint fields from server metadata.
     ///
     /// # Errors
     ///
     /// Returns an error if a `jws_verifier_factory` is supplied without a
     /// `jws_verifier_platform`, or if building the JWS verifier from `jwks_uri`
     /// fails.
-    #[builder(
-        start_fn(name = "builder_internal", vis = ""),
-        state_mod(name = "builder"),
-        generics(setters(vis = "", name = "with_{}_internal")),
-        on(String, into)
-    )]
+    #[builder(state_mod(name = "builder"), on(String, into))]
     pub async fn new(
         /// The client ID.
         client_id: String,
@@ -290,16 +276,16 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
             });
 
         Ok(AuthorizationCodeGrant {
-            jws_verifier,
             client_id,
             http_client,
             client_auth,
             dpop,
-            jar,
+            issuer,
             token_endpoint,
             token_endpoint_auth_methods_supported,
+            jws_verifier,
+            jar,
             authorization_endpoint,
-            issuer,
             pushed_authorization_request_endpoint,
             require_pushed_authorization_requests,
             authorization_response_iss_parameter_supported,
@@ -308,51 +294,7 @@ impl<IdClaims: Clone + DeserializeOwned + 'static> AuthorizationCodeGrant<IdClai
             disable_pkce,
             prefer_pushed_authorization_requests,
             allowed_id_token_signed_response_algs,
-            _phantom: PhantomData,
         })
-    }
-}
-
-/// Specialized public entry points for the default `IdClaims = ()` case.
-///
-/// `builder()` and `builder_from_metadata()` forward to the bon- and
-/// macro-generated `_internal` workhorses living on the fully-generic impl;
-/// `IdClaims` is fixed to `()` here so callers don't need to turbofish. Users
-/// who want a typed claim set chain `with_id_claims::<C>()` on the returned
-/// builder before any other setter.
-impl AuthorizationCodeGrant<()> {
-    /// Returns a builder for an authorization code grant, with `IdClaims`
-    /// defaulting to `()` (call [`with_id_claims`][AuthorizationCodeGrantBuilder::with_id_claims]
-    /// to switch to a typed claim set).
-    pub fn builder() -> AuthorizationCodeGrantBuilder<()> {
-        Self::builder_internal()
-    }
-
-    /// Configure the grant from authorization server metadata.
-    ///
-    /// Returns `None` if `metadata.authorization_endpoint` is absent.
-    #[must_use]
-    pub fn builder_from_metadata(
-        metadata: &crate::core::server_metadata::AuthorizationServerMetadata,
-    ) -> Option<
-        AuthorizationCodeGrantBuilder<(), AuthorizationCodeGrantBuilderFromMetadataInternalState>,
-    > {
-        Self::builder_from_metadata_internal(metadata)
-    }
-}
-
-/// Builder-level `with_id_claims` — switches the `IdClaims` parameter of the
-/// builder before any setter is called. Works because bon's experimental
-/// `generics(setters(...))` on `fn new` generated `with_id_claims_internal`
-/// to perform the type-state move.
-impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static, S: State>
-    AuthorizationCodeGrantBuilder<IdClaims, S>
-{
-    /// Sets the ID claims type for the authorization code grant.
-    pub fn with_id_claims<C: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>(
-        self,
-    ) -> AuthorizationCodeGrantBuilder<C, S> {
-        self.with_id_claims_internal()
     }
 }
 
@@ -384,9 +326,7 @@ pub struct AuthorizationCodeGrantForm<'a> {
     resource: Option<Vec<String>>,
 }
 
-impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static> OAuth2ExchangeGrant
-    for AuthorizationCodeGrant<IdClaims>
-{
+impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
     type Parameters = AuthorizationCodeGrantParameters;
     type Form<'a> = AuthorizationCodeGrantForm<'a>;
 

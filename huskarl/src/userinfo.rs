@@ -1,10 +1,10 @@
 //! `OpenID` Connect `UserInfo` endpoint (OIDC Core §5.3).
 
-use std::{marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header::InvalidHeaderValue};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::{
@@ -20,7 +20,7 @@ use crate::{
         server_metadata::AuthorizationServerMetadata,
     },
     grant::core::OAuth2ExchangeGrant,
-    token::AccessToken,
+    token::{AccessToken, id_token::StandardOidcProfileClaims},
 };
 
 /// Wraps a `UserInfo` failure with its error kind.
@@ -35,10 +35,9 @@ fn userinfo_error(source: UserInfoError) -> Error {
 
 /// `OpenID` Connect `UserInfo` client.
 ///
-/// The `Extra` type parameter controls the claims type returned by [`get`](Self::get).
-/// It defaults to `()` (standard claims only). Specify a custom type to capture
-/// additional provider-specific claims.
-pub struct UserInfoClient<Extra: Clone + for<'de> Deserialize<'de> + 'static = ()> {
+/// Standard claims are returned as typed fields on [`UserInfo`]; any
+/// additional provider-specific claims land in [`UserInfo::extra`].
+pub struct UserInfoClient {
     /// The URL of the `UserInfo` endpoint.
     userinfo_endpoint: EndpointUrl,
 
@@ -50,13 +49,9 @@ pub struct UserInfoClient<Extra: Clone + for<'de> Deserialize<'de> + 'static = (
 
     /// Optional JWT validator for `application/jwt` `UserInfo` responses (OIDC Core §5.3.2).
     jwt_validator: Option<JwtValidator>,
-
-    _phantom: PhantomData<Extra>,
 }
 
-impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> core::fmt::Debug
-    for UserInfoClient<Extra>
-{
+impl core::fmt::Debug for UserInfoClient {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("UserInfoClient")
             .field("userinfo_endpoint", &self.userinfo_endpoint)
@@ -66,16 +61,14 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> core::fmt::Debug
 }
 
 #[huskarl_macros::from_metadata(
-    metadata = crate::core::server_metadata::AuthorizationServerMetadata,
-    method(name = "builder_from_metadata_internal", vis = "")
+    metadata = crate::core::server_metadata::AuthorizationServerMetadata
 )]
 #[bon::bon]
-impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
+impl UserInfoClient {
     /// Creates a new [`UserInfoClient`].
     ///
-    /// This is the workhorse constructor; callers use [`Self::builder()`]
-    /// (which starts with `Extra = ()`) and can switch to a typed claim
-    /// set via [`with_extra`][UserInfoClientBuilder::with_extra] on the builder.
+    /// Callers use [`Self::builder()`], or [`Self::builder_from_metadata()`]
+    /// to pre-populate the endpoint fields from server metadata.
     ///
     /// # Errors
     ///
@@ -83,11 +76,7 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
     /// validation is misconfigured (a `jws_verifier_factory` is supplied
     /// without `issuer` or `client_id`), or propagates the failure if
     /// building the JWS verifier from `jwks_uri` fails.
-    #[builder(
-        start_fn(name = "builder_internal", vis = ""),
-        state_mod(name = "builder"),
-        generics(setters(vis = "", name = "with_{}_internal"))
-    )]
+    #[builder(state_mod(name = "builder"))]
     pub async fn new(
         /// The URL of the `UserInfo` endpoint.
         ///
@@ -195,35 +184,11 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
             mtls_userinfo_endpoint,
             dpop,
             jwt_validator,
-            _phantom: PhantomData,
         })
     }
 }
 
-/// Specialized public entry points for the default `Extra = ()` case.
-///
-/// `builder()` and `builder_from_metadata()` forward to the bon- and
-/// macro-generated `_internal` workhorses living on the fully-generic impl;
-/// `Extra` is fixed to `()` here so callers don't need to turbofish. Users who
-/// want a typed claim set chain `with_extra::<E>()` on the returned builder.
-impl UserInfoClient<()> {
-    /// Returns a builder for a `UserInfoClient`, with `Extra` defaulting to
-    /// `()` (call [`with_extra`][UserInfoClientBuilder::with_extra] on the
-    /// returned builder to switch to a typed claim set).
-    pub fn builder() -> UserInfoClientBuilder<()> {
-        Self::builder_internal()
-    }
-
-    /// Configure the `UserInfo` client from authorization server metadata.
-    ///
-    /// Returns `None` if `metadata.userinfo_endpoint` is absent.
-    #[must_use]
-    pub fn builder_from_metadata(
-        metadata: &AuthorizationServerMetadata,
-    ) -> Option<UserInfoClientBuilder<(), UserInfoClientBuilderFromMetadataInternalState>> {
-        Self::builder_from_metadata_internal(metadata)
-    }
-
+impl UserInfoClient {
     /// Creates a `UserInfo` client from an `OAuth2` grant and authorization server metadata.
     ///
     /// The `DPoP` configuration is derived from the grant, converted to its resource
@@ -244,27 +209,8 @@ impl UserInfoClient<()> {
                 .and_then(|a| a.userinfo_endpoint.clone()),
             dpop: grant.dpop().to_resource_server_dpop(),
             jwt_validator: None,
-            _phantom: PhantomData,
         })
     }
-}
-
-/// Builder-level `with_extra` — switches the `Extra` parameter of the builder
-/// before any setter is called. Works because bon's experimental
-/// `generics(setters(...))` on `fn new` generated `with_extra_internal` to
-/// perform the type-state move.
-impl<Extra: Clone + for<'de> Deserialize<'de> + 'static, S: builder::State>
-    UserInfoClientBuilder<Extra, S>
-{
-    /// Sets the typed claim extension for the `UserInfo` response.
-    pub fn with_extra<E: Clone + for<'de> Deserialize<'de> + 'static>(
-        self,
-    ) -> UserInfoClientBuilder<E, S> {
-        self.with_extra_internal()
-    }
-}
-
-impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
     /// Call the `UserInfo` endpoint with the given access token.
     ///
     /// The `expected_sub` parameter is the `sub` claim from the ID Token. Per
@@ -283,7 +229,7 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
         http_client: &impl HttpClient,
         access_token: &AccessToken,
         expected_sub: &str,
-    ) -> Result<UserInfo<Extra>, Error> {
+    ) -> Result<UserInfo, Error> {
         let endpoint = if http_client.uses_mtls() {
             self.mtls_userinfo_endpoint
                 .as_ref()
@@ -372,7 +318,7 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
                 }));
             }
 
-            let user_info: UserInfo<Extra> = if is_jwt_response {
+            let user_info: UserInfo = if is_jwt_response {
                 self.decode_jwt_response(&body).await?
             } else {
                 serde_json::from_slice(&body)
@@ -391,7 +337,7 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
     }
 
     /// Decode and validate a JWT-encoded `UserInfo` response body.
-    async fn decode_jwt_response(&self, body: &[u8]) -> Result<UserInfo<Extra>, Error> {
+    async fn decode_jwt_response(&self, body: &[u8]) -> Result<UserInfo, Error> {
         let jwt_validator = self
             .jwt_validator
             .as_ref()
@@ -428,72 +374,24 @@ impl<Extra: Clone + for<'de> Deserialize<'de> + 'static> UserInfoClient<Extra> {
 
 /// Standard OIDC `UserInfo` claims (OIDC Core §5.1).
 ///
-/// The `Extra` type parameter captures additional claims beyond the standard set.
-/// By default extra claims are ignored; specify a custom type to capture them.
-#[derive(Debug, Clone, Deserialize)]
-pub struct UserInfo<Extra = ()> {
+/// Standard profile claims live in [`profile`](Self::profile) — the same
+/// [`StandardOidcProfileClaims`] set that may be asserted in an ID token.
+/// Claims beyond the standard set land in [`extra`](Self::extra); callers
+/// wanting typed access deserialize individual values on demand, e.g.
+/// `serde_json::from_value(user_info.extra.remove("groups")?)`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserInfo {
     /// Subject identifier.
     pub sub: String,
-    /// Full name.
-    pub name: Option<String>,
-    /// Given name(s) or first name(s).
-    pub given_name: Option<String>,
-    /// Surname(s) or last name(s).
-    pub family_name: Option<String>,
-    /// Middle name(s).
-    pub middle_name: Option<String>,
-    /// Casual name.
-    pub nickname: Option<String>,
-    /// Shorthand name by which the End-User wishes to be referred to.
-    pub preferred_username: Option<String>,
-    /// URL of the End-User's profile page.
-    pub profile: Option<String>,
-    /// URL of the End-User's profile picture.
-    pub picture: Option<String>,
-    /// URL of the End-User's Web page or blog.
-    pub website: Option<String>,
-    /// End-User's preferred e-mail address.
-    pub email: Option<String>,
-    /// `true` if the End-User's e-mail address has been verified.
-    pub email_verified: Option<bool>,
-    /// End-User's gender.
-    pub gender: Option<String>,
-    /// End-User's birthday.
-    pub birthdate: Option<String>,
-    /// Time zone database string.
-    pub zoneinfo: Option<String>,
-    /// End-User's locale.
-    pub locale: Option<String>,
-    /// End-User's preferred telephone number.
-    pub phone_number: Option<String>,
-    /// `true` if the End-User's phone number has been verified.
-    pub phone_number_verified: Option<bool>,
-    /// End-User's preferred postal address (OIDC Core §5.1.1).
-    pub address: Option<Address>,
-    /// Time the End-User's information was last updated (seconds since epoch).
-    pub updated_at: Option<i64>,
+
+    /// Standard OIDC profile claims (OIDC Core §5.1), flattened into the
+    /// response's claim set.
+    #[serde(flatten)]
+    pub profile: StandardOidcProfileClaims,
 
     /// Extra claims beyond the standard OIDC `UserInfo` set.
     #[serde(flatten)]
-    pub extra: Extra,
-}
-
-/// Postal address claim (OIDC Core §5.1.1).
-#[derive(Debug, Clone, Deserialize)]
-pub struct Address {
-    /// Full mailing address, formatted for display or use on a mailing label.
-    pub formatted: Option<String>,
-    /// Full street address component, which MAY include house number, street
-    /// name, Post Office Box, and multi-line extended street address information.
-    pub street_address: Option<String>,
-    /// City or locality component.
-    pub locality: Option<String>,
-    /// State, province, prefecture, or region component.
-    pub region: Option<String>,
-    /// Zip code or postal code component.
-    pub postal_code: Option<String>,
-    /// Country name component.
-    pub country: Option<String>,
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 /// Source vocabulary for [`UserInfoClient`] build failures.
@@ -672,7 +570,6 @@ mod tests {
             mtls_userinfo_endpoint: None,
             dpop: Arc::new(NoDPoP),
             jwt_validator: None,
-            _phantom: PhantomData,
         }
     }
 
@@ -700,13 +597,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.sub, "248289761001");
-        assert_eq!(result.name.as_deref(), Some("Jane Doe"));
-        assert_eq!(result.given_name.as_deref(), Some("Jane"));
-        assert_eq!(result.family_name.as_deref(), Some("Doe"));
-        assert_eq!(result.email.as_deref(), Some("janedoe@example.com"));
-        assert_eq!(result.email_verified, Some(true));
+        assert_eq!(result.profile.name.as_deref(), Some("Jane Doe"));
+        assert_eq!(result.profile.given_name.as_deref(), Some("Jane"));
+        assert_eq!(result.profile.family_name.as_deref(), Some("Doe"));
+        assert_eq!(result.profile.email.as_deref(), Some("janedoe@example.com"));
+        assert_eq!(result.profile.email_verified, Some(true));
         assert_eq!(
-            result.picture.as_deref(),
+            result.profile.picture.as_deref(),
             Some("http://example.com/janedoe/me.jpg")
         );
     }
@@ -797,7 +694,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_claims_are_ignored() {
+    async fn unknown_claims_land_in_extra() {
         let body = serde_json::json!({
             "sub": "user1",
             "custom_claim": "custom_value",
@@ -810,18 +707,19 @@ mod tests {
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
         });
 
-        // Default Extra = () ignores extra claims.
         let result = client()
             .get(&http, &bearer_token("tok"), "user1")
             .await
             .unwrap();
 
         assert_eq!(result.sub, "user1");
-        assert!(result.name.is_none());
+        assert!(result.profile.name.is_none());
+        assert_eq!(result.extra["custom_claim"], "custom_value");
+        assert_eq!(result.extra["org_id"], 42);
     }
 
     #[tokio::test]
-    async fn typed_extra_claims() {
+    async fn typed_extra_claims_on_demand() {
         #[derive(Debug, Clone, Deserialize)]
         struct MyClaims {
             org_id: u64,
@@ -840,24 +738,18 @@ mod tests {
             body: Bytes::from(serde_json::to_vec(&body).unwrap()),
         });
 
-        let client: UserInfoClient<MyClaims> = UserInfoClient {
-            userinfo_endpoint: "https://op.example.com/userinfo"
-                .into_endpoint_url()
-                .unwrap(),
-            mtls_userinfo_endpoint: None,
-            dpop: Arc::new(NoDPoP),
-            jwt_validator: None,
-            _phantom: PhantomData,
-        };
-
-        let result = client
+        let result = client()
             .get(&http, &bearer_token("tok"), "user1")
             .await
             .unwrap();
 
+        // Callers wanting typed access deserialize out of the extras map.
+        let claims: MyClaims =
+            serde_json::from_value(serde_json::to_value(&result.extra).unwrap()).unwrap();
+
         assert_eq!(result.sub, "user1");
-        assert_eq!(result.extra.org_id, 42);
-        assert_eq!(result.extra.role, "admin");
+        assert_eq!(claims.org_id, 42);
+        assert_eq!(claims.role, "admin");
     }
 
     #[tokio::test]
@@ -885,7 +777,7 @@ mod tests {
             .await
             .unwrap();
 
-        let addr = result.address.unwrap();
+        let addr = result.profile.address.unwrap();
         assert_eq!(addr.locality.as_deref(), Some("Anytown"));
         assert_eq!(addr.region.as_deref(), Some("CA"));
         assert_eq!(addr.postal_code.as_deref(), Some("90210"));
@@ -1009,10 +901,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.sub, "minimal");
-        assert!(result.name.is_none());
-        assert!(result.email.is_none());
-        assert!(result.address.is_none());
-        assert!(result.updated_at.is_none());
+        assert!(result.profile.name.is_none());
+        assert!(result.profile.email.is_none());
+        assert!(result.profile.address.is_none());
+        assert!(result.profile.updated_at.is_none());
     }
 
     #[tokio::test]
@@ -1079,7 +971,6 @@ mod tests {
             mtls_userinfo_endpoint: None,
             dpop: Arc::new(NoDPoP),
             jwt_validator: Some(validator),
-            _phantom: PhantomData,
         }
     }
 
@@ -1116,8 +1007,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.sub, "user1");
-        assert_eq!(result.name.as_deref(), Some("Jane Doe"));
-        assert_eq!(result.email.as_deref(), Some("jane@example.com"));
+        assert_eq!(result.profile.name.as_deref(), Some("Jane Doe"));
+        assert_eq!(result.profile.email.as_deref(), Some("jane@example.com"));
     }
 
     #[tokio::test]

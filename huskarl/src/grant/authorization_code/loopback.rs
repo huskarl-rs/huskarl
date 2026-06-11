@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use serde::Deserialize;
 use snafu::{ResultExt as _, Snafu};
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
@@ -9,7 +8,7 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    core::{Error, jwt::validator::ValidatedJwt, platform::MaybeSendSync},
+    core::{Error, jwt::validator::ValidatedJwt},
     grant::{authorization_code::CompleteInput, core::TokenResponse},
     token::id_token::IdTokenClaims,
 };
@@ -193,19 +192,15 @@ fn to_error_context(port: u16, err: &LoopbackError) -> ErrorContext {
     }
 }
 
-pub async fn complete_on_loopback_oidc<
-    Extra: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static,
->(
+pub async fn complete_on_loopback_oidc(
     listener: &TcpListener,
     redirect_uri: &str,
     renderer: Option<CallbackRenderer>,
     complete: impl AsyncFnOnce(
         CompleteInput,
-    ) -> Result<
-        (TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>),
-        Error,
-    >,
-) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<Extra>>>), LoopbackError> {
+    )
+        -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error>,
+) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), LoopbackError> {
     let port = listener.local_addr().map_or(0, |a| a.port());
 
     let expected_path = Url::parse(redirect_uri)

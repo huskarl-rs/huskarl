@@ -1,5 +1,5 @@
 use http::Uri;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use subtle::ConstantTimeEq;
 
 #[cfg(all(
@@ -11,10 +11,7 @@ use subtle::ConstantTimeEq;
 ))]
 use crate::grant::authorization_code::{LoopbackError, loopback};
 use crate::{
-    core::{
-        EndpointUrl, Error, ErrorKind, jwt::validator::ValidatedJwt, platform::MaybeSendSync,
-        secrets::SecretString,
-    },
+    core::{EndpointUrl, Error, ErrorKind, jwt::validator::ValidatedJwt, secrets::SecretString},
     grant::{
         authorization_code::{
             AuthorizationCodeGrantParameters,
@@ -40,9 +37,7 @@ fn complete_error(source: super::error::CompleteError) -> Error {
     Error::new(ErrorKind::Protocol, source)
 }
 
-impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>
-    AuthorizationCodeGrant<IdClaims>
-{
+impl AuthorizationCodeGrant {
     /// Completes the authorization code flow on the provided listener, possibly returning a token response.
     ///
     /// A lightweight HTTP server is implemented on the listener, which is capable of handling
@@ -96,7 +91,7 @@ impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>
         listener: &tokio::net::TcpListener,
         pending_state: &PendingState,
         renderer: Option<loopback::CallbackRenderer>,
-    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<IdClaims>>>), LoopbackError> {
+    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), LoopbackError> {
         loopback::complete_on_loopback_oidc(
             listener,
             &pending_state.redirect_uri,
@@ -297,7 +292,7 @@ impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>
         &self,
         pending_state: &PendingState,
         complete_input: CompleteInput,
-    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims<IdClaims>>>), Error> {
+    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error> {
         // Required state check (one layer of CSRF protection).
         if pending_state
             .state
@@ -376,11 +371,8 @@ impl<IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static>
     }
 }
 
-fn build_authorization_payload<
-    'a,
-    IdClaims: Clone + for<'de> Deserialize<'de> + MaybeSendSync + 'static,
->(
-    grant: &'a AuthorizationCodeGrant<IdClaims>,
+fn build_authorization_payload<'a>(
+    grant: &'a AuthorizationCodeGrant,
     start_input: &'a StartInput,
     pkce: Option<&'a Pkce>,
     dpop_jkt: Option<String>,

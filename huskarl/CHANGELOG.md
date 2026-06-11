@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 
+ - Breaking: `UserInfoClient` and `UserInfo` lost the `Extra` type parameter.
+ - Breaking: `IdTokenClaims` and `AuthorizationCodeGrant` likewise lost their
+   claim type parameters.
  - Breaking: ported to the dyn-first huskarl-core.
  - Breaking: grants hold the HTTP client as a required `http_client`.
  - Breaking: reworked error handling completely.

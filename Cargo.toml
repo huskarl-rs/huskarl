@@ -36,7 +36,6 @@ huskarl-crypto-webcrypto = { version = "0.8.0-pre.0", path = "./huskarl-crypto-w
 
 bon = { version = "3.9", default-features = false, features = [
   "experimental-generics-setters",
-  "experimental-overwritable",
   "implied-bounds",
 ] }
 form_urlencoded = { version = "1", default-features = false, features = ["std"] }

@@ -40,8 +40,8 @@ impl From<String> for IdToken {
 }
 
 /// Claims for a standard `OpenID` Connect ID token.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IdTokenClaims<Extra = HashMap<String, serde_json::Value>> {
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IdTokenClaims {
     /// The nonce value from the token claims.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
@@ -66,6 +66,25 @@ pub struct IdTokenClaims<Extra = HashMap<String, serde_json::Value>> {
     // back-channel logout to scope logout to a specific session.
     // #[serde(skip_serializing_if = "Option::is_none")]
     // pub sid: Option<String>,
+    /// Standard OIDC profile claims (OIDC Core §5.1), flattened into the
+    /// token's claim set.
+    #[serde(flatten)]
+    pub profile: StandardOidcProfileClaims,
+
+    /// Extra claims beyond the standard `OpenID` Connect set.
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
+}
+
+/// Standard `OpenID` Connect profile claims as defined in OIDC Core §5.1.
+///
+/// Shared between [`IdTokenClaims`] and
+/// [`UserInfo`](crate::userinfo::UserInfo) — the same claim set may be
+/// asserted in either place (OIDC Core §5.4). `sub` is excluded: it is
+/// optional on ID-token claims but required on `UserInfo` responses, so each
+/// outer type carries its own.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StandardOidcProfileClaims {
     /// End-User's full name in displayable form.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -78,7 +97,7 @@ pub struct IdTokenClaims<Extra = HashMap<String, serde_json::Value>> {
     /// End-User's middle name(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub middle_name: Option<String>,
-    /// End-User's preferred username.
+    /// End-User's casual name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nickname: Option<String>,
     /// End-User's preferred username.
@@ -127,10 +146,6 @@ pub struct IdTokenClaims<Extra = HashMap<String, serde_json::Value>> {
         with = "crate::core::serde_utils::time::option_unix_secs"
     )]
     pub updated_at: Option<SystemTime>,
-
-    /// Extra claims beyond the standard `OpenID` Connect set.
-    #[serde(flatten)]
-    pub extra: Extra,
 }
 
 /// Standard `OpenID` Connect address claim as defined in OIDC Core §5.1.1.
@@ -189,11 +204,11 @@ impl IdTokenValidator {
     /// # Errors
     ///
     /// Returns an error if the token is not valid according to the configuration.
-    pub async fn validate<E: Clone + for<'de> Deserialize<'de> + 'static>(
+    pub async fn validate(
         &self,
         id_token: &IdToken,
         expected_nonce: Option<&str>,
-    ) -> Result<ValidatedJwt<IdTokenClaims<E>>, IdTokenValidationError> {
+    ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
         let jwt_validator = JwtValidator::builder()
             .verifier(self.verifier.clone())
             .iss(ClaimCheck::required_value(self.issuer.clone()))
@@ -206,7 +221,7 @@ impl IdTokenValidator {
             .build();
 
         let validated_jwt = jwt_validator
-            .validate::<IdTokenClaims<E>>(id_token.token())
+            .validate::<IdTokenClaims>(id_token.token())
             .await
             .context(JwtSnafu)?;
 
@@ -343,14 +358,17 @@ mod tests {
         let json = r#"{"sub":"alice","updated_at":1700000000}"#;
         let claims: IdTokenClaims = serde_json::from_str(json).unwrap();
         let expected = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
-        assert_eq!(claims.updated_at, Some(expected));
+        assert_eq!(claims.profile.updated_at, Some(expected));
     }
 
     #[test]
     fn updated_at_serializes_as_unix_seconds() {
-        let claims = IdTokenClaims::<HashMap<String, serde_json::Value>> {
-            updated_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
-            ..empty_claims()
+        let claims = IdTokenClaims {
+            profile: StandardOidcProfileClaims {
+                updated_at: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+                ..StandardOidcProfileClaims::default()
+            },
+            ..IdTokenClaims::default()
         };
         let value: serde_json::Value = serde_json::to_value(&claims).unwrap();
         assert_eq!(value["updated_at"], serde_json::json!(1_700_000_000));
@@ -367,7 +385,7 @@ mod tests {
     #[test]
     fn updated_at_absent_deserializes_to_none_and_is_omitted_on_serialize() {
         let claims: IdTokenClaims = serde_json::from_str(r#"{"sub":"alice"}"#).unwrap();
-        assert!(claims.updated_at.is_none());
+        assert!(claims.profile.updated_at.is_none());
         let value: serde_json::Value = serde_json::to_value(&claims).unwrap();
         assert!(value.get("updated_at").is_none());
     }
@@ -376,37 +394,15 @@ mod tests {
     fn updated_at_null_deserializes_to_none() {
         let claims: IdTokenClaims =
             serde_json::from_str(r#"{"sub":"alice","updated_at":null}"#).unwrap();
-        assert!(claims.updated_at.is_none());
+        assert!(claims.profile.updated_at.is_none());
     }
 
-    fn empty_claims() -> IdTokenClaims<HashMap<String, serde_json::Value>> {
-        IdTokenClaims {
-            nonce: None,
-            auth_time: None,
-            acr: None,
-            amr: Vec::new(),
-            azp: None,
-            sub: None,
-            name: None,
-            given_name: None,
-            family_name: None,
-            middle_name: None,
-            nickname: None,
-            preferred_username: None,
-            profile: None,
-            picture: None,
-            website: None,
-            email: None,
-            email_verified: None,
-            gender: None,
-            birthdate: None,
-            zoneinfo: None,
-            locale: None,
-            phone_number: None,
-            phone_number_verified: None,
-            address: None,
-            updated_at: None,
-            extra: HashMap::new(),
-        }
+    #[test]
+    fn unknown_claims_land_in_extra_not_profile() {
+        let json = r#"{"sub":"alice","email":"a@example.com","groups":["admin"]}"#;
+        let claims: IdTokenClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.profile.email.as_deref(), Some("a@example.com"));
+        assert_eq!(claims.extra["groups"], serde_json::json!(["admin"]));
+        assert!(!claims.extra.contains_key("email"));
     }
 }
