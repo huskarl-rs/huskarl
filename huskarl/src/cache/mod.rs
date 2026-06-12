@@ -32,9 +32,11 @@ pub trait TokenCache: MaybeSendSync {
     ///
     /// Returns an error of kind
     /// [`ErrorKind::ReauthRequired`](crate::core::ErrorKind::ReauthRequired)
-    /// when no token can be obtained without re-running the interactive flow
-    /// (see [`GetTokenError`] for the cases). Other kinds propagate from the
-    /// underlying exchange.
+    /// only when no token can be obtained without re-running the interactive
+    /// flow (see [`GetTokenError`] for the cases). Transient failures (e.g. a
+    /// retryable transport error during refresh) keep their own
+    /// classification — a later call may succeed, so they are not a reauth
+    /// signal. Other kinds propagate from the underlying exchange.
     fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>>;
 
     /// Returns a reference to the resource server `DPoP` proof implementation.
@@ -110,10 +112,14 @@ impl<T: TokenCache + ?Sized> TokenCache for Arc<T> {
 
 /// Source vocabulary for token acquisition failures.
 ///
-/// Carried as the source of
+/// Carried as the source of errors returned by
+/// [`TokenCache::get_token_response`] when both the cache and its fallbacks
+/// were exhausted. The error kind is
 /// [`ErrorKind::ReauthRequired`](crate::core::ErrorKind::ReauthRequired)
-/// errors returned by [`TokenCache::get_token_response`] — match on the error
-/// kind rather than downcasting to this type.
+/// unless an automatic recovery path remains (e.g. a retained refresh token
+/// after a transient failure), in which case the underlying retryable
+/// classification is kept — match on the error kind rather than downcasting
+/// to this type.
 #[derive(Debug, Snafu)]
 pub enum GetTokenError {
     /// Token refresh failed and no grant parameters were available to fall back to.

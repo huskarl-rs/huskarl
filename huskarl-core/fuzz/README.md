@@ -8,6 +8,7 @@ Coverage-guided fuzzing of the attacker-facing parsers (see
 | `parse_compact_jws` | Compact JWS parsing, incl. full `JwtHeader`/embedded-`jwk` deserialization; asserts the signing-input invariant |
 | `unseal_v1` | v1 sealed-bundle header parsing and slicing, via a passthrough decryptor |
 | `jwks` | `Jwks` JSON ingestion, RFC 7638 thumbprints, private→public conversion |
+| `challenges` | RFC 7235 `WWW-Authenticate` challenge parsing (lives in the `huskarl` client crate); asserts scheme/token68 invariants |
 
 ## Running locally
 

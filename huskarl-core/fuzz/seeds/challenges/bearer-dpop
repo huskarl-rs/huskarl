@@ -1,0 +1,2 @@
+Bearer realm="example", error="invalid_token", error_description="The access token expired"
+DPoP error="use_dpop_nonce", error_description="Resource server requires nonce in DPoP proof"

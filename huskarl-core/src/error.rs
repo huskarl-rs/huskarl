@@ -6,6 +6,22 @@
 //! surfacing the RFC 6749 error code — goes through [`ErrorKind`] and the
 //! accessors on [`Error`]; they are the stable contract.
 //!
+//! # Handling errors
+//!
+//! Applications consuming tokens (through a token cache or authorizer) need
+//! exactly three signals, checked in this order:
+//!
+//! 1. **Retry**: [`Error::is_retryable`] — the failure is transient and the
+//!    same call may succeed if re-attempted (with backoff). No user
+//!    involvement is needed; in particular this is *not* a reason to re-run
+//!    the interactive flow.
+//! 2. **Re-authenticate**: [`ErrorKind::ReauthRequired`] — no token can be
+//!    obtained automatically; the interactive flow must run again.
+//! 3. **Fail**: everything else is a genuine failure — log it and surface
+//!    it. The remaining kinds classify *what* failed (configuration,
+//!    protocol, crypto, ...) for diagnostics and error reports, not what to
+//!    do next.
+//!
 //! # Source chains and downcasting
 //!
 //! [`Error::source`](std::error::Error::source) chains preserve the concrete
@@ -46,13 +62,27 @@ pub struct Error {
 ///
 /// Marked `#[non_exhaustive]`: match with a wildcard arm. Variants are kept
 /// coarse deliberately — additions are non-breaking, removals are not.
+///
+/// Most application code does not need to match individual variants: the
+/// three signals described under [Handling errors](self#handling-errors)
+/// (retry / re-authenticate / fail) are the intended consumption pattern.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
     /// RFC 6749 §5.2 `invalid_grant` — the grant itself is dead.
+    ///
+    /// Seen when driving a grant directly. A token cache absorbs this kind:
+    /// it discards the rejected refresh token and reports
+    /// [`ReauthRequired`](Self::ReauthRequired) once no token source remains.
     InvalidGrant,
-    /// Refresh failed or there is no token source: the interactive flow must
-    /// re-run before another token can be obtained.
+    /// No token can be obtained without re-running the interactive flow: the
+    /// refresh token is missing or was definitively rejected, and no usable
+    /// grant parameters remain.
+    ///
+    /// Transient failures are deliberately *not* classified as this kind —
+    /// they keep their retryable classification (see
+    /// [`Error::is_retryable`]), since a later call may succeed without user
+    /// involvement.
     ReauthRequired,
     /// Transport-level failure.
     Transport {
@@ -121,7 +151,12 @@ impl Error {
         self.oauth_error_code.as_deref()
     }
 
-    /// If true, a failed request may succeed if retried.
+    /// If true, the failure is transient and the same call may succeed if
+    /// re-attempted (with backoff). No user involvement is needed; in
+    /// particular this is not a reason to re-run the interactive flow.
+    ///
+    /// See [Handling errors](self#handling-errors) for how this composes
+    /// with [`ErrorKind::ReauthRequired`].
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self.kind, ErrorKind::Transport { retryable: true })

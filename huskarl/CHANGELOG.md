@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 
+ - Breaking: `HttpAuthorizer` reworked with recommendations around retries and
+   challenge handling.
  - `RawTokenResponse` (with its builder), `into_token_response`, and
    `InvalidTokenResponse` are now exported from `grant::core`, so tests and
    integrations can fabricate a `TokenResponse` — e.g. to `prime` a token
@@ -16,7 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    persist only the refresh token via a `RefreshTokenStore`.
  - `RefreshTokenStore` gained `&`/`Box`/`Arc` forwarding impls, so a shared
    `Arc<MyStore>` handle can be passed to a cache builder directly.
-
  - Breaking: `UserInfoClient` and `UserInfo` lost the `Extra` type parameter.
  - Breaking: `IdTokenClaims` and `AuthorizationCodeGrant` likewise lost their
    claim type parameters.

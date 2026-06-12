@@ -28,7 +28,7 @@ description = "Fuzz a huskarl-core target from its seed corpus"
 dir = "huskarl-core"
 usage = '''
 arg "<target>" help="Fuzz target" {
-  choices "parse_compact_jws" "unseal_v1" "jwks"
+  choices "parse_compact_jws" "unseal_v1" "jwks" "challenges"
 }
 flag "--time <seconds>" help="Stop after this many seconds (default: run until interrupted)"
 '''
@@ -46,7 +46,7 @@ description = "Report what a fuzz target's accumulated corpus actually covers"
 dir = "huskarl-core"
 usage = '''
 arg "<target>" help="Fuzz target" {
-  choices "parse_compact_jws" "unseal_v1" "jwks"
+  choices "parse_compact_jws" "unseal_v1" "jwks" "challenges"
 }
 '''
 run = '''

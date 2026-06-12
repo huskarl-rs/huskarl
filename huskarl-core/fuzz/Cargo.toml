@@ -12,10 +12,17 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 futures-executor = { version = "0.3", default-features = false, features = ["std"] }
+http = "1"
 serde_json = "1"
 
 [dependencies.huskarl-core]
 path = ".."
+
+# For the `challenges` target — the WWW-Authenticate parser lives in the
+# client crate. This package is workspace-excluded, so the extra dependency
+# does not affect normal builds.
+[dependencies.huskarl]
+path = "../../huskarl"
 
 [[bin]]
 name = "parse_compact_jws"
@@ -34,6 +41,13 @@ bench = false
 [[bin]]
 name = "jwks"
 path = "fuzz_targets/jwks.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "challenges"
+path = "fuzz_targets/challenges.rs"
 test = false
 doc = false
 bench = false

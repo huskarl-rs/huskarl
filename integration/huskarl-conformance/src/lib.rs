@@ -95,17 +95,17 @@ pub fn build_browser() -> Browser {
     Browser::spawn(client)
 }
 
-/// Makes a GET request to `uri` using the authorizer, retrying once on a DPoP nonce challenge.
+/// Makes a GET request to `uri` using the authorizer, re-sending once on a 401.
 ///
 /// Each call to `get_headers` generates a fresh DPoP proof (including the current nonce).
-/// After each response, `update_from_response_headers` persists any new `DPoP-Nonce` so
-/// the retry carries the correct nonce.
+/// `process_response` records each response's `DPoP-Nonce` (and invalidates the token on an
+/// `invalid_token` challenge), so the re-sent request carries the fix if there is one.
 pub async fn call_resource_get(
     http_client: &ReqwestClient,
     authorizer: &HttpAuthorizer,
     uri: &Uri,
 ) {
-    let mut retry = false;
+    let mut retried = false;
     loop {
         let headers = match authorizer.get_headers(&Method::GET, uri).await {
             Ok(h) => h,
@@ -122,14 +122,10 @@ pub async fn call_resource_get(
             Err(_) => break,
         };
 
-        let status = response.status;
-        authorizer.update_from_response_headers(uri, &response.headers);
+        authorizer.process_response(uri, &response.headers);
 
-        if status.is_success() || retry {
-            break;
-        }
-        if status == StatusCode::UNAUTHORIZED {
-            retry = true;
+        if response.status == StatusCode::UNAUTHORIZED && !retried {
+            retried = true;
             continue;
         }
         break;

@@ -5,9 +5,9 @@
 //! public setter and unwrap the `Result`).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Url(String);
+pub struct Url(String);
 
-trait IntoUrl {
+pub trait IntoUrl {
     fn into_url(self) -> Result<Url, huskarl_core::Error>;
 }
 

@@ -5,10 +5,13 @@ on:
     branches: [main]
     paths:
       - "huskarl-core/**"
+      # The challenges target fuzzes the client crate's header parser.
+      - "huskarl/**"
       - ".github/workflows/fuzz.yml"
   pull_request:
     paths:
       - "huskarl-core/**"
+      - "huskarl/**"
       - ".github/workflows/fuzz.yml"
   schedule:
     # Weekly long run; the corpus cache accumulates coverage across runs.
@@ -27,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [parse_compact_jws, unseal_v1, jwks]
+        target: [parse_compact_jws, unseal_v1, jwks, challenges]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

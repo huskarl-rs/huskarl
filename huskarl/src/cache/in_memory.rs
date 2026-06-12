@@ -129,13 +129,19 @@ where
             }
         };
         let Some(params) = params else {
-            return Err(Error::new(
-                ErrorKind::ReauthRequired,
-                match refresh_error {
-                    Some(source) => GetTokenError::RefreshFailed { source },
-                    None => GetTokenError::NoTokenSource,
-                },
-            ));
+            return Err(match refresh_error {
+                // A transient refresh failure is not a reauth signal: the
+                // refresh token was retained and a later call may succeed.
+                // Propagate the refresh error's own retryable classification.
+                Some(source) if source.is_retryable() => {
+                    Error::new(source.kind(), GetTokenError::RefreshFailed { source })
+                }
+                Some(source) => Error::new(
+                    ErrorKind::ReauthRequired,
+                    GetTokenError::RefreshFailed { source },
+                ),
+                None => Error::new(ErrorKind::ReauthRequired, GetTokenError::NoTokenSource),
+            });
         };
 
         match self.grant.exchange(params).await {
@@ -145,13 +151,28 @@ where
                 Ok(token_response)
             }
             Err(exchange_source) => Err(match refresh_error {
-                Some(refresh_source) => Error::new(
-                    ErrorKind::ReauthRequired,
-                    GetTokenError::BothFailed {
-                        refresh_source,
-                        exchange_source,
-                    },
-                ),
+                Some(refresh_source) => {
+                    // ReauthRequired only when no automatic path remains. A
+                    // retryable exchange with reusable parameters, or a
+                    // retryable refresh (the refresh token was retained), can
+                    // both succeed on a later call without re-running the
+                    // interactive flow.
+                    let kind = if self.grant.reusable_parameters() && exchange_source.is_retryable()
+                    {
+                        exchange_source.kind()
+                    } else if refresh_source.is_retryable() {
+                        refresh_source.kind()
+                    } else {
+                        ErrorKind::ReauthRequired
+                    };
+                    Error::new(
+                        kind,
+                        GetTokenError::BothFailed {
+                            refresh_source,
+                            exchange_source,
+                        },
+                    )
+                }
                 // No refresh was attempted: surface the exchange error with
                 // its own classification (e.g. a retryable transport failure).
                 None => exchange_source,
@@ -377,15 +398,49 @@ mod tests {
         }
     }
 
-    /// Asserts the error wraps the given [`GetTokenError`] case under
-    /// [`ErrorKind::ReauthRequired`].
-    fn assert_reauth_required(err: &Error, matcher: impl Fn(&GetTokenError) -> bool) {
-        assert_eq!(err.kind(), ErrorKind::ReauthRequired);
+    /// Asserts the error has the given kind and wraps the given
+    /// [`GetTokenError`] case.
+    fn assert_get_token_error(
+        err: &Error,
+        kind: ErrorKind,
+        matcher: impl Fn(&GetTokenError) -> bool,
+    ) {
+        assert_eq!(err.kind(), kind);
         let source = std::error::Error::source(err)
-            .expect("ReauthRequired carries a GetTokenError source")
+            .expect("error carries a GetTokenError source")
             .downcast_ref::<GetTokenError>()
             .expect("source is a GetTokenError");
         assert!(matcher(source), "unexpected GetTokenError: {source}");
+    }
+
+    /// Asserts the error wraps the given [`GetTokenError`] case under
+    /// [`ErrorKind::ReauthRequired`].
+    fn assert_reauth_required(err: &Error, matcher: impl Fn(&GetTokenError) -> bool) {
+        assert_get_token_error(err, ErrorKind::ReauthRequired, matcher);
+    }
+
+    /// An already-expired access token carrying the refresh token
+    /// `"rt-original"`.
+    fn expired_response() -> Arc<TokenResponse> {
+        let expired = RawTokenResponse::builder()
+            .access_token(SecretString::new("expired-access-token"))
+            .token_type("bearer")
+            .expires_in(0)
+            .refresh_token(SecretString::new("rt-original"))
+            .build()
+            .into_token_response(None, SystemTime::now())
+            .expect("valid token response");
+        Arc::new(expired)
+    }
+
+    fn client_credentials_grant(http: MockHttpClient) -> ClientCredentialsGrant {
+        ClientCredentialsGrant::builder()
+            .client_id("client_id")
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token")
+            .unwrap()
+            .http_client(http)
+            .build()
     }
 
     /// Builds a cache primed with an already-expired access token and the
@@ -396,28 +451,25 @@ mod tests {
         http: MockHttpClient,
     ) -> InMemoryTokenCache<ClientCredentialsGrant, SharedRefreshStore> {
         let cache = InMemoryTokenCache::builder()
-            .grant(
-                ClientCredentialsGrant::builder()
-                    .client_id("client_id")
-                    .client_auth(NoAuth)
-                    .token_endpoint("https://as.example.com/token")
-                    .unwrap()
-                    .http_client(http)
-                    .build(),
-            )
+            .grant(client_credentials_grant(http))
             .refresh_store(store)
             .build();
+        cache.prime(expired_response()).await.unwrap();
+        cache
+    }
 
-        let expired = RawTokenResponse::builder()
-            .access_token(SecretString::new("expired-access-token"))
-            .token_type("bearer")
-            .expires_in(0)
-            .refresh_token(SecretString::new("rt-original"))
-            .build()
-            .into_token_response(None, SystemTime::now())
-            .expect("valid token response");
-        cache.prime(Arc::new(expired)).await.unwrap();
-
+    /// Like [`primed_cache`], but with reusable grant parameters available as
+    /// an exchange fallback after a failed refresh.
+    async fn primed_cache_with_params(
+        store: SharedRefreshStore,
+        http: MockHttpClient,
+    ) -> InMemoryTokenCache<ClientCredentialsGrant, SharedRefreshStore> {
+        let cache = InMemoryTokenCache::builder()
+            .grant(client_credentials_grant(http))
+            .grant_parameters(ClientCredentialsGrantParameters::new())
+            .refresh_store(store)
+            .build();
+        cache.prime(expired_response()).await.unwrap();
         cache
     }
 
@@ -484,14 +536,30 @@ mod tests {
             r#"{"error":"temporarily_unavailable"}"#,
         );
 
+        // Not a reauth signal: the refresh token is retained and a later call
+        // can succeed, so the retryable transport classification is kept.
         let err = cache.get_token_response().await.unwrap_err();
-        assert_reauth_required(&err, |e| matches!(e, GetTokenError::RefreshFailed { .. }));
+        assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
+            matches!(e, GetTokenError::RefreshFailed { .. })
+        });
 
         assert_eq!(
             stored_refresh_token(&store).await.as_deref(),
             Some("rt-original")
         );
         assert!(cache.has_refresh_token_cached());
+
+        // The advertised retry path works: the next call refreshes with the
+        // retained token and succeeds.
+        http.push(
+            StatusCode::OK,
+            r#"{"access_token":"recovered","token_type":"bearer","expires_in":3600}"#,
+        );
+        let token = cache.get_token_response().await.unwrap();
+        assert_eq!(
+            token.raw_token_response().access_token.expose_secret(),
+            "recovered"
+        );
     }
 
     #[tokio::test]
@@ -507,6 +575,59 @@ mod tests {
 
         assert_eq!(stored_refresh_token(&store).await, None);
         assert!(!cache.has_refresh_token_cached());
+    }
+
+    /// Transient failures of both the refresh and the fallback exchange stay
+    /// retryable for a grant with reusable parameters: a later call can
+    /// succeed without re-running any interactive flow.
+    #[tokio::test]
+    async fn both_failed_transiently_stays_retryable() {
+        let store = SharedRefreshStore::default();
+        let http = MockHttpClient::default();
+        let cache = primed_cache_with_params(store.clone(), http.clone()).await;
+
+        // Refresh attempt, then the fallback exchange, both 503.
+        http.push(
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":"temporarily_unavailable"}"#,
+        );
+        http.push(
+            StatusCode::SERVICE_UNAVAILABLE,
+            r#"{"error":"temporarily_unavailable"}"#,
+        );
+
+        let err = cache.get_token_response().await.unwrap_err();
+        assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
+            matches!(e, GetTokenError::BothFailed { .. })
+        });
+
+        // The advertised retry path works: the retained refresh token is
+        // tried first and succeeds.
+        http.push(
+            StatusCode::OK,
+            r#"{"access_token":"recovered","token_type":"bearer","expires_in":3600}"#,
+        );
+        let token = cache.get_token_response().await.unwrap();
+        assert_eq!(
+            token.raw_token_response().access_token.expose_secret(),
+            "recovered"
+        );
+    }
+
+    /// When both paths fail definitively, no automatic recovery remains and
+    /// the error is the reauth signal.
+    #[tokio::test]
+    async fn both_failed_definitively_requires_reauth() {
+        let store = SharedRefreshStore::default();
+        let http = MockHttpClient::default();
+        let cache = primed_cache_with_params(store.clone(), http.clone()).await;
+
+        http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+        http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+
+        let err = cache.get_token_response().await.unwrap_err();
+        assert_reauth_required(&err, |e| matches!(e, GetTokenError::BothFailed { .. }));
+        assert_eq!(stored_refresh_token(&store).await, None);
     }
 
     /// Builds a cache around an authorization code grant (single-use
@@ -577,13 +698,16 @@ mod tests {
 
         // The next call must refresh. When the refresh fails, the spent code
         // must not be replayed as a fallback (a second request would exhaust
-        // the mock and panic); the refresh error is surfaced instead.
+        // the mock and panic); the refresh error is surfaced instead — as
+        // retryable, since the retained refresh token makes a retry viable.
         http.push(
             StatusCode::SERVICE_UNAVAILABLE,
             r#"{"error":"temporarily_unavailable"}"#,
         );
         let err = cache.get_token_response().await.unwrap_err();
-        assert_reauth_required(&err, |e| matches!(e, GetTokenError::RefreshFailed { .. }));
+        assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
+            matches!(e, GetTokenError::RefreshFailed { .. })
+        });
 
         // The transiently-failed refresh token is retained for later retries.
         assert_eq!(stored_refresh_token(&store).await.as_deref(), Some("rt-1"));
