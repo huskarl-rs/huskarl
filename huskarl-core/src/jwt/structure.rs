@@ -25,12 +25,17 @@ pub struct ConfirmationClaim {
     pub jku: Option<serde_json::Value>,
 }
 
+/// A JOSE header (RFC 7515 §4) with the registered parameters huskarl
+/// processes, plus type-safe extra parameters via `ExtraHeaders`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "ExtraHeaders: serde::de::Deserialize<'de>"))]
 pub struct JwtHeader<'a, ExtraHeaders: Clone> {
+    /// The JWS algorithm (RFC 7515 §4.1.1), e.g. `ES256`.
     pub alg: Cow<'a, str>,
+    /// The media type of the token (RFC 7515 §4.1.9), e.g. `at+jwt`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub typ: Option<Cow<'a, str>>,
+    /// The identifier of the key used to sign the token (RFC 7515 §4.1.4).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kid: Option<Cow<'a, str>>,
     /// RFC 7515 §4.1.11: critical header parameters. Any non-empty value means the
@@ -42,41 +47,53 @@ pub struct JwtHeader<'a, ExtraHeaders: Clone> {
     /// it unless they are specifically processing a `DPoP` proof.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jwk: Option<PublicJwk>,
+    /// Additional header parameters beyond the registered set, captured
+    /// type-safely via the `ExtraHeaders` type parameter.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pub extra_headers: Option<Cow<'a, ExtraHeaders>>,
 }
 
+/// The registered JWT claims (RFC 7519 §4.1), with additional claims captured
+/// type-safely via the `Claims` type parameter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "Claims: serde::de::Deserialize<'de>"))]
 pub struct JwtClaims<'a, Claims: Clone> {
+    /// The issuer of the token (RFC 7519 §4.1.1).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub iss: Option<Cow<'a, str>>,
+    /// The subject of the token (RFC 7519 §4.1.2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub: Option<Cow<'a, str>>,
+    /// The audiences of the token (RFC 7519 §4.1.3). A bare-string `aud`
+    /// deserializes as a single-element vector; an absent claim as empty.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
         with = "crate::serde_utils::string::string_or_vec"
     )]
     pub aud: Vec<String>,
+    /// When the token was issued (RFC 7519 §4.1.6).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         with = "crate::serde_utils::time::option_unix_secs"
     )]
     pub iat: Option<SystemTime>,
+    /// When the token expires (RFC 7519 §4.1.4).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         with = "crate::serde_utils::time::option_unix_secs"
     )]
     pub exp: Option<SystemTime>,
+    /// The time before which the token must not be accepted (RFC 7519 §4.1.5).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         with = "crate::serde_utils::time::option_unix_secs"
     )]
     pub nbf: Option<SystemTime>,
+    /// The unique identifier of the token (RFC 7519 §4.1.7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jti: Option<Cow<'a, str>>,
     /// Key confirmation claim (RFC 7800). Binds the token to a `DPoP` key or mTLS certificate.

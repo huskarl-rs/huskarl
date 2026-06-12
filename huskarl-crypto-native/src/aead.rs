@@ -2,8 +2,7 @@
 
 use std::{array::TryFromSliceError, borrow::Cow, fmt};
 
-use aes_gcm::{AeadInOut, aead::Generate};
-use hmac::KeyInit;
+use aes_gcm::{AeadInOut, KeyInit, aead::Generate};
 use huskarl_core::{
     Error, ErrorKind,
     crypto::{

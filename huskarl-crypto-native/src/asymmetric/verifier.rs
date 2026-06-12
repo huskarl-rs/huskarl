@@ -44,6 +44,12 @@ impl Key {
 
     pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Option<Key> {
         fn rsa_key_from_jwk(rsa_jwk: jwk::RsaPublicKey) -> Option<rsa::RsaPublicKey> {
+            // RFC 7518 §4.2 sets 2048 bits as the minimum RSA key size for JWS;
+            // anything smaller is rejected rather than verified.
+            let modulus_bytes = rsa_jwk.n.iter().skip_while(|&&b| b == 0).count();
+            if modulus_bytes < 2048 / 8 {
+                return None;
+            }
             let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
             let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e.into_boxed_slice());
             RsaPublicKey::new(n_boxed, e_boxed).ok()
@@ -337,7 +343,7 @@ mod tests {
             earnest_id: String,
         }
 
-        let signing_key = PrivateKey::generate(GenerateAlgorithm::EdDsa, None);
+        let signing_key = PrivateKey::generate(GenerateAlgorithm::EdDsa, None).unwrap();
         let selected_key = signing_key.select_asymmetric_signer();
 
         let jwt = Jwt::builder()
@@ -366,6 +372,21 @@ mod tests {
         assert_eq!(validated.issuer.as_deref(), Some("https://as.example.com"));
         assert_eq!(validated.audience, ["my-api"]);
         assert!(validated.expiration.is_some());
+    }
+
+    #[test]
+    fn from_jwk_rejects_small_rsa_modulus() {
+        // A 1024-bit modulus is below the RFC 7518 §4.2 minimum of 2048 bits.
+        let jwk = huskarl_core::jwk::PublicJwk::builder()
+            .algorithm("RS256")
+            .key(
+                huskarl_core::jwk::RsaPublicKey::builder()
+                    .n([0xFF; 128])
+                    .e([0x01, 0x00, 0x01])
+                    .build(),
+            )
+            .build();
+        assert!(AsymmetricPublicKey::from_jwk(jwk).is_none());
     }
 
     #[tokio::test]
@@ -456,7 +477,7 @@ mod tests {
 
     async fn roundtrip_load_jwk(algorithm: GenerateAlgorithm) {
         let kid = "load-jwk-key".to_string();
-        let original = PrivateKey::generate(algorithm, Some(kid.clone()));
+        let original = PrivateKey::generate(algorithm, Some(kid.clone())).unwrap();
         let private_jwk = original.as_private_jwk(Some(&kid));
 
         // Convert to Jwk (which is Serialize) and serialize to JSON
@@ -685,7 +706,7 @@ mod tests {
     }
 
     async fn deterministic_signature_roundtrip(algorithm: GenerateAlgorithm) {
-        let original = PrivateKey::generate(algorithm, Some("det-key".to_string()));
+        let original = PrivateKey::generate(algorithm, Some("det-key".to_string())).unwrap();
         let private_jwk = original.as_private_jwk(Some("det-key"));
         let restored = PrivateKey::from_jwk(private_jwk).unwrap();
 
@@ -730,7 +751,7 @@ mod tests {
 
     async fn roundtrip_jwk(algorithm: GenerateAlgorithm) {
         let kid = "test-key-1".to_string();
-        let original = PrivateKey::generate(algorithm, Some(kid.clone()));
+        let original = PrivateKey::generate(algorithm, Some(kid.clone())).unwrap();
         let private_jwk = original.as_private_jwk(Some(&kid));
 
         // Round-trip through from_jwk

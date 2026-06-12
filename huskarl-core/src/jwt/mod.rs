@@ -14,4 +14,4 @@ pub mod validator;
 pub use builder::{JwsSigningInputError, Jwt, JwtBuilder};
 pub use jti::JtiUniquenessChecker;
 pub use parse::{JwsParseError, ParsedJws, parse_compact_jws};
-pub use structure::ConfirmationClaim;
+pub use structure::{ConfirmationClaim, JwtClaims, JwtHeader};

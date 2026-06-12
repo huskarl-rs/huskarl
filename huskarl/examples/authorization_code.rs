@@ -45,7 +45,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .redirect_uri("http://localhost:8080/login/callback")
         .dpop(
             DPoP::builder()
-                .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None))
+                .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
                 .build(),
         )
         .jws_verifier_factory(Arc::new(

@@ -3,7 +3,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use huskarl_core::{
-    Error,
+    Error, ErrorKind,
     crypto::signer::{
         AsymmetricJwsSigner, AsymmetricJwsSignerSelector, JwsSigner, JwsSignerSelector,
     },
@@ -518,9 +518,23 @@ impl AsRef<str> for AsymmetricAlgorithm {
 
 impl PrivateKey {
     /// Generates an asymmetric key in memory.
-    #[must_use]
-    #[allow(clippy::missing_panics_doc)]
-    pub fn generate(key_type: GenerateAlgorithm, kid: Option<String>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if an RSA modulus length below 2048 bits
+    /// is requested, and [`ErrorKind::Crypto`] if key generation itself fails.
+    pub fn generate(key_type: GenerateAlgorithm, kid: Option<String>) -> Result<Self, Error> {
+        fn rsa_key(modulus_length: u32) -> Result<rsa::RsaPrivateKey, Error> {
+            if modulus_length < RSA_MODULUS_2048 {
+                return Err(Error::new(
+                    ErrorKind::Config,
+                    format!("RSA modulus length must be at least 2048 bits, got {modulus_length}"),
+                ));
+            }
+            rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
+                .map_err(|e| Error::new(ErrorKind::Crypto, e).with_context("generating RSA key"))
+        }
+
         let signing_key = match key_type {
             GenerateAlgorithm::Es256 => {
                 use p256::elliptic_curve::Generate as _;
@@ -531,35 +545,23 @@ impl PrivateKey {
                 Key::Es384(p384::ecdsa::SigningKey::generate())
             }
             GenerateAlgorithm::Rs256 { modulus_length } => {
-                Key::Rs256(rsa::pkcs1v15::SigningKey::new(
-                    rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
-                        .expect("Key is >= 1024 bytes"),
-                ))
+                Key::Rs256(rsa::pkcs1v15::SigningKey::new(rsa_key(modulus_length)?))
             }
             GenerateAlgorithm::Rs384 { modulus_length } => {
-                Key::Rs384(rsa::pkcs1v15::SigningKey::new(
-                    rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
-                        .expect("Key is >= 1024 bytes"),
-                ))
+                Key::Rs384(rsa::pkcs1v15::SigningKey::new(rsa_key(modulus_length)?))
             }
             GenerateAlgorithm::Rs512 { modulus_length } => {
-                Key::Rs512(rsa::pkcs1v15::SigningKey::new(
-                    rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
-                        .expect("Key is >= 1024 bytes"),
-                ))
+                Key::Rs512(rsa::pkcs1v15::SigningKey::new(rsa_key(modulus_length)?))
             }
-            GenerateAlgorithm::Ps256 { modulus_length } => Key::Ps256(rsa::pss::SigningKey::new(
-                rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
-                    .expect("Key is >= 1024 bytes"),
-            )),
-            GenerateAlgorithm::Ps384 { modulus_length } => Key::Ps384(rsa::pss::SigningKey::new(
-                rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
-                    .expect("Key is >= 1024 bytes"),
-            )),
-            GenerateAlgorithm::Ps512 { modulus_length } => Key::Ps512(rsa::pss::SigningKey::new(
-                rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
-                    .expect("Key is >= 1024 bytes"),
-            )),
+            GenerateAlgorithm::Ps256 { modulus_length } => {
+                Key::Ps256(rsa::pss::SigningKey::new(rsa_key(modulus_length)?))
+            }
+            GenerateAlgorithm::Ps384 { modulus_length } => {
+                Key::Ps384(rsa::pss::SigningKey::new(rsa_key(modulus_length)?))
+            }
+            GenerateAlgorithm::Ps512 { modulus_length } => {
+                Key::Ps512(rsa::pss::SigningKey::new(rsa_key(modulus_length)?))
+            }
             GenerateAlgorithm::EdDsa => {
                 let mut secret = [0u8; 32];
                 rand::rng().fill_bytes(&mut secret);
@@ -581,14 +583,14 @@ impl PrivateKey {
         let jwk = signing_key.as_public_jwk(kid.as_deref());
         let thumbprint = jwk.thumbprint();
 
-        Self {
+        Ok(Self {
             inner: Arc::new(PrivateKeyInner {
                 signing_key,
                 jwk,
                 thumbprint,
                 kid,
             }),
-        }
+        })
     }
 
     /// Loads the private key from a DER binary secret.
@@ -887,8 +889,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generate_rejects_small_rsa_modulus() {
+        let error = PrivateKey::generate(
+            GenerateAlgorithm::Rs256 {
+                modulus_length: 1024,
+            },
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Config);
+    }
+
+    #[test]
     fn from_jwk_missing_algorithm() {
-        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None);
+        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
         let mut private_jwk = key.as_private_jwk(None);
         private_jwk.algorithm = None;
 
@@ -898,7 +912,7 @@ mod tests {
 
     #[test]
     fn from_jwk_key_type_mismatch() {
-        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None);
+        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
         let mut private_jwk = key.as_private_jwk(None);
         private_jwk.algorithm = Some("RS256".to_string());
 

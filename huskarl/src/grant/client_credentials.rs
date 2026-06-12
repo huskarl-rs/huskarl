@@ -432,7 +432,7 @@ mod tests {
             .client_auth(NoAuth)
             .dpop(
                 DPoP::builder()
-                    .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None))
+                    .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
                     .build(),
             )
             .build();

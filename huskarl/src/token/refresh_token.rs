@@ -19,7 +19,7 @@ impl RefreshToken {
 }
 
 impl RefreshToken {
-    /// Reeturns the token as a [`SecretString`].
+    /// Returns the token as a [`SecretString`].
     #[must_use]
     pub fn token(&self) -> &SecretString {
         &self.token

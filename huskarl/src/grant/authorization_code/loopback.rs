@@ -193,13 +193,6 @@ fn to_error_context(port: u16, err: &LoopbackError) -> ErrorContext {
 }
 
 /// Deadline for reading a single HTTP request once a connection is accepted.
-///
-/// A connection that opens and then stalls (a port scanner, a browser
-/// preconnect, a stray `curl`) must not block the flow forever; on expiry the
-/// request is treated as bad and the server keeps waiting for the real
-/// callback. There is deliberately no deadline on `accept()` itself — how
-/// long to wait for the user to finish in the browser is the caller's
-/// decision (wrap the future in `tokio::time::timeout` to bound it).
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Maximum bytes accepted for the request line plus headers.
@@ -211,6 +204,12 @@ const MAX_HEADER_BYTES: u64 = 16 * 1024;
 /// peer from triggering a huge allocation via the `Content-Length` header.
 const MAX_BODY_BYTES: u64 = 16 * 1024;
 
+/// Deadline for the browser to follow the post-callback redirect and fetch
+/// the result page (which is cosmetic).
+const RESULT_PAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Waits for the authorization callback on `listener`, completes the flow
+/// via `complete`, and serves a result page to the browser.
 pub async fn complete_on_loopback_oidc(
     listener: &TcpListener,
     redirect_uri: &str,
@@ -220,15 +219,23 @@ pub async fn complete_on_loopback_oidc(
     )
         -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error>,
 ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), LoopbackError> {
-    complete_on_loopback_oidc_with_timeout(listener, redirect_uri, renderer, READ_TIMEOUT, complete)
-        .await
+    complete_on_loopback_oidc_with_timeouts(
+        listener,
+        redirect_uri,
+        renderer,
+        READ_TIMEOUT,
+        RESULT_PAGE_TIMEOUT,
+        complete,
+    )
+    .await
 }
 
-async fn complete_on_loopback_oidc_with_timeout(
+async fn complete_on_loopback_oidc_with_timeouts(
     listener: &TcpListener,
     redirect_uri: &str,
     renderer: Option<CallbackRenderer>,
     read_timeout: std::time::Duration,
+    result_page_timeout: std::time::Duration,
     complete: impl AsyncFnOnce(
         CompleteInput,
     )
@@ -243,8 +250,6 @@ async fn complete_on_loopback_oidc_with_timeout(
 
     let renderer = renderer.unwrap_or_default();
 
-    // Phase 1: Accept the callback with query parameters, parse them,
-    // perform the token exchange, and redirect to a clean URL.
     let result = loop {
         let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
         let path = read_request_path(&mut stream, read_timeout)
@@ -284,35 +289,40 @@ async fn complete_on_loopback_oidc_with_timeout(
         break result;
     };
 
-    // Phase 2: Serve the result page on the clean URL.
-    // Accept connections in a loop to handle any stray requests
-    // (e.g. favicon) before the redirect arrives.
-    loop {
-        let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
-        let path = read_request_path(&mut stream, read_timeout)
-            .await
-            .context(ReadRequestSnafu)?;
+    // Serve the result page on the clean URL.
+    let serve_result_page = async {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let Ok(path) = read_request_path(&mut stream, read_timeout).await else {
+                continue;
+            };
 
-        match path.as_deref() {
-            Some("/success") => {
-                let response = (renderer.success)(&SuccessContext { port });
-                let _ = send_callback_response(&mut stream, response, "").await;
-                return result;
-            }
-            Some("/failure") => {
-                if let Err(ref err) = result {
-                    let ctx = to_error_context(port, err);
-                    let query = error_query_string(&ctx);
-                    let response = (renderer.error)(&ctx);
-                    let _ = send_callback_response(&mut stream, response, &query).await;
+            match path.as_deref() {
+                Some("/success") => {
+                    let response = (renderer.success)(&SuccessContext { port });
+                    let _ = send_callback_response(&mut stream, response, "").await;
+                    break;
                 }
-                return result;
-            }
-            _ => {
-                let _ = send_error_response(&mut stream, 404, "Not Found").await;
+                Some("/failure") => {
+                    if let Err(ref err) = result {
+                        let ctx = to_error_context(port, err);
+                        let query = error_query_string(&ctx);
+                        let response = (renderer.error)(&ctx);
+                        let _ = send_callback_response(&mut stream, response, &query).await;
+                    }
+                    break;
+                }
+                _ => {
+                    let _ = send_error_response(&mut stream, 404, "Not Found").await;
+                }
             }
         }
-    }
+    };
+    let _ = tokio::time::timeout(result_page_timeout, serve_result_page).await;
+
+    result
 }
 
 /// Reads one HTTP request and returns its path (with the `form_post` body
@@ -772,11 +782,12 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc_with_timeout(
+            complete_on_loopback_oidc_with_timeouts(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
                 std::time::Duration::from_millis(100),
+                RESULT_PAGE_TIMEOUT,
                 async |_input| Ok(ok_token_response()),
             )
             .await
@@ -795,6 +806,35 @@ mod tests {
             "test-token"
         );
         drop(silent);
+    }
+
+    #[tokio::test]
+    async fn test_result_returned_when_browser_never_follows_redirect() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc_with_timeouts(
+                &listener,
+                "http://127.0.0.1/callback",
+                None,
+                READ_TIMEOUT,
+                std::time::Duration::from_millis(100),
+                async |_input| Ok(ok_token_response()),
+            )
+            .await
+        });
+
+        // The callback arrives and the exchange succeeds, but the browser
+        // never follows the /success redirect (tab closed mid-flow). The
+        // completed result must still be returned after the bounded wait.
+        send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
+
+        let (token_response, _) = handle.await.unwrap().unwrap();
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
     }
 
     #[tokio::test]

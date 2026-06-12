@@ -44,10 +44,13 @@ async fn run_fapi2_plan<J: Jar + Clone + 'static>(
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
 
     // Generate fresh key pairs for each test run.
-    let client_key = PrivateKey::generate(GenerateAlgorithm::Es256, Some("client-key".to_string()));
-    let dpop_key = PrivateKey::generate(GenerateAlgorithm::Es256, Some("dpop-key".to_string()));
+    let client_key =
+        PrivateKey::generate(GenerateAlgorithm::Es256, Some("client-key".to_string())).unwrap();
+    let dpop_key =
+        PrivateKey::generate(GenerateAlgorithm::Es256, Some("dpop-key".to_string())).unwrap();
     // The conformance suite AS needs a private signing key to issue tokens.
-    let server_key = PrivateKey::generate(GenerateAlgorithm::Es256, Some("server-key".to_string()));
+    let server_key =
+        PrivateKey::generate(GenerateAlgorithm::Es256, Some("server-key".to_string())).unwrap();
 
     // Extract the public JWK to register with the conformance suite as the client JWKS.
     let client_public_jwk = client_key.public_key_jwk().into_owned();

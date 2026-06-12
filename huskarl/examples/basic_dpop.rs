@@ -40,7 +40,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .client_auth(ClientSecret::new(client_secret))
         .dpop(
             DPoP::builder()
-                .signer(PrivateKey::generate(GenerateAlgorithm::Ed25519, None))
+                .signer(PrivateKey::generate(GenerateAlgorithm::Ed25519, None).unwrap())
                 .build(),
         )
         .build();

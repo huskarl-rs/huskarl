@@ -76,6 +76,16 @@ impl ReqwestClient {
         #[builder(default = false)]
         follow_redirects: bool,
 
+        /// Total request timeout, from connecting until the response body has
+        /// been read. Defaults to 30 seconds so a hung server cannot stall
+        /// token acquisition indefinitely; pass `None` to disable the timeout.
+        ///
+        /// Not available on `wasm32`, where the browser's fetch API controls
+        /// request timeouts.
+        #[cfg(not(target_arch = "wasm32"))]
+        #[builder(required, default = Some(std::time::Duration::from_secs(30)))]
+        timeout: Option<std::time::Duration>,
+
         configure_builder: Option<
             Box<dyn FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder>,
         >,
@@ -85,6 +95,11 @@ impl ReqwestClient {
         #[cfg(not(target_arch = "wasm32"))]
         if !follow_redirects {
             reqwest_builder = reqwest_builder.redirect(reqwest::redirect::Policy::none());
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(timeout) = timeout {
+            reqwest_builder = reqwest_builder.timeout(timeout);
         }
 
         if let Some(user_agent) = user_agent {
@@ -159,6 +174,75 @@ fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
     Error::new(ErrorKind::Transport { retryable }, source)
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use std::time::Duration;
+
+    use huskarl_core::{ErrorKind, http::Idempotency};
+
+    use super::transport_error;
+
+    /// Produces a connection-establishment failure by targeting a port that
+    /// was just released, so nothing is listening on it.
+    async fn connect_error() -> reqwest::Error {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        reqwest::Client::new()
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap_err()
+    }
+
+    /// Produces a timeout by connecting to a listener whose backlog completes
+    /// the TCP handshake but which never accepts or responds.
+    async fn timeout_error() -> (reqwest::Error, std::net::TcpListener) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let error = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap()
+            .get(format!("http://127.0.0.1:{port}/"))
+            .send()
+            .await
+            .unwrap_err();
+        (error, listener)
+    }
+
+    #[tokio::test]
+    async fn connect_failure_is_retryable_regardless_of_idempotency() {
+        for idempotency in [Idempotency::Idempotent, Idempotency::Unknown] {
+            let error = transport_error(connect_error().await, idempotency);
+            assert!(
+                matches!(error.kind(), ErrorKind::Transport { retryable: true }),
+                "connect failure with {idempotency:?} should be retryable, got {:?}",
+                error.kind()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn timeout_is_retryable_only_when_idempotent() {
+        let (error, _listener) = timeout_error().await;
+        let error = transport_error(error, Idempotency::Idempotent);
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Transport { retryable: true }
+        ));
+
+        let (error, _listener) = timeout_error().await;
+        let error = transport_error(error, Idempotency::Unknown);
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::Transport { retryable: false }
+        ));
+    }
+}
+
 impl HttpClient for ReqwestClient {
     fn uses_mtls(&self) -> bool {
         self.uses_mtls
@@ -181,7 +265,9 @@ impl HttpClient for ReqwestClient {
                 .headers(parts.headers)
                 .body(body)
                 .build()
-                .map_err(|e| transport_error(e, idempotency))?;
+                .map_err(|e| {
+                    Error::new(ErrorKind::Config, e).with_context("building HTTP request")
+                })?;
 
             let response = self
                 .client
