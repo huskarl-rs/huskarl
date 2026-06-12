@@ -1172,6 +1172,7 @@ name = "huskarl-crypto-native"
 version = "0.8.0-pre.0"
 dependencies = [
  "aes-gcm",
+ "base64",
  "ed25519-dalek",
  "hmac",
  "huskarl-core",

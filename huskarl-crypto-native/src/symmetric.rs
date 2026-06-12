@@ -14,7 +14,7 @@ use huskarl_core::{
     platform::MaybeSendBoxFuture,
     secrets::{Secret, SecretBytes, SecretString},
 };
-use sha2::digest::common::KeySizeUser as _;
+use sha2::Digest as _;
 use snafu::{ResultExt, Snafu, ensure};
 use subtle::ConstantTimeEq as _;
 
@@ -35,6 +35,17 @@ impl AsRef<str> for SymmetricAlgorithm {
             Self::Hs256 => "HS256",
             Self::Hs384 => "HS384",
             Self::Hs512 => "HS512",
+        }
+    }
+}
+
+impl SymmetricAlgorithm {
+    /// The minimum key size in bytes.
+    fn min_key_size(self) -> usize {
+        match self {
+            Self::Hs256 => sha2::Sha256::output_size(),
+            Self::Hs384 => sha2::Sha384::output_size(),
+            Self::Hs512 => sha2::Sha512::output_size(),
         }
     }
 }
@@ -132,13 +143,8 @@ impl SymmetricKey {
         let key_id = key_id_from_secret_identity(secret_output.identity.as_deref());
         let key = secret_output.value;
 
-        let required_key_size = match algorithm {
-            SymmetricAlgorithm::Hs256 => Hmac::<sha2::Sha256>::key_size(),
-            SymmetricAlgorithm::Hs384 => Hmac::<sha2::Sha384>::key_size(),
-            SymmetricAlgorithm::Hs512 => Hmac::<sha2::Sha512>::key_size(),
-        };
+        let required_key_size = algorithm.min_key_size();
 
-        // RFC 7518 Section 3.2: A key of the same size as the hash output (or larger) MUST be used.
         ensure!(
             key.expose_secret().len() >= required_key_size,
             InvalidKeySizeSnafu {
@@ -183,11 +189,7 @@ impl SymmetricKey {
             }
         };
 
-        let required_key_size = match algorithm {
-            SymmetricAlgorithm::Hs256 => Hmac::<sha2::Sha256>::key_size(),
-            SymmetricAlgorithm::Hs384 => Hmac::<sha2::Sha384>::key_size(),
-            SymmetricAlgorithm::Hs512 => Hmac::<sha2::Sha512>::key_size(),
-        };
+        let required_key_size = algorithm.min_key_size();
 
         ensure!(
             oct.k.len() >= required_key_size,
@@ -330,19 +332,84 @@ mod tests {
         key.verify(data, &signature, &key_match).await.unwrap();
     }
 
+    // The RFC 7518 §3.2 minimum key size for each algorithm — keys of exactly
+    // the hash output size must be accepted (they're typical for
+    // client-secret-derived keys).
     #[tokio::test]
     async fn from_jwk_hs256() {
-        roundtrip_symmetric("HS256", 64).await;
+        roundtrip_symmetric("HS256", 32).await;
     }
 
     #[tokio::test]
     async fn from_jwk_hs384() {
-        roundtrip_symmetric("HS384", 128).await;
+        roundtrip_symmetric("HS384", 48).await;
     }
 
     #[tokio::test]
     async fn from_jwk_hs512() {
+        roundtrip_symmetric("HS512", 64).await;
+    }
+
+    #[tokio::test]
+    async fn from_jwk_oversized_keys() {
+        roundtrip_symmetric("HS256", 64).await;
+        roundtrip_symmetric("HS384", 128).await;
         roundtrip_symmetric("HS512", 128).await;
+    }
+
+    #[test]
+    fn from_jwk_key_size_boundaries() {
+        let jwk_with_key = |alg: &str, len: usize| {
+            huskarl_core::jwk::Jwk::builder()
+                .key(
+                    huskarl_core::jwk::OctKey::builder()
+                        .k(vec![0u8; len])
+                        .build(),
+                )
+                .algorithm(alg)
+                .build()
+        };
+
+        for (alg, min) in [("HS256", 32), ("HS384", 48), ("HS512", 64)] {
+            assert!(
+                SymmetricKey::from_jwk(jwk_with_key(alg, min)).is_ok(),
+                "{alg}: RFC-minimum {min}-byte key must be accepted"
+            );
+            let err = SymmetricKey::from_jwk(jwk_with_key(alg, min - 1)).unwrap_err();
+            assert!(
+                matches!(err, JwkError::InvalidKeySize { required, .. } if required == min),
+                "{alg}: {}-byte key must be rejected with required={min}",
+                min - 1
+            );
+        }
+    }
+
+    /// RFC 7515 Appendix A.1 — HS256 known-answer vector.
+    #[tokio::test]
+    async fn hs256_rfc7515_a1_vector() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+        let key_bytes = URL_SAFE_NO_PAD
+            .decode("AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow")
+            .unwrap();
+        let jwk = huskarl_core::jwk::Jwk::builder()
+            .key(huskarl_core::jwk::OctKey::builder().k(key_bytes).build())
+            .algorithm("HS256")
+            .build();
+        let key = SymmetricKey::from_jwk(jwk).unwrap();
+
+        let input = b"eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
+        let expected = URL_SAFE_NO_PAD
+            .decode("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
+            .unwrap();
+
+        assert_eq!(key.sign(input).await.unwrap(), expected);
+
+        let key_match = KeyMatch {
+            alg: "HS256",
+            kid: None,
+        };
+        key.verify(input, &expected, &key_match).await.unwrap();
     }
 
     #[test]
