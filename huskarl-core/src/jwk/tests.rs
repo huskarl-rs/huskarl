@@ -48,6 +48,72 @@ fn test_unknown_curve_parses() {
     let _: PublicJwk = serde_json::from_str(unknown_curve).unwrap();
 }
 
+// One unrecognized key in an IdP's JWKS (e.g. a future post-quantum kty) must
+// not fail the whole fetch — the recognized keys must remain usable.
+#[test]
+fn test_jwks_with_unknown_kty_parses() {
+    let jwks_json = r#"{"keys":[
+            {"kty":"AKP","alg":"ML-DSA-44","pub":"dGVzdA","kid":"pqc-1"},
+            {"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","use":"sig","kid":"1"}
+        ]}"#;
+
+    let jwks: Jwks = serde_json::from_str(jwks_json).unwrap();
+    assert_eq!(jwks.keys.len(), 2);
+    assert_eq!(jwks.keys[0].key, Key::Unknown);
+    assert_eq!(jwks.keys[0].kid.as_deref(), Some("pqc-1"));
+    assert!(matches!(&jwks.keys[1].key, Key::Ec(_)));
+
+    // The unknown key is dropped on conversion; the usable key survives.
+    let public: PublicJwks = jwks.into();
+    assert_eq!(public.keys.len(), 1);
+    assert_eq!(public.keys[0].kid.as_deref(), Some("1"));
+}
+
+#[test]
+fn test_unknown_key_use_parses() {
+    let jwk_json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","use":"attest"}"#;
+    let jwk: PublicJwk = serde_json::from_str(jwk_json).unwrap();
+    assert_eq!(jwk.key_use, Some(KeyUse::Unknown));
+}
+
+#[test]
+fn test_unknown_key_operation_parses() {
+    let jwk_json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","key_ops":["verify","attest"]}"#;
+    let jwk: PublicJwk = serde_json::from_str(jwk_json).unwrap();
+    assert_eq!(
+        jwk.key_operations,
+        Some(vec![KeyOperation::Verify, KeyOperation::Unknown])
+    );
+}
+
+#[test]
+fn test_known_key_operations_parse() {
+    let ops_json = r#"["sign","verify","encrypt","decrypt","wrapKey","unwrapKey","deriveKey","deriveBits"]"#;
+    let ops: Vec<KeyOperation> = serde_json::from_str(ops_json).unwrap();
+    assert_eq!(
+        ops,
+        vec![
+            KeyOperation::Sign,
+            KeyOperation::Verify,
+            KeyOperation::Encrypt,
+            KeyOperation::Decrypt,
+            KeyOperation::WrapKey,
+            KeyOperation::UnwrapKey,
+            KeyOperation::DeriveKey,
+            KeyOperation::DeriveBits,
+        ]
+    );
+}
+
+// Unknown variants carry no wire representation; serializing them must be an
+// error rather than emitting a bogus value like "kty":"Unknown".
+#[test]
+fn test_unknown_variants_do_not_serialize() {
+    assert!(serde_json::to_string(&Key::Unknown).is_err());
+    assert!(serde_json::to_string(&KeyUse::Unknown).is_err());
+    assert!(serde_json::to_string(&KeyOperation::Unknown).is_err());
+}
+
 // --- Private key type tests ---
 
 // RFC 7517 Appendix A.2 — JWK Set containing private keys (EC + RSA)

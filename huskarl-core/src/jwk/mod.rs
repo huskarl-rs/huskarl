@@ -113,7 +113,7 @@ impl PublicJwk {
 
 /// Key use parameter (RFC 7517 §4.2).
 #[non_exhaustive]
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Serialize, PartialEq, Clone, Copy)]
 pub enum KeyUse {
     /// Digital signature or MAC.
     #[serde(rename = "sig")]
@@ -122,13 +122,27 @@ pub enum KeyUse {
     #[serde(rename = "enc")]
     Encrypt,
     /// Unknown key use value.
-    #[serde(skip, other)]
+    #[serde(skip)]
     Unknown,
+}
+
+impl<'de> Deserialize<'de> for KeyUse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "sig" => Self::Sign,
+            "enc" => Self::Encrypt,
+            _ => Self::Unknown,
+        })
+    }
 }
 
 /// Key operations parameter (RFC 7517 §4.3).
 #[non_exhaustive]
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Serialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum KeyOperation {
     /// Compute digital signature or MAC.
@@ -148,8 +162,28 @@ pub enum KeyOperation {
     /// Derive bits not to be used as a key.
     DeriveBits,
     /// Unknown key operation.
-    #[serde(skip, other)]
+    #[serde(skip)]
     Unknown,
+}
+
+impl<'de> Deserialize<'de> for KeyOperation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "sign" => Self::Sign,
+            "verify" => Self::Verify,
+            "encrypt" => Self::Encrypt,
+            "decrypt" => Self::Decrypt,
+            "wrapKey" => Self::WrapKey,
+            "unwrapKey" => Self::UnwrapKey,
+            "deriveKey" => Self::DeriveKey,
+            "deriveBits" => Self::DeriveBits,
+            _ => Self::Unknown,
+        })
+    }
 }
 
 /// The parts of a public key that vary structurally between types (RFC 7517 §4).
@@ -649,9 +683,7 @@ where
 /// A JSON Web Key with private key material (RFC 7517/7518).
 ///
 /// Superset of [`PublicKey`] — includes all asymmetric key types plus symmetric
-/// (`oct`) keys. The [`Unknown`](Key::Unknown) variant allows tolerant
-/// deserialization of unrecognized `kty` values; it carries no key material and
-/// is skipped during serialization.
+/// (`oct`) keys.
 #[non_exhaustive]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(tag = "kty")]
@@ -668,8 +700,8 @@ pub enum Key {
     /// A symmetric octet sequence key.
     #[serde(rename = "oct")]
     Oct(OctKey),
-    /// Unknown key type (unrecognized `kty` value).
-    #[serde(skip, other)]
+    /// Unknown key type.
+    #[serde(skip_serializing, other)]
     Unknown,
 }
 
