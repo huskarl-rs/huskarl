@@ -15,8 +15,7 @@ use crate::{
     platform::MaybeSendBoxFuture,
 };
 
-/// Factory for building a JWKS-backed [`JwsVerifier`](crate::crypto::verifier::JwsVerifier)
-/// with automatic periodic refresh and retry.
+/// Factory for building a JWKS-backed [`JwsVerifier`] with automatic periodic refresh and retry.
 ///
 /// This is an opinionated default stack: a [`MultiKeyVerifier`] wrapped in a
 /// [`ScheduledRefreshVerifier`] and a [`RetryingVerifier`] — keys are fetched from the JWKS

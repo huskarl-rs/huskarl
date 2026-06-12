@@ -7,7 +7,7 @@
 
     This region was generated from Rust documentation comments by `cargo-reedme` using this command:
 
-        cargo reedme
+        cargo +nightly reedme
 
     for more info: https://github.com/nik-rev/cargo-reedme
 
@@ -27,14 +27,19 @@ rest of the authorization checking.
 
 ```rust
 use std::sync::Arc;
-use huskarl_resource_server::core::jwk::JwksSource;
-use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
+
+use huskarl_resource_server::{
+    core::{http::HttpClient, jwk::JwksSource},
+    validator::rfc9068::Rfc9068Validator,
+};
 
 let validator = Rfc9068Validator::builder()
-  .issuer("https://issuer")
-  .audience("audience")
-  .jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client).build()))
-  .build();
+    .issuer("https://issuer")
+    .audience("audience")
+    .jws_verifier_factory(Arc::new(
+        JwksSource::builder().http_client(http_client).build(),
+    ))
+    .build();
 ```
 
 <!-- cargo-reedme: end -->

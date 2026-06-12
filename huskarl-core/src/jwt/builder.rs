@@ -194,9 +194,8 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`](crate::error::ErrorKind::Config) if the
-    /// JWT could not be serialized to JSON, or the signer's error if signing
-    /// failed.
+    /// Returns [`ErrorKind::Config`] if the JWT could not be serialized to
+    /// JSON, or the signer's error if signing failed.
     pub async fn to_jws_compact(
         &self,
         signer: &(impl JwsSigner + ?Sized),
