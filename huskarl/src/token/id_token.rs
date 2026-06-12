@@ -60,12 +60,12 @@ pub struct IdTokenClaims {
     /// Subject - Identifier for the End-User at the Issuer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub: Option<String>,
-    //
-    // Session ID — identifies a specific login session at the issuer. Defined
-    // in OIDC Session Management 1.0 §5; used by front-channel and
-    // back-channel logout to scope logout to a specific session.
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub sid: Option<String>,
+    /// Session ID — identifies a specific login session at the issuer. Defined
+    /// in OIDC Front-Channel Logout 1.0 §3; front-channel and back-channel
+    /// logout requests carry it so the RP can scope logout to the session this
+    /// token established rather than all of the End-User's sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
     /// Standard OIDC profile claims (OIDC Core §5.1), flattened into the
     /// token's claim set.
     #[serde(flatten)]
@@ -395,6 +395,14 @@ mod tests {
         let claims: IdTokenClaims =
             serde_json::from_str(r#"{"sub":"alice","updated_at":null}"#).unwrap();
         assert!(claims.profile.updated_at.is_none());
+    }
+
+    #[test]
+    fn sid_deserializes_to_typed_field_not_extra() {
+        let json = r#"{"sub":"alice","sid":"sess-123"}"#;
+        let claims: IdTokenClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.sid.as_deref(), Some("sess-123"));
+        assert!(!claims.extra.contains_key("sid"));
     }
 
     #[test]
