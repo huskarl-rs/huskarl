@@ -88,7 +88,8 @@ fn test_unknown_key_operation_parses() {
 
 #[test]
 fn test_known_key_operations_parse() {
-    let ops_json = r#"["sign","verify","encrypt","decrypt","wrapKey","unwrapKey","deriveKey","deriveBits"]"#;
+    let ops_json =
+        r#"["sign","verify","encrypt","decrypt","wrapKey","unwrapKey","deriveKey","deriveBits"]"#;
     let ops: Vec<KeyOperation> = serde_json::from_str(ops_json).unwrap();
     assert_eq!(
         ops,

@@ -733,11 +733,16 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |input| {
-                assert_eq!(input.code, "abc");
-                assert_eq!(input.state, "xyz");
-                Ok(ok_token_response())
-            })
+            complete_on_loopback_oidc(
+                &listener,
+                "http://127.0.0.1/callback",
+                None,
+                async |input| {
+                    assert_eq!(input.code, "abc");
+                    assert_eq!(input.state, "xyz");
+                    Ok(ok_token_response())
+                },
+            )
             .await
         });
 

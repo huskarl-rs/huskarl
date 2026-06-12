@@ -29,4 +29,5 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 wasm-bindgen-test = "0.3"

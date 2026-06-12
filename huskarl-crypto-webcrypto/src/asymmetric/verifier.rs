@@ -137,7 +137,7 @@ impl Key {
             Key::Ps256(..) => &["PS256"],
             Key::Ps384(..) => &["PS384"],
             Key::Ps512(..) => &["PS512"],
-            Key::Ed25519(..) => &["Ed25519"],
+            Key::Ed25519(..) => &["Ed25519", "EdDSA"],
         }
     }
 
@@ -356,5 +356,70 @@ impl JwsVerifier for AsymmetricPublicKey {
 
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use wasm_bindgen_test::*;
+
+    use super::*;
+
+    // RFC 8037 §A.2 — Ed25519 public key.
+    const RFC8037_ED25519_PUBLIC_JWK: &str =
+        r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#;
+
+    async fn rfc8037_verifier() -> AsymmetricPublicKey {
+        let jwk: jwk::PublicJwk = serde_json::from_str(RFC8037_ED25519_PUBLIC_JWK).unwrap();
+        AsymmetricPublicKey::from_jwk(jwk).await.unwrap()
+    }
+
+    /// JWS headers in the wild carry the polymorphic name `EdDSA` (RFC 8037),
+    /// not the fully-specified `Ed25519` (RFC 9864); the key must match under
+    /// both, since multi-key dispatch selects on `key_match`.
+    #[wasm_bindgen_test]
+    async fn ed25519_key_matches_eddsa_and_ed25519() {
+        let verifier = rfc8037_verifier().await;
+        for alg in ["EdDSA", "Ed25519"] {
+            assert!(
+                verifier.key_match(&KeyMatch { alg, kid: None }).is_some(),
+                "expected key_match for alg {alg}"
+            );
+        }
+        assert!(
+            verifier
+                .key_match(&KeyMatch {
+                    alg: "RS256",
+                    kid: None
+                })
+                .is_none()
+        );
+    }
+
+    /// RFC 8037 §A.4/§A.5 — verify the worked Ed25519 JWS example.
+    #[wasm_bindgen_test]
+    async fn ed25519_verifies_rfc8037_example() {
+        let verifier = rfc8037_verifier().await;
+        let input = b"eyJhbGciOiJFZERTQSJ9.RXhhbXBsZSBvZiBFZDI1NTE5IHNpZ25pbmc";
+        let signature = URL_SAFE_NO_PAD
+            .decode("hgyY0il_MGCjP0JzlnLWG1PPOt7-09PGcvMg3AIbQR6dWbhijcNR4ki4iylGjg5BhVsPt9g7sVvpAr_MuM0KAg")
+            .unwrap();
+        let key_match = KeyMatch {
+            alg: "EdDSA",
+            kid: None,
+        };
+
+        verifier
+            .verify(input, &signature, &key_match)
+            .await
+            .unwrap();
+
+        let mut tampered = input.to_vec();
+        tampered[0] ^= 1;
+        assert!(matches!(
+            verifier.verify(&tampered, &signature, &key_match).await,
+            Err(VerifyError::SignatureMismatch)
+        ));
     }
 }
