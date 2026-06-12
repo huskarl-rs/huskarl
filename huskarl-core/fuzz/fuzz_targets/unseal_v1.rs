@@ -7,7 +7,7 @@
 
 use huskarl_core::crypto::KeyMatchStrength;
 use huskarl_core::crypto::cipher::{
-    AeadDecryptor, AeadUnsealer, AeadV1Unsealer, CipherMatch, DecryptError,
+    AeadDecryptor, AeadUnsealer, AeadV1Cipher, CipherMatch, DecryptError,
 };
 use huskarl_core::platform::MaybeSendBoxFuture;
 use libfuzzer_sys::fuzz_target;
@@ -43,7 +43,7 @@ impl AeadDecryptor for PassthroughDecryptor {
 }
 
 fuzz_target!(|data: &[u8]| {
-    let unsealer = AeadV1Unsealer::new(PassthroughDecryptor);
+    let unsealer = AeadV1Cipher::new(PassthroughDecryptor);
     // Peel off up to 8 leading bytes as AAD so that path isn't always empty.
     let (aad, bundle) = data.split_at(data.len().min(8));
     let _ = futures_executor::block_on(unsealer.unseal(None, bundle, aad));
