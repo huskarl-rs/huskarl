@@ -330,16 +330,16 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
     type Parameters = AuthorizationCodeGrantParameters;
     type Form<'a> = AuthorizationCodeGrantForm<'a>;
 
-    fn client_id(&self) -> &str {
-        &self.client_id
+    fn client_id(&self) -> Option<&str> {
+        Some(&self.client_id)
     }
 
     fn issuer(&self) -> Option<&str> {
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &dyn ClientAuthentication {
-        self.client_auth.as_ref()
+    fn client_auth(&self) -> Option<&dyn ClientAuthentication> {
+        Some(self.client_auth.as_ref())
     }
 
     fn token_endpoint(&self) -> &EndpointUrl {

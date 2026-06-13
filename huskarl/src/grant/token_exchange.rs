@@ -139,6 +139,7 @@ use crate::{
         client_auth::ClientAuthentication,
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
+        secrets::SecretString,
     },
     grant::{
         core::{OAuth2ExchangeGrant, mk_scopes},
@@ -157,16 +158,21 @@ use crate::{
 #[derive(Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
 pub struct TokenExchangeGrant {
-    /// The client ID.
-    client_id: String,
+    /// The client ID. Optional: omit it for an unidentified client (RFC 8693 §2
+    /// leaves client identification to the authorization server's discretion).
+    client_id: Option<String>,
 
     /// The HTTP client used for token requests.
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
-    /// The client authentication method.
+    /// The client authentication method. Optional: the subject token is the
+    /// grant, independent of client authentication. Omit it to authenticate the
+    /// client in no way; supply [`NoAuth`](crate::core::client_auth::NoAuth) to
+    /// send the `client_id` without credentials, or any other
+    /// [`ClientAuthentication`] to authenticate.
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
-    client_auth: Arc<dyn ClientAuthentication>,
+    client_auth: Option<Arc<dyn ClientAuthentication>>,
 
     /// The `DPoP` signer. Defaults to [`NoDPoP`] (no token sender-constraining).
     #[builder(
@@ -234,16 +240,16 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
         true
     }
 
-    fn client_id(&self) -> &str {
-        &self.client_id
+    fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
     }
 
     fn issuer(&self) -> Option<&str> {
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &dyn ClientAuthentication {
-        self.client_auth.as_ref()
+    fn client_auth(&self) -> Option<&dyn ClientAuthentication> {
+        self.client_auth.as_deref()
     }
 
     // Deliberately returns the build-time-resolved endpoint, not the raw
@@ -267,10 +273,10 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
 
     fn to_refresh_grant(&self) -> RefreshGrant {
         RefreshGrant::builder()
-            .client_id(self.client_id.clone())
+            .maybe_client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
             .http_client(self.http_client.clone())
-            .client_auth(self.client_auth.clone())
+            .maybe_client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.effective_token_endpoint.clone())
             .expect("an EndpointUrl converts to itself infallibly")
@@ -320,9 +326,15 @@ pub struct TokenExchangeGrantParameters {
 /// A security token used as the subject or actor in a token exchange.
 #[derive(Debug, Clone, Builder)]
 pub struct SecurityToken {
-    /// The raw token string.
+    /// The raw token.
+    ///
+    /// Accepts anything that converts into a
+    /// [`SecretString`](crate::core::secrets::SecretString) — a `&str`, `String`,
+    /// or the `SecretString` you already hold (e.g. from a
+    /// [`TokenResponse`](crate::grant::core::TokenResponse)). Held redacted;
+    /// serialized only when the request is sent.
     #[builder(into)]
-    token: String,
+    token: SecretString,
     /// The type of the token.
     token_type: SecurityTokenType,
 }
@@ -366,10 +378,10 @@ pub struct TokenExchangeGrantForm {
     scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     requested_token_type: Option<String>,
-    subject_token: String,
+    subject_token: SecretString,
     subject_token_type: SecurityTokenType,
     #[serde(skip_serializing_if = "Option::is_none")]
-    actor_token: Option<String>,
+    actor_token: Option<SecretString>,
     #[serde(skip_serializing_if = "Option::is_none")]
     actor_token_type: Option<SecurityTokenType>,
 }

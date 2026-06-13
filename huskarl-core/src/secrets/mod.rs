@@ -61,6 +61,18 @@ impl SecretString {
     }
 }
 
+impl From<String> for SecretString {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for SecretString {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
 /// A secret byte buffer that avoids accidental exposure in logs and debug output.
 #[derive(Debug, Clone)]
 pub struct SecretBytes(secrecy::SecretBox<[u8]>);

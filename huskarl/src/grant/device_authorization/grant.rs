@@ -272,16 +272,16 @@ impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
     type Parameters = DeviceAuthorizationGrantParameters;
     type Form<'a> = DeviceAuthorizationGrantForm;
 
-    fn client_id(&self) -> &str {
-        &self.client_id
+    fn client_id(&self) -> Option<&str> {
+        Some(&self.client_id)
     }
 
     fn issuer(&self) -> Option<&str> {
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &dyn ClientAuthentication {
-        self.client_auth.as_ref()
+    fn client_auth(&self) -> Option<&dyn ClientAuthentication> {
+        Some(self.client_auth.as_ref())
     }
 
     // Deliberately returns the build-time-resolved endpoint, not the raw

@@ -154,16 +154,18 @@ use crate::{
 #[derive(Clone, Builder)]
 #[builder(state_mod(name = "builder"), on(String, into))]
 pub struct RefreshGrant {
-    /// The client ID.
-    client_id: String,
+    /// The client ID. Omitted for a client that presents no identification
+    /// (e.g. refreshing a token obtained by an anonymous grant).
+    client_id: Option<String>,
 
     /// The HTTP client used for token requests.
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
-    /// The client authentication method.
+    /// The client authentication method. Omitted for a public client that does
+    /// not authenticate to the token endpoint (RFC 6749 §6).
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
-    client_auth: Arc<dyn ClientAuthentication>,
+    client_auth: Option<Arc<dyn ClientAuthentication>>,
 
     /// The `DPoP` signer. Defaults to [`NoDPoP`] (no token sender-constraining).
     #[builder(
@@ -226,16 +228,16 @@ impl OAuth2ExchangeGrant for RefreshGrant {
     type Parameters = RefreshGrantParameters;
     type Form<'a> = RefreshGrantForm;
 
-    fn client_id(&self) -> &str {
-        &self.client_id
+    fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
     }
 
     fn issuer(&self) -> Option<&str> {
         self.issuer.as_deref()
     }
 
-    fn client_auth(&self) -> &dyn ClientAuthentication {
-        self.client_auth.as_ref()
+    fn client_auth(&self) -> Option<&dyn ClientAuthentication> {
+        self.client_auth.as_deref()
     }
 
     // Deliberately returns the build-time-resolved endpoint, not the raw

@@ -43,14 +43,22 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         false
     }
 
-    /// Returns the configured client ID.
-    fn client_id(&self) -> &str;
+    /// Returns the configured client ID, if the client is identified.
+    ///
+    /// `None` for a grant that presents no client identification (e.g. an
+    /// anonymous JWT bearer or token exchange request).
+    fn client_id(&self) -> Option<&str>;
 
     /// Returns the configured issuer.
     fn issuer(&self) -> Option<&str>;
 
-    /// Returns the configured client auth.
-    fn client_auth(&self) -> &dyn ClientAuthentication;
+    /// Returns the configured client auth, if the client authenticates.
+    ///
+    /// `None` for a grant that does not authenticate the client to the token
+    /// endpoint. The grant carries its own authorization (an assertion or an
+    /// existing token), so client authentication is an independent, optional
+    /// concern (RFC 7523 §3.1, RFC 8693 §2).
+    fn client_auth(&self) -> Option<&dyn ClientAuthentication>;
 
     /// Returns the bound `DPoP` thumbprint for the session.
     ///
@@ -82,9 +90,22 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         &self,
     ) -> impl Future<Output = Result<AuthenticationParams<'_>, Error>> + MaybeSend {
         async {
-            self.client_auth()
+            // No client authentication: present nothing (no credentials, and no
+            // `client_id`). The grant's own authorization stands on its own.
+            let Some(client_auth) = self.client_auth() else {
+                return Ok(AuthenticationParams::builder().build());
+            };
+            // Every authentication method identifies the client, so it needs a
+            // client ID (e.g. the basic-auth username, or the assertion subject).
+            let client_id = self.client_id().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Auth,
+                    "client authentication requires a client ID",
+                )
+            })?;
+            client_auth
                 .authentication_params(
-                    self.client_id(),
+                    client_id,
                     self.issuer(),
                     self.token_endpoint().as_uri(),
                     self.allowed_auth_methods(),
@@ -108,15 +129,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             let form = self.build_form(params);
 
             let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
-                let auth_params = self
-                    .client_auth()
-                    .authentication_params(
-                        self.client_id(),
-                        self.issuer(),
-                        endpoint.as_uri(),
-                        self.allowed_auth_methods(),
-                    )
-                    .await?;
+                let auth_params = self.authentication_params().await?;
 
                 OAuth2FormRequest::builder()
                     .auth_params(auth_params)

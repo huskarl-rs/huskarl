@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changes
 
+ - Make client auth optional for JWT bearer and token exchange grants.
+ - Add `JwtBearer` grant.
  - Breaking: `HttpAuthorizer` reworked with recommendations around retries and
    challenge handling.
  - `RawTokenResponse` (with its builder), `into_token_response`, and
