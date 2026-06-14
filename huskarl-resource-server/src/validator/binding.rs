@@ -359,3 +359,252 @@ impl crate::error::ToRfc6750Error for MtlsBindingError {
         }
     }
 }
+
+#[cfg(all(
+    test,
+    not(target_family = "wasm"),
+    feature = "default-jws-verifier-platform"
+))]
+mod tests {
+    use std::sync::Arc;
+
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+    use rstest::rstest;
+    use serde::Serialize;
+
+    use super::*;
+    use crate::{
+        DefaultJwsVerifierPlatform,
+        core::{crypto::signer::AsymmetricJwsSigner, jwt::Jwt, platform::Duration},
+    };
+
+    // The request the proof is bound to. Tests keep these fixed and vary the proof.
+    const ACCESS_TOKEN: &str = "the-access-token";
+
+    fn req_uri() -> http::Uri {
+        "https://rs.example.com/resource".parse().unwrap()
+    }
+
+    fn es256() -> PrivateKey {
+        PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap()
+    }
+
+    /// The `cnf.jkt` value that correctly binds the token to `signer`'s key.
+    fn matching_jkt(signer: &PrivateKey) -> String {
+        signer.public_key_jwk().thumbprint()
+    }
+
+    /// DPoP proof claims, with `None` fields omitted entirely from the JWT so
+    /// the binding checker sees a genuinely missing claim rather than `null`.
+    #[derive(Debug, Clone, Default, Serialize)]
+    struct ProofClaims {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        htm: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        htu: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ath: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        nonce: Option<String>,
+    }
+
+    /// Claims that match the fixed request (`POST` `req_uri()` + `ACCESS_TOKEN`).
+    fn valid_claims() -> ProofClaims {
+        ProofClaims {
+            htm: Some("POST".to_string()),
+            htu: Some(normalize_uri_for_dpop(&req_uri()).unwrap().to_string()),
+            ath: Some(hash_access_token_for_dpop(ACCESS_TOKEN)),
+            nonce: None,
+        }
+    }
+
+    async fn sign_proof(signer: &PrivateKey, claims: ProofClaims) -> SecretString {
+        Jwt::builder()
+            .typ("dpop+jwt")
+            .issued_now_expires_after(Duration::from_secs(60))
+            .jwk(signer.public_key_jwk().into_owned())
+            .claims(claims)
+            .build()
+            .to_jws_compact(signer)
+            .await
+            .unwrap()
+    }
+
+    fn checker(
+        nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
+        required: bool,
+    ) -> DPoPBindingChecker {
+        DPoPBindingChecker {
+            dpop_nonce_checker: nonce_checker,
+            proof_validator: DpopProofValidator::builder()
+                .jws_verifier_platform(DefaultJwsVerifierPlatform::default().into())
+                .build(),
+            required,
+        }
+    }
+
+    fn cnf(jkt: Option<String>) -> ConfirmationClaim {
+        ConfirmationClaim {
+            jkt,
+            x5t_s256: None,
+            jwe: None,
+            jku: None,
+        }
+    }
+
+    /// A nonce checker that always returns a preconfigured verdict, so binding
+    /// tests can exercise the nonce branches without a real sealed-nonce setup.
+    #[derive(Debug)]
+    struct FixedNonce(NonceCheck);
+
+    impl DpopNonceChecker for FixedNonce {
+        fn check_nonce<'a>(
+            &'a self,
+            _nonce: Option<&'a str>,
+        ) -> crate::core::platform::MaybeSendBoxFuture<'a, Result<NonceCheck, Error>> {
+            let verdict = self.0.clone();
+            Box::pin(async move { Ok(verdict) })
+        }
+    }
+
+    /// Runs `check` for the fixed request against a freshly signed proof.
+    async fn run(
+        signer: &PrivateKey,
+        claims: ProofClaims,
+        cnf_jkt: Option<String>,
+        nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
+        required: bool,
+    ) -> Result<Option<String>, DPoPBindingError> {
+        let proof = sign_proof(signer, claims).await;
+        let confirmation = cnf(cnf_jkt);
+        checker(nonce_checker, required)
+            .check(
+                Some(&confirmation),
+                &SecretString::new(ACCESS_TOKEN),
+                proof.expose_secret(),
+                &http::Method::POST,
+                &req_uri(),
+            )
+            .await
+    }
+
+    #[tokio::test]
+    async fn valid_proof_and_binding_is_accepted() {
+        let signer = es256();
+        let result = run(
+            &signer,
+            valid_claims(),
+            Some(matching_jkt(&signer)),
+            None,
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Ok(None)),
+            "expected Ok(None), got {result:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::htm(ProofClaims { htm: None, ..valid_claims() }, "htm")]
+    #[case::htu(ProofClaims { htu: None, ..valid_claims() }, "htu")]
+    #[case::ath(ProofClaims { ath: None, ..valid_claims() }, "ath")]
+    #[tokio::test]
+    async fn missing_required_proof_claim_is_rejected(
+        #[case] claims: ProofClaims,
+        #[case] expected_claim: &str,
+    ) {
+        let signer = es256();
+        let err = run(&signer, claims, Some(matching_jkt(&signer)), None, false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DPoPBindingError::MissingProofClaim { claim } if claim == expected_claim),
+            "expected MissingProofClaim({expected_claim}), got {err:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::htm(ProofClaims { htm: Some("GET".to_string()), ..valid_claims() }, "htm")]
+    #[case::htu(ProofClaims { htu: Some("https://evil.example/other".to_string()), ..valid_claims() }, "htu")]
+    #[case::ath(ProofClaims { ath: Some("not-the-token-hash".to_string()), ..valid_claims() }, "ath")]
+    #[tokio::test]
+    async fn proof_claim_mismatch_is_rejected(
+        #[case] claims: ProofClaims,
+        #[case] expected_claim: &str,
+    ) {
+        let signer = es256();
+        let err = run(&signer, claims, Some(matching_jkt(&signer)), None, false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DPoPBindingError::ProofClaimMismatch { claim, .. } if claim == expected_claim),
+            "expected ProofClaimMismatch({expected_claim}), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn token_without_jkt_binding_is_rejected() {
+        let signer = es256();
+        let err = run(&signer, valid_claims(), None, None, false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DPoPBindingError::MissingThumbprintBinding),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn thumbprint_mismatch_is_rejected() {
+        let signer = es256();
+        // A jkt that belongs to a different key than the one that signed the proof.
+        let other_jkt = matching_jkt(&es256());
+        let err = run(&signer, valid_claims(), Some(other_jkt), None, false)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DPoPBindingError::ThumbprintMismatch),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_nonce_requires_retry_with_new_nonce() {
+        let signer = es256();
+        let nonce_checker = Arc::new(FixedNonce(NonceCheck::Invalid("fresh-nonce".to_string())));
+        let err = run(
+            &signer,
+            valid_claims(),
+            Some(matching_jkt(&signer)),
+            Some(nonce_checker),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, DPoPBindingError::NonceRequired { ref nonce } if nonce == "fresh-nonce"),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rotating_nonce_is_returned_on_success() {
+        let signer = es256();
+        let nonce_checker = Arc::new(FixedNonce(NonceCheck::ValidWithNewNonce(
+            "rotated-nonce".to_string(),
+        )));
+        let result = run(
+            &signer,
+            valid_claims(),
+            Some(matching_jkt(&signer)),
+            Some(nonce_checker),
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Ok(Some(ref n)) if n == "rotated-nonce"),
+            "expected Ok(Some(\"rotated-nonce\")), got {result:?}"
+        );
+    }
+}
