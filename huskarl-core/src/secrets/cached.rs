@@ -120,9 +120,13 @@ impl<S: Secret> Secret for CachedSecret<S> {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use rstest::{fixture, rstest};
+
     use super::*;
     use crate::secrets::SecretString;
 
+    /// A secret whose value increments on every fetch (`secret-0`, `secret-1`,
+    /// ...), so callers can tell a cache hit from a reload.
     #[derive(Clone)]
     struct MockSecret {
         counter: Arc<AtomicUsize>,
@@ -144,52 +148,49 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_cached_secret_no_ttl() {
+    /// A `CachedSecret` over a fresh counting `MockSecret`. Override the TTL with
+    /// `#[with(Some(...))]`; it defaults to no TTL (cache until invalidated).
+    #[fixture]
+    fn cached_secret(#[default(None)] ttl: Option<Duration>) -> CachedSecret<MockSecret> {
         let mock = MockSecret {
             counter: Arc::new(AtomicUsize::new(0)),
         };
-        let cached = CachedSecret::builder().secret(mock).build();
-
-        let val1 = cached.get_secret_value().await.unwrap();
-        assert_eq!(val1.value.expose_secret(), "secret-0");
-
-        let val2 = cached.get_secret_value().await.unwrap();
-        assert_eq!(val2.value.expose_secret(), "secret-0"); // Still 0
+        CachedSecret::builder().secret(mock).maybe_ttl(ttl).build()
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_cached_secret_with_ttl() {
-        let mock = MockSecret {
-            counter: Arc::new(AtomicUsize::new(0)),
-        };
-        let cached = CachedSecret::builder()
-            .secret(mock)
-            .ttl(Duration::from_millis(10))
-            .build();
+    async fn returns_cached_value_without_ttl(cached_secret: CachedSecret<MockSecret>) {
+        let val1 = cached_secret.get_secret_value().await.unwrap();
+        assert_eq!(val1.value.expose_secret(), "secret-0");
 
-        let val1 = cached.get_secret_value().await.unwrap();
+        let val2 = cached_secret.get_secret_value().await.unwrap();
+        assert_eq!(val2.value.expose_secret(), "secret-0"); // cache hit, not refetched
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reloads_after_ttl_expires(
+        #[with(Some(Duration::from_millis(10)))] cached_secret: CachedSecret<MockSecret>,
+    ) {
+        let val1 = cached_secret.get_secret_value().await.unwrap();
         assert_eq!(val1.value.expose_secret(), "secret-0");
 
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        let val2 = cached.get_secret_value().await.unwrap();
-        assert_eq!(val2.value.expose_secret(), "secret-1"); // Incremented
+        let val2 = cached_secret.get_secret_value().await.unwrap();
+        assert_eq!(val2.value.expose_secret(), "secret-1"); // TTL elapsed, reloaded
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn test_cached_secret_invalidate() {
-        let mock = MockSecret {
-            counter: Arc::new(AtomicUsize::new(0)),
-        };
-        let cached = CachedSecret::builder().secret(mock).build();
-
-        let val1 = cached.get_secret_value().await.unwrap();
+    async fn invalidate_forces_reload(cached_secret: CachedSecret<MockSecret>) {
+        let val1 = cached_secret.get_secret_value().await.unwrap();
         assert_eq!(val1.value.expose_secret(), "secret-0");
 
-        cached.invalidate();
+        cached_secret.invalidate();
 
-        let val2 = cached.get_secret_value().await.unwrap();
-        assert_eq!(val2.value.expose_secret(), "secret-1"); // Incremented
+        let val2 = cached_secret.get_secret_value().await.unwrap();
+        assert_eq!(val2.value.expose_secret(), "secret-1"); // reloaded after invalidation
     }
 }
