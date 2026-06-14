@@ -237,8 +237,6 @@ pub fn hash_access_token_for_dpop(access_token: &str) -> String {
 mod tests {
     use std::borrow::Cow;
 
-    use base64::prelude::*;
-
     use super::*;
     use crate::{
         crypto::signer::{

@@ -46,5 +46,6 @@ serde = { version = "1.0", default-features = false, features = ["derive", "std"
 serde_json = { version = "1", default-features = false, features = ["std"] }
 sha2 = { version = "0.11", default-features = false }
 snafu = { version = "0.9", default-features = false, features = ["rust_1_81", "std"] }
+strum = { version = "0.27", default-features = false, features = ["derive"] }
 metrics = { version = "0.24", default-features = false }
 url = { version = "2", default-features = false }

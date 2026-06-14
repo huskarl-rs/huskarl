@@ -155,8 +155,7 @@
 //! [`JwsSigner`](crate::core::crypto::signer::JwsSigner) (here, a freshly
 //! generated key — in practice load a long-lived key the server trusts):
 //!
-//! The [`SecretString`](crate::core::secrets::SecretString) returned by
-//! `to_jws_compact` can be passed straight to
+//! The [`SecretString`] returned by `to_jws_compact` can be passed straight to
 //! [`JwtBearerGrantParameters::builder().assertion(..)`](JwtBearerGrantParameters)
 //! — the setter accepts any `Into<SecretString>` (`&str`, `String`, or
 //! `SecretString`).
