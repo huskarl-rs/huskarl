@@ -11,7 +11,7 @@ categories = ["authentication"]
 readme = "README.md"
 
 [dependencies]
-huskarl-core = { version = "0.7.0-pre.0", path = "../huskarl-core", default-features = false }
+huskarl-core = { workspace = true }
 
 serde-wasm-bindgen = { version = "0.6", default-features = false }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
@@ -31,3 +31,7 @@ web-sys = { version = "0.3", features = [
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 wasm-bindgen-test = "0.3"
+# Interop tests: confirm the WebCrypto cipher and the pure-Rust `aes-gcm` cipher
+# agree on the AES-256-GCM wire format. Native sealing on wasm needs getrandom's
+# wasm_js backend — run via `RUSTFLAGS='--cfg getrandom_backend="wasm_js"'`.
+huskarl-crypto-native = { path = "../huskarl-crypto-native", default-features = false }

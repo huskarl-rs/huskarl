@@ -1,5 +1,6 @@
 [tools]
 "aqua:drager/wasm-pack" = "latest"
+"aqua:wasm-bindgen/wasm-pack" = "latest"
 "cargo:cargo-docs-rs" = "latest"
 "cargo:cargo-fuzz" = "latest"
 "cargo:cargo-geiger" = "latest"
@@ -21,6 +22,14 @@ run = "wasm-pack test --headless --chrome -- --lib"
 run = "wasm-pack test --headless --firefox -- --lib"
 
 [tasks."test-wasm-node"]
+run = "wasm-pack test --node -- --lib"
+
+[tasks."test-webcrypto"]
+description = "WebCrypto crate wasm tests under Node, including the pure-Rust AES-GCM interop suite"
+dir = "huskarl-crypto-webcrypto"
+# The native-seal interop direction draws its nonce from getrandom; select its
+# wasm backend (Workers/Node expose `crypto.getRandomValues`).
+env = { RUSTFLAGS = '--cfg getrandom_backend="wasm_js"' }
 run = "wasm-pack test --node -- --lib"
 
 [tasks."fuzz"]

@@ -9,6 +9,8 @@
 mod error;
 mod factory;
 
+/// AES-GCM AEAD (e.g. for cookie sealing).
+pub mod aead;
 /// Asymmetric JWS signing and verification.
 pub mod asymmetric;
 pub(crate) mod helpers;

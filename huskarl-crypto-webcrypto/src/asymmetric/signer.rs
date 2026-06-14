@@ -40,7 +40,7 @@ use crate::{
 #[derive(Debug)]
 struct PrivateKeyInner {
     crypto_key: CryptoKey,
-    algorithm: AsymmetricAlgorithm,
+    algorithm: GenerateAlgorithm,
     public_jwk: PublicJwk,
 }
 
@@ -52,9 +52,18 @@ pub struct PrivateKey {
     inner: Arc<PrivateKeyInner>,
 }
 
+/// RSA modulus length of 2048 bits (current minimum).
+pub const RSA_MODULUS_2048: u32 = 2048;
+
+/// RSA modulus length of 3072 bits (commonly recommended).
+pub const RSA_MODULUS_3072: u32 = 3072;
+
+/// RSA modulus length of 4096 bits.
+pub const RSA_MODULUS_4096: u32 = 4096;
+
 /// Algorithm supported by this key.
 #[derive(Debug, Serialize, Clone, Copy)]
-pub enum AsymmetricAlgorithm {
+pub enum GenerateAlgorithm {
     /// ES256
     Es256,
     /// ES384
@@ -120,59 +129,59 @@ pub enum AsymmetricAlgorithm {
         modulus_length: u32,
     },
     /// `EdDSA` (polymorphic algorithm name)
-    EdDSA,
+    EdDsa,
     /// Ed25519 (fully specified algorithm name, ref. RFC 9864)
     Ed25519,
 }
 
-impl AsymmetricAlgorithm {
+impl GenerateAlgorithm {
     fn key_gen_params(&self) -> AsymmetricKeyGenParams<'_> {
         match self {
-            AsymmetricAlgorithm::Es256 => AsymmetricKeyGenParams::Ec {
+            GenerateAlgorithm::Es256 => AsymmetricKeyGenParams::Ec {
                 name: "ECDSA",
                 named_curve: "P-256",
             },
-            AsymmetricAlgorithm::Es384 => AsymmetricKeyGenParams::Ec {
+            GenerateAlgorithm::Es384 => AsymmetricKeyGenParams::Ec {
                 name: "ECDSA",
                 named_curve: "P-384",
             },
-            AsymmetricAlgorithm::Rs256 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
+            GenerateAlgorithm::Rs256 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
                 name: "RSASSA-PKCS1-v1_5",
                 modulus_length: *modulus_length,
                 public_exponent: &[0x01, 0x00, 0x01],
                 hash: "SHA-256",
             },
-            AsymmetricAlgorithm::Rs384 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
+            GenerateAlgorithm::Rs384 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
                 name: "RSASSA-PKCS1-v1_5",
                 modulus_length: *modulus_length,
                 public_exponent: &[0x01, 0x00, 0x01],
                 hash: "SHA-384",
             },
-            AsymmetricAlgorithm::Rs512 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
+            GenerateAlgorithm::Rs512 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
                 name: "RSASSA-PKCS1-v1_5",
                 modulus_length: *modulus_length,
                 public_exponent: &[0x01, 0x00, 0x01],
                 hash: "SHA-512",
             },
-            AsymmetricAlgorithm::Ps256 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
+            GenerateAlgorithm::Ps256 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
                 name: "RSA-PSS",
                 modulus_length: *modulus_length,
                 public_exponent: &[0x01, 0x00, 0x01],
                 hash: "SHA-256",
             },
-            AsymmetricAlgorithm::Ps384 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
+            GenerateAlgorithm::Ps384 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
                 name: "RSA-PSS",
                 modulus_length: *modulus_length,
                 public_exponent: &[0x01, 0x00, 0x01],
                 hash: "SHA-384",
             },
-            AsymmetricAlgorithm::Ps512 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
+            GenerateAlgorithm::Ps512 { modulus_length } => AsymmetricKeyGenParams::RsaHashed {
                 name: "RSA-PSS",
                 modulus_length: *modulus_length,
                 public_exponent: &[0x01, 0x00, 0x01],
                 hash: "SHA-512",
             },
-            AsymmetricAlgorithm::EdDSA | AsymmetricAlgorithm::Ed25519 => {
+            GenerateAlgorithm::EdDsa | GenerateAlgorithm::Ed25519 => {
                 AsymmetricKeyGenParams::Ed25519
             }
         }
@@ -201,7 +210,7 @@ impl AsymmetricAlgorithm {
                 name: "RSA-PSS",
                 salt_length: 64,
             },
-            Self::EdDSA | Self::Ed25519 => SignAlgorithm::Ed25519,
+            Self::EdDsa | Self::Ed25519 => SignAlgorithm::Ed25519,
         }
     }
 
@@ -215,7 +224,7 @@ impl AsymmetricAlgorithm {
             Self::Ps256 { .. } => "PS256",
             Self::Ps384 { .. } => "PS384",
             Self::Ps512 { .. } => "PS512",
-            Self::EdDSA => "EdDSA",
+            Self::EdDsa => "EdDSA",
             Self::Ed25519 => "Ed25519",
         }
     }
@@ -245,32 +254,42 @@ pub enum GenerateError {
 }
 
 impl PrivateKey {
-    /// Creates a non-extractable private key which can sign material using the specified JWS algorithm.
+    /// Creates a non-extractable private key which can sign material using the
+    /// specified JWS algorithm, optionally tagging its public JWK with `kid`.
     ///
     /// # Errors
     ///
     /// May return an error if this key type is not supported, or there were
     /// issues getting the corresponding public key information for the private key.
-    pub async fn generate(algorithm: AsymmetricAlgorithm) -> Result<Self, GenerateError> {
+    pub async fn generate(
+        algorithm: GenerateAlgorithm,
+        kid: Option<String>,
+    ) -> Result<Self, GenerateError> {
         let crypto = get_crypto().context(NoCryptoSnafu)?;
 
+        // Request both usages: WebCrypto partitions them across the pair, giving
+        // the private key `sign` and the public key `verify`. Without `verify`,
+        // the exported public JWK carries `key_ops: []` — advertising no
+        // capability — and any verifier re-importing it (e.g. from a DPoP proof
+        // or JWS `jwk` header) rejects it. See the verifier round-trip tests.
         let key_pair = generate_asymmetric_key(
             &crypto.subtle(),
             algorithm.key_gen_params(),
-            &[KeyUsage::Sign],
+            &[KeyUsage::Sign, KeyUsage::Verify],
         )
         .await
         .context(GenerateSnafu)?;
 
-        let public_key_jwk = get_public_jwk(&crypto.subtle(), &key_pair.get_public_key())
+        let mut public_jwk = get_public_jwk(&crypto.subtle(), &key_pair.get_public_key())
             .await
             .context(GetPublicJwkSnafu)?;
+        public_jwk.kid = kid;
 
         Ok(Self {
             inner: Arc::new(PrivateKeyInner {
                 crypto_key: key_pair.get_private_key(),
                 algorithm,
-                public_jwk: public_key_jwk,
+                public_jwk,
             }),
         })
     }
