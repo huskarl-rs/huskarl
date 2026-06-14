@@ -15,16 +15,13 @@ use huskarl_core::{
 use sha2::digest::array::Array;
 use snafu::prelude::*;
 
-/// The type of key to generate.
-pub enum AesGcmKeyType {
-    /// AES-GCM-128
-    Aes128,
-    /// AES-GCM-256
-    Aes256,
-}
+// aes-gcm ships `Aes128Gcm`/`Aes256Gcm` aliases but not 192; spell it out from
+// the re-exported `aes` building blocks (96-bit nonce, like the other two).
+type Aes192Gcm = aes_gcm::AesGcm<aes_gcm::aes::Aes192, aes_gcm::aes::cipher::consts::U12>;
 
 enum NativeKey {
     Aes128(Box<aes_gcm::Aes128Gcm>),
+    Aes192(Box<Aes192Gcm>),
     Aes256(Box<aes_gcm::Aes256Gcm>),
 }
 
@@ -32,6 +29,7 @@ impl NativeKey {
     pub fn enc_algorithm(&self) -> &'static str {
         match self {
             NativeKey::Aes128(_) => "A128GCM",
+            NativeKey::Aes192(_) => "A192GCM",
             NativeKey::Aes256(_) => "A256GCM",
         }
     }
@@ -65,27 +63,33 @@ pub enum LoadKeyError {
 }
 
 impl AesGcmKey {
-    /// Load a key from a secret.
+    /// Load a key from a secret, inferring AES-128/192/256 from the key length
+    /// (16/24/32 bytes).
     ///
     /// # Errors
     ///
-    /// Fails if the key could not be loaded from the secret.
+    /// Fails if the secret cannot be fetched, or the key material is not 16, 24,
+    /// or 32 bytes.
     pub async fn from_secret<S: Secret<Output = SecretBytes>>(
-        key_type: AesGcmKeyType,
         secret: S,
         kid_from_identity: impl Fn(Option<&str>) -> Option<String>,
     ) -> Result<Self, LoadKeyError> {
         let key_source = secret.get_secret_value().await.context(SecretSnafu)?;
+        let bytes = key_source.value.expose_secret();
 
-        let inner = match key_type {
-            AesGcmKeyType::Aes128 => NativeKey::Aes128(Box::new(
-                aes_gcm::Aes128Gcm::new_from_slice(key_source.value.expose_secret())
+        let inner = match bytes.len() {
+            16 => NativeKey::Aes128(Box::new(
+                aes_gcm::Aes128Gcm::new_from_slice(bytes)
                     .map_err(|_| InvalidKeyLengthSnafu.build())?,
             )),
-            AesGcmKeyType::Aes256 => NativeKey::Aes256(Box::new(
-                aes_gcm::Aes256Gcm::new_from_slice(key_source.value.expose_secret())
+            24 => NativeKey::Aes192(Box::new(
+                Aes192Gcm::new_from_slice(bytes).map_err(|_| InvalidKeyLengthSnafu.build())?,
+            )),
+            32 => NativeKey::Aes256(Box::new(
+                aes_gcm::Aes256Gcm::new_from_slice(bytes)
                     .map_err(|_| InvalidKeyLengthSnafu.build())?,
             )),
+            _ => return InvalidKeyLengthSnafu.fail(),
         };
 
         Ok(AesGcmKey {
@@ -154,6 +158,9 @@ impl AeadEncryptor for AesGcmKey {
                 NativeKey::Aes128(aes_gcm) => {
                     aes_gcm.encrypt_inout_detached(&nonce, aad, ciphertext.as_mut_slice().into())
                 }
+                NativeKey::Aes192(aes_gcm) => {
+                    aes_gcm.encrypt_inout_detached(&nonce, aad, ciphertext.as_mut_slice().into())
+                }
                 NativeKey::Aes256(aes_gcm) => {
                     aes_gcm.encrypt_inout_detached(&nonce, aad, ciphertext.as_mut_slice().into())
                 }
@@ -194,6 +201,12 @@ impl AeadDecryptor for AesGcmKey {
                     plaintext.as_mut_slice().into(),
                     &tag,
                 ),
+                NativeKey::Aes192(aes_gcm) => aes_gcm.decrypt_inout_detached(
+                    &nonce,
+                    aad,
+                    plaintext.as_mut_slice().into(),
+                    &tag,
+                ),
                 NativeKey::Aes256(aes_gcm) => aes_gcm.decrypt_inout_detached(
                     &nonce,
                     aad,
@@ -205,5 +218,199 @@ impl AeadDecryptor for AesGcmKey {
 
             Ok(plaintext)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use huskarl_core::{
+        platform::MaybeSendBoxFuture,
+        secrets::{Secret, SecretBytes, SecretOutput},
+    };
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestSecret {
+        bytes: Vec<u8>,
+        identity: Option<String>,
+    }
+
+    impl Secret for TestSecret {
+        type Output = SecretBytes;
+
+        fn get_secret_value(
+            &self,
+        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<SecretBytes>, Error>> {
+            let out = SecretOutput {
+                value: SecretBytes::new(self.bytes.clone()),
+                identity: self.identity.clone(),
+            };
+            Box::pin(async move { Ok(out) })
+        }
+    }
+
+    async fn key_from(bytes: Vec<u8>, identity: Option<&str>) -> AesGcmKey {
+        AesGcmKey::from_secret(
+            TestSecret {
+                bytes,
+                identity: identity.map(str::to_owned),
+            },
+            |id| id.map(str::to_owned),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Decode an ASCII hex string into bytes (for the NIST known-answer test).
+    fn hex(s: &str) -> Vec<u8> {
+        assert!(
+            s.len().is_multiple_of(2),
+            "hex string must have even length"
+        );
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    async fn roundtrip(key_bytes: Vec<u8>, expected_enc: &str) {
+        let key = key_from(key_bytes, None).await;
+        assert_eq!(key.enc_algorithm().as_ref(), expected_enc);
+
+        let pt = b"the quick brown fox jumps over the lazy dog";
+        let aad = b"session-context";
+        let out = key.encrypt(pt, aad).await.unwrap();
+
+        assert_eq!(out.nonce.len(), 12, "96-bit nonce");
+        assert_eq!(out.tag.len(), 16, "128-bit tag");
+        assert_eq!(out.ciphertext.len(), pt.len(), "GCM is length-preserving");
+        assert_ne!(out.ciphertext, pt, "ciphertext must not equal plaintext");
+
+        let recovered = key
+            .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
+            .await
+            .unwrap();
+        assert_eq!(recovered, pt);
+    }
+
+    #[tokio::test]
+    async fn roundtrip_a128gcm() {
+        roundtrip(vec![1u8; 16], "A128GCM").await;
+    }
+
+    #[tokio::test]
+    async fn roundtrip_a192gcm() {
+        roundtrip(vec![2u8; 24], "A192GCM").await;
+    }
+
+    #[tokio::test]
+    async fn roundtrip_a256gcm() {
+        roundtrip(vec![3u8; 32], "A256GCM").await;
+    }
+
+    #[tokio::test]
+    async fn invalid_key_length_rejected() {
+        for len in [0usize, 15, 17, 31, 33, 64] {
+            let err = AesGcmKey::from_secret(
+                TestSecret {
+                    bytes: vec![0u8; len],
+                    identity: None,
+                },
+                |_| None,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, LoadKeyError::InvalidKeyLength),
+                "{len}-byte key must be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn kid_derived_from_identity() {
+        let key = key_from(vec![4u8; 32], Some("cookie-key-2026")).await;
+        assert_eq!(key.key_id().as_deref(), Some("cookie-key-2026"));
+    }
+
+    #[tokio::test]
+    async fn wrong_aad_fails_to_open() {
+        let key = key_from(vec![5u8; 32], None).await;
+        let out = key.encrypt(b"payload", b"session").await.unwrap();
+        let res = key
+            .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"other")
+            .await;
+        assert!(res.is_err(), "AAD must bind: a different AAD must not open");
+    }
+
+    #[tokio::test]
+    async fn tampered_ciphertext_fails_to_open() {
+        let key = key_from(vec![6u8; 32], None).await;
+        let out = key.encrypt(b"payload", b"session").await.unwrap();
+        let mut ct = out.ciphertext.clone();
+        ct[0] ^= 0x01;
+        let res = key
+            .decrypt(None, &out.nonce, &ct, &out.tag, b"session")
+            .await;
+        assert!(
+            res.is_err(),
+            "a flipped ciphertext bit must fail the tag check"
+        );
+    }
+
+    #[tokio::test]
+    async fn wrong_length_nonce_and_tag_rejected() {
+        let key = key_from(vec![7u8; 32], None).await;
+        let out = key.encrypt(b"payload", b"session").await.unwrap();
+
+        // Nonce too short (11 bytes instead of 12).
+        let res = key
+            .decrypt(
+                None,
+                &out.nonce[..11],
+                &out.ciphertext,
+                &out.tag,
+                b"session",
+            )
+            .await;
+        assert!(res.is_err(), "a wrong-length nonce must be rejected");
+
+        // Tag too short (15 bytes instead of 16).
+        let res = key
+            .decrypt(
+                None,
+                &out.nonce,
+                &out.ciphertext,
+                &out.tag[..15],
+                b"session",
+            )
+            .await;
+        assert!(res.is_err(), "a wrong-length tag must be rejected");
+    }
+
+    /// NIST GCM spec (`McGrew` & Viega) Test Case 4 — AES-128-GCM with AAD.
+    /// Exercises the detached-tag decrypt path against a known-answer vector.
+    #[tokio::test]
+    async fn aes128_nist_test_case_4_decrypt() {
+        let key_bytes = hex("feffe9928665731c6d6a8f9467308308");
+        let nonce = hex("cafebabefacedbaddecaf888");
+        let aad = hex("feedfacedeadbeeffeedfacedeadbeefabaddad2");
+        let ciphertext = hex(
+            "42831ec2217774244b7221b784d0d49ce3aa212f2c02a4e035c17e2329aca12e\
+             21d514b25466931c7d8f6a5aac84aa051ba30b396a0aac973d58e091",
+        );
+        let tag = hex("5bc94fbc3221a5db94fae95ae7121a47");
+        let expected_pt = hex(
+            "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72\
+             1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
+        );
+
+        let key = key_from(key_bytes, None).await;
+        let pt = key
+            .decrypt(None, &nonce, &ciphertext, &tag, &aad)
+            .await
+            .unwrap();
+        assert_eq!(pt, expected_pt);
     }
 }

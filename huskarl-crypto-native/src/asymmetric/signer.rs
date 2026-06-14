@@ -475,7 +475,10 @@ pub enum GenerateAlgorithm {
 ///
 /// Used with [`PrivateKey::load_pkcs8_der`] and [`PrivateKey::load_pkcs8_pem`].
 /// For generating new keys, use [`GenerateAlgorithm`] with [`PrivateKey::generate`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// `UPPERCASE` serialization yields the JWA names (`Es256` -> `ES256`); the two
+// non-uppercase names (`EdDSA`, `Ed25519`) are spelled out per variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::AsRefStr)]
+#[strum(serialize_all = "UPPERCASE")]
 pub enum AsymmetricAlgorithm {
     /// ES256
     Es256,
@@ -494,26 +497,11 @@ pub enum AsymmetricAlgorithm {
     /// PS512
     Ps512,
     /// Ed25519, using the algorithm name `EdDSA`
+    #[strum(serialize = "EdDSA")]
     EdDsa,
     /// Ed25519, using the algorithm name Ed25519
+    #[strum(serialize = "Ed25519")]
     Ed25519,
-}
-
-impl AsRef<str> for AsymmetricAlgorithm {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Es256 => "ES256",
-            Self::Es384 => "ES384",
-            Self::Rs256 => "RS256",
-            Self::Rs384 => "RS384",
-            Self::Rs512 => "RS512",
-            Self::Ps256 => "PS256",
-            Self::Ps384 => "PS384",
-            Self::Ps512 => "PS512",
-            Self::EdDsa => "EdDSA",
-            Self::Ed25519 => "Ed25519",
-        }
-    }
 }
 
 impl PrivateKey {

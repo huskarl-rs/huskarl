@@ -19,7 +19,10 @@ use snafu::{ResultExt, Snafu, ensure};
 use subtle::ConstantTimeEq as _;
 
 /// Encodes which algorithm is used by this key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// `UPPERCASE` serialization yields the JWA names (`Hs256` -> `HS256`); `AsRefStr`
+// gives the `AsRef<str>` impl and `EnumString` the `"HS256".parse()` direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::AsRefStr, strum::EnumString)]
+#[strum(serialize_all = "UPPERCASE")]
 pub enum SymmetricAlgorithm {
     /// HS256 algorithm
     Hs256,
@@ -27,16 +30,6 @@ pub enum SymmetricAlgorithm {
     Hs384,
     /// HS512 algorithm
     Hs512,
-}
-
-impl AsRef<str> for SymmetricAlgorithm {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::Hs256 => "HS256",
-            Self::Hs384 => "HS384",
-            Self::Hs512 => "HS512",
-        }
-    }
 }
 
 impl SymmetricAlgorithm {
@@ -177,16 +170,12 @@ impl SymmetricKey {
             return jwk_error::NotOctKeySnafu.fail();
         };
 
-        let algorithm = match jwk.algorithm.as_deref() {
-            Some("HS256") => SymmetricAlgorithm::Hs256,
-            Some("HS384") => SymmetricAlgorithm::Hs384,
-            Some("HS512") => SymmetricAlgorithm::Hs512,
-            other => {
-                return jwk_error::UnsupportedAlgorithmSnafu {
-                    algorithm: other.map(String::from),
-                }
-                .fail();
+        let alg = jwk.algorithm.as_deref();
+        let Some(algorithm) = alg.and_then(|a| a.parse::<SymmetricAlgorithm>().ok()) else {
+            return jwk_error::UnsupportedAlgorithmSnafu {
+                algorithm: alg.map(String::from),
             }
+            .fail();
         };
 
         let required_key_size = algorithm.min_key_size();
@@ -355,6 +344,21 @@ mod tests {
         roundtrip_symmetric("HS256", 64).await;
         roundtrip_symmetric("HS384", 128).await;
         roundtrip_symmetric("HS512", 128).await;
+    }
+
+    #[test]
+    fn symmetric_algorithm_str_roundtrip() {
+        for (alg, name) in [
+            (SymmetricAlgorithm::Hs256, "HS256"),
+            (SymmetricAlgorithm::Hs384, "HS384"),
+            (SymmetricAlgorithm::Hs512, "HS512"),
+        ] {
+            assert_eq!(alg.as_ref(), name);
+            assert_eq!(name.parse::<SymmetricAlgorithm>().unwrap(), alg);
+        }
+        // Unknown and wrong-case algorithms are rejected (parse is case-sensitive).
+        assert!("HS999".parse::<SymmetricAlgorithm>().is_err());
+        assert!("hs256".parse::<SymmetricAlgorithm>().is_err());
     }
 
     #[test]
