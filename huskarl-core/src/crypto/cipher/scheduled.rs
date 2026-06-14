@@ -146,3 +146,180 @@ impl<C: AeadCipherSelector + std::fmt::Debug + 'static> AeadCipherSelector
         self.inner.load().select_cipher()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use rstest::rstest;
+
+    use super::*;
+
+    /// An identity cipher (ciphertext == plaintext) that reports a fixed `kid`,
+    /// so the generation currently held by the wrapper is observable.
+    #[derive(Debug)]
+    struct FakeCipher {
+        kid: String,
+    }
+
+    impl AeadEncryptor for FakeCipher {
+        fn enc_algorithm(&self) -> Cow<'_, str> {
+            "A256GCM".into()
+        }
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(&self.kid))
+        }
+        fn encrypt<'a>(
+            &'a self,
+            plaintext: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+            let ciphertext = plaintext.to_vec();
+            Box::pin(async move {
+                Ok(AeadOutput {
+                    nonce: Vec::new(),
+                    ciphertext,
+                    tag: Vec::new(),
+                })
+            })
+        }
+    }
+
+    impl AeadDecryptor for FakeCipher {
+        fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+            Some(KeyMatchStrength::ByAlgorithm)
+        }
+        fn decrypt<'a>(
+            &'a self,
+            _cipher_match: Option<&'a CipherMatch<'a>>,
+            _nonce: &'a [u8],
+            ciphertext: &'a [u8],
+            _tag: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+            let plaintext = ciphertext.to_vec();
+            Box::pin(async move { Ok(plaintext) })
+        }
+    }
+
+    /// A selector that hands out a `FakeCipher` carrying its `kid`.
+    #[derive(Debug)]
+    struct FakeSelector {
+        kid: String,
+    }
+
+    impl AeadCipherSelector for FakeSelector {
+        fn select_cipher(&self) -> Arc<dyn AeadEncryptor> {
+            Arc::new(FakeCipher {
+                kid: self.kid.clone(),
+            })
+        }
+    }
+
+    /// A generational cipher (`gen-0`, `gen-1`, …) with the given policy.
+    async fn generational_cipher(
+        ttl: Duration,
+        min_refresh_interval: Duration,
+    ) -> ScheduledRefreshCipher<FakeCipher> {
+        let counter = Arc::new(AtomicUsize::new(0));
+        ScheduledRefreshCipher::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(FakeCipher {
+                        kid: format!("gen-{n}"),
+                    })
+                })
+            })
+            .ttl(ttl)
+            .min_refresh_interval(min_refresh_interval)
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn current_kid(cipher: &ScheduledRefreshCipher<FakeCipher>) -> Option<String> {
+        cipher.key_id().map(std::borrow::Cow::into_owned)
+    }
+
+    #[tokio::test]
+    async fn delegates_encryptor_metadata_to_inner() {
+        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
+        assert_eq!(cipher.enc_algorithm().as_ref(), "A256GCM");
+        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-0"));
+    }
+
+    #[tokio::test]
+    async fn encrypt_and_decrypt_delegate_to_inner() {
+        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
+        let out = cipher.encrypt(b"plaintext", b"aad").await.unwrap();
+        let recovered = cipher
+            .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"aad")
+            .await
+            .unwrap();
+        assert_eq!(recovered, b"plaintext");
+    }
+
+    #[tokio::test]
+    async fn cipher_match_delegates_to_inner() {
+        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
+        let m = CipherMatch {
+            enc: Some("A256GCM"),
+            kid: None,
+        };
+        assert_eq!(cipher.cipher_match(&m), Some(KeyMatchStrength::ByAlgorithm));
+    }
+
+    #[tokio::test]
+    async fn forced_refresh_bypasses_policy() {
+        // A long TTL would block a policy-gated refresh, but `refresh` is forced.
+        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_mins(1)).await;
+        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-0"));
+        assert!(cipher.refresh().await.unwrap());
+        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-1"));
+    }
+
+    /// `try_refresh` is gated by the TTL: a fresh value is left in place, a
+    /// stale one (zero TTL) is swapped for the next generation.
+    #[rstest]
+    #[case::blocked_while_fresh(Duration::from_hours(1), false, "gen-0")]
+    #[case::allowed_when_stale(Duration::from_secs(0), true, "gen-1")]
+    #[tokio::test]
+    async fn try_refresh_respects_ttl_policy(
+        #[case] ttl: Duration,
+        #[case] expected_refreshed: bool,
+        #[case] expected_kid: &str,
+    ) {
+        let cipher = generational_cipher(ttl, Duration::from_secs(0)).await;
+        assert_eq!(cipher.try_refresh().await, expected_refreshed);
+        assert_eq!(current_kid(&cipher).as_deref(), Some(expected_kid));
+    }
+
+    #[tokio::test]
+    async fn decryptor_try_refresh_delegates_through_the_trait() {
+        let cipher = generational_cipher(Duration::from_secs(0), Duration::from_secs(0)).await;
+        // Resolve the `AeadDecryptor` method explicitly (an inherent `try_refresh`
+        // also exists and would otherwise win method resolution).
+        assert!(AeadDecryptor::try_refresh(&cipher).await);
+        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-1"));
+    }
+
+    #[tokio::test]
+    async fn select_cipher_delegates_to_inner() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let selector: ScheduledRefreshCipher<FakeSelector> = ScheduledRefreshCipher::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(FakeSelector {
+                        kid: format!("gen-{n}"),
+                    })
+                })
+            })
+            .build()
+            .await
+            .unwrap();
+
+        assert_eq!(selector.select_cipher().key_id().as_deref(), Some("gen-0"));
+    }
+}

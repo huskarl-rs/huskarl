@@ -17,7 +17,7 @@ pub mod verifier;
 /// Used by both JWS verifiers and JWE ciphers to express the strength of a key match,
 /// allowing multi-key types to prefer exact matches over algorithm-only matches.
 #[non_exhaustive]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum KeyMatchStrength {
     /// Both the algorithm and the key ID match exactly.
     ByKeyId,

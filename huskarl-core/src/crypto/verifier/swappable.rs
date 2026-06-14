@@ -92,3 +92,96 @@ impl<V: JwsVerifier + 'static> JwsVerifier for RefreshableVerifier<V> {
         Box::pin(async move { self.refresh().await.unwrap_or(false) })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::*;
+
+    /// A verifier whose acceptance is fixed at construction, so a swap to a
+    /// differently-configured instance is observable through the trait.
+    #[derive(Debug)]
+    struct FlagVerifier {
+        accept: bool,
+    }
+
+    impl JwsVerifier for FlagVerifier {
+        fn key_match(&self, _key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
+            self.accept.then_some(KeyMatchStrength::ByAlgorithm)
+        }
+
+        fn verify<'a>(
+            &'a self,
+            _input: &'a [u8],
+            _signature: &'a [u8],
+            _key_match: &'a KeyMatch<'a>,
+        ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+            let accept = self.accept;
+            Box::pin(async move {
+                if accept {
+                    Ok(())
+                } else {
+                    Err(VerifyError::NoMatchingKey)
+                }
+            })
+        }
+    }
+
+    /// First factory call accepts; every later one rejects — so a refresh
+    /// flips the observable behaviour.
+    async fn accept_then_reject() -> RefreshableVerifier<FlagVerifier> {
+        let counter = Arc::new(AtomicUsize::new(0));
+        RefreshableVerifier::builder()
+            .factory(move || {
+                let accept = counter.fetch_add(1, Ordering::SeqCst) == 0;
+                Box::pin(async move { Ok(FlagVerifier { accept }) })
+            })
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn key_match() -> KeyMatch<'static> {
+        KeyMatch {
+            alg: "ES256",
+            kid: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn delegates_to_the_initial_verifier() {
+        let verifier = accept_then_reject().await;
+        assert_eq!(
+            verifier.key_match(&key_match()),
+            Some(KeyMatchStrength::ByAlgorithm)
+        );
+        verifier
+            .verify(b"input", b"sig", &key_match())
+            .await
+            .expect("initial verifier accepts");
+    }
+
+    #[tokio::test]
+    async fn refresh_swaps_the_inner_verifier() {
+        let verifier = accept_then_reject().await;
+        assert!(verifier.refresh().await.unwrap());
+
+        // After the swap the rejecting verifier is in force.
+        assert_eq!(verifier.key_match(&key_match()), None);
+        verifier
+            .verify(b"input", b"sig", &key_match())
+            .await
+            .expect_err("post-refresh verifier rejects");
+    }
+
+    #[tokio::test]
+    async fn try_refresh_reports_success_and_swaps() {
+        let verifier = accept_then_reject().await;
+        assert!(verifier.try_refresh().await, "try_refresh succeeded");
+        assert_eq!(verifier.key_match(&key_match()), None);
+    }
+}

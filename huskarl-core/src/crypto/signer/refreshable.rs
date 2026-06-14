@@ -94,3 +94,97 @@ where
         self.inner.load().select_signer_by_thumbprint(thumbprint)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        borrow::Cow,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use super::*;
+    use crate::{crypto::signer::JwsSigner, platform::MaybeSendBoxFuture};
+
+    /// A signer that reports a fixed `kid` — used to observe which generation
+    /// the refreshable selector currently holds.
+    #[derive(Debug)]
+    struct TaggedSigner {
+        kid: String,
+    }
+
+    impl JwsSigner for TaggedSigner {
+        fn jws_algorithm(&self) -> Cow<'_, str> {
+            "ES256".into()
+        }
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(&self.kid))
+        }
+        fn sign<'a>(&'a self, _input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+            Box::pin(async { Ok(vec![0x01]) })
+        }
+    }
+
+    #[derive(Debug)]
+    struct GenSelector {
+        kid: String,
+    }
+
+    impl JwsSignerSelector for GenSelector {
+        fn select_signer(&self) -> Arc<dyn JwsSigner> {
+            Arc::new(TaggedSigner {
+                kid: self.kid.clone(),
+            })
+        }
+    }
+
+    /// A `RefreshableSigner` whose factory hands out `gen-0`, `gen-1`, … on each
+    /// successive call.
+    async fn generational_signer() -> RefreshableSigner<GenSelector> {
+        let counter = Arc::new(AtomicUsize::new(0));
+        RefreshableSigner::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(GenSelector {
+                        kid: format!("gen-{n}"),
+                    })
+                })
+            })
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn current_kid(signer: &RefreshableSigner<GenSelector>) -> Option<String> {
+        signer.select_signer().key_id().map(std::borrow::Cow::into_owned)
+    }
+
+    #[tokio::test]
+    async fn factory_runs_immediately_for_initial_value() {
+        let signer = generational_signer().await;
+        assert_eq!(current_kid(&signer).as_deref(), Some("gen-0"));
+    }
+
+    #[tokio::test]
+    async fn refresh_swaps_in_the_next_generation() {
+        let signer = generational_signer().await;
+        assert_eq!(current_kid(&signer).as_deref(), Some("gen-0"));
+
+        assert!(
+            signer.refresh().await.unwrap(),
+            "refresh fetched new material"
+        );
+        assert_eq!(current_kid(&signer).as_deref(), Some("gen-1"));
+    }
+
+    #[tokio::test]
+    async fn clones_share_the_same_swappable_state() {
+        let signer = generational_signer().await;
+        let clone = signer.clone();
+
+        // A refresh through the clone is visible through the original.
+        clone.refresh().await.unwrap();
+        assert_eq!(current_kid(&signer).as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&clone).as_deref(), Some("gen-1"));
+    }
+}

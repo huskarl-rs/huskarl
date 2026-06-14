@@ -40,6 +40,7 @@ serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true, default-features = false }
 snafu = { workspace = true }
+strum = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 url = { workspace = true, optional = true }
 zeroize = { version = "1", default-features = false }
@@ -55,6 +56,7 @@ gloo-timers = { version = "0.4", default-features = false, features = ["futures"
 web-time = { version = "1", default-features = false, features = ["serde"] }
 
 [dev-dependencies]
+rstest = { version = "0.26.1", default-features = false }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3"

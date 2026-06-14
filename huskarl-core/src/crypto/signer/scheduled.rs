@@ -105,3 +105,100 @@ where
         self.inner.load().select_signer_by_thumbprint(thumbprint)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        borrow::Cow,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{crypto::signer::JwsSigner, platform::MaybeSendBoxFuture};
+
+    /// A signer that reports a fixed `kid` — used to observe which generation
+    /// the scheduled selector currently holds.
+    #[derive(Debug)]
+    struct TaggedSigner {
+        kid: String,
+    }
+
+    impl JwsSigner for TaggedSigner {
+        fn jws_algorithm(&self) -> Cow<'_, str> {
+            "ES256".into()
+        }
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(&self.kid))
+        }
+        fn sign<'a>(&'a self, _input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+            Box::pin(async { Ok(vec![0x01]) })
+        }
+    }
+
+    #[derive(Debug)]
+    struct GenSelector {
+        kid: String,
+    }
+
+    impl JwsSignerSelector for GenSelector {
+        fn select_signer(&self) -> Arc<dyn JwsSigner> {
+            Arc::new(TaggedSigner {
+                kid: self.kid.clone(),
+            })
+        }
+    }
+
+    /// Builds a generational signer (`gen-0`, `gen-1`, …) with the given policy.
+    async fn generational_signer(
+        ttl: Duration,
+        min_refresh_interval: Duration,
+    ) -> ScheduledRefreshSigner<GenSelector> {
+        let counter = Arc::new(AtomicUsize::new(0));
+        ScheduledRefreshSigner::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(GenSelector {
+                        kid: format!("gen-{n}"),
+                    })
+                })
+            })
+            .ttl(ttl)
+            .min_refresh_interval(min_refresh_interval)
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn current_kid(signer: &ScheduledRefreshSigner<GenSelector>) -> Option<String> {
+        signer.select_signer().key_id().map(std::borrow::Cow::into_owned)
+    }
+
+    #[tokio::test]
+    async fn forced_refresh_bypasses_policy() {
+        // A long TTL would block a policy-gated refresh, but `refresh` is forced.
+        let signer = generational_signer(Duration::from_hours(1), Duration::from_mins(1)).await;
+        assert_eq!(current_kid(&signer).as_deref(), Some("gen-0"));
+
+        assert!(signer.refresh().await.unwrap());
+        assert_eq!(current_kid(&signer).as_deref(), Some("gen-1"));
+    }
+
+    /// `try_refresh` is gated by the TTL: a fresh value is left in place, a
+    /// stale one (zero TTL) is swapped for the next generation.
+    #[rstest]
+    #[case::blocked_while_fresh(Duration::from_hours(1), false, "gen-0")]
+    #[case::allowed_when_stale(Duration::from_secs(0), true, "gen-1")]
+    #[tokio::test]
+    async fn try_refresh_respects_ttl_policy(
+        #[case] ttl: Duration,
+        #[case] expected_refreshed: bool,
+        #[case] expected_kid: &str,
+    ) {
+        let signer = generational_signer(ttl, Duration::from_secs(0)).await;
+        assert_eq!(signer.try_refresh().await, expected_refreshed);
+        assert_eq!(current_kid(&signer).as_deref(), Some(expected_kid));
+    }
+}

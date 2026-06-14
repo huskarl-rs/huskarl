@@ -243,3 +243,268 @@ impl<E: AeadEncryptor> AeadDecryptor for MultiKeyCipher<E> {
         self.decryptor.try_refresh()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{crypto::KeyMatchStrength::*, error::ErrorKind};
+
+    /// What a fake decryptor's `decrypt` returns.
+    #[derive(Clone, Copy, Debug)]
+    enum Outcome {
+        Ok(&'static [u8]),
+        NoMatchingKey,
+        Retryable,
+        NonRetryable,
+    }
+
+    #[derive(Debug)]
+    struct FakeDecryptor {
+        strength: Option<KeyMatchStrength>,
+        outcome: Outcome,
+        refresh: bool,
+    }
+
+    impl AeadDecryptor for FakeDecryptor {
+        fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+            self.strength
+        }
+
+        fn decrypt<'a>(
+            &'a self,
+            _cipher_match: Option<&'a CipherMatch<'a>>,
+            _nonce: &'a [u8],
+            _ciphertext: &'a [u8],
+            _tag: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+            let outcome = self.outcome;
+            Box::pin(async move {
+                match outcome {
+                    Outcome::Ok(b) => Ok(b.to_vec()),
+                    Outcome::NoMatchingKey => Err(DecryptError::NoMatchingKey),
+                    Outcome::Retryable => {
+                        Err(Error::from(ErrorKind::Transport { retryable: true }).into())
+                    }
+                    Outcome::NonRetryable => Err(Error::from(ErrorKind::Crypto).into()),
+                }
+            })
+        }
+
+        fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+            let refresh = self.refresh;
+            Box::pin(async move { refresh })
+        }
+    }
+
+    fn dec(strength: Option<KeyMatchStrength>, outcome: Outcome) -> Arc<dyn AeadDecryptor> {
+        Arc::new(FakeDecryptor {
+            strength,
+            outcome,
+            refresh: false,
+        })
+    }
+
+    fn cm() -> CipherMatch<'static> {
+        CipherMatch {
+            enc: Some("A256GCM"),
+            kid: Some("k1"),
+        }
+    }
+
+    async fn decrypt(
+        d: &MultiKeyDecryptor,
+        m: Option<&CipherMatch<'_>>,
+    ) -> Result<Vec<u8>, DecryptError> {
+        d.decrypt(m, b"nonce", b"ciphertext", b"tag", b"aad").await
+    }
+
+    // ── Selection with a CipherMatch ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn by_key_id_match_is_used_exclusively() {
+        // The kid match wins even though algorithm matches surround it.
+        let d = MultiKeyDecryptor::new(vec![
+            dec(Some(ByAlgorithm), Outcome::Ok(b"algo")),
+            dec(Some(ByKeyId), Outcome::Ok(b"by-kid")),
+            dec(Some(ByAlgorithm), Outcome::Ok(b"algo2")),
+        ]);
+        assert_eq!(decrypt(&d, Some(&cm())).await.unwrap(), b"by-kid");
+    }
+
+    #[tokio::test]
+    async fn algorithm_matches_are_tried_in_order() {
+        let d = MultiKeyDecryptor::new(vec![
+            dec(Some(ByAlgorithm), Outcome::Ok(b"first")),
+            dec(Some(ByAlgorithm), Outcome::Ok(b"second")),
+        ]);
+        assert_eq!(decrypt(&d, Some(&cm())).await.unwrap(), b"first");
+    }
+
+    #[tokio::test]
+    async fn algorithm_match_skips_a_failing_key() {
+        let d = MultiKeyDecryptor::new(vec![
+            dec(Some(ByAlgorithm), Outcome::NonRetryable),
+            dec(Some(ByAlgorithm), Outcome::Ok(b"second")),
+        ]);
+        assert_eq!(decrypt(&d, Some(&cm())).await.unwrap(), b"second");
+    }
+
+    #[tokio::test]
+    async fn no_candidate_match_does_not_attempt_decryption() {
+        // The only key would succeed if asked, but it doesn't match the criteria,
+        // so decryption is never attempted and NoMatchingKey is returned.
+        let d = MultiKeyDecryptor::new(vec![dec(None, Outcome::Ok(b"never"))]);
+        let err = decrypt(&d, Some(&cm())).await.unwrap_err();
+        assert!(matches!(err, DecryptError::NoMatchingKey));
+    }
+
+    // ── Selection without a CipherMatch (try-all) ─────────────────────────
+
+    #[tokio::test]
+    async fn without_cipher_match_tries_all_keys_in_order() {
+        let d = MultiKeyDecryptor::new(vec![
+            dec(None, Outcome::Ok(b"a")),
+            dec(None, Outcome::Ok(b"b")),
+        ]);
+        assert_eq!(decrypt(&d, None).await.unwrap(), b"a");
+    }
+
+    #[tokio::test]
+    async fn without_cipher_match_falls_through_no_matching_key() {
+        let d = MultiKeyDecryptor::new(vec![
+            dec(None, Outcome::NoMatchingKey),
+            dec(None, Outcome::Ok(b"b")),
+        ]);
+        assert_eq!(decrypt(&d, None).await.unwrap(), b"b");
+    }
+
+    // ── Error preference when every attempted key fails ───────────────────
+
+    #[tokio::test]
+    async fn non_retryable_failure_is_preferred_over_retryable() {
+        let d = MultiKeyDecryptor::new(vec![
+            dec(Some(ByAlgorithm), Outcome::Retryable),
+            dec(Some(ByAlgorithm), Outcome::NonRetryable),
+        ]);
+        let err = decrypt(&d, Some(&cm())).await.unwrap_err();
+        assert!(!err.is_retryable(), "the non-retryable failure should win");
+    }
+
+    #[tokio::test]
+    async fn retryable_failure_surfaces_when_it_is_the_only_real_error() {
+        let d = MultiKeyDecryptor::new(vec![dec(Some(ByAlgorithm), Outcome::Retryable)]);
+        let err = decrypt(&d, Some(&cm())).await.unwrap_err();
+        assert!(err.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn no_matching_key_is_not_recorded_as_a_real_failure() {
+        // A real failure (retryable) is preferred over a NoMatchingKey skip.
+        let d = MultiKeyDecryptor::new(vec![
+            dec(Some(ByAlgorithm), Outcome::NoMatchingKey),
+            dec(Some(ByAlgorithm), Outcome::Retryable),
+        ]);
+        let err = decrypt(&d, Some(&cm())).await.unwrap_err();
+        assert!(
+            err.is_retryable(),
+            "the retryable error, not NoMatchingKey, wins"
+        );
+    }
+
+    // ── Aggregate cipher_match strength ───────────────────────────────────
+
+    #[rstest]
+    #[case::by_kid_wins(&[Some(ByAlgorithm), Some(ByKeyId)], Some(KeyMatchStrength::ByKeyId))]
+    #[case::algorithm_when_no_kid(&[None, Some(ByAlgorithm)], Some(KeyMatchStrength::ByAlgorithm))]
+    #[case::none_when_nothing_matches(&[None, None], None)]
+    fn cipher_match_aggregates_strength(
+        #[case] matches: &[Option<KeyMatchStrength>],
+        #[case] expected: Option<KeyMatchStrength>,
+    ) {
+        let decryptors = matches
+            .iter()
+            .map(|m| dec(*m, Outcome::NoMatchingKey))
+            .collect();
+        assert_eq!(
+            MultiKeyDecryptor::new(decryptors).cipher_match(&cm()),
+            expected
+        );
+    }
+
+    // ── try_refresh is the OR of inner refreshes ──────────────────────────
+
+    #[rstest]
+    #[case::one_refreshes(&[false, true], true)]
+    #[case::none_refresh(&[false, false], false)]
+    #[case::empty(&[], false)]
+    #[tokio::test]
+    async fn try_refresh_is_true_if_any_inner_refreshes(
+        #[case] flags: &[bool],
+        #[case] expected: bool,
+    ) {
+        let decryptors = flags
+            .iter()
+            .map(|&refresh| {
+                Arc::new(FakeDecryptor {
+                    strength: None,
+                    outcome: Outcome::NoMatchingKey,
+                    refresh,
+                }) as Arc<dyn AeadDecryptor>
+            })
+            .collect();
+        let d = MultiKeyDecryptor::new(decryptors);
+        assert_eq!(d.try_refresh().await, expected);
+    }
+
+    // ── MultiKeyCipher delegation ─────────────────────────────────────────
+
+    #[derive(Debug)]
+    struct FakeEncryptor;
+
+    impl AeadEncryptor for FakeEncryptor {
+        fn enc_algorithm(&self) -> Cow<'_, str> {
+            "A256GCM".into()
+        }
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed("enc-kid"))
+        }
+        fn encrypt<'a>(
+            &'a self,
+            plaintext: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+            let ciphertext = plaintext.to_vec();
+            Box::pin(async move {
+                Ok(AeadOutput {
+                    nonce: Vec::new(),
+                    ciphertext,
+                    tag: Vec::new(),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_key_cipher_delegates_each_direction() {
+        let cipher = MultiKeyCipher::new(
+            FakeEncryptor,
+            MultiKeyDecryptor::new(vec![dec(None, Outcome::Ok(b"plaintext"))]),
+        );
+
+        // Encryptor side → delegates to the inner encryptor.
+        assert_eq!(cipher.enc_algorithm().as_ref(), "A256GCM");
+        assert_eq!(cipher.key_id().as_deref(), Some("enc-kid"));
+        let out = cipher.encrypt(b"plaintext", b"aad").await.unwrap();
+        assert_eq!(out.ciphertext, b"plaintext");
+
+        // Decryptor side → delegates to the MultiKeyDecryptor.
+        let recovered = cipher
+            .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"aad")
+            .await
+            .unwrap();
+        assert_eq!(recovered, b"plaintext");
+    }
+}
