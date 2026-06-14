@@ -7,7 +7,7 @@ use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
     core::{
-        IntoEndpointUrl,
+        EndpointUrl,
         crypto::signer::AsymmetricJwsSigner,
         jwk::{JwksSource, PublicJwks},
         jwt::Jwt,
@@ -33,7 +33,9 @@ async fn test_rfc9068_validator() {
     });
 
     let issuer = format!("http://{}", server.address());
-    let jwks_uri = format!("{}/jwks.json", issuer).into_endpoint_url().unwrap();
+    let jwks_uri = format!("{}/jwks.json", issuer)
+        .parse::<EndpointUrl>()
+        .unwrap();
 
     // 3. Create validator
     let http_client = ReqwestClient::builder().build().await.unwrap();

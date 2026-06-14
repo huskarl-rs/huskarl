@@ -86,6 +86,7 @@ huskarl = { path = ".", features = ["authorization-flow-loopback"] }
 huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
 huskarl-testkit = { path = "../integration/huskarl-testkit" }
 pem = "3"
+rstest = { version = "0.26", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
 httpmock = "0.8.3"

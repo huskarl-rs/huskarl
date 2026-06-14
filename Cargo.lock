@@ -1105,6 +1105,7 @@ dependencies = [
  "pem",
  "rand 0.10.1",
  "reqwest",
+ "rstest",
  "serde",
  "serde_html_form",
  "serde_json",

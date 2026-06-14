@@ -106,6 +106,7 @@ pub struct JwtClaims<'a, Claims: Clone> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
@@ -165,32 +166,16 @@ mod tests {
 
     // --- aud deserialization ---
 
-    #[test]
-    fn aud_deserialize_string() {
-        let j = r#"{"aud":"x"}"#;
-        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert_eq!(c.aud, vec!["x"]);
-    }
-
-    #[test]
-    fn aud_deserialize_array() {
-        let j = r#"{"aud":["a","b"]}"#;
-        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert_eq!(c.aud, vec!["a", "b"]);
-    }
-
-    #[test]
-    fn aud_deserialize_null() {
-        let j = r#"{"aud":null}"#;
-        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert!(c.aud.is_empty());
-    }
-
-    #[test]
-    fn aud_deserialize_absent() {
-        let j = r"{}";
-        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert!(c.aud.is_empty());
+    // `aud` accepts a bare string, an array, null, or absence; null and absence
+    // both normalize to an empty list.
+    #[rstest]
+    #[case::string(r#"{"aud":"x"}"#, vec!["x"])]
+    #[case::array(r#"{"aud":["a","b"]}"#, vec!["a", "b"])]
+    #[case::null(r#"{"aud":null}"#, vec![])]
+    #[case::absent(r"{}", vec![])]
+    fn aud_deserialize(#[case] json: &str, #[case] expected: Vec<&str>) {
+        let c: JwtClaims<'_, ()> = serde_json::from_str(json).unwrap();
+        assert_eq!(c.aud, expected);
     }
 
     // --- Timestamp deserialization ---

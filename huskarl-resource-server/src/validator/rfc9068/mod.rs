@@ -55,17 +55,14 @@
 //! ```rust
 //! use std::sync::Arc;
 //!
-//! use huskarl_resource_server::{
-//!     core::{IntoEndpointUrl as _, jwk::JwksSource},
-//!     validator::rfc9068::Rfc9068Validator,
-//! };
+//! use huskarl_resource_server::{core::jwk::JwksSource, validator::rfc9068::Rfc9068Validator};
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //!
 //! let validator = Rfc9068Validator::builder()
 //!     .issuer("https://my-issuer")
 //!     .audience("api://my-resource")
-//!     .jwks_uri("https://my-issuer/.well-known/jwks.json".into_endpoint_url()?)
+//!     .jwks_uri("https://my-issuer/.well-known/jwks.json".parse()?)
 //!     .jws_verifier_factory(Arc::new(
 //!         JwksSource::builder()
 //!             .http_client(http_client.clone())

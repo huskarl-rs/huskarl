@@ -225,7 +225,8 @@ impl AuthorizationCodeGrant {
                 .authentication_params(
                     &self.client_id,
                     self.issuer.as_deref(),
-                    par_url.as_uri(),
+                    Some(&self.token_endpoint),
+                    par_url,
                     self.token_endpoint_auth_methods_supported.as_deref(),
                 )
                 .await?;
@@ -458,10 +459,8 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .token_endpoint("https://as.example.com/token")
-            .unwrap()
-            .authorization_endpoint("https://as.example.com/authorize")
-            .unwrap()
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
             .redirect_uri("http://127.0.0.1/cb")
             .build()
             .await
@@ -504,10 +503,8 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .token_endpoint("https://as.example.com/token")
-            .unwrap()
-            .authorization_endpoint("https://as.example.com/authorize")
-            .unwrap()
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
             .redirect_uri("http://127.0.0.1/cb")
             .code_challenge_methods_supported(vec!["plain".to_string()])
             .build()
@@ -524,10 +521,8 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .token_endpoint("https://as.example.com/token")
-            .unwrap()
-            .authorization_endpoint("https://as.example.com/authorize")
-            .unwrap()
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
             .redirect_uri("http://127.0.0.1/cb")
             .build()
             .await
@@ -556,10 +551,8 @@ mod tests {
             .client_id("client")
             .http_client(NoHttp)
             .client_auth(NoAuth)
-            .token_endpoint("https://as.example.com/token")
-            .unwrap()
-            .authorization_endpoint("https://as.example.com/authorize")
-            .unwrap()
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
             .redirect_uri("http://127.0.0.1/cb")
             .disable_pkce(true)
             .build()

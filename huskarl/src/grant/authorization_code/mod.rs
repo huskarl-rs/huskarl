@@ -72,8 +72,8 @@
 //! # let client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 //!
 //! let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder()
-//!     .authorization_endpoint("https://my-server/authorize")?
-//!     .token_endpoint("https://my-server/token")?
+//!     .authorization_endpoint("https://my-server/authorize".parse()?)
+//!     .token_endpoint("https://my-server/token".parse()?)
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(NoAuth)

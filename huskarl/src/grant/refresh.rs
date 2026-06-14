@@ -93,7 +93,7 @@
 //! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //!
 //! let refresh_grant: RefreshGrant = RefreshGrant::builder()
-//!     .token_endpoint("https://my-server/token")?
+//!     .token_endpoint("https://my-server/token".parse()?)
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(client_auth)
@@ -152,7 +152,7 @@ use crate::{
 /// See the [module documentation][crate::grant::refresh] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
-#[builder(state_mod(name = "builder"), on(String, into))]
+#[builder(on(String, into))]
 pub struct RefreshGrant {
     /// The client ID. Omitted for a client that presents no identification
     /// (e.g. refreshing a token obtained by an anonymous grant).
@@ -179,27 +179,11 @@ pub struct RefreshGrant {
     issuer: Option<String>,
 
     /// The URL of the token endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "token_endpoint")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     token_endpoint: EndpointUrl,
 
     /// The mTLS alias for the token endpoint (RFC 8705 §5).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     mtls_token_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for token requests: the mTLS alias when the HTTP
@@ -240,10 +224,11 @@ impl OAuth2ExchangeGrant for RefreshGrant {
         self.client_auth.as_deref()
     }
 
-    // Deliberately returns the build-time-resolved endpoint, not the raw
-    // `token_endpoint` builder input.
-    #[allow(clippy::misnamed_getters)]
     fn token_endpoint(&self) -> &EndpointUrl {
+        &self.token_endpoint
+    }
+
+    fn effective_token_endpoint(&self) -> &EndpointUrl {
         &self.effective_token_endpoint
     }
 

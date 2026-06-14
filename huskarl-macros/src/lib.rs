@@ -28,8 +28,7 @@ mod util;
 /// Fields whose bon setter is a fallible `with` closure
 /// (`#[builder(with = |…| -> Result<…> { … })]`) are routed through that
 /// setter and the `Result` is unwrapped (`.expect`). Metadata fields already
-/// have the target type, so the conversion must be an infallible identity
-/// case (e.g. `impl IntoEndpointUrl for EndpointUrl` returns `Ok(self)`).
+/// have the target type, so the conversion must succeed.
 ///
 /// If a *required* grant field (not `Option<T>`) draws from an `Option`-typed
 /// extraction, the generated function gates on it and returns
@@ -44,15 +43,9 @@ mod util;
 ///     issuer: Option<String>,
 ///
 ///     #[from_metadata(path = "token_endpoint")]
-///     #[builder(with = |url: impl IntoEndpointUrl| -> Result<_, Error> {
-///         IntoEndpointUrl::into_endpoint_url(url)
-///     })]
 ///     token_endpoint: crate::core::EndpointUrl,
 ///
 ///     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-///     #[builder(with = |url: impl IntoEndpointUrl| -> Result<_, Error> {
-///         IntoEndpointUrl::into_endpoint_url(url)
-///     })]
 ///     mtls_token_endpoint: Option<crate::core::EndpointUrl>,
 /// }
 /// ```

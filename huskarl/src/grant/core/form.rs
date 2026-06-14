@@ -12,7 +12,6 @@ use crate::core::{
 };
 
 #[derive(Builder)]
-#[builder(state_mod(name = builder))]
 pub struct OAuth2FormRequest<'a, F: Serialize> {
     uri: &'a Uri,
     form: &'a F,

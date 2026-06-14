@@ -85,7 +85,7 @@
 //! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //!
 //! let grant: TokenExchangeGrant = TokenExchangeGrant::builder()
-//!     .token_endpoint("https://my-server/token")?
+//!     .token_endpoint("https://my-server/token".parse()?)
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(client_auth)
@@ -113,7 +113,7 @@
 //! # let client_auth: ClientSecret = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
 //! #
 //! # let grant: TokenExchangeGrant = TokenExchangeGrant::builder()
-//! #     .token_endpoint("https://my-server/token")?
+//! #     .token_endpoint("https://my-server/token".parse()?)
 //! #     .client_id("client_id")
 //! #     .http_client(client)
 //! #     .client_auth(client_auth)
@@ -156,7 +156,7 @@ use crate::{
 /// See the [module documentation][crate::grant::token_exchange] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Builder)]
-#[builder(state_mod(name = "builder"), on(String, into))]
+#[builder(on(String, into))]
 pub struct TokenExchangeGrant {
     /// The client ID. Optional: omit it for an unidentified client (RFC 8693 §2
     /// leaves client identification to the authorization server's discretion).
@@ -186,27 +186,11 @@ pub struct TokenExchangeGrant {
     issuer: Option<String>,
 
     /// The URL of the token endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "token_endpoint")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     token_endpoint: EndpointUrl,
 
     /// The mTLS alias for the token endpoint (RFC 8705 §5).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     mtls_token_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for token requests: the mTLS alias when the HTTP
@@ -252,10 +236,11 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
         self.client_auth.as_deref()
     }
 
-    // Deliberately returns the build-time-resolved endpoint, not the raw
-    // `token_endpoint` builder input.
-    #[allow(clippy::misnamed_getters)]
     fn token_endpoint(&self) -> &EndpointUrl {
+        &self.token_endpoint
+    }
+
+    fn effective_token_endpoint(&self) -> &EndpointUrl {
         &self.effective_token_endpoint
     }
 
@@ -279,7 +264,6 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
             .maybe_client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.effective_token_endpoint.clone())
-            .expect("an EndpointUrl converts to itself infallibly")
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )
@@ -364,6 +348,165 @@ pub enum SecurityTokenType {
     /// An extension token type not covered by the standard variants.
     #[serde(untagged)]
     Other(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use http::Request;
+    use serde_json::json;
+
+    use crate::core::{
+        Error,
+        http::{HttpClient, HttpResponse, Idempotency},
+        platform::MaybeSendBoxFuture,
+    };
+
+    use super::*;
+
+    /// An [`HttpClient`] that must never be called — `build_form` does no I/O.
+    struct UnusedClient;
+
+    impl HttpClient for UnusedClient {
+        fn execute(
+            &self,
+            _request: Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            Box::pin(async { unreachable!("build_form performs no HTTP request") })
+        }
+    }
+
+    fn grant() -> TokenExchangeGrant {
+        TokenExchangeGrant::builder()
+            .token_endpoint("https://as.example/token".parse::<EndpointUrl>().unwrap())
+            .client_id("exchange-client")
+            .http_client(UnusedClient)
+            .build()
+    }
+
+    fn subject() -> SecurityToken {
+        SecurityToken::builder()
+            .token("subject-tok")
+            .token_type(SecurityTokenType::AccessToken)
+            .build()
+    }
+
+    #[test]
+    fn build_form_maps_all_parameters_onto_the_wire() {
+        let params = TokenExchangeGrantParameters::builder()
+            .subject(subject())
+            .actor(
+                SecurityToken::builder()
+                    .token("actor-tok")
+                    .token_type(SecurityTokenType::Jwt)
+                    .build(),
+            )
+            .audience("https://api.example")
+            .scopes(["read", "write"])
+            .requested_token_type("urn:ietf:params:oauth:token-type:access_token")
+            .build();
+
+        let encoded = serde_html_form::to_string(&grant().build_form(params)).unwrap();
+
+        for expected in [
+            "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
+            "subject_token=subject-tok",
+            "subject_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
+            "actor_token=actor-tok",
+            "actor_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Ajwt",
+            "audience=https%3A%2F%2Fapi.example",
+            "scope=read+write",
+            "requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
+        ] {
+            assert!(encoded.contains(expected), "missing {expected} in: {encoded}");
+        }
+    }
+
+    #[test]
+    fn build_form_omits_absent_optional_fields() {
+        // Only the subject is supplied; every other field is optional.
+        let params = TokenExchangeGrantParameters::builder()
+            .subject(subject())
+            .scopes(Vec::<String>::new())
+            .build();
+
+        let encoded = serde_html_form::to_string(&grant().build_form(params)).unwrap();
+
+        // The subject and the constant grant type are always present.
+        assert!(encoded.contains("grant_type="));
+        assert!(encoded.contains("subject_token=subject-tok"));
+        // Absent optionals are skipped entirely (no empty `key=`).
+        for absent in [
+            "resource",
+            "audience",
+            "scope",
+            "requested_token_type",
+            "actor_token",
+            "actor_token_type",
+        ] {
+            assert!(
+                !encoded.contains(absent),
+                "{absent} should be omitted, but found it in: {encoded}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_serializes_as_repeated_keys() {
+        let params = TokenExchangeGrantParameters::builder()
+            .subject(subject())
+            .resource(vec![
+                "https://api.example.com".to_string(),
+                "https://other.example.com".to_string(),
+            ])
+            .scopes(Vec::<String>::new())
+            .build();
+
+        let encoded = serde_html_form::to_string(&grant().build_form(params)).unwrap();
+
+        assert!(encoded.contains("resource=https%3A%2F%2Fapi.example.com"));
+        assert!(encoded.contains("resource=https%3A%2F%2Fother.example.com"));
+        assert!(!encoded.contains(','), "resource must not be comma-joined: {encoded}");
+    }
+
+    #[test]
+    fn security_token_type_serializes_to_rfc8693_urns() {
+        for (ty, urn) in [
+            (
+                SecurityTokenType::AccessToken,
+                "urn:ietf:params:oauth:token-type:access_token",
+            ),
+            (
+                SecurityTokenType::RefreshToken,
+                "urn:ietf:params:oauth:token-type:refresh_token",
+            ),
+            (
+                SecurityTokenType::IdToken,
+                "urn:ietf:params:oauth:token-type:id_token",
+            ),
+            (
+                SecurityTokenType::Saml1,
+                "urn:ietf:params:oauth:token-type:saml1",
+            ),
+            (
+                SecurityTokenType::Saml2,
+                "urn:ietf:params:oauth:token-type:saml2",
+            ),
+            (SecurityTokenType::Jwt, "urn:ietf:params:oauth:token-type:jwt"),
+        ] {
+            assert_eq!(serde_json::to_value(&ty).unwrap(), json!(urn));
+        }
+
+        // The `Other` extension variant serializes untagged as its raw string.
+        assert_eq!(
+            serde_json::to_value(SecurityTokenType::Other(
+                "urn:example:custom-token".to_string()
+            ))
+            .unwrap(),
+            json!("urn:example:custom-token")
+        );
+    }
 }
 
 /// Token exchange grant body.

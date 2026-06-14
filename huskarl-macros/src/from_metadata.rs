@@ -15,9 +15,8 @@
 //!
 //! Fields whose bon setter is a fallible `with` closure
 //! (`#[builder(with = |…| -> Result<…> { … })]`) are routed through that
-//! setter and the `Result` is unwrapped: metadata fields already have the
-//! target type, so the conversion is required to be an infallible identity
-//! case (`impl IntoEndpointUrl for EndpointUrl` returns `Ok(self)`).
+//! setter and the `Result` is unwrapped (`.expect`): metadata fields already
+//! have the target type, so the conversion is required to succeed.
 //!
 //! Gating: if exactly one *required* field (not `Option<T>`) draws from an
 //! Option-typed extraction, the generated function returns `Option<Builder<…>>`

@@ -39,9 +39,13 @@ pub struct AuthorizationCodeGrant {
     /// The issuer for tokens created by the authorization server.
     pub(super) issuer: Option<String>,
 
-    /// The URL of the token endpoint, resolved at build time to the
-    /// RFC 8705 §5 mTLS alias when the HTTP client uses mTLS.
+    /// The URL of the token endpoint, as published in authorization server
+    /// metadata (before RFC 8705 §5 mTLS-alias resolution).
     pub(super) token_endpoint: EndpointUrl,
+
+    /// The token endpoint used for token requests: the RFC 8705 §5 mTLS alias
+    /// when the HTTP client uses mTLS, the primary token endpoint otherwise.
+    pub(super) effective_token_endpoint: EndpointUrl,
 
     /// Supported endpoint auth methods; used to auto-select basic or
     /// form auth for client secrets.
@@ -101,6 +105,19 @@ pub struct AuthorizationCodeGrant {
     pub(super) allowed_id_token_signed_response_algs: Option<HashSet<String>>,
 }
 
+impl AuthorizationCodeGrant {
+    /// The OAuth 2.0 client identifier this grant authenticates as.
+    ///
+    /// Exposed so callers can supply the `client_id` parameter for flows that
+    /// need it outside the grant itself — notably OIDC RP-Initiated Logout,
+    /// where it lets the OP identify the RP (and thus honor
+    /// `post_logout_redirect_uri`) when no `id_token_hint` is available.
+    #[must_use]
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+}
+
 #[huskarl_macros::from_metadata(
     metadata = crate::core::server_metadata::AuthorizationServerMetadata
 )]
@@ -116,7 +133,7 @@ impl AuthorizationCodeGrant {
     /// Returns an error if a `jws_verifier_factory` is supplied without a
     /// `jws_verifier_platform`, or if building the JWS verifier from `jwks_uri`
     /// fails.
-    #[builder(state_mod(name = "builder"), on(String, into))]
+    #[builder(on(String, into))]
     pub async fn new(
         /// The client ID.
         client_id: String,
@@ -136,26 +153,10 @@ impl AuthorizationCodeGrant {
         #[from_metadata(path = "issuer")]
         issuer: Option<String>,
         /// The URL of the token endpoint.
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "token_endpoint")]
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
         token_endpoint: EndpointUrl,
         /// The mTLS alias for the token endpoint (RFC 8705 §5).
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
         mtls_token_endpoint: Option<EndpointUrl>,
         /// Supported endpoint auth methods; used to auto-select basic or
         /// form auth for client secrets.
@@ -178,45 +179,11 @@ impl AuthorizationCodeGrant {
             default = Arc::new(NoJar),
         )]
         jar: Arc<dyn Jar>,
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
-        #[from_metadata(path = "jwks_uri?")]
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
-        jwks_uri: Option<EndpointUrl>,
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
-        #[from_metadata(path = "authorization_endpoint?")]
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
-        authorization_endpoint: EndpointUrl,
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
+        #[from_metadata(path = "jwks_uri?")] jwks_uri: Option<EndpointUrl>,
+        #[from_metadata(path = "authorization_endpoint?")] authorization_endpoint: EndpointUrl,
         #[from_metadata(path = "pushed_authorization_request_endpoint?")]
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
         pushed_authorization_request_endpoint: Option<EndpointUrl>,
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
         #[from_metadata(path = "mtls_endpoint_aliases?.pushed_authorization_request_endpoint?")]
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
         mtls_pushed_authorization_request_endpoint: Option<EndpointUrl>,
         #[from_metadata(path = "require_pushed_authorization_requests")]
         #[builder(default)]
@@ -261,7 +228,7 @@ impl AuthorizationCodeGrant {
             (Some(_) | None, None) => None,
         };
 
-        let token_endpoint = crate::grant::core::resolve_mtls_alias(
+        let effective_token_endpoint = crate::grant::core::resolve_mtls_alias(
             http_client.as_ref(),
             &token_endpoint,
             mtls_token_endpoint.as_ref(),
@@ -282,6 +249,7 @@ impl AuthorizationCodeGrant {
             dpop,
             issuer,
             token_endpoint,
+            effective_token_endpoint,
             token_endpoint_auth_methods_supported,
             jws_verifier,
             jar,
@@ -346,6 +314,10 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
         &self.token_endpoint
     }
 
+    fn effective_token_endpoint(&self) -> &EndpointUrl {
+        &self.effective_token_endpoint
+    }
+
     fn dpop(&self) -> &dyn AuthorizationServerDPoP {
         self.dpop.as_ref()
     }
@@ -369,8 +341,7 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
             .http_client(self.http_client.clone())
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
-            .token_endpoint(self.token_endpoint.clone())
-            .expect("an EndpointUrl converts to itself infallibly")
+            .token_endpoint(self.effective_token_endpoint.clone())
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )

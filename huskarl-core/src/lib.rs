@@ -31,5 +31,5 @@ pub mod secrets;
 pub mod serde_utils;
 pub mod server_metadata;
 
-pub use endpoint_url::{EndpointUrl, IntoEndpointUrl};
+pub use endpoint_url::EndpointUrl;
 pub use error::{Error, ErrorKind};

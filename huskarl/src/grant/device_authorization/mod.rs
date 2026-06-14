@@ -77,8 +77,8 @@
 //! #     .await?;
 //!
 //! let grant: DeviceAuthorizationGrant = DeviceAuthorizationGrant::builder()
-//!     .device_authorization_endpoint("https://my-server/device_authorization")?
-//!     .token_endpoint("https://my-server/token")?
+//!     .device_authorization_endpoint("https://my-server/device_authorization".parse()?)
+//!     .token_endpoint("https://my-server/token".parse()?)
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(NoAuth)

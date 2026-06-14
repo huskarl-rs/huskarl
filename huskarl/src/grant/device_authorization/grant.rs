@@ -31,7 +31,7 @@ use crate::{
 /// See the [module documentation][crate::grant::device_authorization] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
-#[builder(state_mod(name = "builder"), on(String, into))]
+#[builder(on(String, into))]
 pub struct DeviceAuthorizationGrant {
     /// The client ID.
     client_id: String,
@@ -56,27 +56,11 @@ pub struct DeviceAuthorizationGrant {
     issuer: Option<String>,
 
     /// The URL of the token endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "token_endpoint")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     token_endpoint: EndpointUrl,
 
     /// The mTLS alias for the token endpoint (RFC 8705 §5).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     mtls_token_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for token requests: the mTLS alias when the HTTP
@@ -90,27 +74,11 @@ pub struct DeviceAuthorizationGrant {
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 
     /// The device authorization endpoint (RFC 8628 §3.1).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "device_authorization_endpoint?")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     device_authorization_endpoint: EndpointUrl,
 
     /// The mTLS alias for the device authorization endpoint (RFC 8705 §5).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.device_authorization_endpoint?")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     mtls_device_authorization_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for device authorization requests: the mTLS alias
@@ -160,7 +128,20 @@ impl DeviceAuthorizationGrant {
         let dpop_jkt = self.dpop().get_current_thumbprint();
 
         let response: DeviceAuthorizationResponse = with_dpop_nonce_retry!({
-            let auth_params = self.authentication_params().await?;
+            // The assertion is sent to the device authorization endpoint, not
+            // the token endpoint: pass that as the target endpoint (RFC 8628 is
+            // one of the non-token endpoints named in the audience-injection
+            // analysis, draft-ietf-oauth-security-topics-update §2.1.1.2).
+            let auth_params = self
+                .client_auth
+                .authentication_params(
+                    &self.client_id,
+                    self.issuer.as_deref(),
+                    Some(&self.token_endpoint),
+                    device_auth_endpoint,
+                    self.token_endpoint_auth_methods_supported.as_deref(),
+                )
+                .await?;
 
             OAuth2FormRequest::builder()
                 .form(&payload)
@@ -284,10 +265,11 @@ impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
         Some(self.client_auth.as_ref())
     }
 
-    // Deliberately returns the build-time-resolved endpoint, not the raw
-    // `token_endpoint` builder input.
-    #[allow(clippy::misnamed_getters)]
     fn token_endpoint(&self) -> &EndpointUrl {
+        &self.token_endpoint
+    }
+
+    fn effective_token_endpoint(&self) -> &EndpointUrl {
         &self.effective_token_endpoint
     }
 
@@ -311,7 +293,6 @@ impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.effective_token_endpoint.clone())
-            .expect("an EndpointUrl converts to itself infallibly")
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )
@@ -408,6 +389,7 @@ pub enum PollError {
 }
 
 /// The result of polling.
+#[derive(Debug)]
 pub enum PollResult {
     /// The token is still pending.
     Pending,
@@ -431,5 +413,125 @@ impl StartInput {
     #[must_use]
     pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self::builder().scopes(scopes).build()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use http::{HeaderMap, Request, StatusCode};
+
+    use crate::core::{
+        Error,
+        client_auth::NoAuth,
+        http::{HttpClient, HttpResponse, Idempotency},
+        platform::MaybeSendBoxFuture,
+    };
+
+    use super::*;
+
+    /// An [`HttpClient`] that ignores the request and returns a fixed response.
+    struct FakeClient {
+        status: StatusCode,
+        body: &'static str,
+    }
+
+    impl HttpClient for FakeClient {
+        fn execute(
+            &self,
+            _request: Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            let status = self.status;
+            let body = Bytes::from_static(self.body.as_bytes());
+            Box::pin(async move {
+                Ok(HttpResponse {
+                    status,
+                    headers: HeaderMap::new(),
+                    body,
+                })
+            })
+        }
+    }
+
+    /// A grant whose token endpoint always answers with the given status/body.
+    fn grant(status: StatusCode, body: &'static str) -> DeviceAuthorizationGrant {
+        DeviceAuthorizationGrant::builder()
+            .client_id("device-client")
+            .http_client(FakeClient { status, body })
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example/token".parse::<EndpointUrl>().unwrap())
+            .device_authorization_endpoint(
+                "https://as.example/device".parse::<EndpointUrl>().unwrap(),
+            )
+            .build()
+    }
+
+    fn pending() -> PendingState {
+        PendingState {
+            device_code: "dev-code".to_string(),
+            interval_secs: 5,
+        }
+    }
+
+    #[tokio::test]
+    async fn slow_down_bumps_interval_and_stays_pending() {
+        let g = grant(StatusCode::BAD_REQUEST, r#"{"error":"slow_down"}"#);
+        let mut state = pending();
+        let result = g.poll(&mut state, None).await.unwrap();
+        assert!(matches!(result, PollResult::Pending));
+        assert_eq!(state.interval_secs, 10, "slow_down adds 5s to the interval");
+    }
+
+    #[tokio::test]
+    async fn authorization_pending_stays_pending_without_bump() {
+        let g = grant(
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"authorization_pending"}"#,
+        );
+        let mut state = pending();
+        let result = g.poll(&mut state, None).await.unwrap();
+        assert!(matches!(result, PollResult::Pending));
+        assert_eq!(
+            state.interval_secs, 5,
+            "authorization_pending leaves the interval unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn access_denied_maps_to_error() {
+        let g = grant(StatusCode::BAD_REQUEST, r#"{"error":"access_denied"}"#);
+        assert!(matches!(
+            g.poll(&mut pending(), None).await,
+            Err(PollError::AccessDenied)
+        ));
+    }
+
+    #[tokio::test]
+    async fn expired_token_maps_to_error() {
+        let g = grant(StatusCode::BAD_REQUEST, r#"{"error":"expired_token"}"#);
+        assert!(matches!(
+            g.poll(&mut pending(), None).await,
+            Err(PollError::TokenExpired)
+        ));
+    }
+
+    #[tokio::test]
+    async fn other_oauth_error_propagates_as_exchange() {
+        let g = grant(StatusCode::BAD_REQUEST, r#"{"error":"invalid_client"}"#);
+        assert!(matches!(
+            g.poll(&mut pending(), None).await,
+            Err(PollError::Exchange { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn successful_token_completes_poll() {
+        let g = grant(
+            StatusCode::OK,
+            r#"{"access_token":"at-123","token_type":"bearer"}"#,
+        );
+        let result = g.poll(&mut pending(), None).await.unwrap();
+        assert!(matches!(result, PollResult::Complete(_)));
     }
 }

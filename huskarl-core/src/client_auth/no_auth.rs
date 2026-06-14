@@ -1,6 +1,5 @@
-use http::Uri;
-
 use crate::{
+    EndpointUrl,
     client_auth::{AuthenticationParams, ClientAuthentication},
     error::Error,
     platform::MaybeSendBoxFuture,
@@ -17,7 +16,8 @@ impl ClientAuthentication for NoAuth {
         &'a self,
         client_id: &'a str,
         _issuer: Option<&'a str>,
-        _endpoint: &'a Uri,
+        _token_endpoint: Option<&'a EndpointUrl>,
+        _target_endpoint: &'a EndpointUrl,
         _allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {

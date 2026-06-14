@@ -6,7 +6,8 @@ use crate::core::platform::MaybeSendSync;
 ///
 /// Passed to the [`OnValidate`] callback registered on a validator.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::IntoStaticStr, strum::AsRefStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum ValidationOutcome {
     /// Token was valid.
     Success,
@@ -25,14 +26,7 @@ pub enum ValidationOutcome {
 impl ValidationOutcome {
     /// Returns a short static string label suitable for use as a metrics tag.
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::NoToken => "no_token",
-            Self::ExtractError => "extract_error",
-            Self::InvalidToken => "invalid_token",
-            Self::BindingError => "binding_error",
-            Self::CallError => "call_error",
-        }
+        self.into()
     }
 }
 

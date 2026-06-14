@@ -437,8 +437,7 @@ mod tests {
         ClientCredentialsGrant::builder()
             .client_id("client_id")
             .client_auth(NoAuth)
-            .token_endpoint("https://as.example.com/token")
-            .unwrap()
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
             .http_client(http)
             .build()
     }
@@ -640,10 +639,8 @@ mod tests {
             .client_id("client")
             .client_auth(NoAuth)
             .http_client(http)
-            .token_endpoint("https://as.example.com/token")
-            .unwrap()
-            .authorization_endpoint("https://as.example.com/authorize")
-            .unwrap()
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
             .redirect_uri("http://127.0.0.1/cb")
             .build()
             .await
@@ -721,8 +718,7 @@ mod tests {
                 ClientCredentialsGrant::builder()
                     .client_id("client")
                     .client_auth(NoAuth)
-                    .token_endpoint("https://as.example.com/token")
-                    .unwrap()
+                    .token_endpoint("https://as.example.com/token".parse().unwrap())
                     .http_client(http.clone())
                     .build(),
             )

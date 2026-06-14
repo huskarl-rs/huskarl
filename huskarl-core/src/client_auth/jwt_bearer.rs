@@ -1,10 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
 use bon::Builder;
-use http::Uri;
 use snafu::Snafu;
 
 use crate::{
+    EndpointUrl,
     client_auth::{AuthenticationParams, ClientAuthentication},
     crypto::signer::JwsSignerSelector,
     error::{Error, ErrorKind},
@@ -73,37 +73,57 @@ pub struct JwtBearer {
 
 /// Sets the value used for the audience of the JWT.
 ///
-/// draft-ietf-oauth-rfc7523bis requires client authentication assertions to
-/// use the authorization server's issuer identifier as their sole audience —
-/// endpoint URLs are explicitly disallowed, as they enable audience-injection
-/// attacks. [`Audience::Issuer`] implements this and is the recommended
-/// choice; the issuer is usually supplied by authorization server metadata.
-/// The issuer value is also required for FAPI 2.0.
+/// Signature-based client authentication is subject to audience-injection
+/// attacks (draft-ietf-oauth-security-topics-update §2.1): a malicious
+/// authorization server that advertises an honest server's token endpoint can
+/// replay a client's assertion against the honest server. The draft gives two
+/// safe countermeasures, both of which use a *single* audience value:
 ///
-/// [`Audience::TokenEndpoint`] remains for legacy authorization servers
-/// that predate that guidance (RFC 7523 / `OpenID` Connect Core 1.0 §9
-/// historically suggested the token endpoint URL), and
-/// [`Audience::Custom`] for servers that pin some other value.
+///  - §2.1.2.1 — the authorization server's issuer identifier
+///    ([`Audience::Issuer`], recommended; also required for FAPI 2.0); and
+///  - §2.1.2.2 — the exact endpoint URI the assertion is sent to
+///    ([`Audience::TargetEndpoint`]).
 ///
-/// See <https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc7523bis/>,
+/// [`Audience::TokenEndpoint`] (the authorization server's token endpoint, even
+/// for assertions sent elsewhere) is the historically common pattern
+/// "encouraged, or at least allowed" by RFC 7521/7522/7523, RFC 9126 and
+/// `OpenID` Connect Core 1.0 §9 — and is exactly the value an audience-injection
+/// attack exploits. Use it only for a legacy server that demands it.
+/// [`Audience::Custom`] pins some other value.
+///
+/// See <https://datatracker.ietf.org/doc/draft-ietf-oauth-security-topics-update/>,
+/// <https://datatracker.ietf.org/doc/draft-ietf-oauth-rfc7523bis/>,
 /// <https://www.rfc-editor.org/rfc/rfc7523> and
 /// <https://openid.net/specs/fapi-security-profile-2_0-final.html>
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Audience {
     /// Use the authorization server's issuer identifier as the sole audience
-    /// (draft-ietf-oauth-rfc7523bis). Recommended.
+    /// (draft-ietf-oauth-security-topics-update §2.1.2.1). Recommended.
     ///
     /// The issuer usually comes from authorization server metadata. Fails
     /// with [`ErrorKind::Config`] if no issuer is configured — there is no
-    /// fallback, since an endpoint-URL audience would be rejected by
-    /// conforming servers and weakens audience-injection protection.
+    /// fallback, since an endpoint-URL audience weakens audience-injection
+    /// protection.
     Issuer,
-    /// Use the endpoint being authenticated to, which is always available.
+    /// Use the authorization server's token endpoint URL, even when the
+    /// assertion is sent to another endpoint (PAR, revocation, introspection,
+    /// device authorization).
     ///
-    /// Legacy: pre-rfc7523bis authorization servers historically expected
-    /// the token endpoint URL here. Conforming servers reject it.
+    /// This is the historically common pattern, but it is the value an
+    /// audience-injection attack
+    /// (draft-ietf-oauth-security-topics-update §2.1) exploits — only use it
+    /// for a legacy server that requires it. Fails with [`ErrorKind::Config`]
+    /// if the caller cannot supply the token endpoint (e.g. a revocation or
+    /// introspection client configured without one).
     TokenEndpoint,
+    /// Use the exact endpoint URI the assertion is sent to
+    /// (draft-ietf-oauth-security-topics-update §2.1.2.2).
+    ///
+    /// Always available, and a safe countermeasure for servers that do not
+    /// publish a verifiable issuer identifier. Note that for grant exchanges
+    /// the target endpoint *is* the token endpoint.
+    TargetEndpoint,
     /// Use a custom audience value.
     Custom(Arc<str>),
 }
@@ -119,12 +139,28 @@ pub enum Audience {
 ))]
 pub struct MissingIssuer;
 
+/// [`Audience::TokenEndpoint`] requires the authorization server's token
+/// endpoint, but the caller could not supply one.
+///
+/// Carried as the source of [`ErrorKind::Config`] errors from
+/// [`JwtBearer::authentication_params`](ClientAuthentication::authentication_params).
+/// Arises when authenticating to an endpoint whose client is configured
+/// without the token endpoint (e.g. revocation or introspection).
+#[derive(Debug, Clone, Copy, Default, Snafu)]
+#[snafu(display(
+    "Audience::TokenEndpoint requires the authorization server's token endpoint, \
+     but none was available; use Audience::TargetEndpoint or Audience::Issuer, \
+     or configure the token endpoint"
+))]
+pub struct MissingTokenEndpoint;
+
 impl ClientAuthentication for JwtBearer {
     fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        endpoint: &'a Uri,
+        token_endpoint: Option<&'a EndpointUrl>,
+        target_endpoint: &'a EndpointUrl,
         _allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
@@ -132,7 +168,11 @@ impl ClientAuthentication for JwtBearer {
                 Audience::Issuer => issuer
                     .ok_or_else(|| Error::new(ErrorKind::Config, MissingIssuer))?
                     .to_string(),
-                Audience::TokenEndpoint => endpoint.to_string(),
+                Audience::TokenEndpoint => token_endpoint
+                    .ok_or_else(|| Error::new(ErrorKind::Config, MissingTokenEndpoint))?
+                    .as_uri()
+                    .to_string(),
+                Audience::TargetEndpoint => target_endpoint.as_uri().to_string(),
                 Audience::Custom(custom) => custom.to_string(),
             };
 
@@ -167,6 +207,8 @@ impl ClientAuthentication for JwtBearer {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use base64::Engine as _;
 
     use super::*;
@@ -208,49 +250,15 @@ mod tests {
         )
     }
 
-    #[tokio::test]
-    async fn audience_issuer_with_issuer() {
-        let bearer = JwtBearer::builder()
-            .signer(MockJwsSigner { alg: "ES256" })
-            .audience(Audience::Issuer)
-            .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
-        let params = bearer
-            .authentication_params("cid", Some("https://issuer.example.com"), &uri, None)
-            .await
-            .unwrap();
-        let form = params.form_params.unwrap();
-        let assertion = extract_form_str(&form, "client_assertion");
+    fn decode_claims(assertion: &str) -> serde_json::Value {
         let parts: Vec<&str> = assertion.split('.').collect();
         assert_eq!(parts.len(), 3);
-
-        let claims: serde_json::Value = serde_json::from_slice(
+        serde_json::from_slice(
             &base64::prelude::BASE64_URL_SAFE_NO_PAD
                 .decode(parts[1])
                 .unwrap(),
         )
-        .unwrap();
-        assert_eq!(claims["aud"], "https://issuer.example.com");
-    }
-
-    #[tokio::test]
-    async fn audience_issuer_without_issuer_fails_closed() {
-        let bearer = JwtBearer::builder()
-            .signer(MockJwsSigner { alg: "ES256" })
-            .audience(Audience::Issuer)
-            .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
-        let err = bearer
-            .authentication_params("cid", None, &uri, None)
-            .await
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
-        assert!(
-            std::error::Error::source(&err)
-                .expect("carries a source")
-                .downcast_ref::<MissingIssuer>()
-                .is_some()
-        );
+        .unwrap()
     }
 
     fn decode_header(assertion: &str) -> serde_json::Value {
@@ -263,15 +271,67 @@ mod tests {
         .unwrap()
     }
 
+    // A token endpoint distinct from the target endpoint, so tests can tell
+    // `TokenEndpoint` and `TargetEndpoint` audiences apart.
+    fn token_endpoint() -> &'static EndpointUrl {
+        static E: LazyLock<EndpointUrl> =
+            LazyLock::new(|| "https://token.example.com/token".parse().unwrap());
+        LazyLock::force(&E)
+    }
+    fn target_endpoint() -> &'static EndpointUrl {
+        static E: LazyLock<EndpointUrl> =
+            LazyLock::new(|| "https://as.example.com/revoke".parse().unwrap());
+        LazyLock::force(&E)
+    }
+
+    #[tokio::test]
+    async fn audience_issuer_with_issuer() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::Issuer)
+            .build();
+        let params = bearer
+            .authentication_params(
+                "cid",
+                Some("https://issuer.example.com"),
+                Some(token_endpoint()),
+                target_endpoint(),
+                None,
+            )
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        let claims = decode_claims(&extract_form_str(&form, "client_assertion"));
+        assert_eq!(claims["aud"], "https://issuer.example.com");
+    }
+
+    #[tokio::test]
+    async fn audience_issuer_without_issuer_fails_closed() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::Issuer)
+            .build();
+        let err = bearer
+            .authentication_params("cid", None, Some(token_endpoint()), target_endpoint(), None)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
+        assert!(
+            std::error::Error::source(&err)
+                .expect("carries a source")
+                .downcast_ref::<MissingIssuer>()
+                .is_some()
+        );
+    }
+
     #[tokio::test]
     async fn assertion_is_explicitly_typed_by_default() {
         let bearer = JwtBearer::builder()
             .signer(MockJwsSigner { alg: "ES256" })
-            .audience(Audience::TokenEndpoint)
+            .audience(Audience::TargetEndpoint)
             .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
         let params = bearer
-            .authentication_params("cid", None, &uri, None)
+            .authentication_params("cid", None, None, target_endpoint(), None)
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -283,12 +343,11 @@ mod tests {
     async fn explicit_typ_opt_out_restores_plain_jwt() {
         let bearer = JwtBearer::builder()
             .signer(MockJwsSigner { alg: "ES256" })
-            .audience(Audience::TokenEndpoint)
+            .audience(Audience::TargetEndpoint)
             .explicit_typ(false)
             .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
         let params = bearer
-            .authentication_params("cid", None, &uri, None)
+            .authentication_params("cid", None, None, target_endpoint(), None)
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -297,26 +356,70 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn audience_token_endpoint() {
+    async fn audience_target_endpoint_uses_target_not_token() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::TargetEndpoint)
+            .build();
+        let params = bearer
+            .authentication_params(
+                "cid",
+                Some("https://issuer.example.com"),
+                Some(token_endpoint()),
+                target_endpoint(),
+                None,
+            )
+            .await
+            .unwrap();
+        let form = params.form_params.unwrap();
+        let claims = decode_claims(&extract_form_str(&form, "client_assertion"));
+        assert_eq!(claims["aud"], "https://as.example.com/revoke");
+    }
+
+    #[tokio::test]
+    async fn audience_token_endpoint_uses_token_not_target() {
         let bearer = JwtBearer::builder()
             .signer(MockJwsSigner { alg: "ES256" })
             .audience(Audience::TokenEndpoint)
             .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
         let params = bearer
-            .authentication_params("cid", Some("https://issuer.example.com"), &uri, None)
+            .authentication_params(
+                "cid",
+                Some("https://issuer.example.com"),
+                Some(token_endpoint()),
+                target_endpoint(),
+                None,
+            )
             .await
             .unwrap();
         let form = params.form_params.unwrap();
-        let assertion = extract_form_str(&form, "client_assertion");
-        let parts: Vec<&str> = assertion.split('.').collect();
-        let claims: serde_json::Value = serde_json::from_slice(
-            &base64::prelude::BASE64_URL_SAFE_NO_PAD
-                .decode(parts[1])
-                .unwrap(),
-        )
-        .unwrap();
+        let claims = decode_claims(&extract_form_str(&form, "client_assertion"));
         assert_eq!(claims["aud"], "https://token.example.com/token");
+    }
+
+    #[tokio::test]
+    async fn audience_token_endpoint_without_token_endpoint_fails_closed() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::TokenEndpoint)
+            .build();
+        let err = bearer
+            .authentication_params(
+                "cid",
+                Some("https://issuer.example.com"),
+                None,
+                target_endpoint(),
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
+        assert!(
+            std::error::Error::source(&err)
+                .expect("carries a source")
+                .downcast_ref::<MissingTokenEndpoint>()
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -325,20 +428,18 @@ mod tests {
             .signer(MockJwsSigner { alg: "ES256" })
             .audience(Audience::Custom("https://custom.example.com".into()))
             .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
         let params = bearer
-            .authentication_params("cid", Some("https://issuer.example.com"), &uri, None)
+            .authentication_params(
+                "cid",
+                Some("https://issuer.example.com"),
+                Some(token_endpoint()),
+                target_endpoint(),
+                None,
+            )
             .await
             .unwrap();
         let form = params.form_params.unwrap();
-        let assertion = extract_form_str(&form, "client_assertion");
-        let parts: Vec<&str> = assertion.split('.').collect();
-        let claims: serde_json::Value = serde_json::from_slice(
-            &base64::prelude::BASE64_URL_SAFE_NO_PAD
-                .decode(parts[1])
-                .unwrap(),
-        )
-        .unwrap();
+        let claims = decode_claims(&extract_form_str(&form, "client_assertion"));
         assert_eq!(claims["aud"], "https://custom.example.com");
     }
 
@@ -346,11 +447,10 @@ mod tests {
     async fn form_params_structure() {
         let bearer = JwtBearer::builder()
             .signer(MockJwsSigner { alg: "ES256" })
-            .audience(Audience::TokenEndpoint)
+            .audience(Audience::TargetEndpoint)
             .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
         let params = bearer
-            .authentication_params("my-client", None, &uri, None)
+            .authentication_params("my-client", None, None, target_endpoint(), None)
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -367,23 +467,15 @@ mod tests {
     async fn subject_override() {
         let bearer = JwtBearer::builder()
             .signer(MockJwsSigner { alg: "ES256" })
-            .audience(Audience::TokenEndpoint)
+            .audience(Audience::TargetEndpoint)
             .subject("custom-subject")
             .build();
-        let uri: Uri = "https://token.example.com/token".parse().unwrap();
         let params = bearer
-            .authentication_params("my-client", None, &uri, None)
+            .authentication_params("my-client", None, None, target_endpoint(), None)
             .await
             .unwrap();
         let form = params.form_params.unwrap();
-        let assertion = extract_form_str(&form, "client_assertion");
-        let parts: Vec<&str> = assertion.split('.').collect();
-        let claims: serde_json::Value = serde_json::from_slice(
-            &base64::prelude::BASE64_URL_SAFE_NO_PAD
-                .decode(parts[1])
-                .unwrap(),
-        )
-        .unwrap();
+        let claims = decode_claims(&extract_form_str(&form, "client_assertion"));
         assert_eq!(claims["iss"], "my-client");
         assert_eq!(claims["sub"], "custom-subject");
     }

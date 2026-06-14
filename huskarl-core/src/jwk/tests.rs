@@ -1,4 +1,5 @@
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
+use rstest::rstest;
 
 use super::*;
 
@@ -187,37 +188,20 @@ fn test_parse_jwks_appendix_a3() {
     );
 }
 
-#[test]
-fn test_roundtrip_ec_key() {
-    let json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}"#;
-    let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let serialized = serde_json::to_string(&jwk).unwrap();
-    let deserialized: Jwk = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(jwk, deserialized);
-}
-
-#[test]
-fn test_roundtrip_rsa_key() {
-    let json = r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYjqxnf7vQoSmcnVQ"}"#;
-    let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let serialized = serde_json::to_string(&jwk).unwrap();
-    let deserialized: Jwk = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(jwk, deserialized);
-}
-
-// RFC 8037 Appendix A — Ed25519 private key
-#[test]
-fn test_roundtrip_okp_key() {
-    let json = r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"}"#;
-    let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let serialized = serde_json::to_string(&jwk).unwrap();
-    let deserialized: Jwk = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(jwk, deserialized);
-}
-
-#[test]
-fn test_roundtrip_oct_key() {
-    let json = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#;
+// A JWK survives a serialize/deserialize round trip unchanged, across every
+// key type. The OKP key is the RFC 8037 Appendix A Ed25519 private key.
+#[rstest]
+#[case::ec(
+    r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}"#
+)]
+#[case::rsa(
+    r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYjqxnf7vQoSmcnVQ"}"#
+)]
+#[case::okp(
+    r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"}"#
+)]
+#[case::oct(r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#)]
+fn test_roundtrip_key(#[case] json: &str) {
     let jwk: Jwk = serde_json::from_str(json).unwrap();
     let serialized = serde_json::to_string(&jwk).unwrap();
     let deserialized: Jwk = serde_json::from_str(&serialized).unwrap();

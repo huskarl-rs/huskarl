@@ -18,11 +18,12 @@ use std::sync::Arc;
 use bon::Builder;
 pub use client_secret::ClientSecret;
 pub use form_value::FormValue;
-use http::{HeaderMap, Uri};
-pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder, MissingIssuer};
+use http::HeaderMap;
+pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder, MissingIssuer, MissingTokenEndpoint};
 pub use no_auth::NoAuth;
 
 use crate::{
+    EndpointUrl,
     error::Error,
     platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
@@ -46,16 +47,24 @@ use crate::{
 pub trait ClientAuthentication: MaybeSendSync {
     /// Returns the authentication parameters for a request.
     ///
-    /// `endpoint` is the endpoint being authenticated to — the token endpoint
-    /// for grant exchanges, but equally the PAR, revocation, or introspection
-    /// endpoint. Implementations should not assume it is the token endpoint;
-    /// per draft-ietf-oauth-rfc7523bis, client assertions audience the
-    /// issuer, not an endpoint URL (see [`Audience`]).
+    /// `target_endpoint` is the exact endpoint the request is sent to — the
+    /// token endpoint for grant exchanges, but equally the PAR, revocation, or
+    /// introspection endpoint. `token_endpoint` is the authorization server's
+    /// token endpoint when the caller knows it; it differs from
+    /// `target_endpoint` whenever the request targets some other endpoint, and
+    /// is `None` where the caller cannot supply it.
+    ///
+    /// Both feed the audience of signature-based client assertions: per
+    /// draft-ietf-oauth-security-topics-update §2.1.2 the safe choices are the
+    /// issuer (§2.1.2.1) or the exact `target_endpoint` (§2.1.2.2); a
+    /// `token_endpoint` audience is offered only for legacy servers that
+    /// demand it, and enables audience-injection attacks (see [`Audience`]).
     fn authentication_params<'a>(
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        endpoint: &'a Uri,
+        token_endpoint: Option<&'a EndpointUrl>,
+        target_endpoint: &'a EndpointUrl,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>>;
 }
@@ -65,10 +74,17 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for &T {
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        endpoint: &'a Uri,
+        token_endpoint: Option<&'a EndpointUrl>,
+        target_endpoint: &'a EndpointUrl,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(client_id, issuer, endpoint, allowed_methods)
+        (**self).authentication_params(
+            client_id,
+            issuer,
+            token_endpoint,
+            target_endpoint,
+            allowed_methods,
+        )
     }
 }
 
@@ -77,10 +93,17 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Box<T> {
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        endpoint: &'a Uri,
+        token_endpoint: Option<&'a EndpointUrl>,
+        target_endpoint: &'a EndpointUrl,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(client_id, issuer, endpoint, allowed_methods)
+        (**self).authentication_params(
+            client_id,
+            issuer,
+            token_endpoint,
+            target_endpoint,
+            allowed_methods,
+        )
     }
 }
 
@@ -89,10 +112,17 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Arc<T> {
         &'a self,
         client_id: &'a str,
         issuer: Option<&'a str>,
-        endpoint: &'a Uri,
+        token_endpoint: Option<&'a EndpointUrl>,
+        target_endpoint: &'a EndpointUrl,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(client_id, issuer, endpoint, allowed_methods)
+        (**self).authentication_params(
+            client_id,
+            issuer,
+            token_endpoint,
+            target_endpoint,
+            allowed_methods,
+        )
     }
 }
 
@@ -113,9 +143,9 @@ mod tests {
     #[tokio::test]
     async fn erased_authentication_dispatches() {
         let auth: Arc<dyn ClientAuthentication> = Arc::new(NoAuth);
-        let uri = Uri::from_static("https://as.example/token");
+        let uri: EndpointUrl = "https://as.example/token".parse().unwrap();
         let params = auth
-            .authentication_params("my-client", None, &uri, None)
+            .authentication_params("my-client", None, Some(&uri), &uri, None)
             .await
             .expect("no_auth never fails");
         let form = params.form_params.expect("client_id form param");

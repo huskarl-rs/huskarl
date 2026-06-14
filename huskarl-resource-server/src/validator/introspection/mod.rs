@@ -83,7 +83,6 @@
 //! ```rust
 //! use huskarl_resource_server::{
 //!     core::{
-//!         IntoEndpointUrl as _,
 //!         client_auth::ClientSecret,
 //!         jwt::validator::ClaimCheck,
 //!         secrets::{EnvVarSecret, encodings::StringEncoding},
@@ -97,7 +96,7 @@
 //! let validator = IntrospectionValidator::builder()
 //!     .client_id("my-resource-server")
 //!     .issuer("https://my-issuer")
-//!     .introspection_endpoint("https://my-issuer/oauth/introspect".into_endpoint_url()?)
+//!     .introspection_endpoint("https://my-issuer/oauth/introspect".parse()?)
 //!     .audience(ClaimCheck::required_value("api://my-resource"))
 //!     .client_auth(ClientSecret::new(client_secret))
 //!     .http_client(http_client.clone())
@@ -175,7 +174,7 @@ use crate::{
         introspection::{
             error::{AudienceSnafu, BindingSnafu, CallSnafu, ExtractSnafu},
             introspection_validator_builder::{
-                SetIntrospectionEndpoint, SetIssuer, SetJwksUri, State,
+                SetIntrospectionEndpoint, SetIssuer, SetJwksUri, SetTokenEndpoint, State,
             },
         },
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
@@ -223,6 +222,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         issuer: Option<String>,
         /// The URL of the token introspection endpoint.
         introspection_endpoint: EndpointUrl,
+        /// The authorization server's token endpoint, as published in metadata.
+        ///
+        /// Used only as the audience for client assertions configured with
+        /// `Audience::TokenEndpoint`. Pre-filled by
+        /// [`builder_from_metadata`](Self::builder_from_metadata); leave unset
+        /// to make that audience policy fail closed.
+        token_endpoint: Option<EndpointUrl>,
         /// Check applied against the audience (`aud`) of introspected tokens.
         ///
         /// RFC 7662 §4 directs resource servers to verify that an introspected
@@ -304,6 +310,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             .client_id(client_id.clone())
             .maybe_issuer(issuer.clone())
             .introspection_endpoint(introspection_endpoint)
+            .maybe_token_endpoint(token_endpoint)
             .client_auth(client_auth)
             .request_jwt_response(request_jwt_response)
             .maybe_jwks_uri(jwks_uri)
@@ -352,8 +359,12 @@ impl IntrospectionValidator<()> {
     #[allow(clippy::type_complexity)]
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> Option<IntrospectionValidatorBuilder<(), SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>>>
-    {
+    ) -> Option<
+        IntrospectionValidatorBuilder<
+            (),
+            SetTokenEndpoint<SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>>,
+        >,
+    > {
         metadata
             .introspection_endpoint
             .as_ref()
@@ -362,6 +373,7 @@ impl IntrospectionValidator<()> {
                     .issuer(metadata.issuer.clone())
                     .introspection_endpoint(introspection_endpoint.clone())
                     .maybe_jwks_uri(metadata.jwks_uri.clone())
+                    .token_endpoint(metadata.token_endpoint.clone())
             })
     }
 }

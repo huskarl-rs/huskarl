@@ -61,7 +61,7 @@
 //! use std::sync::Arc;
 //!
 //! use huskarl_resource_server::{
-//!     core::{IntoEndpointUrl as _, jwk::JwksSource, jwt::validator::ClaimCheck},
+//!     core::{jwk::JwksSource, jwt::validator::ClaimCheck},
 //!     validator::custom::CustomValidator,
 //! };
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -70,7 +70,7 @@
 //! let validator = CustomValidator::builder()
 //!     .authorization_server("https://my-issuer")
 //!     .audience(ClaimCheck::required_value("api://my-resource"))
-//!     .jwks_uri("https://my-issuer/.well-known/jwks.json".into_endpoint_url()?)
+//!     .jwks_uri("https://my-issuer/.well-known/jwks.json".parse()?)
 //!     .jws_verifier_factory(Arc::new(
 //!         JwksSource::builder()
 //!             .http_client(http_client.clone())

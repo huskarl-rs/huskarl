@@ -612,6 +612,8 @@ pub enum JwtValidationError {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::crypto::{
         KeyMatchStrength,
@@ -889,34 +891,20 @@ mod tests {
 
     // --- iss claim checks ---
 
+    // Both the single-value and any-of forms of the iss check report the same
+    // `ClaimMismatch` when the token's issuer isn't accepted.
+    #[rstest]
+    #[case::required_value(ClaimCheck::required_value("expected-issuer"), "wrong-issuer")]
+    #[case::require_any(ClaimCheck::require_any(["a", "b"]), "c")]
     #[tokio::test]
-    async fn iss_required_value_mismatch() {
+    async fn iss_mismatch_is_rejected(#[case] iss_check: ClaimCheck, #[case] actual_iss: &str) {
         let validator = JwtValidator::builder()
             .verifier(MockVerifier)
-            .iss(ClaimCheck::required_value("expected-issuer"))
+            .iss(iss_check)
             .build();
         let parsed = make_parsed_jws(
             serde_json::json!({"alg": "RS256"}),
-            serde_json::json!({"iss": "wrong-issuer"}),
-        );
-        let result = validator
-            .validate_parsed_jws::<serde_json::Value>(parsed)
-            .await;
-        assert!(matches!(
-            result,
-            Err(JwtValidationError::ClaimMismatch { claim: "iss", .. })
-        ));
-    }
-
-    #[tokio::test]
-    async fn iss_require_any_mismatch() {
-        let validator = JwtValidator::builder()
-            .verifier(MockVerifier)
-            .iss(ClaimCheck::require_any(["a", "b"]))
-            .build();
-        let parsed = make_parsed_jws(
-            serde_json::json!({"alg": "RS256"}),
-            serde_json::json!({"iss": "c"}),
+            serde_json::json!({ "iss": actual_iss }),
         );
         let result = validator
             .validate_parsed_jws::<serde_json::Value>(parsed)

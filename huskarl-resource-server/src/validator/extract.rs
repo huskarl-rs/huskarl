@@ -2,6 +2,7 @@
 
 use http::{HeaderMap, HeaderName, header::ToStrError};
 use snafu::prelude::*;
+use strum::EnumMessage as _;
 
 use crate::{
     core::secrets::SecretString,
@@ -54,18 +55,23 @@ pub fn extract_token(
 }
 
 /// Errors that can occur when validating the token string and type.
-#[derive(Debug, Snafu)]
+// `#[strum(message)]` on each variant carries the client-facing RFC 6750
+// `error_description`; the doc comment is the operator-facing `Display`.
+#[derive(Debug, Snafu, strum::EnumMessage)]
 pub enum TokenExtractError {
     /// The token header value is not valid UTF-8.
+    #[strum(message = "The access token header value is not a valid string")]
     TokenNotString {
         /// The underlying string conversion error.
         source: ToStrError,
     },
     /// The token header is not in `<scheme> <token>` format.
+    #[strum(message = "The access token header format is invalid")]
     InvalidTokenHeaderFormat,
     /// The token scheme is not supported.
     ///
     /// Currently `Bearer` and `DPoP` are supported.
+    #[strum(message = "The access token type is unsupported")]
     UnsupportedTokenType {
         /// The unrecognised token type scheme.
         token_type: String,
@@ -93,16 +99,6 @@ impl ToRfc6750Error for TokenExtractError {
     }
 
     fn error_description(&self) -> Option<String> {
-        match self {
-            TokenExtractError::TokenNotString { .. } => {
-                Some("The access token header value is not a valid string".to_string())
-            }
-            TokenExtractError::InvalidTokenHeaderFormat => {
-                Some("The access token header format is invalid".to_string())
-            }
-            TokenExtractError::UnsupportedTokenType { .. } => {
-                Some("The access token type is unsupported".to_string())
-            }
-        }
+        self.get_message().map(str::to_string)
     }
 }

@@ -46,7 +46,6 @@ impl RevocableToken for RefreshToken {
 /// Implementation of token revocation.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
-#[builder(state_mod(name = "builder"))]
 pub struct TokenRevocation {
     // -- User-supplied fields --
     /// The client ID.
@@ -63,27 +62,21 @@ pub struct TokenRevocation {
     #[from_metadata(path = "issuer")]
     issuer: Option<String>,
 
+    /// The authorization server's token endpoint, as published in metadata.
+    ///
+    /// Used only as the audience for client assertions configured with
+    /// [`Audience::TokenEndpoint`](crate::core::client_auth::Audience::TokenEndpoint);
+    /// revocation requests go to the revocation endpoint, so this differs from
+    /// the target endpoint. `None` leaves `Audience::TokenEndpoint` to fail
+    /// closed.
+    #[from_metadata(path = "token_endpoint")]
+    token_endpoint: Option<EndpointUrl>,
+
     /// The URL of the revocation endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     #[from_metadata(path = "revocation_endpoint?")]
     revocation_endpoint: EndpointUrl,
 
     /// The mTLS alias for the revocation endpoint (RFC 8705 §5).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     #[from_metadata(path = "mtls_endpoint_aliases?.revocation_endpoint?")]
     mtls_revocation_endpoint: Option<EndpointUrl>,
 
@@ -97,6 +90,7 @@ impl core::fmt::Debug for TokenRevocation {
         f.debug_struct("TokenRevocation")
             .field("client_id", &self.client_id)
             .field("issuer", &self.issuer)
+            .field("token_endpoint", &self.token_endpoint)
             .field("revocation_endpoint", &self.revocation_endpoint)
             .field("mtls_revocation_endpoint", &self.mtls_revocation_endpoint)
             .finish_non_exhaustive()
@@ -134,7 +128,8 @@ impl TokenRevocation {
             .authentication_params(
                 &self.client_id,
                 self.issuer.as_deref(),
-                effective_endpoint.as_uri(),
+                self.token_endpoint.as_ref(),
+                effective_endpoint,
                 self.revocation_endpoint_auth_methods_supported.as_deref(),
             )
             .await?;
@@ -159,4 +154,168 @@ impl TokenRevocation {
 struct RevocationForm<'a> {
     token: &'a str,
     token_type_hint: &'static str,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use bytes::Bytes;
+    use http::{Request, StatusCode, Uri};
+    use rstest::rstest;
+
+    use crate::{
+        core::{
+            client_auth::NoAuth,
+            http::{HttpClient, HttpResponse, Idempotency},
+            platform::{MaybeSendBoxFuture, SystemTime},
+            secrets::SecretString,
+        },
+        token::{AccessToken, BearerAccessToken},
+    };
+
+    use super::*;
+
+    #[derive(Default)]
+    struct Captured {
+        uri: Option<Uri>,
+        body: Option<Bytes>,
+    }
+
+    /// An [`HttpClient`] that records the request it receives and answers with a
+    /// fixed status and an empty body.
+    struct RecordingClient {
+        status: StatusCode,
+        uses_mtls: bool,
+        captured: Mutex<Captured>,
+    }
+
+    impl RecordingClient {
+        fn new(status: StatusCode, uses_mtls: bool) -> Self {
+            Self {
+                status,
+                uses_mtls,
+                captured: Mutex::new(Captured::default()),
+            }
+        }
+
+        fn uri(&self) -> String {
+            self.captured.lock().unwrap().uri.clone().unwrap().to_string()
+        }
+
+        fn body(&self) -> String {
+            let bytes = self.captured.lock().unwrap().body.clone().unwrap();
+            String::from_utf8(bytes.to_vec()).unwrap()
+        }
+    }
+
+    impl HttpClient for RecordingClient {
+        fn execute(
+            &self,
+            request: Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            {
+                let mut cap = self.captured.lock().unwrap();
+                cap.uri = Some(request.uri().clone());
+                cap.body = Some(request.body().clone());
+            }
+            let status = self.status;
+            Box::pin(async move {
+                Ok(HttpResponse {
+                    status,
+                    headers: http::HeaderMap::new(),
+                    body: Bytes::new(),
+                })
+            })
+        }
+
+        fn uses_mtls(&self) -> bool {
+            self.uses_mtls
+        }
+    }
+
+    fn url(s: &str) -> EndpointUrl {
+        s.parse().unwrap()
+    }
+
+    fn revocation(mtls_alias: Option<&str>) -> TokenRevocation {
+        TokenRevocation::builder()
+            .client_id("revoke-client")
+            .client_auth(NoAuth)
+            .revocation_endpoint(url("https://as.example/revoke"))
+            .maybe_mtls_revocation_endpoint(mtls_alias.map(url))
+            .build()
+    }
+
+    fn access_token() -> AccessToken {
+        AccessToken::Bearer(BearerAccessToken::new(
+            SecretString::new("the-access-token"),
+            SystemTime::now(),
+            None,
+        ))
+    }
+
+    fn refresh_token() -> RefreshToken {
+        RefreshToken::new(SecretString::new("the-refresh-token"), None)
+    }
+
+    #[test]
+    fn revocable_token_impls_report_value_and_hint() {
+        assert_eq!(access_token().token_value(), "the-access-token");
+        assert_eq!(access_token().token_type_hint(), "access_token");
+        assert_eq!(refresh_token().token_value(), "the-refresh-token");
+        assert_eq!(refresh_token().token_type_hint(), "refresh_token");
+    }
+
+    #[tokio::test]
+    async fn revoke_access_token_posts_rfc7009_form_to_revocation_endpoint() {
+        let client = RecordingClient::new(StatusCode::OK, false);
+        revocation(None)
+            .revoke(&client, &access_token())
+            .await
+            .expect("200 with empty body is success");
+
+        assert_eq!(client.uri(), "https://as.example/revoke");
+        let body = client.body();
+        assert!(body.contains("token=the-access-token"), "body: {body}");
+        assert!(body.contains("token_type_hint=access_token"), "body: {body}");
+    }
+
+    #[tokio::test]
+    async fn revoke_refresh_token_sends_refresh_hint() {
+        let client = RecordingClient::new(StatusCode::OK, false);
+        revocation(None)
+            .revoke(&client, &refresh_token())
+            .await
+            .unwrap();
+
+        let body = client.body();
+        assert!(body.contains("token=the-refresh-token"), "body: {body}");
+        assert!(body.contains("token_type_hint=refresh_token"), "body: {body}");
+    }
+
+    /// The effective endpoint is the mTLS alias only when the client uses mTLS
+    /// *and* an alias is configured; otherwise it is the primary endpoint.
+    #[rstest]
+    #[case::mtls_prefers_alias(true, Some("https://mtls.as.example/revoke"), "https://mtls.as.example/revoke")]
+    #[case::mtls_without_alias_falls_back(true, None, "https://as.example/revoke")]
+    #[case::plain_client_ignores_alias(false, Some("https://mtls.as.example/revoke"), "https://as.example/revoke")]
+    #[tokio::test]
+    async fn revoke_selects_endpoint_by_mtls_and_alias(
+        #[case] uses_mtls: bool,
+        #[case] alias: Option<&str>,
+        #[case] expected_uri: &str,
+    ) {
+        let client = RecordingClient::new(StatusCode::OK, uses_mtls);
+        revocation(alias).revoke(&client, &access_token()).await.unwrap();
+        assert_eq!(client.uri(), expected_uri);
+    }
+
+    #[tokio::test]
+    async fn revoke_propagates_a_server_error_status() {
+        let client = RecordingClient::new(StatusCode::BAD_REQUEST, false);
+        let result = revocation(None).revoke(&client, &access_token()).await;
+        assert!(result.is_err(), "a non-2xx response must surface as an error");
+    }
 }

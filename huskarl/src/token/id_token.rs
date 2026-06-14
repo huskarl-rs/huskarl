@@ -350,8 +350,317 @@ pub enum IdTokenValidationError {
 
 #[cfg(test)]
 mod tests {
+    use huskarl_crypto_native::{
+        NativeVerifierPlatform,
+        asymmetric::signer::{GenerateAlgorithm, PrivateKey},
+    };
+    use rstest::rstest;
+
     use super::*;
-    use crate::core::platform::Duration;
+    use crate::core::{
+        crypto::{signer::AsymmetricJwsSigner, verifier::JwsVerifierPlatform},
+        jwt::Jwt,
+        platform::Duration,
+    };
+
+    const ISS: &str = "https://issuer.example.com";
+    const AUD: &str = "client-123";
+    const SUB: &str = "user-abc";
+
+    /// Mints an ES256 signer paired with a verifier built from its public JWK,
+    /// so signed tokens verify end-to-end against the validator.
+    async fn signer_and_verifier() -> (PrivateKey, Arc<dyn JwsVerifier>) {
+        let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+        let verifier = NativeVerifierPlatform
+            .create_verifier_from_jwk(signer.public_key_jwk().into_owned())
+            .await
+            .unwrap();
+        (signer, verifier)
+    }
+
+    /// Signs an ID token with the given issuer/audiences/subject and claim body.
+    async fn mint(
+        signer: &PrivateKey,
+        iss: &str,
+        audiences: Vec<String>,
+        sub: Option<&str>,
+        claims: IdTokenClaims,
+    ) -> IdToken {
+        let token = Jwt::builder()
+            .typ("JWT")
+            .issuer(iss.to_string())
+            .audiences(audiences)
+            .maybe_subject(sub.map(str::to_string))
+            .issued_now_expires_after(Duration::from_secs(3600))
+            .claims(claims)
+            .build()
+            .to_jws_compact(signer)
+            .await
+            .unwrap();
+        IdToken::from(token.expose_secret())
+    }
+
+    /// A well-formed ID token with a single audience and the given claim body.
+    async fn mint_standard(signer: &PrivateKey, claims: IdTokenClaims) -> IdToken {
+        mint(signer, ISS, vec![AUD.to_string()], Some(SUB), claims).await
+    }
+
+    /// Builds a validator with the same shape every time; optional OIDC knobs
+    /// are passed as `Some`/`None` through `maybe_` setters.
+    fn validator(
+        verifier: Arc<dyn JwsVerifier>,
+        max_age: Option<Duration>,
+        expected_azp: Option<&str>,
+        required_acr: Option<&str>,
+    ) -> IdTokenValidator {
+        IdTokenValidator::builder()
+            .verifier(verifier)
+            .issuer(ISS)
+            .audience(AUD)
+            .maybe_max_age(max_age)
+            .maybe_expected_azp(expected_azp.map(str::to_string))
+            .maybe_required_acr(required_acr.map(str::to_string))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn valid_id_token_is_accepted() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(&signer, IdTokenClaims::default()).await;
+        let validated = validator(verifier, None, None, None)
+            .validate(&token, None)
+            .await
+            .expect("token should validate");
+        assert_eq!(validated.subject.as_deref(), Some(SUB));
+        assert_eq!(validated.issuer.as_deref(), Some(ISS));
+    }
+
+    #[tokio::test]
+    async fn missing_subject_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint(
+            &signer,
+            ISS,
+            vec![AUD.to_string()],
+            None,
+            IdTokenClaims::default(),
+        )
+        .await;
+        let err = validator(verifier, None, None, None)
+            .validate(&token, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IdTokenValidationError::SubjectMissing),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn nonce_mismatch_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                nonce: Some("actual".to_string()),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let err = validator(verifier, None, None, None)
+            .validate(&token, Some("expected"))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IdTokenValidationError::NonceMismatch),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn matching_nonce_is_accepted() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                nonce: Some("the-nonce".to_string()),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        validator(verifier, None, None, None)
+            .validate(&token, Some("the-nonce"))
+            .await
+            .expect("matching nonce should validate");
+    }
+
+    #[tokio::test]
+    async fn max_age_without_auth_time_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(&signer, IdTokenClaims::default()).await;
+        let err = validator(verifier, Some(Duration::from_secs(60)), None, None)
+            .validate(&token, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IdTokenValidationError::AuthTimeMissing),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auth_time_older_than_max_age_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(now - 1000),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let err = validator(verifier, Some(Duration::from_secs(60)), None, None)
+            .validate(&token, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IdTokenValidationError::AuthTimeTooOld { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_auth_time_within_max_age_is_accepted() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(now - 10),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        validator(verifier, Some(Duration::from_secs(300)), None, None)
+            .validate(&token, None)
+            .await
+            .expect("recent auth_time should validate");
+    }
+
+    #[tokio::test]
+    async fn multiple_audiences_without_azp_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint(
+            &signer,
+            ISS,
+            vec![AUD.to_string(), "other-aud".to_string()],
+            Some(SUB),
+            IdTokenClaims::default(),
+        )
+        .await;
+        let err = validator(verifier, None, None, None)
+            .validate(&token, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IdTokenValidationError::AzpMissing),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multiple_audiences_with_wrong_azp_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint(
+            &signer,
+            ISS,
+            vec![AUD.to_string(), "other-aud".to_string()],
+            Some(SUB),
+            IdTokenClaims {
+                azp: Some("someone-else".to_string()),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let err = validator(verifier, None, None, None)
+            .validate(&token, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IdTokenValidationError::AzpMismatch { .. }),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multiple_audiences_with_matching_azp_is_accepted() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint(
+            &signer,
+            ISS,
+            vec![AUD.to_string(), "other-aud".to_string()],
+            Some(SUB),
+            IdTokenClaims {
+                azp: Some(AUD.to_string()),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        validator(verifier, None, None, None)
+            .validate(&token, None)
+            .await
+            .expect("matching azp should validate");
+    }
+
+    #[tokio::test]
+    async fn expected_azp_mismatch_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                azp: Some("actual-party".to_string()),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let err = validator(verifier, None, Some("expected-party"), None)
+            .validate(&token, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, IdTokenValidationError::AzpMismatch { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// `required_acr` against the token's asserted `acr` (OIDC Core §3.1.3.7 step 12).
+    #[rstest]
+    #[case::missing(None, true)]
+    #[case::mismatch(Some("urn:loa:low"), true)]
+    #[case::matches(Some("urn:loa:high"), false)]
+    #[tokio::test]
+    async fn required_acr_is_enforced(#[case] token_acr: Option<&str>, #[case] expect_err: bool) {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                acr: token_acr.map(str::to_string),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let result = validator(verifier, None, None, Some("urn:loa:high"))
+            .validate(&token, None)
+            .await;
+        assert_eq!(result.is_err(), expect_err, "got {result:?}");
+    }
 
     #[test]
     fn updated_at_deserializes_from_unix_seconds() {

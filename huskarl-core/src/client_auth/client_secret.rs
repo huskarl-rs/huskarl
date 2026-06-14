@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use base64::prelude::*;
-use http::{HeaderMap, Uri};
+use http::HeaderMap;
 
 use crate::{
+    EndpointUrl,
     client_auth::{AuthenticationParams, ClientAuthentication},
     error::{Error, ErrorKind},
     platform::MaybeSendBoxFuture,
@@ -73,7 +74,8 @@ impl ClientAuthentication for ClientSecret {
         &'a self,
         client_id: &'a str,
         _issuer: Option<&'a str>,
-        _endpoint: &'a Uri,
+        _token_endpoint: Option<&'a EndpointUrl>,
+        _target_endpoint: &'a EndpointUrl,
         allowed_methods: Option<&'a [String]>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
@@ -96,22 +98,16 @@ impl ClientAuthentication for ClientSecret {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// `AsRef<str>` yields the RFC 8414 / OIDC discovery value for the method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, strum::AsRefStr)]
 enum ClientSecretMethod {
+    #[strum(serialize = "client_secret_basic")]
     Basic,
+    #[strum(serialize = "client_secret_post")]
     Post,
 }
 
 impl ClientSecretMethod {
-    /// The OIDC discovery value for this method.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            ClientSecretMethod::Basic => "client_secret_basic",
-            ClientSecretMethod::Post => "client_secret_post",
-        }
-    }
-
     /// Default priority order for method selection.
     ///
     /// Basic is preferred (see RFC 6749 section 2.3.1).
@@ -123,7 +119,7 @@ fn select_method(allowed_methods: Option<&[String]>) -> ClientSecretMethod {
         None => ClientSecretMethod::Basic,
         Some(allowed) => ClientSecretMethod::PRIORITY
             .iter()
-            .find(|m| allowed.iter().any(|a| a == m.as_str()))
+            .find(|m| allowed.iter().any(|a| a == m.as_ref()))
             .copied()
             .unwrap_or(ClientSecretMethod::Basic),
     }
@@ -195,9 +191,9 @@ mod tests {
     #[tokio::test]
     async fn authentication_params_basic() {
         let secret = ClientSecret::new(MockSecret(SecretString::new("my-secret")));
-        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let params = secret
-            .authentication_params("my-client", None, &uri, None)
+            .authentication_params("my-client", None, Some(&uri), &uri, None)
             .await
             .unwrap();
 
@@ -219,10 +215,10 @@ mod tests {
     #[tokio::test]
     async fn authentication_params_post() {
         let secret = ClientSecret::new(MockSecret(SecretString::new("s3cret")));
-        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let methods = vec!["client_secret_post".to_string()];
         let params = secret
-            .authentication_params("cid", None, &uri, Some(&methods))
+            .authentication_params("cid", None, Some(&uri), &uri, Some(&methods))
             .await
             .unwrap();
 
@@ -235,9 +231,9 @@ mod tests {
     #[tokio::test]
     async fn basic_percent_encodes_special_chars() {
         let secret = ClientSecret::new(MockSecret(SecretString::new("p&ss=w:rd")));
-        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let params = secret
-            .authentication_params("cl&ent", None, &uri, None)
+            .authentication_params("cl&ent", None, Some(&uri), &uri, None)
             .await
             .unwrap();
 

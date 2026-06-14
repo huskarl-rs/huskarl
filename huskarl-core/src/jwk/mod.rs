@@ -113,7 +113,7 @@ impl PublicJwk {
 
 /// Key use parameter (RFC 7517 §4.2).
 #[non_exhaustive]
-#[derive(Debug, Serialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
 pub enum KeyUse {
     /// Digital signature or MAC.
     #[serde(rename = "sig")]
@@ -121,28 +121,15 @@ pub enum KeyUse {
     /// Encryption.
     #[serde(rename = "enc")]
     Encrypt,
-    /// Unknown key use value.
-    #[serde(skip)]
+    /// Unknown key use value. Any unrecognized `use` value deserializes here;
+    /// it is never serialized.
+    #[serde(skip_serializing, other)]
     Unknown,
-}
-
-impl<'de> Deserialize<'de> for KeyUse {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(match value.as_str() {
-            "sig" => Self::Sign,
-            "enc" => Self::Encrypt,
-            _ => Self::Unknown,
-        })
-    }
 }
 
 /// Key operations parameter (RFC 7517 §4.3).
 #[non_exhaustive]
-#[derive(Debug, Serialize, PartialEq, Clone, Copy)]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum KeyOperation {
     /// Compute digital signature or MAC.
@@ -161,29 +148,10 @@ pub enum KeyOperation {
     DeriveKey,
     /// Derive bits not to be used as a key.
     DeriveBits,
-    /// Unknown key operation.
-    #[serde(skip)]
+    /// Unknown key operation. Any unrecognized `key_ops` value deserializes
+    /// here; it is never serialized.
+    #[serde(skip_serializing, other)]
     Unknown,
-}
-
-impl<'de> Deserialize<'de> for KeyOperation {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Ok(match value.as_str() {
-            "sign" => Self::Sign,
-            "verify" => Self::Verify,
-            "encrypt" => Self::Encrypt,
-            "decrypt" => Self::Decrypt,
-            "wrapKey" => Self::WrapKey,
-            "unwrapKey" => Self::UnwrapKey,
-            "deriveKey" => Self::DeriveKey,
-            "deriveBits" => Self::DeriveBits,
-            _ => Self::Unknown,
-        })
-    }
 }
 
 /// The parts of a public key that vary structurally between types (RFC 7517 §4).

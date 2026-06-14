@@ -67,11 +67,29 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         None
     }
 
-    /// Returns the token endpoint URL used for token requests.
+    /// Returns the token endpoint URL as published in authorization server
+    /// metadata.
     ///
-    /// Already resolved at grant build time to the RFC 8705 §5 mTLS alias
-    /// when the grant's HTTP client uses mTLS.
+    /// This is the authorization server's canonical token endpoint, before any
+    /// RFC 8705 §5 mTLS-alias resolution, and the audience for
+    /// [`Audience::TokenEndpoint`] client assertions — which identify the
+    /// authorization server by its token endpoint rather than the
+    /// (possibly mTLS-aliased) endpoint actually contacted.
+    ///
+    /// [`Audience::TokenEndpoint`]: crate::core::client_auth::Audience::TokenEndpoint
     fn token_endpoint(&self) -> &EndpointUrl;
+
+    /// Returns the endpoint that token requests are actually sent to.
+    ///
+    /// This is [`Self::token_endpoint`] resolved to the RFC 8705 §5 mTLS alias
+    /// when the grant's HTTP client uses mTLS, and so the `target_endpoint` for
+    /// client authentication (see [`Audience::TargetEndpoint`]). Defaults to
+    /// [`Self::token_endpoint`]; grants that resolve an mTLS alias override it.
+    ///
+    /// [`Audience::TargetEndpoint`]: crate::core::client_auth::Audience::TargetEndpoint
+    fn effective_token_endpoint(&self) -> &EndpointUrl {
+        self.token_endpoint()
+    }
 
     /// Returns the configured `DPoP` implementation (if any).
     fn dpop(&self) -> &dyn AuthorizationServerDPoP;
@@ -107,7 +125,8 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .authentication_params(
                     client_id,
                     self.issuer(),
-                    self.token_endpoint().as_uri(),
+                    Some(self.token_endpoint()),
+                    self.effective_token_endpoint(),
                     self.allowed_auth_methods(),
                 )
                 .await
@@ -125,7 +144,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 .or_else(|| self.dpop().get_current_thumbprint());
 
             let http_client = self.http_client();
-            let endpoint = self.token_endpoint();
+            let endpoint = self.effective_token_endpoint();
             let form = self.build_form(params);
 
             let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({

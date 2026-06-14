@@ -164,8 +164,11 @@ mod tests {
         ClientCredentialsGrant::builder()
             .client_id("downstream-app")
             .client_auth(NoAuth)
-            .token_endpoint("https://as.example.com/token")
-            .expect("valid endpoint URL")
+            .token_endpoint(
+                "https://as.example.com/token"
+                    .parse()
+                    .expect("valid endpoint URL"),
+            )
             .http_client(http)
             .build()
     }

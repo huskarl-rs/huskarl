@@ -79,7 +79,18 @@ impl TokenValidationError {
 /// and [`Self::InsufficientUserAuthentication`] are application-level decisions — use
 /// [`InsufficientScope`] and [`InsufficientUserAuthentication`] respectively to build
 /// `WWW-Authenticate` responses for those cases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    strum::IntoStaticStr,
+    strum::AsRefStr,
+    strum::Display,
+    strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case")]
 pub enum TokenErrorCode {
     /// The request is malformed. Respond with HTTP 400.
     InvalidRequest,
@@ -88,8 +99,11 @@ pub enum TokenErrorCode {
     /// The token has insufficient scope for the requested resource. Respond with HTTP 403.
     InsufficientScope,
     /// The `DPoP` proof is invalid. Respond with HTTP 401 (RFC 9449).
+    // `snake_case` would mangle the `DPoP` acronym, so spell it out.
+    #[strum(serialize = "invalid_dpop_proof")]
     InvalidDPoPProof,
     /// A `DPoP` nonce is required. Respond with HTTP 401 (RFC 9449).
+    #[strum(serialize = "use_dpop_nonce")]
     UseDPoPNonce,
     /// The token was obtained with insufficient user authentication strength.
     /// Respond with HTTP 401 (RFC 9470).
@@ -100,14 +114,7 @@ impl TokenErrorCode {
     /// The error code string as defined in RFC 6750 §3.1 or RFC 9449 §7.1.
     #[must_use]
     pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::InvalidRequest => "invalid_request",
-            Self::InvalidToken => "invalid_token",
-            Self::InsufficientScope => "insufficient_scope",
-            Self::InvalidDPoPProof => "invalid_dpop_proof",
-            Self::UseDPoPNonce => "use_dpop_nonce",
-            Self::InsufficientUserAuthentication => "insufficient_user_authentication",
-        }
+        self.into()
     }
 
     /// The suggested HTTP status code.
@@ -257,5 +264,31 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
             }
             E::JtiTooLong { .. } => Some("The access token 'jti' claim is too long".to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn token_error_code_str_roundtrip() {
+        for (code, s) in [
+            (TokenErrorCode::InvalidRequest, "invalid_request"),
+            (TokenErrorCode::InvalidToken, "invalid_token"),
+            (TokenErrorCode::InsufficientScope, "insufficient_scope"),
+            (TokenErrorCode::InvalidDPoPProof, "invalid_dpop_proof"),
+            (TokenErrorCode::UseDPoPNonce, "use_dpop_nonce"),
+            (
+                TokenErrorCode::InsufficientUserAuthentication,
+                "insufficient_user_authentication",
+            ),
+        ] {
+            assert_eq!(code.as_str(), s);
+            assert_eq!(code.to_string(), s, "Display matches the RFC code");
+            assert_eq!(s.parse::<TokenErrorCode>().unwrap(), code);
+        }
+        // Unknown codes are rejected.
+        assert!("not_a_code".parse::<TokenErrorCode>().is_err());
     }
 }

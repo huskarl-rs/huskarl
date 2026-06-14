@@ -2,6 +2,7 @@
 
 use http::header::ToStrError;
 use snafu::prelude::*;
+use strum::EnumMessage as _;
 
 use crate::{
     TokenType,
@@ -14,12 +15,18 @@ use crate::{
 };
 
 /// Errors that can occur during token binding validation.
-#[derive(Debug, Snafu)]
+// `#[strum(message)]` on each variant carries the client-facing RFC 6750
+// `error_description`; the `#[snafu(display)]` / doc comment is the
+// operator-facing `Display`. Variants that delegate to a `source` carry no
+// message and are handled explicitly in `ToRfc6750Error::error_description`.
+#[derive(Debug, Snafu, strum::EnumMessage)]
 #[snafu(visibility(pub(super)))]
 pub enum TokenBindingError {
     /// The DPoP header is required but missing from the request.
+    #[strum(message = "The DPoP header is missing")]
     MissingDPoPHeader,
     /// The DPoP header is present but is not valid UTF-8.
+    #[strum(message = "The DPoP header value is invalid")]
     DPoPHeaderNotString {
         /// The underlying string conversion error.
         source: ToStrError,
@@ -30,15 +37,18 @@ pub enum TokenBindingError {
     /// token type, not `Bearer`. Accepting a bound token as Bearer would allow an
     /// attacker who stole the token to use it without possessing the private key.
     #[snafu(display("Token is DPoP-bound but was presented as Bearer"))]
+    #[strum(message = "The access token is DPoP-bound")]
     DpopRequiredForBoundToken,
     /// DPoP is required by this resource server but the token was presented as Bearer.
     #[snafu(display("DPoP-bound tokens are required"))]
+    #[strum(message = "DPoP is required to access this resource")]
     DpopRequired,
     /// The token `cnf` claim contains a confirmation method that is not supported.
     /// Only `jkt` (DPoP) and `x5t#S256` (mTLS) are checked; `jwe` and `jku` are rejected
     /// rather than silently ignored, per RFC 7800's requirement that applications ensure
     /// confirmation members they require are understood and processed.
     #[snafu(display("Unsupported cnf confirmation method: {method}"))]
+    #[strum(message = "The access token confirmation method is not supported")]
     UnsupportedCnfMethod {
         /// The name of the unsupported confirmation method.
         method: &'static str,
@@ -85,17 +95,11 @@ impl ToRfc6750Error for TokenBindingError {
 
     fn error_description(&self) -> Option<String> {
         match self {
-            Self::MissingDPoPHeader => Some("The DPoP header is missing".to_string()),
-            Self::DPoPHeaderNotString { .. } => {
-                Some("The DPoP header value is invalid".to_string())
-            }
-            Self::DpopRequiredForBoundToken => Some("The access token is DPoP-bound".to_string()),
-            Self::DpopRequired => Some("DPoP is required to access this resource".to_string()),
-            Self::UnsupportedCnfMethod { .. } => {
-                Some("The access token confirmation method is not supported".to_string())
-            }
+            // These delegate to their inner source; the rest carry a static
+            // `#[strum(message)]` returned via `get_message()`.
             Self::DPoPBinding { source } => source.error_description(),
             Self::MtlsBinding { source } => source.error_description(),
+            other => other.get_message().map(str::to_string),
         }
     }
 }

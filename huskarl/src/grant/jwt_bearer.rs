@@ -97,7 +97,7 @@
 //! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
 //!
 //! let grant: JwtBearerGrant = JwtBearerGrant::builder()
-//!     .token_endpoint("https://my-server/token")?
+//!     .token_endpoint("https://my-server/token".parse()?)
 //!     .client_id("client_id")
 //!     .http_client(client)
 //!     .client_auth(client_auth)
@@ -128,7 +128,7 @@
 //! # let client_auth: ClientSecret = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
 //! #
 //! # let grant: JwtBearerGrant = JwtBearerGrant::builder()
-//! #     .token_endpoint("https://my-server/token")?
+//! #     .token_endpoint("https://my-server/token".parse()?)
 //! #     .client_id("client_id")
 //! #     .http_client(client)
 //! #     .client_auth(client_auth)
@@ -211,7 +211,7 @@ use crate::{
 /// See the [module documentation][crate::grant::jwt_bearer] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Builder)]
-#[builder(state_mod(name = "builder"), on(String, into))]
+#[builder(on(String, into))]
 pub struct JwtBearerGrant {
     /// The client ID. Optional: omit it for an unidentified client (the
     /// assertion's `iss`/`sub` identify the principal; RFC 7523 §3.1 allows a
@@ -242,27 +242,11 @@ pub struct JwtBearerGrant {
     issuer: Option<String>,
 
     /// The URL of the token endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "token_endpoint")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     token_endpoint: EndpointUrl,
 
     /// The mTLS alias for the token endpoint (RFC 8705 §5).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the value cannot be converted via
-    /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-    #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-        crate::core::IntoEndpointUrl::into_endpoint_url(url)
-    })]
     mtls_token_endpoint: Option<EndpointUrl>,
 
     /// The endpoint used for token requests: the mTLS alias when the HTTP
@@ -308,10 +292,11 @@ impl OAuth2ExchangeGrant for JwtBearerGrant {
         self.client_auth.as_deref()
     }
 
-    // Deliberately returns the build-time-resolved endpoint, not the raw
-    // `token_endpoint` builder input.
-    #[allow(clippy::misnamed_getters)]
     fn token_endpoint(&self) -> &EndpointUrl {
+        &self.token_endpoint
+    }
+
+    fn effective_token_endpoint(&self) -> &EndpointUrl {
         &self.effective_token_endpoint
     }
 
@@ -335,7 +320,6 @@ impl OAuth2ExchangeGrant for JwtBearerGrant {
             .maybe_client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
             .token_endpoint(self.effective_token_endpoint.clone())
-            .expect("an EndpointUrl converts to itself infallibly")
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )
@@ -454,8 +438,7 @@ mod tests {
         use crate::prelude::*;
 
         let grant = JwtBearerGrant::builder()
-            .token_endpoint(MOCK_SERVER.url("/no_dpop/token"))
-            .unwrap()
+            .token_endpoint(MOCK_SERVER.url("/no_dpop/token").parse().unwrap())
             .client_id("client")
             .http_client(http_client())
             .client_auth(NoAuth)
@@ -510,8 +493,7 @@ mod tests {
         // grant, so an unidentified, unauthenticated request is valid
         // (RFC 7523 §3.1).
         let grant = JwtBearerGrant::builder()
-            .token_endpoint(MOCK_SERVER.url("/anon/token"))
-            .unwrap()
+            .token_endpoint(MOCK_SERVER.url("/anon/token").parse().unwrap())
             .http_client(http_client())
             .build();
 
@@ -555,8 +537,7 @@ mod tests {
         use crate::prelude::*;
 
         let grant = JwtBearerGrant::builder()
-            .token_endpoint(MOCK_SERVER.url("/with_dpop/token"))
-            .unwrap()
+            .token_endpoint(MOCK_SERVER.url("/with_dpop/token").parse().unwrap())
             .client_id("client")
             .http_client(http_client())
             .client_auth(NoAuth)

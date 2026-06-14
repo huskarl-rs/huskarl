@@ -174,8 +174,7 @@ mod tests {
                 ClientCredentialsGrant::builder()
                     .client_id("client_id")
                     .client_auth(NoAuth)
-                    .token_endpoint("https://blah")
-                    .unwrap()
+                    .token_endpoint("https://blah".parse().unwrap())
                     .http_client(NoHttp)
                     .build(),
             )

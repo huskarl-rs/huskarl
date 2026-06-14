@@ -1,52 +1,47 @@
 #![cfg(not(target_family = "wasm"))]
 
+mod common;
+
 use std::collections::HashMap;
 
+use common::{CcSetup, cc_setup};
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
     cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
-    core::{client_auth::ClientSecret, server_metadata::AuthorizationServerMetadata},
+    core::client_auth::ClientSecret,
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
-use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
     core::jwt::validator::ClaimCheck, validator::introspection::IntrospectionValidator,
 };
-use huskarl_testkit::{ClientConfig, GrantConfig, KeycloakAdmin, PlainSecret};
+use huskarl_testkit::PlainSecret;
+use rstest::rstest;
 
 /// Introspection of a client-credentials access token against a real Keycloak.
 ///
 /// Creates a fresh realm with a single confidential client, exchanges for a token,
 /// then validates it via token introspection (RFC 7662) instead of local JWT verification.
+#[rstest]
 #[tokio::test]
 #[cfg_attr(
     not(feature = "keycloak-tests"),
     ignore = "requires Keycloak: cd integration && mise run keycloak:up"
 )]
-async fn introspection_validates_active_token() {
-    let admin = KeycloakAdmin::local();
-    let realm = admin.create_realm().await.expect("create realm");
-
-    let config = ClientConfig::builder()
-        .client_id("huskarl-introspect")
-        .secret("test-secret")
-        .grant(GrantConfig::client_credentials())
-        .audience("huskarl-rs")
-        .build();
-
-    let client = realm.create_client(&config).await.expect("create client");
-
-    let http: ReqwestClient = reqwest::Client::new().into();
-    let server_metadata = AuthorizationServerMetadata::fetch()
-        .http_client(&http)
-        .issuer(realm.issuer())
-        .call()
-        .await
-        .expect("fetch server metadata");
+async fn introspection_validates_active_token(
+    #[future]
+    #[with("huskarl-introspect")]
+    cc_setup: CcSetup,
+) {
+    let CcSetup {
+        realm,
+        client,
+        http,
+        metadata,
+    } = cc_setup.await;
 
     // Obtain an access token via client credentials grant.
-    let grant = ClientCredentialsGrant::builder_from_metadata(&server_metadata)
+    let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
         .client_id(&client.client_id)
         .http_client(http.clone())
         .client_auth(ClientSecret::new(PlainSecret::new(&client.secret)))
@@ -72,7 +67,7 @@ async fn introspection_validates_active_token() {
 
     // Build introspection validator — the same client authenticates to the
     // introspection endpoint using its own credentials.
-    let introspection_endpoint = server_metadata
+    let introspection_endpoint = metadata
         .introspection_endpoint
         .expect("Keycloak should expose introspection_endpoint in OIDC metadata");
 

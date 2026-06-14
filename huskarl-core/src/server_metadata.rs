@@ -254,7 +254,7 @@ fn add_issuer_to_known_path(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::IntoEndpointUrl;
+    use crate::EndpointUrl;
 
     /// Test the document from OIDC Discovery §4.2.
     #[test]
@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(
             parsed.authorization_endpoint,
             "https://server.example.com/connect/authorize"
-                .into_endpoint_url()
+                .parse::<EndpointUrl>()
                 .ok()
         );
     }

@@ -34,6 +34,7 @@ pub struct TokenIntrospection {
     client_id: String,
     issuer: Option<String>,
     introspection_endpoint: EndpointUrl,
+    token_endpoint: Option<EndpointUrl>,
     client_auth: Arc<dyn ClientAuthentication>,
     request_jwt_response: bool,
     jwt_validator: Option<JwtValidator>,
@@ -56,6 +57,13 @@ impl TokenIntrospection {
         issuer: Option<String>,
         /// The URL of the token introspection endpoint.
         introspection_endpoint: EndpointUrl,
+        /// The authorization server's token endpoint, as published in metadata.
+        ///
+        /// Used only as the audience for client assertions configured with
+        /// `Audience::TokenEndpoint`; introspection requests go to the
+        /// introspection endpoint, so this differs from the target endpoint.
+        /// Leave unset to make that audience policy fail closed.
+        token_endpoint: Option<EndpointUrl>,
         /// The client authentication strategy.
         #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
         client_auth: Arc<dyn ClientAuthentication>,
@@ -122,6 +130,7 @@ impl TokenIntrospection {
             client_id,
             issuer,
             introspection_endpoint,
+            token_endpoint,
             client_auth,
             request_jwt_response,
             jwt_validator,
@@ -143,7 +152,8 @@ impl TokenIntrospection {
             .authentication_params(
                 &self.client_id,
                 self.issuer.as_deref(),
-                self.introspection_endpoint.as_uri(),
+                self.token_endpoint.as_ref(),
+                &self.introspection_endpoint,
                 None,
             )
             .await
@@ -168,7 +178,7 @@ impl TokenIntrospection {
 
         let (mut parts, ()) = Request::new(()).into_parts();
         parts.method = Method::POST;
-        parts.uri = self.introspection_endpoint.clone().into_uri();
+        parts.uri = self.introspection_endpoint.as_uri().clone();
         parts.headers.insert(
             http::header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded"),

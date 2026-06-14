@@ -157,6 +157,7 @@ pub mod option_unix_secs {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde::{
         Deserialize, Serialize,
         de::{
@@ -221,32 +222,33 @@ mod tests {
         assert_eq!(parsed.t, epoch_plus(1234));
     }
 
-    #[test]
-    fn unix_secs_deserialize_negative_errors() {
-        let err = serde_json::from_value::<WithTime>(json!({ "t": -1 })).unwrap_err();
-        assert!(err.to_string().contains("negative"));
+    // Values that pass through the full `from_value` path and must be rejected.
+    // The `needle` is a fragment of the expected error message.
+    #[rstest]
+    #[case::negative(json!({ "t": -1 }), "negative")]
+    #[case::overflows_systemtime(json!({ "t": u64::MAX }), "overflows")]
+    fn unix_secs_deserialize_errors(#[case] input: serde_json::Value, #[case] needle: &str) {
+        let err = serde_json::from_value::<WithTime>(input).unwrap_err();
+        assert!(
+            err.to_string().contains(needle),
+            "expected error containing {needle:?}, got: {err}"
+        );
     }
 
-    #[test]
-    fn unix_secs_deserialize_huge_float_errors() {
-        // 2^64 is outside u64 range; the previous `>` check let this through and
-        // silently saturated to u64::MAX.
-        let de: F64Deserializer<ValueError> = (2.0_f64.powi(64)).into_deserializer();
+    // Float-specific rejections that the JSON layer can't reach: `serde_json`
+    // never hands a NaN or a 2^64-magnitude float to the visitor, so these drive
+    // `SecsVisitor::visit_f64` directly. (2^64 is outside u64 range; the previous
+    // `>` check let it through and silently saturated to u64::MAX.)
+    #[rstest]
+    #[case::outside_u64_range(2.0_f64.powi(64), "outside u64 range")]
+    #[case::nan(f64::NAN, "NaN")]
+    fn secs_visitor_rejects_invalid_float(#[case] input: f64, #[case] needle: &str) {
+        let de: F64Deserializer<ValueError> = input.into_deserializer();
         let err = de.deserialize_any(SecsVisitor).unwrap_err();
-        assert!(err.to_string().contains("outside u64 range"));
-    }
-
-    #[test]
-    fn unix_secs_deserialize_nan_errors() {
-        let de: F64Deserializer<ValueError> = f64::NAN.into_deserializer();
-        let err = de.deserialize_any(SecsVisitor).unwrap_err();
-        assert!(err.to_string().contains("NaN"));
-    }
-
-    #[test]
-    fn unix_secs_deserialize_overflow_errors() {
-        let err = serde_json::from_value::<WithTime>(json!({ "t": u64::MAX })).unwrap_err();
-        assert!(err.to_string().contains("overflows"));
+        assert!(
+            err.to_string().contains(needle),
+            "expected error containing {needle:?}, got: {err}"
+        );
     }
 
     // --- option_unix_secs ---

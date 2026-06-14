@@ -3,7 +3,7 @@
 use httpmock::prelude::*;
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
-    core::{IntoEndpointUrl, client_auth::NoAuth, jwt::validator::ClaimCheck},
+    core::{EndpointUrl, client_auth::NoAuth, jwt::validator::ClaimCheck},
     validator::introspection::{IntrospectionValidateError, IntrospectionValidator},
 };
 
@@ -18,7 +18,7 @@ async fn validator_for(
         .client_id("my-resource-server")
         .introspection_endpoint(
             format!("http://{}{}", server.address(), path)
-                .into_endpoint_url()
+                .parse::<EndpointUrl>()
                 .unwrap(),
         )
         .audience(audience)

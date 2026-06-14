@@ -145,7 +145,7 @@ impl From<huskarl::core::Error> for AppError {
 # let grant = ClientCredentialsGrant::builder()
 #     .client_id("client-id")
 #     .client_auth(NoAuth)
-#     .token_endpoint("https://as.example.com/token")?
+#     .token_endpoint("https://as.example.com/token".parse()?)
 #     .http_client(http_client)
 #     .build();
 // `grant` is any grant, built as in the example above.

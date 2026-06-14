@@ -268,6 +268,9 @@ fn find_builder_sub_arg(attrs: &[Attribute], sub: &str, key: &str) -> Result<Opt
         if !attr.path().is_ident("builder") {
             continue;
         }
+        // Bare `#[builder]` (impl-mode marker with no config) carries no
+        // sub-arguments — nothing to find, fall through to the default.
+        let Meta::List(_) = &attr.meta else { continue };
         let outer = attr.parse_args_with(parser).map_err(|e| {
             syn::Error::new(
                 e.span(),

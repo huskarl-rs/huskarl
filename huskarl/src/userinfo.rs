@@ -76,28 +76,12 @@ impl UserInfoClient {
     /// validation is misconfigured (a `jws_verifier_factory` is supplied
     /// without `issuer` or `client_id`), or propagates the failure if
     /// building the JWS verifier from `jwks_uri` fails.
-    #[builder(state_mod(name = "builder"))]
+    #[builder]
     pub async fn new(
         /// The URL of the `UserInfo` endpoint.
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
         #[from_metadata(path = "userinfo_endpoint?")]
         userinfo_endpoint: EndpointUrl,
         /// The mTLS alias for the `UserInfo` endpoint (RFC 8705 §5).
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
         #[from_metadata(path = "mtls_endpoint_aliases?.userinfo_endpoint?")]
         mtls_userinfo_endpoint: Option<EndpointUrl>,
         /// The `DPoP` proof implementation for resource server requests.
@@ -112,14 +96,6 @@ impl UserInfoClient {
         ///
         /// Must be provided together with `jws_verifier_factory` to enable JWT response
         /// validation.
-        ///
-        /// # Errors
-        ///
-        /// Returns an error if the value cannot be converted via
-        /// [`IntoEndpointUrl`](crate::core::IntoEndpointUrl).
-        #[builder(with = |url: impl crate::core::IntoEndpointUrl| -> Result<_, crate::core::Error> {
-            crate::core::IntoEndpointUrl::into_endpoint_url(url)
-        })]
         #[from_metadata(path = "jwks_uri?")]
         jwks_uri: Option<EndpointUrl>,
         /// JWS verifier factory for JWT response validation.
@@ -495,7 +471,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            IntoEndpointUrl,
+            EndpointUrl,
             crypto::{
                 KeyMatchStrength,
                 verifier::{JwsVerifier, KeyMatch, VerifyError},
@@ -565,7 +541,7 @@ mod tests {
     fn client() -> UserInfoClient {
         UserInfoClient {
             userinfo_endpoint: "https://op.example.com/userinfo"
-                .into_endpoint_url()
+                .parse::<EndpointUrl>()
                 .unwrap(),
             mtls_userinfo_endpoint: None,
             dpop: Arc::new(NoDPoP),
@@ -966,7 +942,7 @@ mod tests {
             .build();
         UserInfoClient {
             userinfo_endpoint: "https://op.example.com/userinfo"
-                .into_endpoint_url()
+                .parse::<EndpointUrl>()
                 .unwrap(),
             mtls_userinfo_endpoint: None,
             dpop: Arc::new(NoDPoP),
