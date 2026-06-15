@@ -53,14 +53,13 @@ mod tests {
     use bytes::Bytes;
     use http::{Request, StatusCode, Uri};
 
+    use super::*;
     use crate::core::{
         client_auth::{ClientAuthentication, NoAuth},
         dpop::NoDPoP,
         http::{HttpResponse, Idempotency},
         platform::MaybeSendBoxFuture,
     };
-
-    use super::*;
 
     #[derive(Default)]
     struct Captured {
@@ -85,7 +84,13 @@ mod tests {
         }
 
         fn uri(&self) -> String {
-            self.captured.lock().unwrap().uri.clone().unwrap().to_string()
+            self.captured
+                .lock()
+                .unwrap()
+                .uri
+                .clone()
+                .unwrap()
+                .to_string()
         }
 
         fn body(&self) -> String {
@@ -178,7 +183,8 @@ mod tests {
 
     #[tokio::test]
     async fn make_par_call_propagates_an_error_response() {
-        let client = RecordingClient::new(StatusCode::BAD_REQUEST, r#"{"error":"invalid_request"}"#);
+        let client =
+            RecordingClient::new(StatusCode::BAD_REQUEST, r#"{"error":"invalid_request"}"#);
         let par_url = url("https://as.example/par");
         let auth = NoAuth
             .authentication_params("client-1", None, None, &par_url, None)

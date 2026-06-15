@@ -421,14 +421,13 @@ mod tests {
     use bytes::Bytes;
     use http::{HeaderMap, Request, StatusCode};
 
+    use super::*;
     use crate::core::{
         Error,
         client_auth::NoAuth,
         http::{HttpClient, HttpResponse, Idempotency},
         platform::MaybeSendBoxFuture,
     };
-
-    use super::*;
 
     /// An [`HttpClient`] that ignores the request and returns a fixed response.
     struct FakeClient {

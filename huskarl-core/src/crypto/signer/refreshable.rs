@@ -156,7 +156,10 @@ mod tests {
     }
 
     fn current_kid(signer: &RefreshableSigner<GenSelector>) -> Option<String> {
-        signer.select_signer().key_id().map(std::borrow::Cow::into_owned)
+        signer
+            .select_signer()
+            .key_id()
+            .map(std::borrow::Cow::into_owned)
     }
 
     #[tokio::test]

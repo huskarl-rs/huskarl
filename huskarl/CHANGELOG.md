@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.8.0] - 2026-06-15
 
 ### Changes
 
+ - Major Breaking change: ported to the dyn-first huskarl-core.
  - Make client auth optional for JWT bearer and token exchange grants.
  - Add `JwtBearer` grant.
  - Breaking: `HttpAuthorizer` reworked with recommendations around retries and
@@ -23,7 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Breaking: `UserInfoClient` and `UserInfo` lost the `Extra` type parameter.
  - Breaking: `IdTokenClaims` and `AuthorizationCodeGrant` likewise lost their
    claim type parameters.
- - Breaking: ported to the dyn-first huskarl-core.
  - Breaking: grants hold the HTTP client as a required `http_client`.
  - Breaking: reworked error handling completely.
  - Breaking: mTLS endpoint aliases (RFC 8705 §5) are resolved at grant build

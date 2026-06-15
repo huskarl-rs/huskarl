@@ -56,9 +56,8 @@ impl<T: SecretDecoder + ?Sized> SecretDecoder for Arc<T> {
 mod tests {
     use rstest::rstest;
 
-    use crate::{error::ErrorKind, secrets::SecretBytes};
-
     use super::*;
+    use crate::{error::ErrorKind, secrets::SecretBytes};
 
     // ── BinaryEncoding ────────────────────────────────────────────────────
     #[test]

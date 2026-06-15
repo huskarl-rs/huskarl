@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.7.0] - 2026-06-15
 
 ### Changes
 
+ - Major breaking change: Update traits to be dyn traits.
  - `AeadV1Sealer`/`AeadV1Unsealer` are replaced by a single `AeadV1Cipher<C>`.
  - `ClientAuthentication::authentication_params`: the `token_endpoint`
    parameter is renamed to `endpoint` — it is whatever endpoint is being
@@ -18,7 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Burn JTI after all other JWT checks have passed.
  - Adds in-memory JTI uniqueness checker (especially for tests).
  - Add concrete error type (to replace trait).
- - Update traits to be dyn traits.
  - Add `KeyMatch::strength_for` and `CipherMatch::strength_for` helpers so
    single-key verifier/decryptor implementations can delegate the standard
    algorithm/kid matching rules instead of re-implementing them.
@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Client assertion JWTs are explicitly typed `client-authentication+jwt`
    (draft-ietf-oauth-rfc7523bis); opt out with `explicit_typ(false)` on the
    `JwtBearer` builder for servers that reject it.
+ - Remove `IntoEndpointUrl`, add TryFrom/From impls for `EndpointUrl`.
 
 ## [0.6.4] - 2026-05-29
 
