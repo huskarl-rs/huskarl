@@ -5,11 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-06-15
 
 ### Changes
 
  - Bump huskarl-core to 0.7.0-pre.0 and adopt its dyn-trait design:
+ - Ed25519 keys in webcrypto support both Ed25519 and EdDSA algorithms
+ - Add WebCrypto AES-GCM AEAD
 
 ## [0.7.0] - 2026-05-25
 

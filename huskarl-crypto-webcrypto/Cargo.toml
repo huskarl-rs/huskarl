@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-crypto-webcrypto"
-version = "0.8.0-pre.0"
+version = "0.8.0"
 edition = "2024"
 rust-version = "1.92"
 description = "WebCrypto support for huskarl (OAuth2 client) ecosystem."

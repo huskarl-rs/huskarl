@@ -356,13 +356,12 @@ mod tests {
     use http::Request;
     use serde_json::json;
 
+    use super::*;
     use crate::core::{
         Error,
         http::{HttpClient, HttpResponse, Idempotency},
         platform::MaybeSendBoxFuture,
     };
-
-    use super::*;
 
     /// An [`HttpClient`] that must never be called — `build_form` does no I/O.
     struct UnusedClient;
@@ -407,7 +406,7 @@ mod tests {
             .requested_token_type("urn:ietf:params:oauth:token-type:access_token")
             .build();
 
-        let encoded = serde_html_form::to_string(&grant().build_form(params)).unwrap();
+        let encoded = serde_html_form::to_string(grant().build_form(params)).unwrap();
 
         for expected in [
             "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
@@ -419,7 +418,10 @@ mod tests {
             "scope=read+write",
             "requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
         ] {
-            assert!(encoded.contains(expected), "missing {expected} in: {encoded}");
+            assert!(
+                encoded.contains(expected),
+                "missing {expected} in: {encoded}"
+            );
         }
     }
 
@@ -431,7 +433,7 @@ mod tests {
             .scopes(Vec::<String>::new())
             .build();
 
-        let encoded = serde_html_form::to_string(&grant().build_form(params)).unwrap();
+        let encoded = serde_html_form::to_string(grant().build_form(params)).unwrap();
 
         // The subject and the constant grant type are always present.
         assert!(encoded.contains("grant_type="));
@@ -463,11 +465,14 @@ mod tests {
             .scopes(Vec::<String>::new())
             .build();
 
-        let encoded = serde_html_form::to_string(&grant().build_form(params)).unwrap();
+        let encoded = serde_html_form::to_string(grant().build_form(params)).unwrap();
 
         assert!(encoded.contains("resource=https%3A%2F%2Fapi.example.com"));
         assert!(encoded.contains("resource=https%3A%2F%2Fother.example.com"));
-        assert!(!encoded.contains(','), "resource must not be comma-joined: {encoded}");
+        assert!(
+            !encoded.contains(','),
+            "resource must not be comma-joined: {encoded}"
+        );
     }
 
     #[test]
@@ -493,7 +498,10 @@ mod tests {
                 SecurityTokenType::Saml2,
                 "urn:ietf:params:oauth:token-type:saml2",
             ),
-            (SecurityTokenType::Jwt, "urn:ietf:params:oauth:token-type:jwt"),
+            (
+                SecurityTokenType::Jwt,
+                "urn:ietf:params:oauth:token-type:jwt",
+            ),
         ] {
             assert_eq!(serde_json::to_value(&ty).unwrap(), json!(urn));
         }

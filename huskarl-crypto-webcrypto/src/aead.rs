@@ -45,7 +45,7 @@ struct Inner {
 /// Deno Deploy. It is the symmetric counterpart to [`crate::asymmetric`]'s
 /// signer/verifier.
 ///
-/// Wrap it the same way as any other [`AeadCipher`]:
+/// Wrap it the same way as any other [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher):
 /// `AeadV1Cipher::new(key)` for the bundle envelope, and the reload wrappers
 /// ([`RetryingDecryptor`](huskarl_core::crypto::cipher::RetryingDecryptor),
 /// [`MultiKeyCipher`](huskarl_core::crypto::cipher::MultiKeyCipher)) compose

@@ -212,12 +212,11 @@ pub trait ProvideValidatorMetadata {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::{
         TokenType,
         error::{ChallengeParam, TokenErrorCode, TokenValidationError},
     };
-
-    use super::*;
 
     /// A configurable [`ToRfc6750Error`] test double.
     struct TestError {
@@ -333,7 +332,10 @@ mod tests {
         let mut m = meta();
         m.dpop_signing_alg_values_supported = Some(vec!["ES256".to_string()]);
         // 5xx failures omit WWW-Authenticate entirely.
-        assert!(m.challenges(Some(&TestError::server()), None, None).is_empty());
+        assert!(
+            m.challenges(Some(&TestError::server()), None, None)
+                .is_empty()
+        );
     }
 
     #[test]
@@ -373,8 +375,7 @@ mod tests {
     fn client_error_attempted_dpop_details_only_in_dpop() {
         let mut m = meta();
         m.dpop_signing_alg_values_supported = Some(vec!["ES256".to_string()]);
-        let err =
-            TestError::client(TokenErrorCode::InvalidDPoPProof).scheme(TokenType::DPoP);
+        let err = TestError::client(TokenErrorCode::InvalidDPoPProof).scheme(TokenType::DPoP);
 
         assert_eq!(
             m.challenges(Some(&err), None, None),

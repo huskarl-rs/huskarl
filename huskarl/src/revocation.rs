@@ -164,6 +164,7 @@ mod tests {
     use http::{Request, StatusCode, Uri};
     use rstest::rstest;
 
+    use super::*;
     use crate::{
         core::{
             client_auth::NoAuth,
@@ -173,8 +174,6 @@ mod tests {
         },
         token::{AccessToken, BearerAccessToken},
     };
-
-    use super::*;
 
     #[derive(Default)]
     struct Captured {
@@ -200,7 +199,13 @@ mod tests {
         }
 
         fn uri(&self) -> String {
-            self.captured.lock().unwrap().uri.clone().unwrap().to_string()
+            self.captured
+                .lock()
+                .unwrap()
+                .uri
+                .clone()
+                .unwrap()
+                .to_string()
         }
 
         fn body(&self) -> String {
@@ -279,7 +284,10 @@ mod tests {
         assert_eq!(client.uri(), "https://as.example/revoke");
         let body = client.body();
         assert!(body.contains("token=the-access-token"), "body: {body}");
-        assert!(body.contains("token_type_hint=access_token"), "body: {body}");
+        assert!(
+            body.contains("token_type_hint=access_token"),
+            "body: {body}"
+        );
     }
 
     #[tokio::test]
@@ -292,15 +300,26 @@ mod tests {
 
         let body = client.body();
         assert!(body.contains("token=the-refresh-token"), "body: {body}");
-        assert!(body.contains("token_type_hint=refresh_token"), "body: {body}");
+        assert!(
+            body.contains("token_type_hint=refresh_token"),
+            "body: {body}"
+        );
     }
 
     /// The effective endpoint is the mTLS alias only when the client uses mTLS
     /// *and* an alias is configured; otherwise it is the primary endpoint.
     #[rstest]
-    #[case::mtls_prefers_alias(true, Some("https://mtls.as.example/revoke"), "https://mtls.as.example/revoke")]
+    #[case::mtls_prefers_alias(
+        true,
+        Some("https://mtls.as.example/revoke"),
+        "https://mtls.as.example/revoke"
+    )]
     #[case::mtls_without_alias_falls_back(true, None, "https://as.example/revoke")]
-    #[case::plain_client_ignores_alias(false, Some("https://mtls.as.example/revoke"), "https://as.example/revoke")]
+    #[case::plain_client_ignores_alias(
+        false,
+        Some("https://mtls.as.example/revoke"),
+        "https://as.example/revoke"
+    )]
     #[tokio::test]
     async fn revoke_selects_endpoint_by_mtls_and_alias(
         #[case] uses_mtls: bool,
@@ -308,7 +327,10 @@ mod tests {
         #[case] expected_uri: &str,
     ) {
         let client = RecordingClient::new(StatusCode::OK, uses_mtls);
-        revocation(alias).revoke(&client, &access_token()).await.unwrap();
+        revocation(alias)
+            .revoke(&client, &access_token())
+            .await
+            .unwrap();
         assert_eq!(client.uri(), expected_uri);
     }
 
@@ -316,6 +338,9 @@ mod tests {
     async fn revoke_propagates_a_server_error_status() {
         let client = RecordingClient::new(StatusCode::BAD_REQUEST, false);
         let result = revocation(None).revoke(&client, &access_token()).await;
-        assert!(result.is_err(), "a non-2xx response must surface as an error");
+        assert!(
+            result.is_err(),
+            "a non-2xx response must surface as an error"
+        );
     }
 }
