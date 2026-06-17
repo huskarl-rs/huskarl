@@ -21,12 +21,11 @@ use crate::{
 /// [`RefreshTokenStore`](crate::cache::RefreshTokenStore)) and refresh into
 /// a fresh access token, rather than persisting responses.
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
+#[builder(on(String, into), on(SecretString, into))]
 pub struct RawTokenResponse {
     /// The access token.
-    #[builder(into)]
     pub access_token: SecretString,
     /// The token type.
-    #[builder(into)]
     pub token_type: String,
     /// Number of seconds until token expiry.
     #[serde(
@@ -35,11 +34,9 @@ pub struct RawTokenResponse {
     )]
     pub expires_in: Option<u64>,
     /// The refresh token.
-    #[builder(into)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<SecretString>,
     /// The scopes of the token, usually provided if different to requested scopes.
-    #[builder(into)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     /// The ID token, usually provided with the `oidc` scope.
@@ -47,7 +44,6 @@ pub struct RawTokenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) id_token: Option<IdToken>,
     /// The issued token type.
-    #[builder(into)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issued_token_type: Option<String>,
     /// Other fields received from the token endpoint.

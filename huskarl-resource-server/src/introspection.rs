@@ -43,17 +43,15 @@ pub struct TokenIntrospection {
 #[bon::bon]
 impl TokenIntrospection {
     /// Creates a new [`TokenIntrospection`].
-    #[builder]
+    #[builder(on(String, into))]
     pub async fn new(
         /// The client ID of this resource server, used for authenticating to the introspection
         /// endpoint.
-        #[builder(into)]
         client_id: String,
         /// The issuer URL of the authorization server.
         ///
         /// Used for client authentication methods that require an audience (e.g.
         /// `private_key_jwt`) and for RFC 9701 JWT response issuer (`iss`) validation.
-        #[builder(into)]
         issuer: Option<String>,
         /// The URL of the token introspection endpoint.
         introspection_endpoint: EndpointUrl,

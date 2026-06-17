@@ -165,12 +165,11 @@ pub struct AuthorizationServerMetadata {
 #[bon]
 impl AuthorizationServerMetadata {
     /// Get the authorization server metadata for an issuer.
-    #[builder]
+    #[builder(on(String, into))]
     pub async fn fetch<C: HttpClient>(
         http_client: &C,
-        #[builder(into)] issuer: String,
-        #[builder(into, default = "/.well-known/oauth-authorization-server")]
-        well_known_path: String,
+        issuer: String,
+        #[builder(default = "/.well-known/oauth-authorization-server")] well_known_path: String,
         #[builder(default = false)] use_legacy_transformation: bool,
     ) -> Result<Self, Error> {
         let configuration_endpoint =
