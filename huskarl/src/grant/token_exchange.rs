@@ -287,23 +287,20 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
 
 /// Parameters when requesting a token using the token exchange grant.
 #[derive(Debug, Clone, Builder)]
+#[builder(on(String, into), on(SecurityToken, into))]
 pub struct TokenExchangeGrantParameters {
     /// The security token to exchange (the subject of the exchange).
-    #[builder(into)]
     subject: SecurityToken,
     /// The URI of a resource server where the requested token will be used.
     resource: Option<Vec<String>>,
     /// The logical name of the target service or resource where the requested token will be used.
-    #[builder(into)]
     audience: Option<String>,
     /// The requested scope(s) for the issued security token.
     #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
     scope: Option<String>,
     /// The type of the requested security token (e.g. `urn:ietf:params:oauth:token-type:access_token`).
-    #[builder(into)]
     requested_token_type: Option<String>,
     /// An optional security token representing the party acting on behalf of the subject.
-    #[builder(into)]
     actor: Option<SecurityToken>,
 }
 

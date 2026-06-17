@@ -76,7 +76,7 @@ impl UserInfoClient {
     /// validation is misconfigured (a `jws_verifier_factory` is supplied
     /// without `issuer` or `client_id`), or propagates the failure if
     /// building the JWS verifier from `jwks_uri` fails.
-    #[builder]
+    #[builder(on(String, into))]
     pub async fn new(
         /// The URL of the `UserInfo` endpoint.
         #[from_metadata(path = "userinfo_endpoint?")]
@@ -117,14 +117,12 @@ impl UserInfoClient {
         ///
         /// Required when JWT validation is configured (`jwks_uri` and
         /// `jws_verifier_factory` are provided).
-        #[builder(into)]
         #[from_metadata(path = "issuer")]
         issuer: Option<String>,
         /// The client ID, used for JWT `aud` claim validation (OIDC Core §5.3.2).
         ///
         /// Required when JWT validation is configured (`jwks_uri` and
         /// `jws_verifier_factory` are provided).
-        #[builder(into)]
         client_id: Option<String>,
     ) -> Result<Self, Error> {
         #[cfg(feature = "default-jws-verifier-platform")]

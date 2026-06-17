@@ -87,13 +87,12 @@ impl GrantConfig {
 ///     .build();
 /// ```
 #[derive(Debug, Clone, Builder)]
+#[builder(on(String, into))]
 pub struct ClientConfig {
     /// The OAuth2 client ID.
-    #[builder(into)]
     pub client_id: String,
 
     /// The client secret.
-    #[builder(into)]
     pub secret: String,
 
     /// The grant type / flow configuration.
@@ -110,7 +109,6 @@ pub struct ClientConfig {
     /// Add an audience protocol mapper so `aud` contains this value.
     ///
     /// Required when validating tokens with a resource server that checks `aud`.
-    #[builder(into)]
     pub audience: Option<String>,
 }
 

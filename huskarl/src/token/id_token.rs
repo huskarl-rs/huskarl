@@ -173,15 +173,14 @@ pub struct StandardOidcAddressClaims {
 
 /// Validates an ID token against configuration.
 #[derive(Debug, Builder)]
+#[builder(on(String, into))]
 pub struct IdTokenValidator {
     /// The JWS verifier to use for validating the ID token.
     #[builder(with = |verifier: impl JwsVerifier + 'static| Arc::new(verifier) as Arc<dyn JwsVerifier>)]
     verifier: Arc<dyn JwsVerifier>,
     /// The issuer to validate against.
-    #[builder(into)]
     issuer: String,
     /// The audience to validate against.
-    #[builder(into)]
     audience: Option<String>,
     /// The maximum age of the token.
     max_age: Option<Duration>,
@@ -189,10 +188,8 @@ pub struct IdTokenValidator {
     #[builder(default)]
     clock_leeway: Duration,
     /// If set, verifies the `azp` (authorized party) claim matches this value when present.
-    #[builder(into)]
     expected_azp: Option<String>,
     /// If set, verifies the `acr` (authentication context class reference) claim matches this value.
-    #[builder(into)]
     required_acr: Option<String>,
     /// If set, restricts accepted signature algorithms to this set.
     allowed_algorithms: Option<HashSet<String>>,

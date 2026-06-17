@@ -187,6 +187,9 @@ handing a freshly-obtained token from the login path to a running cache, use
 #![forbid(unsafe_code)]
 #![deny(clippy::panic)]
 #![warn(clippy::pedantic)]
+// bon's multiple `on(..., into)` clauses (e.g. `on(String, into), on(SecretString, into)`)
+// trip this lint, which sees the repeated `into` token as a duplicated attribute.
+#![allow(clippy::duplicated_attributes)]
 #![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
