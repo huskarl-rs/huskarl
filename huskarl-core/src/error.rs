@@ -9,15 +9,24 @@
 //! # Handling errors
 //!
 //! Applications consuming tokens (through a token cache or authorizer) need
-//! exactly three signals, checked in this order:
+//! a small set of signals, checked in this order:
 //!
 //! 1. **Retry**: [`Error::is_retryable`] — the failure is transient and the
 //!    same call may succeed if re-attempted (with backoff). No user
 //!    involvement is needed; in particular this is *not* a reason to re-run
 //!    the interactive flow.
-//! 2. **Re-authenticate**: [`ErrorKind::ReauthRequired`] — no token can be
+//! 2. **Back off, then retry**: [`ErrorKind::Backoff`] — no token right now,
+//!    but the source expects to recover on its own, so a later automatic call
+//!    may succeed. Like retry, no user involvement is needed; unlike retry, an
+//!    *immediate* re-attempt will not help — wait for the cooldown first. This
+//!    is *not* a reason to re-run the interactive flow.
+//! 3. **Adjust the request**: [`ErrorKind::RequestRejected`] — the credential
+//!    is intact but the request was wrong (e.g. an over-broad scope or a bad
+//!    resource indicator). Narrow the request and retry with the *same*
+//!    credential; re-authentication will not help.
+//! 4. **Re-authenticate**: [`ErrorKind::ReauthRequired`] — no token can be
 //!    obtained automatically; the interactive flow must run again.
-//! 3. **Fail**: everything else is a genuine failure — log it and surface
+//! 5. **Fail**: everything else is a genuine failure — log it and surface
 //!    it. The remaining kinds classify *what* failed (configuration,
 //!    protocol, crypto, ...) for diagnostics and error reports, not what to
 //!    do next.
@@ -104,6 +113,27 @@ pub enum ErrorKind {
     Config,
     /// Cryptographic operation failed.
     Crypto,
+    /// The request was rejected for its parameters, but the credential is
+    /// intact (RFC 6749 §5.2 `invalid_scope`, RFC 8707 `invalid_target`).
+    ///
+    /// Recoverable by adjusting the request — narrowing the requested scope,
+    /// fixing the resource indicator — and retrying with the *same* credential.
+    /// Re-authentication does not help, and a token cache deliberately does
+    /// **not** discard the parameter source for this kind.
+    RequestRejected,
+    /// No token can be obtained right now, but the source expects the condition
+    /// to clear on its own: it is backing off after repeated non-recoverable
+    /// failures from scratch (for example an assertion signer that keeps
+    /// producing values the server rejects with `invalid_grant`).
+    ///
+    /// Distinct from its neighbours. Unlike [`ReauthRequired`](Self::ReauthRequired)
+    /// it does **not** call for re-running the interactive flow: a later
+    /// automatic call, after the source's cooldown, may succeed once the
+    /// underlying cause is fixed (a rotated signing key, a corrected clock).
+    /// Unlike a retryable [`Transport`](Self::Transport) failure, retrying
+    /// *immediately* will not help — wait for the cooldown before re-attempting.
+    /// In short: try again later, without user involvement.
+    Backoff,
 }
 
 impl Error {
@@ -202,7 +232,9 @@ impl fmt::Display for ErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let description = match self {
             Self::InvalidGrant => "the grant is no longer valid",
+            Self::RequestRejected => "the request parameters were rejected",
             Self::ReauthRequired => "re-authorization is required",
+            Self::Backoff => "backing off after repeated failures",
             Self::Transport { retryable: true } => "transient transport failure",
             Self::Transport { retryable: false } => "transport failure",
             Self::Protocol => "invalid or malformed server response",

@@ -388,7 +388,7 @@ mod tests {
             .issuer(iss.to_string())
             .audiences(audiences)
             .maybe_subject(sub.map(str::to_string))
-            .issued_now_expires_after(Duration::from_secs(3600))
+            .issued_now_expires_after(Duration::from_hours(1))
             .claims(claims)
             .build()
             .to_jws_compact(signer)
@@ -495,7 +495,7 @@ mod tests {
     async fn max_age_without_auth_time_is_rejected() {
         let (signer, verifier) = signer_and_verifier().await;
         let token = mint_standard(&signer, IdTokenClaims::default()).await;
-        let err = validator(verifier, Some(Duration::from_secs(60)), None, None)
+        let err = validator(verifier, Some(Duration::from_mins(1)), None, None)
             .validate(&token, None)
             .await
             .unwrap_err();
@@ -520,7 +520,7 @@ mod tests {
             },
         )
         .await;
-        let err = validator(verifier, Some(Duration::from_secs(60)), None, None)
+        let err = validator(verifier, Some(Duration::from_mins(1)), None, None)
             .validate(&token, None)
             .await
             .unwrap_err();
@@ -545,7 +545,7 @@ mod tests {
             },
         )
         .await;
-        validator(verifier, Some(Duration::from_secs(300)), None, None)
+        validator(verifier, Some(Duration::from_mins(5)), None, None)
             .validate(&token, None)
             .await
             .expect("recent auth_time should validate");

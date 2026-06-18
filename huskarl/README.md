@@ -109,7 +109,7 @@ run again; everything else is a genuine failure to log and surface.
 ```rust
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::ErrorKind,
 };
 
@@ -140,11 +140,12 @@ impl From<huskarl::core::Error> for AppError {
 }
 
 // `grant` is any grant, built as in the example above.
-let cache = InMemoryTokenCache::builder()
+let source = GrantTokenSource::builder()
     .grant(grant)
     .grant_parameters(ClientCredentialsGrantParameters::builder().build())
     .refresh_store(InMemoryRefreshTokenStore::default())
     .build();
+let cache = InMemoryTokenCache::builder().source(source).build();
 
 let app = App {
     authorizer: HttpAuthorizer::builder().cache(cache).build(),
@@ -167,7 +168,7 @@ app.authorizer.process_response(&uri, &response_headers);
 To survive restarts, persist only the refresh token by handing the cache a
 custom [`RefreshTokenStore`](https://docs.rs/huskarl/latest/huskarl/cache/trait.RefreshTokenStore.html) (keychain- or
 disk-backed); on startup the cache refreshes into a fresh access token. For
-handing a freshly-obtained token from the login path to a running cache, use
-[`prime`](https://docs.rs/huskarl/latest/huskarl/cache/trait.TokenCache.html#tymethod.prime).
+handing a freshly-obtained token from the login path to a running source, use
+[`GrantTokenSource::prime`](https://docs.rs/huskarl/latest/huskarl/cache/grant_token_source/struct.GrantTokenSource.html#method.prime).
 
 <!-- cargo-reedme: end -->

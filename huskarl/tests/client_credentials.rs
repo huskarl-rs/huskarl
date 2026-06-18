@@ -8,7 +8,7 @@ use common::{CcSetup, cc_setup};
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{client_auth::ClientSecret, jwk::JwksSource},
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
@@ -53,9 +53,13 @@ async fn client_credentials_exchange(#[future] cc_setup: CcSetup) {
     let authorizer = HttpAuthorizer::builder()
         .cache(
             InMemoryTokenCache::builder()
-                .grant(grant)
-                .grant_parameters(ClientCredentialsGrantParameters::new())
-                .refresh_store(InMemoryRefreshTokenStore::default())
+                .source(
+                    GrantTokenSource::builder()
+                        .grant(grant)
+                        .grant_parameters(ClientCredentialsGrantParameters::new())
+                        .refresh_store(InMemoryRefreshTokenStore::default())
+                        .build(),
+                )
                 .build(),
         )
         .build();

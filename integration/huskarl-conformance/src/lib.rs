@@ -8,7 +8,7 @@ use bytes::Bytes;
 use http::{Method, StatusCode, Uri};
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{
         client_auth::ClientAuthentication,
         dpop::AuthorizationServerDPoP,
@@ -230,13 +230,18 @@ pub async fn run_auth_code_flow_with_listener<
         .await
         .map_err(|e| format!("failed to build grant: {e}"))?;
 
-    // Build the token cache from the refresh grant (takes &self, so `grant` is still usable).
-    // The cache's resource_server_dpop is derived from grant.dpop() at this point.
-    let cache = InMemoryTokenCache::builder()
-        .grant(grant.to_refresh_grant())
-        .refresh_store(InMemoryRefreshTokenStore::default())
+    // Build the token source from the refresh grant (takes &self, so `grant` is
+    // still usable). Its resource_server_dpop is derived from grant.dpop() here.
+    // Keep an Arc handle so the source can be primed after the flow completes.
+    let source = Arc::new(
+        GrantTokenSource::builder()
+            .grant(grant.to_refresh_grant())
+            .refresh_store(InMemoryRefreshTokenStore::default())
+            .build(),
+    );
+    let authorizer = HttpAuthorizer::builder()
+        .cache(InMemoryTokenCache::builder().source(source.clone()).build())
         .build();
-    let authorizer = HttpAuthorizer::builder().cache(cache).build();
 
     let StartOutput {
         authorization_url,
@@ -269,11 +274,11 @@ pub async fn run_auth_code_flow_with_listener<
         }
     }?;
 
-    // Prime the cache so get_headers() immediately returns the fresh token.
-    authorizer
-        .prime(Arc::new(token_response.clone()))
+    // Prime the source so get_headers() immediately returns the fresh token.
+    source
+        .prime(token_response.clone())
         .await
-        .map_err(|e| format!("failed to prime token cache: {e}"))?;
+        .map_err(|e| format!("failed to prime token source: {e}"))?;
 
     Ok((token_response, authorizer))
 }

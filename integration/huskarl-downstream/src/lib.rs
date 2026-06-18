@@ -102,7 +102,7 @@ mod tests {
 
     use bytes::Bytes;
     use huskarl::{
-        cache::{InMemoryTokenCache, TokenCache as _},
+        cache::{GrantTokenSource, InMemoryTokenCache},
         core::{
             client_auth::NoAuth,
             http::{HttpClient, HttpResponse, Idempotency},
@@ -174,11 +174,12 @@ mod tests {
     }
 
     fn app_state(http: MockHttp, store: KeychainStore) -> AppState {
-        let cache = InMemoryTokenCache::builder()
+        let source = GrantTokenSource::builder()
             .grant(grant(http))
             .grant_parameters(ClientCredentialsGrantParameters::builder().build())
             .refresh_store(store)
             .build();
+        let cache = InMemoryTokenCache::builder().source(source).build();
 
         AppState {
             authorizer: HttpAuthorizer::builder().cache(cache).build(),
@@ -213,10 +214,11 @@ mod tests {
 
     #[tokio::test]
     async fn no_token_source_maps_to_login_required() {
-        let cache = InMemoryTokenCache::builder()
+        let source = GrantTokenSource::builder()
             .grant(grant(MockHttp::default())) // no responses queued: must not be called
             .refresh_store(KeychainStore::default())
             .build();
+        let cache = InMemoryTokenCache::builder().source(source).build();
         let state = AppState {
             authorizer: HttpAuthorizer::builder().cache(cache).build(),
             userinfo: None,
@@ -242,12 +244,12 @@ mod tests {
 
         let store = KeychainStore::default();
         store.lock();
-        let cache = InMemoryTokenCache::builder()
+        let source = GrantTokenSource::builder()
             .grant(grant(MockHttp::default()))
             .refresh_store(store)
             .build();
 
-        let err = cache.prime(Arc::new(response)).await.unwrap_err();
+        let err = source.prime(response).await.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Transport { retryable: true });
         assert!(
             std::error::Error::source(&err)
@@ -271,12 +273,12 @@ mod tests {
             .unwrap();
 
         let store = Arc::new(KeychainStore::default());
-        let cache = InMemoryTokenCache::builder()
+        let source = GrantTokenSource::builder()
             .grant(grant(http))
             .refresh_store(store.clone())
             .build();
 
-        cache.prime(Arc::new(response)).await.unwrap();
+        source.prime(response).await.unwrap();
         let stored = store.get().await.unwrap().expect("refresh token persisted");
         assert_eq!(stored.token().expose_secret(), "rt-1");
     }

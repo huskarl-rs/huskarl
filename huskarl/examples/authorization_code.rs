@@ -3,7 +3,7 @@ use std::sync::Arc;
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{
         client_auth::NoAuth, dpop::DPoP, jwk::JwksSource,
         server_metadata::AuthorizationServerMetadata,
@@ -75,21 +75,21 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     println!("ID token: {:?}", id_token);
 
-    // Prime the authorizer with the token response from the authorization code exchange.
-    // The authorizer handles DPoP proof generation and token refresh automatically.
-    let authorizer = HttpAuthorizer::builder()
-        .cache(
-            InMemoryTokenCache::builder()
-                .grant(grant)
-                .refresh_store(InMemoryRefreshTokenStore::default())
-                .build(),
-        )
+    // Hand the token response from the authorization code exchange to the
+    // source; it serves the token and refreshes it automatically. DPoP proof
+    // generation is handled by the authorizer.
+    let source = GrantTokenSource::builder()
+        .grant(grant)
+        .refresh_store(InMemoryRefreshTokenStore::default())
         .build();
-
-    authorizer
-        .prime(Arc::new(token_response))
+    source
+        .prime(token_response)
         .await
-        .whatever_context("Failed to prime the token cache")?;
+        .whatever_context("Failed to prime the token source")?;
+
+    let authorizer = HttpAuthorizer::builder()
+        .cache(InMemoryTokenCache::builder().source(source).build())
+        .build();
 
     let resource_server_validator = Rfc9068Validator::builder_from_metadata(&metadata)
         .audience("api://default")

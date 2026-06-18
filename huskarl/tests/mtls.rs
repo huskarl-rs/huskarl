@@ -5,7 +5,7 @@ use std::{path::Path, sync::Arc};
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{
         client_auth::ClientSecret, jwk::JwksSource, server_metadata::AuthorizationServerMetadata,
     },
@@ -94,9 +94,13 @@ async fn client_credentials_mtls_binding() {
     let authorizer = HttpAuthorizer::builder()
         .cache(
             InMemoryTokenCache::builder()
-                .grant(grant)
-                .grant_parameters(ClientCredentialsGrantParameters::new())
-                .refresh_store(InMemoryRefreshTokenStore::default())
+                .source(
+                    GrantTokenSource::builder()
+                        .grant(grant)
+                        .grant_parameters(ClientCredentialsGrantParameters::new())
+                        .refresh_store(InMemoryRefreshTokenStore::default())
+                        .build(),
+                )
                 .build(),
         )
         .build();
