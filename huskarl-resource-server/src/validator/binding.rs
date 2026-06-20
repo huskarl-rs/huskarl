@@ -604,4 +604,103 @@ mod tests {
             "expected Ok(Some(\"rotated-nonce\")), got {result:?}"
         );
     }
+
+    /// Signs a proof whose embedded `jwk` header is `embedded`'s public key but
+    /// whose signature is produced by `signer` — a proof not signed by the key
+    /// it claims to be signed by.
+    async fn sign_proof_with_embedded_jwk(
+        signer: &PrivateKey,
+        embedded: &PrivateKey,
+        claims: ProofClaims,
+    ) -> SecretString {
+        Jwt::builder()
+            .typ("dpop+jwt")
+            .issued_now_expires_after(Duration::from_secs(60))
+            .jwk(embedded.public_key_jwk().into_owned())
+            .claims(claims)
+            .build()
+            .to_jws_compact(signer)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn proof_signed_by_key_other_than_embedded_jwk_is_rejected() {
+        // RFC 9449 §4.3: the proof MUST be signed by the key in its `jwk` header.
+        // Here the proof embeds the victim's public key — and the token is bound
+        // to that key, so the `jkt` check would pass — but it is signed by the
+        // attacker's key, so the signature cannot verify against the embedded JWK.
+        let attacker = es256();
+        let victim = es256();
+        let proof = sign_proof_with_embedded_jwk(&attacker, &victim, valid_claims()).await;
+        let confirmation = cnf(Some(matching_jkt(&victim)));
+        let err = checker(None, false)
+            .check(
+                Some(&confirmation),
+                &SecretString::new(ACCESS_TOKEN),
+                proof.expose_secret(),
+                &http::Method::POST,
+                &req_uri(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DPoPBindingError::ProofValidation { .. }),
+            "expected ProofValidation (signature vs embedded key), got {err:?}"
+        );
+    }
+
+    /// A `cnf` carrying only an `x5t#S256` certificate-thumbprint binding.
+    fn cnf_x5t(thumbprint: Option<String>) -> ConfirmationClaim {
+        ConfirmationClaim {
+            jkt: None,
+            x5t_s256: thumbprint,
+            jwe: None,
+            jku: None,
+        }
+    }
+
+    const CLIENT_CERT_DER: &[u8] = b"a-client-certificate-in-der-form";
+
+    #[test]
+    fn mtls_matching_certificate_is_accepted() {
+        let confirmation = cnf_x5t(Some(cert_thumbprint(CLIENT_CERT_DER)));
+        assert!(check_mtls_binding(Some(&confirmation), Some(CLIENT_CERT_DER), false).is_ok());
+    }
+
+    #[test]
+    fn mtls_wrong_certificate_is_rejected() {
+        let confirmation = cnf_x5t(Some(cert_thumbprint(CLIENT_CERT_DER)));
+        let err = check_mtls_binding(Some(&confirmation), Some(b"a-different-certificate"), false)
+            .unwrap_err();
+        assert!(
+            matches!(err, MtlsBindingError::CertThumbprintMismatch),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mtls_bound_token_without_client_certificate_is_rejected() {
+        let confirmation = cnf_x5t(Some(cert_thumbprint(CLIENT_CERT_DER)));
+        let err = check_mtls_binding(Some(&confirmation), None, false).unwrap_err();
+        assert!(
+            matches!(err, MtlsBindingError::CertBoundTokenWithoutCert),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mtls_required_but_token_unbound_is_rejected() {
+        // The RS requires certificate-bound tokens, but this token has no binding.
+        let err =
+            check_mtls_binding(Some(&cnf_x5t(None)), Some(CLIENT_CERT_DER), true).unwrap_err();
+        assert!(matches!(err, MtlsBindingError::MtlsRequired), "got {err:?}");
+    }
+
+    #[test]
+    fn mtls_unbound_token_is_accepted_when_not_required() {
+        // No binding present and mTLS not required: the certificate is ignored.
+        assert!(check_mtls_binding(None, None, false).is_ok());
+        assert!(check_mtls_binding(Some(&cnf_x5t(None)), Some(CLIENT_CERT_DER), false).is_ok());
+    }
 }

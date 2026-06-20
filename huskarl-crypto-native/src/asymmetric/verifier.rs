@@ -805,4 +805,89 @@ mod tests {
             Some("https://test.example.com")
         );
     }
+
+    #[test]
+    fn rsa_verifier_does_not_match_hmac_algorithms() {
+        use huskarl_core::crypto::verifier::{JwsVerifier as _, KeyMatch};
+
+        let rsa = PrivateKey::generate(
+            GenerateAlgorithm::Rs256 {
+                modulus_length: 2048,
+            },
+            None,
+        )
+        .unwrap();
+        let verifier = AsymmetricPublicKey::from_jwk(rsa.public_key_jwk().into_owned()).unwrap();
+
+        // RS256→HS256 confusion is prevented at key selection: an RSA key
+        // advertises only RSA algorithms, so a token claiming `alg: HS256` finds
+        // no matching key and the RSA modulus is never treated as an HMAC secret.
+        assert!(
+            verifier
+                .key_match(&KeyMatch {
+                    alg: "HS256",
+                    kid: None,
+                })
+                .is_none()
+        );
+        // The same key still matches its genuine algorithm.
+        assert!(
+            verifier
+                .key_match(&KeyMatch {
+                    alg: "RS256",
+                    kid: None,
+                })
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn rsa_validator_rejects_hs256_key_confusion_token() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+        use hmac::{Hmac, KeyInit as _, Mac as _};
+        use huskarl_core::{crypto::verifier::VerifyError, jwt::validator::JwtValidationError};
+        use sha2::Sha256;
+
+        // A validator that trusts only an RSA public key, as if it had been
+        // fetched from the authorization server's JWKS.
+        let rsa = PrivateKey::generate(
+            GenerateAlgorithm::Rs256 {
+                modulus_length: 2048,
+            },
+            None,
+        )
+        .unwrap();
+        let rsa_pub_jwk = rsa.public_key_jwk().into_owned();
+        let verifier = AsymmetricPublicKey::from_jwk(rsa_pub_jwk.clone()).unwrap();
+        let validator = JwtValidator::builder().verifier(verifier).build();
+
+        // RS256→HS256 confusion: the attacker forges an `HS256` token whose HMAC
+        // secret is the (public) RSA key material. A verifier that selected the
+        // key by material rather than algorithm would treat the public modulus as
+        // a shared secret and accept this; huskarl rejects it at key selection
+        // (`JwsVerifier::verify` returns `NoMatchingKey`).
+        let secret = serde_json::to_vec(&rsa_pub_jwk).unwrap();
+        let b64 = |bytes: &[u8]| URL_SAFE_NO_PAD.encode(bytes);
+        let signing_input = format!(
+            "{}.{}",
+            b64(br#"{"alg":"HS256","typ":"JWT"}"#),
+            b64(br#"{"iss":"attacker"}"#),
+        );
+        let mut mac = Hmac::<Sha256>::new_from_slice(&secret).unwrap();
+        mac.update(signing_input.as_bytes());
+        let forged = format!("{signing_input}.{}", b64(&mac.finalize().into_bytes()));
+
+        // Rejected specifically at key selection (proving the token parsed and
+        // reached verification): no key matched `alg: HS256`.
+        let result = validator.validate::<serde_json::Value>(&forged).await;
+        assert!(
+            matches!(
+                result,
+                Err(JwtValidationError::Signature {
+                    source: VerifyError::NoMatchingKey
+                })
+            ),
+            "RS256→HS256 confusion token must be rejected at key selection, got {result:?}"
+        );
+    }
 }
