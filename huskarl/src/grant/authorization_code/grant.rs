@@ -162,18 +162,9 @@ impl AuthorizationCodeGrant {
         /// form auth for client secrets.
         #[from_metadata(path = "token_endpoint_auth_methods_supported")]
         token_endpoint_auth_methods_supported: Option<Vec<String>>,
-        /// The JAR (JWT Secured Authorization Request) implementation to use when making requests to the authorization server.
-        ///
-        /// With JAR, the parameters of the initial request to the authorization server are signed
-        /// using a JWT, instead of being passed as URL query parameters.
-        ///
-        /// This adds authenticity (request comes from the client) and integrity (request cannot be tampered with) to the request.
-        ///
-        /// There are two built-in implementations:
-        /// - [`crate::grant::authorization_code::jar::Jar`]
-        ///     This implements JAR signing (when understood by the authorization server).
-        /// - [`crate::grant::authorization_code::jar::NoJar`]
-        ///     No JAR is implemented when this variant is used. This is the default.
+        /// The [`Jar`] implementation used to JWT-secure the authorization
+        /// request (RFC 9101). Defaults to [`NoJar`] — no request object; see the
+        /// trait for what JAR provides and how to supply one.
         #[builder(
             with = |jar: impl Jar + 'static| Arc::new(jar) as Arc<dyn Jar>,
             default = Arc::new(NoJar),

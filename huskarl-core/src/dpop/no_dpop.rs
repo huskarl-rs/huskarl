@@ -10,13 +10,14 @@ use crate::{
     secrets::SecretString,
 };
 
-/// This represents a grant without the ability to use `DPoP` to constrain tokens.
+/// The no-op `DPoP` implementation, used when `DPoP` is disabled — tokens are
+/// not sender-constrained.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoDPoP;
 
 impl super::sealed::Sealed for NoDPoP {}
 
-/// This represents a situation where a `DPoP` proof is required, but the server is not configured to use `DPoP`.
+/// A `DPoP` proof was required, but `DPoP` is not configured.
 #[derive(Debug, Clone, Copy, Default, Snafu)]
 pub struct DPoPNotConfigured;
 

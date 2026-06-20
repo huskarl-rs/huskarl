@@ -17,12 +17,11 @@ use crate::{
     secrets::SecretString,
 };
 
-/// A built JWT with all information except signing metadata.
+/// A built JWT, complete except for its signing metadata.
 ///
-/// This represents a full JWT that can be signed with information
-/// from the signing layer. The signing layer can add the algorithm
-/// and key ID information, creates a JWS signature, and builds the
-/// final string.
+/// Construct one with [`builder`](Self::builder), then hand it to the signing
+/// layer: [`to_jws_compact`](Self::to_jws_compact) adds the algorithm and key
+/// ID, computes the JWS signature, and produces the final compact string.
 #[non_exhaustive]
 #[derive(Debug, Clone, Builder)]
 #[builder(

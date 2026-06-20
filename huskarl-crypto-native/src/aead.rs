@@ -1,4 +1,10 @@
-//! AEAD encryptor/decryptor implementations.
+//! AES-GCM AEAD cipher, backed by `RustCrypto`'s `aes-gcm`.
+//!
+//! [`AesGcmKey`] is the user-facing cipher implementing huskarl-core's
+//! [`AeadEncryptor`] and
+//! [`AeadDecryptor`]. Build one with
+//! [`AesGcmKey::from_secret`], which infers AES-128/192/256 from the key length
+//! (16/24/32 bytes) — e.g. to back the `DPoP` nonce store.
 
 use std::{array::TryFromSliceError, borrow::Cow, fmt};
 
@@ -35,7 +41,12 @@ impl NativeKey {
     }
 }
 
-/// An AES-GCM key.
+/// An AES-GCM AEAD cipher (`RustCrypto`), doing both encryption and decryption.
+///
+/// Build one with [`from_secret`](Self::from_secret), which selects
+/// AES-128/192/256 from the key length. Implements huskarl-core's
+/// [`AeadEncryptor`] and
+/// [`AeadDecryptor`].
 pub struct AesGcmKey {
     inner: NativeKey,
     kid: Option<String>,
@@ -58,7 +69,7 @@ pub enum LoadKeyError {
         /// The underlying error.
         source: Error,
     },
-    /// The key had the incorrect length;
+    /// The key material was not 16, 24, or 32 bytes (AES-128/192/256).
     InvalidKeyLength,
 }
 

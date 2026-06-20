@@ -17,11 +17,16 @@ use crate::{
     },
 };
 
-/// An `OAuth2` exchange grant.
+/// The core trait every grant implements: exchanges grant-specific parameters
+/// for a token at the token endpoint.
 ///
-/// This represents an `OAuth2` grant implementation. It provides
-/// the ability of the grant to provide features like parameters,
-/// authentication, its `DPoP` configuration, and so forth.
+/// Most methods are accessors the built-in [`exchange`](Self::exchange)
+/// machinery reads — client identity and authentication, the token endpoint,
+/// the `DPoP` binding, and how to build the request body. Implement it to add a
+/// grant this crate does not ship; application code calls
+/// [`exchange`](Self::exchange) (or hands the grant to a
+/// [`GrantTokenSource`](crate::cache::GrantTokenSource)) rather than the
+/// accessors directly.
 pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Parameters exchanged when making the token request.
     type Parameters: Clone + MaybeSendSync;

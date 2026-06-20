@@ -406,7 +406,7 @@ pub struct StartInput {
 }
 
 impl StartInput {
-    /// Implements a simple complete input to the flow including just scopes.
+    /// Convenience constructor for a start input carrying only scopes.
     ///
     /// This is enough for most use cases; the builder exists as an extensible
     /// API where arbitrary extra fields may be added in future.

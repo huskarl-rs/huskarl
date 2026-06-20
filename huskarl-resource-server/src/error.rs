@@ -1,6 +1,6 @@
 //! RFC 6750 attribute-based error types and traits for resource server responses.
 //!
-//! These attributes (error, error_description) are used by both the
+//! These attributes (error, `error_description`) are used by both the
 //! `Bearer` (RFC 6750) and `DPoP` (RFC 9449) authentication schemes.
 //! The `error_uri` attribute is supported as a parameter to
 //! [`crate::validator::metadata::ValidatorMetadata::challenges`].
@@ -45,7 +45,7 @@ impl ChallengeParam {
     pub fn format(&self) -> String {
         match self {
             Self::Quoted(key, value) => format!(r#"{}="{}""#, key, escape_quoted(value)),
-            Self::Token(key, value) => format!("{}={}", key, value),
+            Self::Token(key, value) => format!("{key}={value}"),
         }
     }
 }
@@ -198,12 +198,8 @@ pub trait ToRfc6750Error: MaybeSendSync {
     /// Returns the attempted authentication scheme, if known.
     fn attempted_scheme(&self) -> Option<TokenType>;
 
-    /// Classifies this error as a client-side or server-side failure.
-    ///
-    /// - [`TokenValidationError::Client`]: a problem with the client's token or request.
-    ///   Include RFC 6750 error details in the `WWW-Authenticate` response.
-    /// - [`TokenValidationError::Server`]: a server-side failure (e.g. unreachable introspection
-    ///   endpoint). Respond with the given status code and no `WWW-Authenticate` header.
+    /// Classifies this error as a client-side or server-side failure; see
+    /// [`TokenValidationError`] for how each is rendered into a response.
     fn token_error(&self) -> TokenValidationError;
 
     /// Returns a human-readable description of the error for the `error_description` parameter.

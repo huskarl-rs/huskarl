@@ -55,9 +55,9 @@ impl ToRfc6750Error for IntrospectionValidateError {
     fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
             Self::Extract { source } => source.attempted_scheme(),
-            Self::Binding { token_type, .. } => Some(*token_type),
-            Self::Call { token_type, .. } => Some(*token_type),
-            Self::Audience { token_type, .. } => Some(*token_type),
+            Self::Binding { token_type, .. }
+            | Self::Call { token_type, .. }
+            | Self::Audience { token_type, .. } => Some(*token_type),
         }
     }
 

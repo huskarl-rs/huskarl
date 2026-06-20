@@ -38,19 +38,19 @@ fn complete_error(source: super::error::CompleteError) -> Error {
 }
 
 impl AuthorizationCodeGrant {
-    /// Completes the authorization code flow on the provided listener, possibly returning a token response.
+    /// Completes the authorization code flow on `listener`, returning the token
+    /// response.
     ///
-    /// A lightweight HTTP server is implemented on the listener, which is capable of handling
-    /// the authorization code callback at the redirect URI. This may be useful in various use
-    /// cases, especially that of command-line utilities.
+    /// Runs a minimal HTTP server on `listener` to receive the redirect callback
+    /// at the redirect URI — handy for command-line tools. To also recover the
+    /// validated ID token, use
+    /// [`complete_on_loopback_oidc`](Self::complete_on_loopback_oidc).
     ///
     /// # Errors
     ///
-    /// Errors if there are issues with parsing callback URLs, HTTP read errors, errors handling the
-    /// callback, or errors requesting a token, or if a supplied ID token could not be validated.
-    ///
-    /// Note that if an ID token is returned by the authorization server, this indicates that an
-    /// OIDC flow was requested in the authorization request, and the ID token will be validated.
+    /// Errors if a callback URL cannot be parsed, the HTTP exchange or callback
+    /// handling fails, the token request fails, or a returned ID token fails
+    /// validation (see [`complete_oidc`](Self::complete_oidc)).
     #[cfg(all(
         feature = "authorization-flow-loopback",
         any(
@@ -69,16 +69,19 @@ impl AuthorizationCodeGrant {
             .map(|v| v.0)
     }
 
-    /// Completes the authorization code flow on the provided listener, possibly returning a token response and an ID token.
+    /// Completes the authorization code flow on `listener`, returning the token
+    /// response together with the validated ID token when the flow was an OIDC
+    /// flow.
     ///
-    /// A lightweight HTTP server is implemented on the listener, which is capable of handling
-    /// the authorization code callback at the redirect URI. This may be useful in various use
-    /// cases, especially that of command-line utilities.
+    /// Like [`complete_on_loopback`](Self::complete_on_loopback) — same minimal
+    /// callback server and the same errors — but also yields the validated ID
+    /// token.
     ///
     /// # Errors
     ///
-    /// Errors if there are issues with parsing callback URLs, HTTP read errors, errors handling the
-    /// callback, or errors requesting a token, or if the ID token cannot be validated.
+    /// Returns a [`LoopbackError`] if the callback server fails, the
+    /// authorization server returns an error response, or the token (and ID
+    /// token) exchange fails.
     #[cfg(all(
         feature = "authorization-flow-loopback",
         any(
@@ -254,15 +257,17 @@ impl AuthorizationCodeGrant {
         ))
     }
 
-    /// Attempts to complete the authorization code flow, returning the token response.
+    /// Attempts to complete the authorization code flow, returning the token
+    /// response.
+    ///
+    /// To also recover the validated ID token, use
+    /// [`complete_oidc`](Self::complete_oidc).
     ///
     /// # Errors
     ///
-    /// Returns an error if one is returned when sending a message to the token endpoint,
-    /// a check failed against the callback parameters, or if a received ID token could not be validated.
-    ///
-    /// Note that if an ID token is returned by the authorization server, this indicates that an
-    /// OIDC flow was requested in the authorization request, and the ID token will be validated.
+    /// Returns an error if the token request fails, a callback parameter check
+    /// fails, or a returned ID token fails validation (see
+    /// [`complete_oidc`](Self::complete_oidc) for the ID-token semantics).
     pub async fn complete(
         &self,
         pending_state: &PendingState,

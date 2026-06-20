@@ -23,10 +23,9 @@ use crate::{
 /// a grant exchange. Implement it yourself for other producers (for example a
 /// channel fed by a separate task).
 ///
-/// An [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer) does not take a bare
-/// `TokenSource` — it requires a [`TokenCache`](crate::cache::TokenCache), the
-/// marker for a source that memoizes — so a raw producer can't be wired in by
-/// mistake and re-run on every request.
+/// An [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer) does not consume a
+/// bare `TokenSource`; it requires the memoizing
+/// [`TokenCache`](crate::cache::TokenCache) marker (see there for why).
 ///
 /// This trait is dyn-capable and is implemented for `Arc<T>`, `Box<T>`, and
 /// `&T`, so a source can be shared: hand an `Arc<GrantTokenSource>` to the cache
@@ -40,11 +39,11 @@ pub trait TokenSource: MaybeSendSync {
 
     /// The `DPoP` binding for resource-server requests made with these tokens.
     ///
-    /// A `DPoP`-bound token must be proven with the *same* key it is bound to
-    /// (the token's `jkt` is that key's thumbprint), so the source that issues
-    /// such tokens is exactly the thing that owns the matching proof key —
-    /// keeping them together guarantees the key and the `jkt` agree. Defaults to
-    /// a no-op binding ([`NoDPoP`]); a source that issues `DPoP`-bound tokens
+    /// A `DPoP`-bound token must be proven with the *same* key it is bound to —
+    /// the token's `jkt` is that key's thumbprint. The source that issues such
+    /// tokens is exactly the thing that owns the matching proof key, so keeping
+    /// the two together guarantees the key and the `jkt` agree. Defaults to a
+    /// no-op binding ([`NoDPoP`]); a source that issues `DPoP`-bound tokens
     /// (e.g. [`GrantTokenSource`](crate::cache::GrantTokenSource)) overrides it.
     fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
         &NoDPoP

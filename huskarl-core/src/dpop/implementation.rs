@@ -24,7 +24,12 @@ type Origin = (Option<Scheme>, Option<String>, Option<u16>);
 
 impl super::sealed::Sealed for DPoP {}
 
-/// This respresents a grant with the ability to create DPoP-bound tokens and sign requests with them.
+/// Generates authorization-server `DPoP` proofs (RFC 9449), backed by an
+/// asymmetric signer.
+///
+/// Used at the token endpoint to obtain `DPoP`-bound tokens and sign the
+/// requests that carry them; the key it signs with is the one the tokens are
+/// bound to.
 #[derive(Debug, Clone, Builder)]
 pub struct DPoP {
     #[builder(with = |signer: impl AsymmetricJwsSignerSelector + 'static| Arc::new(signer) as Arc<dyn AsymmetricJwsSignerSelector>)]
@@ -92,7 +97,8 @@ impl AuthorizationServerDPoP for DPoP {
 
 impl super::sealed::Sealed for ResourceDPoP {}
 
-/// This respresents the ability to create proofs for resource servers from DPoP-bound access tokens.
+/// Generates `DPoP` proofs for resource-server requests, each bound to a
+/// `DPoP`-bound access token (RFC 9449).
 #[derive(Debug, Clone, Builder)]
 pub struct ResourceDPoP {
     #[builder(with = |signer: impl AsymmetricJwsSignerSelector + 'static| Arc::new(signer) as Arc<dyn AsymmetricJwsSignerSelector>)]

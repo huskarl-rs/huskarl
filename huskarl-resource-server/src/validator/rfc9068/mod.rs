@@ -163,6 +163,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
     ///
     /// For a more convenient constructor when you have authorization server metadata,
     /// see [`Rfc9068Validator::builder_from_metadata`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if the [`JwsVerifierFactory`] fails to build a
+    /// verifier — for example, when the JWKS cannot be fetched or parsed.
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
         generics(setters(vis = "", name = "with_{}_internal")),
@@ -180,13 +185,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         /// If `None`, any algorithm supported by the verifier is accepted.
         #[builder(into)]
         allowed_signing_algorithms: Option<Vec<String>>,
-        /// Allowed algorithms for DPoP proof signature verification.
+        /// Allowed algorithms for `DPoP` proof signature verification.
         ///
         /// If `None`, any algorithm supported by the verifier is accepted.
         #[builder(into)]
         allowed_dpop_signing_algorithms: Option<Vec<String>>,
-        /// Maximum accepted age of a DPoP proof. Defaults to 60 seconds.
-        #[builder(default = Duration::from_secs(60))]
+        /// Maximum accepted age of a `DPoP` proof. Defaults to 1 minute.
+        #[builder(default = Duration::from_mins(1))]
         max_dpop_proof_age: Duration,
         /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
         ///
@@ -204,16 +209,19 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
         /// Cryptographic platform for JWS verification.
         ///
-        /// Used for both access token and DPoP proof verification. When the
+        /// Used for both access token and `DPoP` proof verification. When the
         /// `default-jws-verifier-platform` feature is enabled, defaults to the platform default.
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
         /// Access token JTI uniqueness checker.
         jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
-        /// DPoP nonce checker.
+        /// Optional server-side `DPoP` nonce enforcement (RFC 9449 §8). When set,
+        /// proofs must carry a nonce this checker accepts; omitting it disables
+        /// nonce enforcement.
         #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
         dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
-        /// JTI uniqueness checker.
+        /// Uniqueness checker for the `jti` of `DPoP` proofs (replay protection) —
+        /// the proof-level counterpart to `jti_checker`.
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// The HTTP header to extract the access token from.
         ///
@@ -293,7 +301,9 @@ impl Rfc9068Validator<()> {
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: rfc9068_validator_builder::State>
     Rfc9068ValidatorBuilder<Claims, S>
 {
-    /// Sets the claims type for the validator.
+    /// Captures access-token claims beyond the RFC 9068 set into a custom type,
+    /// surfaced on the validated request. The default is `()` (no extra claims);
+    /// see [`Rfc9068AccessTokenClaims`].
     pub fn with_claims<Claims1: for<'de> Deserialize<'de> + Clone + 'static>(
         self,
     ) -> Rfc9068ValidatorBuilder<Claims1, S> {
@@ -318,7 +328,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
                 .allowed_signing_algorithms()
                 .map(<[_]>::to_vec),
             dpop_bound_access_tokens_required: Some(self.inner.dpop_binding_checker.required),
-            resource: resource.map(|r| r.to_owned()),
+            resource: resource.map(std::borrow::ToOwned::to_owned),
             bearer_methods_supported: Some(vec!["header"]),
         }
     }

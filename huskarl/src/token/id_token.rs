@@ -15,12 +15,19 @@ use crate::core::{
     platform::{Duration, SystemTime},
 };
 
-/// An `OpenID` Connect ID token.
+/// An `OpenID` Connect ID token: the compact-JWS string exactly as received.
+///
+/// Obtained from
+/// [`TokenResponse::id_token`](crate::grant::core::TokenResponse::id_token). It
+/// is unverified — validate it with [`IdTokenValidator`] before trusting any
+/// claim. [`token`](Self::token) exposes the raw string, e.g. to pass back as an
+/// `id_token_hint`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdToken(String);
 
 impl IdToken {
-    /// Exposes the token as a string.
+    /// Exposes the raw compact-JWS string. Validate with [`IdTokenValidator`]
+    /// rather than parsing this directly.
     #[must_use]
     pub fn token(&self) -> &str {
         self.0.as_str()
@@ -171,7 +178,12 @@ pub struct StandardOidcAddressClaims {
     pub country: Option<String>,
 }
 
-/// Validates an ID token against configuration.
+/// Validates an `OpenID` Connect ID token: signature (via the configured
+/// [`JwsVerifier`]), `iss`, and `aud`, plus — when configured — `nonce`,
+/// `max_age`, `azp`, `acr`, and the set of permitted signature algorithms.
+///
+/// Build one with [`builder`](Self::builder); call [`validate`](Self::validate)
+/// to check a token and recover its claims.
 #[derive(Debug, Builder)]
 #[builder(on(String, into))]
 pub struct IdTokenValidator {
@@ -196,11 +208,17 @@ pub struct IdTokenValidator {
 }
 
 impl IdTokenValidator {
-    /// Validates an ID token against configuration.
+    /// Validates `id_token` against this validator's configuration and returns
+    /// its verified claims.
+    ///
+    /// Pass `expected_nonce` when the authorization request carried a `nonce` —
+    /// it is then required to match; otherwise pass `None`.
     ///
     /// # Errors
     ///
-    /// Returns an error if the token is not valid according to the configuration.
+    /// Returns an [`IdTokenValidationError`] if any configured check fails —
+    /// signature, `iss`, `aud`, `nonce`, `max_age`, `azp`, `acr`, or signature
+    /// algorithm.
     pub async fn validate(
         &self,
         id_token: &IdToken,

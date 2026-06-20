@@ -72,7 +72,7 @@ pub enum Idempotency {
     Unknown,
 }
 
-/// Defines the common interface for HTTP requests.
+/// Executes HTTP requests on behalf of the library, returning a fully-read response.
 ///
 /// This trait is dyn-capable: implement it on your client type and the
 /// library consumes it as `&dyn HttpClient` / `Arc<dyn HttpClient>`.

@@ -25,7 +25,16 @@ fn effective_expiry(
         .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-/// Represents an access token, either a `DPoP` token or a `Bearer` token.
+/// An access token returned by a token grant, used to authorize resource-server
+/// requests.
+///
+/// Get the `Authorization` header value with
+/// [`expose_header_value`](Self::expose_header_value) — the
+/// [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer) does this for you. The
+/// variant determines how the token is presented: a [`Bearer`](Self::Bearer)
+/// token authorizes by possession alone, while a [`Dpop`](Self::Dpop) token is
+/// sender-constrained (RFC 9449) — each request must carry a `DPoP` proof over
+/// the bound key, whose thumbprint is the token's [`dpop_jkt`](Self::dpop_jkt).
 #[derive(Debug, Clone)]
 pub enum AccessToken {
     /// A `DPoP` token.
@@ -74,10 +83,14 @@ impl AccessToken {
         }
     }
 
-    /// Returns the effective expiry time of the token: `received_at + expires_in - margin`.
+    /// The time after which this token should be treated as stale:
+    /// `received_at + expires_in - expires_margin`. It is valid while
+    /// `SystemTime::now()` is earlier than this.
     ///
-    /// This is the point in time after which the token should be considered stale.
-    /// The token is valid while `SystemTime::now() < effective_expiry(...)`.
+    /// `default_expires_in` applies only when the token response carried no
+    /// `expires_in` of its own; `expires_margin` is subtracted to retire the
+    /// token slightly early. An out-of-range `expires_in` is clamped rather than
+    /// panicking.
     #[must_use]
     pub fn effective_expiry(
         &self,
@@ -152,10 +165,8 @@ impl DpopAccessToken {
         HeaderValue::from_str(&format!("DPoP {}", self.token.expose_secret()))
     }
 
-    /// Returns the effective expiry time of the token: `received_at + expires_in - margin`.
-    ///
-    /// This is the point in time after which the token should be considered stale.
-    /// The token is valid while `SystemTime::now() < effective_expiry(...)`.
+    /// The token's effective expiry; see
+    /// [`AccessToken::effective_expiry`] for the parameter semantics.
     #[must_use]
     pub fn effective_expiry(
         &self,
@@ -210,10 +221,8 @@ impl BearerAccessToken {
         HeaderValue::from_str(&format!("Bearer {}", self.token.expose_secret()))
     }
 
-    /// Returns the effective expiry time of the token: `received_at + expires_in - margin`.
-    ///
-    /// This is the point in time after which the token should be considered stale.
-    /// The token is valid while `SystemTime::now() < effective_expiry(...)`.
+    /// The token's effective expiry; see
+    /// [`AccessToken::effective_expiry`] for the parameter semantics.
     #[must_use]
     pub fn effective_expiry(
         &self,

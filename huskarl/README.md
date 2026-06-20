@@ -15,8 +15,8 @@ cargo-reedme: info-end -->
 
 Huskarl provides tools for implementing secure `OAuth2` clients in rust.
 
-This library provides a number of grant implementations, each of which is configured
-with a set of parameters that define how the grant/workflow should progress.
+This library provides several grant implementations, each driven by grant-specific
+parameters that define how the grant/workflow should progress.
 
 The library also provides a caching layer for token responses; and a HTTP authorizer
 that can be used to make authenticated requests to resource servers.
@@ -54,8 +54,8 @@ or more calls to the token endpoint.
   Allows the client to exchange an existing token for a new security token, supporting
   impersonation and delegation use cases.
 
-Further grants exist, could either be implemented for this library either in-crate, or can be
-implemented by external crates. Examples include CIBA, JWT authorization, or provider-specific grants.
+Further grants — CIBA, JWT authorization, provider-specific flows — can be implemented in this
+crate or by external crates.
 
 ## Examples
 

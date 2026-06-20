@@ -1,7 +1,7 @@
 use snafu::Snafu;
 use wasm_bindgen::JsValue;
 
-/// Represents JavaScript errors.
+/// A JavaScript error surfaced from a `JsValue` (e.g. a rejected `WebCrypto` promise).
 #[derive(Debug, Snafu)]
 #[snafu(display("{}", error.as_string().unwrap_or_default()))]
 pub struct JsError {

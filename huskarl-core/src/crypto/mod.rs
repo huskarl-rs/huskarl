@@ -1,11 +1,12 @@
 //! Cryptographic interfaces and definitions.
 //!
-//! Many `OAuth2` grants and auxiliary interfaces require use
-//! of cryptographic operations to ensure properties such as
-//! integrity, authentication, confidentiality, non-repudiation.
+//! Many `OAuth2` grants and auxiliary interfaces require cryptographic
+//! operations to ensure properties such as integrity, authentication,
+//! confidentiality, and non-repudiation.
 //!
-//! This module provides interfaces to support that. Implementations
-//! are provided externally.
+//! This module holds the signing ([`signer`]), verification ([`verifier`]), and
+//! encryption ([`cipher`]) traits, plus the shared key-matching types
+//! ([`KeyMatchStrength`]). Concrete implementations live in platform crates.
 
 pub mod cipher;
 pub(crate) mod refreshable;

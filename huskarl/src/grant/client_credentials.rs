@@ -6,34 +6,16 @@
 //!
 //! ## 1. Set up your HTTP client
 //!
-//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//! The examples below use the `huskarl_reqwest` crate; see [Setting up an HTTP
+//! client](crate::grant#setting-up-an-http-client) for the shared setup the rest
+//! of this page assumes.
 //!
-//! ```rust
-//! use huskarl_reqwest::ReqwestClient;
+//! ## 2. Set up client authentication
 //!
-//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 2. Set up client authentication (mandatory for client credentials).
-//!
-//! This example shows the use of a client secret as credentials, but any `ClientAuthentication`
-//! implementation can be used.
-//!
-//! ```rust
-//! use huskarl::core::{
-//!     client_auth::ClientSecret,
-//!     secrets::{EnvVarSecret, encodings::StringEncoding},
-//! };
-//!
-//! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
-//! let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! let client_auth: ClientSecret = ClientSecret::new(env_secret);
-//! # Ok(())
-//! # }
-//! ```
+//! Client credentials **requires** authentication: the client acts on its own
+//! behalf, so its credentials *are* the grant. See [Setting up client
+//! authentication](crate::grant#setting-up-client-authentication) — the examples
+//! below use a `ClientSecret`.
 //!
 //! ## 3a. Set up the grant with authorization server metadata
 //!
@@ -322,7 +304,8 @@ pub struct ClientCredentialsGrantForm {
     resource: Option<Vec<String>>,
 }
 
-#[cfg(all(test, not(target_family = "wasm")))]
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
 mod tests {
     use std::sync::LazyLock;
 

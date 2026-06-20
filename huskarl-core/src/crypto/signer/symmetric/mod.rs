@@ -1,4 +1,4 @@
-//! Signing key traits.
+//! The base JWS signer traits: [`JwsSigner`] and [`JwsSignerSelector`].
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -23,7 +23,7 @@ pub trait JwsSignerSelector: std::fmt::Debug + MaybeSendSync {
     fn select_signer(&self) -> Arc<dyn JwsSigner>;
 }
 
-/// Trait for using signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
+/// Trait for signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
 ///
 /// This trait is dyn-capable: selectors hand out signers as
 /// `Arc<dyn JwsSigner>`.

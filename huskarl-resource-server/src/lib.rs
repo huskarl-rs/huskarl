@@ -1,13 +1,20 @@
-#![warn(missing_docs)]
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![warn(clippy::pedantic)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 //! # `OAuth2` library for resource servers.
 //!
-//! This library handles concerns of interest to `OAuth2` resource servers. The primary need
-//! in this case is validating provided access tokens, and checking whether the authorization
-//! matches the necessary level.
+//! A resource server has two jobs: validate the access token presented with a
+//! request, and decide whether that token authorizes the request.
 //!
-//! Currently this crate helps to handle the first of these; validating access tokens. It
-//! then provides the context from those access tokens which let the server implement the
-//! rest of the authorization checking.
+//! This crate does the first. A [`validator`] verifies the token
+//! (signature/introspection, expiry, audience, and any sender-constraint
+//! binding) and returns a [`ValidatedRequest`]
+//! carrying its claims — from which your application makes the second decision.
 //!
 //! ## Example with RFC 9068 token validation:
 //!

@@ -51,7 +51,16 @@ pub struct RawTokenResponse {
     extra: Option<HashMap<String, Value>>,
 }
 
-/// The token response, after processing into a valid access and refresh token.
+/// A processed token-endpoint response — what [`exchange`] hands back.
+///
+/// Wraps the [`RawTokenResponse`] with the access and refresh tokens resolved
+/// into typed form (the access token already classified as bearer or
+/// `DPoP`-bound). Read them via [`access_token`](Self::access_token),
+/// [`refresh_token`](Self::refresh_token), and [`id_token`](Self::id_token);
+/// reach any non-standard fields through
+/// [`raw_token_response`](Self::raw_token_response).
+///
+/// [`exchange`]: crate::grant::core::OAuth2ExchangeGrant::exchange
 #[derive(Debug, Clone)]
 pub struct TokenResponse {
     raw: RawTokenResponse,
@@ -78,7 +87,8 @@ impl TokenResponse {
         self.raw.id_token.as_ref()
     }
 
-    /// Returns the token response.
+    /// Returns the underlying raw response, for reading non-standard
+    /// token-endpoint fields not surfaced by the typed accessors.
     #[must_use]
     pub fn raw_token_response(&self) -> &RawTokenResponse {
         &self.raw

@@ -1,3 +1,11 @@
+//! Loopback redirect server for the authorization code flow (RFC 8252 §7.3).
+//!
+//! A minimal HTTP server bound to a loopback address that receives the
+//! authorization callback, for native apps and CLI tools that cannot host a
+//! public redirect URI. `bind_loopback` creates the listener;
+//! `AuthorizationCodeGrant::complete_on_loopback` drives the exchange.
+//! Feature-gated behind `authorization-flow-loopback`.
+
 use std::sync::Arc;
 
 use snafu::{ResultExt as _, Snafu};
@@ -410,10 +418,10 @@ async fn read_request_path_inner(stream: &mut TcpStream) -> Result<Option<String
 }
 
 fn parse_callback_params(path_and_query: &str) -> Result<CompleteInput, LoopbackError> {
-    // Parse the URL to extract query parameters
-    // This parse shouldn't fail since we control the format, but we handle it gracefully
+    // Parse the URL to extract query parameters. This shouldn't fail since we
+    // control the format, but a malformed request line is handled gracefully.
     let url = Url::parse(&format!("http://localhost{path_and_query}"))
-        .expect("localhost URL with path should always parse");
+        .context(InvalidRedirectUriSnafu)?;
 
     let mut code: Option<String> = None;
     let mut state: Option<String> = None;
@@ -554,12 +562,10 @@ pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
     Ok(listener)
 }
 
-#[cfg(all(
-    test,
-    any(
-        not(target_family = "wasm"),
-        all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
-    )
+#[cfg(test)]
+#[cfg(any(
+    not(target_family = "wasm"),
+    all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
 ))]
 mod tests {
     use tokio::net::TcpStream;

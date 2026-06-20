@@ -1,4 +1,13 @@
-//! Native rust implementation of JWS signers.
+//! Native (RustCrypto-backed) implementations of huskarl's crypto traits: JWS
+//! signing and verification, plus AEAD encryption.
+//!
+//! - [`asymmetric`] and [`symmetric`] provide the JWS signer/verifier key types
+//!   ([`PrivateKey`](asymmetric::signer::PrivateKey),
+//!   [`AsymmetricPublicKey`](asymmetric::verifier::AsymmetricPublicKey), and
+//!   [`SymmetricKey`](symmetric::SymmetricKey)).
+//! - [`NativeVerifierPlatform`] builds a verifier from a public JWK; it is the
+//!   feature-gated default verifier platform for the ecosystem.
+//! - [`aead`] provides an AES-GCM AEAD cipher ([`AesGcmKey`](aead::AesGcmKey)).
 //!
 //! The following JWS algorithms are available:
 //!
@@ -20,9 +29,12 @@
 //!   - PS512
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![warn(clippy::pedantic)]
-#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod aead;

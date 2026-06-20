@@ -33,7 +33,11 @@ pub struct MtlsEndpointAliases {
     pub userinfo_endpoint: Option<EndpointUrl>,
 }
 
-/// Authorization server metadata.
+/// Authorization server metadata (RFC 8414 / `OpenID` Connect Discovery).
+///
+/// Fetch it from the issuer's well-known endpoint with [`fetch`](Self::fetch),
+/// or build it directly with the [`builder`](Self::builder) when discovery is
+/// unavailable.
 #[derive(Debug, Clone, Deserialize, bon::Builder)]
 #[non_exhaustive]
 #[allow(clippy::struct_excessive_bools)]
@@ -43,9 +47,9 @@ pub struct AuthorizationServerMetadata {
     pub issuer: String,
     /// The URL of the authorization server's authorization endpoint.
     pub authorization_endpoint: Option<EndpointUrl>,
-    /// The URL of the authorization server's authorization endpoint.
+    /// The URL of the authorization server's token endpoint.
     ///
-    /// Required unless the only the implicit grant is supported.
+    /// Required unless only the implicit grant is supported.
     pub token_endpoint: EndpointUrl,
     /// The URL of the authorization server's JWK Set.
     pub jwks_uri: Option<EndpointUrl>,

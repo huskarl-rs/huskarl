@@ -1,4 +1,4 @@
-//! Token sender-constraint binding checks for DPoP and mTLS.
+//! Token sender-constraint binding checks for `DPoP` and mTLS.
 //!
 //! These functions operate on an already-validated token's [`ConfirmationClaim`]
 //! and can be shared across JWT validation and token introspection flows.
@@ -52,9 +52,9 @@ pub(crate) fn check_mtls_binding(
 /// Validates all sender-constraint bindings for an access token.
 ///
 /// Checks unsupported `cnf` methods (`jwe`, `jku`), then performs
-/// token-type-specific binding (Bearer: rejects DPoP-bound tokens; DPoP: validates
+/// token-type-specific binding (Bearer: rejects DPoP-bound tokens; `DPoP`: validates
 /// the proof), then validates any mTLS certificate binding.
-/// Returns the DPoP nonce to include in the response (if any) alongside the binding result.
+/// Returns the `DPoP` nonce to include in the response (if any) alongside the binding result.
 ///
 /// The nonce is `Some` when the nonce checker issued a fresh nonce (either proactively on
 /// [`NonceCheck::ValidWithNewNonce`] or as a required retry on [`NonceCheck::Invalid`]).
@@ -148,11 +148,11 @@ pub enum MtlsBindingError {
     MtlsRequired,
 }
 
-/// Validates DPoP sender-constraint binding for a validated token.
+/// Validates `DPoP` sender-constraint binding for a validated token.
 ///
-/// Verifies the DPoP proof signature, checks the `htm`/`htu`/`ath` claims
+/// Verifies the `DPoP` proof signature, checks the `htm`/`htu`/`ath` claims
 /// against the request, and confirms the proof key matches the `cnf.jkt`
-/// thumbprint in the token. Also validates the provided DPoP nonce.
+/// thumbprint in the token. Also validates the provided `DPoP` nonce.
 pub(crate) struct DPoPBindingChecker {
     pub(crate) dpop_nonce_checker: Option<std::sync::Arc<dyn DpopNonceChecker>>,
     pub(crate) proof_validator: DpopProofValidator,
@@ -245,13 +245,13 @@ pub enum DPoPBindingError {
     /// The token has no `cnf.jkt` thumbprint binding.
     #[snafu(display("Token has no DPoP key thumbprint binding"))]
     MissingThumbprintBinding,
-    /// The DPoP proof key algorithm does not support thumbprint computation.
+    /// The `DPoP` proof key algorithm does not support thumbprint computation.
     #[snafu(display("No thumbprint for DPoP proof key"))]
     NoThumbprintForKey,
-    /// The DPoP key thumbprint does not match the token's `cnf.jkt`.
+    /// The `DPoP` key thumbprint does not match the token's `cnf.jkt`.
     #[snafu(display("DPoP key thumbprint does not match token binding"))]
     ThumbprintMismatch,
-    /// The DPoP proof failed structural validation (format, signature, JWK, typ, alg, etc.).
+    /// The `DPoP` proof failed structural validation (format, signature, JWK, typ, alg, etc.).
     #[snafu(display("DPoP proof validation failed: {source}"))]
     ProofValidation { source: DpopProofError },
     /// The HTTP URI in the proof could not be normalized.
@@ -260,16 +260,16 @@ pub enum DPoPBindingError {
     /// The nonce checker returned an error (server-side failure).
     #[snafu(display("DPoP nonce check failed"))]
     NonceCheckFailed { source: Error },
-    /// The DPoP proof nonce is missing or invalid. The client must retry with the provided nonce.
+    /// The `DPoP` proof nonce is missing or invalid. The client must retry with the provided nonce.
     #[snafu(display("A DPoP nonce is required"))]
     NonceRequired { nonce: String },
-    /// The DPoP proof is missing a required claim.
+    /// The `DPoP` proof is missing a required claim.
     #[snafu(display("DPoP proof is missing the required claim '{claim}'"))]
     MissingProofClaim {
         /// The missing claim name.
         claim: &'static str,
     },
-    /// A claim in the DPoP proof does not match the expected value.
+    /// A claim in the `DPoP` proof does not match the expected value.
     #[snafu(display("DPoP proof claim '{claim}' mismatch: expected {expected}, got {actual}"))]
     ProofClaimMismatch {
         /// The claim name.
@@ -360,11 +360,8 @@ impl crate::error::ToRfc6750Error for MtlsBindingError {
     }
 }
 
-#[cfg(all(
-    test,
-    not(target_family = "wasm"),
-    feature = "default-jws-verifier-platform"
-))]
+#[cfg(test)]
+#[cfg(all(not(target_family = "wasm"), feature = "default-jws-verifier-platform"))]
 mod tests {
     use std::sync::Arc;
 
@@ -394,7 +391,7 @@ mod tests {
         signer.public_key_jwk().thumbprint()
     }
 
-    /// DPoP proof claims, with `None` fields omitted entirely from the JWT so
+    /// `DPoP` proof claims, with `None` fields omitted entirely from the JWT so
     /// the binding checker sees a genuinely missing claim rather than `null`.
     #[derive(Debug, Clone, Default, Serialize)]
     struct ProofClaims {
@@ -421,7 +418,7 @@ mod tests {
     async fn sign_proof(signer: &PrivateKey, claims: ProofClaims) -> SecretString {
         Jwt::builder()
             .typ("dpop+jwt")
-            .issued_now_expires_after(Duration::from_secs(60))
+            .issued_now_expires_after(Duration::from_mins(1))
             .jwk(signer.public_key_jwk().into_owned())
             .claims(claims)
             .build()

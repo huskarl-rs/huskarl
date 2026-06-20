@@ -152,7 +152,12 @@ impl<T: JwsVerifier + ?Sized> JwsVerifier for Arc<T> {
     }
 }
 
-/// Platform for creating [`JwsVerifier`]s, given public key material.
+/// The platform's verification backend: turns public key material into
+/// [`JwsVerifier`]s.
+///
+/// Implemented by a platform crate (e.g. native `RustCrypto` or `WebCrypto`); the
+/// JOSE layer calls [`create_verifier_from_jwk`](Self::create_verifier_from_jwk)
+/// to obtain a verifier for a given JWK.
 pub trait JwsVerifierPlatform: std::fmt::Debug + MaybeSendSync {
     /// Creates a verifier for the given public JWK.
     fn create_verifier_from_jwk(

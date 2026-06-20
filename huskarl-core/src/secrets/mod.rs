@@ -1,8 +1,10 @@
 //! Async secret access.
 //!
-//! This module provides the ability to access string and binary
-//! secrets, including decoding some basic encodings like Base64
-//! and hex.
+//! Retrieves string and binary secrets — from environment variables, files, or
+//! your own provider — behind the [`Secret`] trait, handing them back in the
+//! redacted [`SecretString`]/[`SecretBytes`] wrappers. A [`SecretDecoder`] (see
+//! [`encodings`]) decodes the stored form (Base64, hex, raw UTF-8), and
+//! [`CachedSecret`] memoizes a value with a TTL.
 
 mod cached;
 mod providers;

@@ -1,8 +1,8 @@
 /*!
 Huskarl provides tools for implementing secure `OAuth2` clients in rust.
 
-This library provides a number of grant implementations, each of which is configured
-with a set of parameters that define how the grant/workflow should progress.
+This library provides several grant implementations, each driven by grant-specific
+parameters that define how the grant/workflow should progress.
 
 The library also provides a caching layer for token responses; and a HTTP authorizer
 that can be used to make authenticated requests to resource servers.
@@ -40,8 +40,8 @@ or more calls to the token endpoint.
   Allows the client to exchange an existing token for a new security token, supporting
   impersonation and delegation use cases.
 
-Further grants exist, could either be implemented for this library either in-crate, or can be
-implemented by external crates. Examples include CIBA, JWT authorization, or provider-specific grants.
+Further grants — CIBA, JWT authorization, provider-specific flows — can be implemented in this
+crate or by external crates.
 
 ## Examples
 
@@ -186,12 +186,15 @@ handing a freshly-obtained token from the login path to a running source, use
 */
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![warn(clippy::pedantic)]
 // bon's multiple `on(..., into)` clauses (e.g. `on(String, into), on(SecretString, into)`)
 // trip this lint, which sees the repeated `into` token as a duplicated attribute.
 #![allow(clippy::duplicated_attributes)]
-#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod serde_utils;

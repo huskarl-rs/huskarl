@@ -90,14 +90,12 @@ pub enum GetTokenError {
     /// there is no way to obtain a token.
     #[snafu(display("no refresh token is stored and no grant parameters were provided"))]
     NoTokenSource,
-    /// The token source is backing off after repeated non-recoverable failures.
-    ///
-    /// A later call (after the cooldown) may succeed once the underlying cause
-    /// is fixed — e.g. a revoked signing key is rotated. Reported under
-    /// [`Backoff`](crate::core::ErrorKind::Backoff): no token can be obtained
-    /// right now, but this is a "retry later, automatically" signal — *not*
-    /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired), so callers
-    /// should retry on a delay rather than re-running the interactive flow.
+    /// The token source is backing off after repeated non-recoverable
+    /// from-scratch failures. Reported under
+    /// [`Backoff`](crate::core::ErrorKind::Backoff) — a "retry later,
+    /// automatically" signal; see that kind for how it differs from
+    /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired) and from a
+    /// retryable transport failure.
     #[snafu(display("token source backed off after repeated failures; retry after cooldown"))]
     Backoff,
 }

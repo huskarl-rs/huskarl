@@ -70,13 +70,11 @@ use crate::{
 ///
 /// The returned error is
 /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired) **only when no
-/// automatic recovery path remains**. A retryable transport failure, a retained
-/// refresh token, a request-shape rejection, or a still-live dynamic source
-/// instead preserves the error's own classification (see
-/// [`Error::is_retryable`](crate::core::Error::is_retryable)), so a later call —
-/// possibly with an adjusted request — may succeed without re-running the
-/// interactive flow. The failure's cause is always a [`GetTokenError`] variant
-/// identifying which paths were exhausted.
+/// automatic recovery path remains** — a retryable transport failure, a retained
+/// refresh token, a request-shape rejection, or a still-live dynamic source each
+/// keeps its own classification instead (see [Handling
+/// errors](crate::core::error#handling-errors)). The cause is always a
+/// [`GetTokenError`] variant identifying which paths were exhausted.
 ///
 /// # Backoff
 ///
@@ -99,12 +97,11 @@ use crate::{
 /// error rather than Backoff, because the refresh path can recover independently
 /// of the breaker.
 ///
-/// [`Backoff`](crate::core::ErrorKind::Backoff) is deliberately *not*
-/// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired): backing off is a
-/// "try again later, automatically" signal, not a "run the interactive flow"
-/// one. A later call after the cooldown may succeed once the underlying cause is
-/// fixed (a rotated signing key, a corrected clock), so an application should
-/// retry on a delay rather than bouncing the user through login.
+/// That [`Backoff`](crate::core::ErrorKind::Backoff) is deliberately not
+/// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired): an application
+/// should retry on a delay rather than bouncing the user through login. See
+/// [`ErrorKind::Backoff`] for the full
+/// distinction.
 #[derive(Builder)]
 pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     pub(crate) grant: G,

@@ -1,3 +1,10 @@
+//! JWS verification with asymmetric public keys via the WebCrypto/SubtleCrypto
+//! API, backing huskarl-core's [`JwsVerifier`] trait.
+//!
+//! [`AsymmetricPublicKey`] is the entry type; build one with
+//! [`AsymmetricPublicKey::from_jwk`] (async, as key import goes through
+//! `SubtleCrypto`).
+
 use std::sync::Arc;
 
 use huskarl_core::{
@@ -20,14 +27,22 @@ use crate::{
     },
 };
 
-/// An asymmetric public key used to verify JWS signatures via the `WebCrypto` `SubtleCrypto` API.
+/// An asymmetric public key for JWS verification (ES256/384, RS/PS 256/384/512,
+/// Ed25519) via the `WebCrypto` `SubtleCrypto` API, implementing [`JwsVerifier`].
+///
+/// Build one with [`from_jwk`](Self::from_jwk); cheap to clone (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct AsymmetricPublicKey {
     inner: Arc<AsymmetricPublicKeyInner>,
 }
 
 impl AsymmetricPublicKey {
-    /// Creates an asymmetric public key from a JWK.
+    /// Creates an asymmetric public key from a public JWK, importing it through
+    /// `SubtleCrypto` (hence `async`).
+    ///
+    /// Returns `None` if the JWK cannot be used for verification: its `use` is
+    /// not `sig`, its `key_ops` excludes `verify`, the algorithm is unsupported,
+    /// or the key material cannot be imported.
     #[must_use]
     pub async fn from_jwk(key: jwk::PublicJwk) -> Option<Self> {
         let kid = key.kid.clone();
@@ -298,16 +313,16 @@ impl Key {
     }
 }
 
-/// Errors that can occur when signing.
+/// Errors that can occur when verifying.
 #[derive(Debug, Snafu)]
 pub enum AsymmetricPublicKeyError {
-    /// Unable to find webcrypto support in environment.
+    /// Unable to find `WebCrypto` support in environment.
     #[snafu(display("Failed to find WebCrypto support"))]
     NoCrypto {
         /// The underlying error.
         source: GetCryptoError,
     },
-    /// Error occurred when attempting to sign.
+    /// Error occurred when attempting to verify.
     #[snafu(display("Verification failed"))]
     Verify {
         /// The underlying error.

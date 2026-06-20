@@ -12,7 +12,7 @@ use crate::{
         EndpointUrl, Error,
         client_auth::{ClientAuthentication, FormValue},
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-        http::{HttpClient, Idempotency},
+        http::{HttpClient, HttpResponse, Idempotency},
         jwt::{
             ConfirmationClaim,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
@@ -106,10 +106,9 @@ impl TokenIntrospection {
 
             // RFC 9701 §4.3: aud = this client's ID; iss = AS issuer (if known)
             let aud_check = ClaimCheck::required_value(client_id.clone());
-            let iss_check = issuer
-                .as_ref()
-                .map(|i| ClaimCheck::required_value(i.clone()))
-                .unwrap_or(ClaimCheck::NoCheck);
+            let iss_check = issuer.as_ref().map_or(ClaimCheck::NoCheck, |i| {
+                ClaimCheck::required_value(i.clone())
+            });
 
             Some(
                 JwtValidator::builder()
@@ -139,7 +138,12 @@ impl TokenIntrospection {
 impl TokenIntrospection {
     /// Calls the introspection endpoint and returns a [`ValidatedRequest`] if the token is active.
     ///
-    /// Returns [`IntrospectionCallError::TokenInactive`] if the token exists but is not active.
+    /// # Errors
+    ///
+    /// Returns an [`IntrospectionCallError`] if client authentication fails, the
+    /// HTTP request fails, the endpoint returns a non-success status, the
+    /// response (or its JWT form) cannot be parsed, or the token is inactive
+    /// ([`IntrospectionCallError::TokenInactive`]).
     pub async fn introspect<C: HttpClient, Claims: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         http_client: &C,
@@ -198,52 +202,7 @@ impl TokenIntrospection {
             .await
             .context(HttpRequestSnafu)?;
 
-        let status = response.status;
-        let is_jwt_response = response
-            .headers
-            .get(http::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(|ct| {
-                let ct = ct.trim().to_ascii_lowercase();
-                ct.starts_with("application/token-introspection+jwt")
-                    || ct.starts_with("token-introspection+jwt")
-            })
-            .unwrap_or(false);
-        let body = response.body;
-
-        if !status.is_success() {
-            return BadStatusSnafu {
-                status,
-                body: String::from_utf8_lossy(&body).into_owned(),
-            }
-            .fail();
-        }
-
-        let (introspection, introspection_jwt): (IntrospectionResponse<Claims>, Option<String>) =
-            if is_jwt_response {
-                let jwt_validator = self
-                    .jwt_validator
-                    .as_ref()
-                    .ok_or_else(|| UnexpectedJwtResponseSnafu.build())?;
-
-                let jwt_str = std::str::from_utf8(&body)
-                    .map_err(|_| MalformedJwtResponseBodySnafu.build())?
-                    .trim();
-
-                let validated = jwt_validator
-                    .validate::<TokenIntrospectionJwtClaims<Claims>>(jwt_str)
-                    .await
-                    .context(JwtResponseSnafu)?;
-
-                (
-                    validated.claims.token_introspection,
-                    Some(jwt_str.to_owned()),
-                )
-            } else {
-                let response: IntrospectionResponse<Claims> =
-                    serde_json::from_slice(&body).context(ParseJsonResponseSnafu)?;
-                (response, None)
-            };
+        let (introspection, introspection_jwt) = self.parse_response::<Claims>(response).await?;
 
         ensure!(introspection.active, TokenInactiveSnafu);
 
@@ -258,6 +217,59 @@ impl TokenIntrospection {
             claims: introspection.claims,
             introspection_jwt,
         })
+    }
+
+    /// Parses an introspection endpoint response into the structured response,
+    /// together with the raw JWT body when the authorization server returned an
+    /// RFC 9701 JWT response.
+    async fn parse_response<Claims: for<'de> Deserialize<'de> + Clone + 'static>(
+        &self,
+        response: HttpResponse,
+    ) -> Result<(IntrospectionResponse<Claims>, Option<String>), IntrospectionCallError> {
+        let status = response.status;
+        let is_jwt_response = response
+            .headers
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ct| {
+                let ct = ct.trim().to_ascii_lowercase();
+                ct.starts_with("application/token-introspection+jwt")
+                    || ct.starts_with("token-introspection+jwt")
+            });
+        let body = response.body;
+
+        if !status.is_success() {
+            return BadStatusSnafu {
+                status,
+                body: String::from_utf8_lossy(&body).into_owned(),
+            }
+            .fail();
+        }
+
+        if is_jwt_response {
+            let jwt_validator = self
+                .jwt_validator
+                .as_ref()
+                .ok_or_else(|| UnexpectedJwtResponseSnafu.build())?;
+
+            let jwt_str = std::str::from_utf8(&body)
+                .map_err(|_| MalformedJwtResponseBodySnafu.build())?
+                .trim();
+
+            let validated = jwt_validator
+                .validate::<TokenIntrospectionJwtClaims<Claims>>(jwt_str)
+                .await
+                .context(JwtResponseSnafu)?;
+
+            Ok((
+                validated.claims.token_introspection,
+                Some(jwt_str.to_owned()),
+            ))
+        } else {
+            let response: IntrospectionResponse<Claims> =
+                serde_json::from_slice(&body).context(ParseJsonResponseSnafu)?;
+            Ok((response, None))
+        }
     }
 }
 
@@ -277,8 +289,8 @@ fn parse_optional_timestamp(
 
 /// RFC 7662 §2.2 introspection response.
 ///
-/// The `Claims` type parameter captures any additional fields your authorization server
-/// includes beyond the standard set.
+/// The `Claims` type parameter captures any non-standard fields the authorization
+/// server includes beyond the standard set; they surface on the validated request.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct IntrospectionResponse<Claims = ()> {
     /// Indicates whether the token is active.
@@ -426,6 +438,7 @@ impl IntrospectionCallError {
     /// Only [`Self::TokenInactive`] is a client error. All other variants represent
     /// server-side failures (unreachable AS, misconfigured credentials, malformed response)
     /// that should result in a 5xx response with no RFC 6750 error details.
+    #[must_use]
     pub fn token_error(&self) -> crate::error::TokenValidationError {
         use crate::error::{TokenErrorCode, TokenValidationError};
         match self {
@@ -444,6 +457,7 @@ impl IntrospectionCallError {
     }
 
     /// Returns a human-readable description of the error for the RFC 6750 `error_description` parameter, if applicable.
+    #[must_use]
     pub fn error_description(&self) -> Option<String> {
         match self {
             Self::TokenInactive => Some("The access token is revoked".to_string()),

@@ -7,34 +7,16 @@
 //!
 //! ## 1. Set up your HTTP client
 //!
-//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//! The examples below use the `huskarl_reqwest` crate; see [Setting up an HTTP
+//! client](crate::grant#setting-up-an-http-client) for the shared setup the rest
+//! of this page assumes.
 //!
-//! ```rust
-//! use huskarl_reqwest::ReqwestClient;
+//! ## 2. Set up client authentication (optional)
 //!
-//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 2. Set up client authentication (if necessary).
-//!
-//! This example shows the use of a client secret as credentials, but any `ClientAuthentication`
-//! implementation can be used.
-//!
-//! ```rust
-//! use huskarl::core::{
-//!     client_auth::ClientSecret,
-//!     secrets::{EnvVarSecret, encodings::StringEncoding},
-//! };
-//!
-//! # async fn setup_client_auth() -> Result<(), Box<dyn std::error::Error>> {
-//! let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! let client_auth: ClientSecret = ClientSecret::new(env_secret);
-//! # Ok(())
-//! # }
-//! ```
+//! The grant presents an existing token as its authorization, so authenticating
+//! the client is optional and independent — do it only if your authorization
+//! server requires it, otherwise present none at all. See [Setting up client
+//! authentication](crate::grant#setting-up-client-authentication).
 //!
 //! ## 3a. Set up the grant with authorization server metadata
 //!
@@ -322,7 +304,7 @@ pub struct SecurityToken {
     /// The raw token.
     ///
     /// Accepts anything that converts into a
-    /// [`SecretString`](crate::core::secrets::SecretString) — a `&str`, `String`,
+    /// [`SecretString`] — a `&str`, `String`,
     /// or the `SecretString` you already hold (e.g. from a
     /// [`TokenResponse`](crate::grant::core::TokenResponse)). Held redacted;
     /// serialized only when the request is sent.

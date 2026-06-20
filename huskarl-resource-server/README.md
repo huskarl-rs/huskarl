@@ -15,13 +15,13 @@ cargo-reedme: info-end -->
 
 # `OAuth2` library for resource servers.
 
-This library handles concerns of interest to `OAuth2` resource servers. The primary need
-in this case is validating provided access tokens, and checking whether the authorization
-matches the necessary level.
+A resource server has two jobs: validate the access token presented with a
+request, and decide whether that token authorizes the request.
 
-Currently this crate helps to handle the first of these; validating access tokens. It
-then provides the context from those access tokens which let the server implement the
-rest of the authorization checking.
+This crate does the first. A [`validator`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/validator/) verifies the token
+(signature/introspection, expiry, audience, and any sender-constraint
+binding) and returns a [`ValidatedRequest`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/validator/struct.ValidatedRequest.html)
+carrying its claims — from which your application makes the second decision.
 
 ## Example with RFC 9068 token validation:
 

@@ -1,4 +1,9 @@
-//! Symmetric cryptography algorithms for signing and verifying.
+//! HMAC symmetric keys for JWS signing and verification.
+//!
+//! [`SymmetricKey`] is the HMAC key (HS256/384/512) implementing huskarl-core's
+//! signer and verifier traits. Build one from a JWK with
+//! [`SymmetricKey::from_jwk`] or [`SymmetricKey::load_jwk`], or from raw bytes
+//! with [`SymmetricKey::load_bytes`].
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -50,7 +55,12 @@ struct SymmetricKeyInner {
     key_id: Option<String>,
 }
 
-/// An HMAC symmetric key.
+/// An HMAC symmetric key (HS256/384/512), used to both sign and verify JWS.
+///
+/// Implements huskarl-core's [`JwsSigner`], [`JwsVerifier`], and
+/// [`JwsSignerSelector`]. Build one with [`from_jwk`](Self::from_jwk),
+/// [`load_jwk`](Self::load_jwk), or [`load_bytes`](Self::load_bytes); cheap to
+/// clone (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct SymmetricKey {
     inner: Arc<SymmetricKeyInner>,
@@ -59,11 +69,11 @@ pub struct SymmetricKey {
 /// An error that occurred while loading a symmetric key.
 #[derive(Debug, Snafu)]
 pub enum KeyLoadError {
-    /// The provided key had an incorrect length.
+    /// The provided key was shorter than the minimum required for the algorithm.
     InvalidKeySize {
         /// The size of the provided key.
         actual: usize,
-        /// The key size.
+        /// The minimum required key size.
         required: usize,
     },
     /// The secret could not be accessed.
@@ -219,6 +229,8 @@ impl SymmetricKey {
         Self::from_jwk(parsed).context(jwk_load_error::JwkSnafu)
     }
 
+    // `Hmac::new_from_slice` accepts a key of any length, so it never errors.
+    #[allow(clippy::expect_used)]
     fn hmac(&self, input: &[u8]) -> Vec<u8> {
         let key_bytes = self.inner.key.expose_secret();
 
