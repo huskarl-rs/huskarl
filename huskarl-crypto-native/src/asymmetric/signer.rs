@@ -1,4 +1,10 @@
-//! Signing code for asymmetric keys.
+//! JWS signing with asymmetric private keys (ES256/384, RS/PS 256/384/512,
+//! Ed25519), backing huskarl-core's [`JwsSigner`] / [`AsymmetricJwsSigner`]
+//! traits.
+//!
+//! [`PrivateKey`] is the entry type; generate one with [`PrivateKey::generate`]
+//! or load one with [`PrivateKey::from_jwk`], [`PrivateKey::load_jwk`],
+//! [`PrivateKey::load_pkcs8_pem`], or [`PrivateKey::load_pkcs8_der`].
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -80,7 +86,13 @@ struct PrivateKeyInner {
     kid: Option<String>,
 }
 
-/// An asymmetric private key.
+/// An asymmetric private key for JWS signing (ES256/384, RS/PS 256/384/512,
+/// Ed25519), implementing [`JwsSigner`] and [`AsymmetricJwsSigner`].
+///
+/// Generate one with [`generate`](Self::generate), or load one with
+/// [`from_jwk`](Self::from_jwk), [`load_jwk`](Self::load_jwk),
+/// [`load_pkcs8_pem`](Self::load_pkcs8_pem), or
+/// [`load_pkcs8_der`](Self::load_pkcs8_der); cheap to clone (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct PrivateKey {
     inner: Arc<PrivateKeyInner>,
@@ -124,6 +136,9 @@ impl Key {
         }
     }
 
+    // The `expect`s below are infallible by construction: an uncompressed SEC1
+    // point always carries its x/y coordinates.
+    #[allow(clippy::expect_used)]
     pub fn as_public_jwk(&self, kid: Option<&str>) -> jwk::PublicJwk {
         match self {
             Key::Es256(signing_key) => {
@@ -198,6 +213,9 @@ impl Key {
     ///
     /// The returned value includes the `d` component (and `dp`, `dq`, `p`, `q`, `qi` for RSA)
     /// and must be treated as sensitive.
+    // The `expect`s below are infallible by construction: a freshly derived
+    // private key always carries its components.
+    #[allow(clippy::expect_used)]
     pub fn as_private_jwk(&self, kid: Option<&str>) -> jwk::PrivateJwk {
         use p256::elliptic_curve::PrimeField as _;
 
@@ -344,6 +362,8 @@ fn build_private_jwk(
         .build()
 }
 
+// `private_key()` is infallible here: `d` is set on a real RSA private key.
+#[allow(clippy::expect_used)]
 fn convert_rsa_to_private_jwk(
     private_key: impl AsRef<rsa::RsaPrivateKey>,
     kid: Option<&str>,
@@ -405,6 +425,11 @@ pub const RSA_MODULUS_4096: u32 = 4096;
 ///
 /// Used with [`PrivateKey::generate`]. For loading existing keys from PKCS#8,
 /// use [`AsymmetricAlgorithm`] instead.
+///
+/// The RSA variants carry a `modulus_length` in bits: traditionally 2048
+/// ([`RSA_MODULUS_2048`]), with 3072 ([`RSA_MODULUS_3072`]) a common
+/// recommendation and 4096 ([`RSA_MODULUS_4096`]) where required. Cost grows
+/// polynomially with modulus length while the security gain is sub-linear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenerateAlgorithm {
     /// ES256
@@ -413,56 +438,32 @@ pub enum GenerateAlgorithm {
     Es384,
     /// RS256
     Rs256 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// RS384
     Rs384 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// RS512
     Rs512 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// PS256
     Ps256 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// PS384
     Ps384 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// PS512
     Ps512 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// Ed25519, using the algorithm name `EdDSA`
@@ -581,12 +582,13 @@ impl PrivateKey {
         })
     }
 
-    /// Loads the private key from a DER binary secret.
+    /// Loads the private key from a PKCS#8 DER binary secret.
     ///
     /// # Errors
     ///
-    /// The secret was not a valid DER formatted secret, or the secret
-    /// could not be accessed.
+    /// Returns [`KeyLoadError::Secret`] if the secret cannot be accessed, or
+    /// [`KeyLoadError::KeyDecode`] if it is not a valid PKCS#8 DER key for
+    /// `key_type`.
     pub async fn load_pkcs8_der<
         S: Secret<Output = SecretBytes>,
         F: FnOnce(Option<&str>) -> Option<String>,
@@ -662,8 +664,9 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// The secret was not a valid PKCS#8 PEM formatted string, or
-    /// the secret could not be accessed.
+    /// Returns [`KeyLoadError::Secret`] if the secret cannot be accessed, or
+    /// [`KeyLoadError::KeyDecode`] if it is not a valid PKCS#8 PEM key for
+    /// `key_type`.
     pub async fn load_pkcs8_pem<
         S: Secret<Output = SecretString>,
         F: FnOnce(Option<&str>) -> Option<String>,
@@ -735,7 +738,8 @@ impl PrivateKey {
         .context(KeyDecodeSnafu)
     }
 
-    /// Returns the full private key in JWK format, including private key material (`d`).
+    /// Returns the full private key in JWK format, including the private key
+    /// material — the `d` component, plus `dp`, `dq`, `p`, `q`, `qi` for RSA.
     ///
     /// The returned value is sensitive and must be handled accordingly.
     #[must_use]
@@ -750,8 +754,8 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// The JWK is missing an algorithm, has an unsupported algorithm,
-    /// or contains invalid key material.
+    /// Returns a [`JwkError`] if the JWK is missing an algorithm, has an
+    /// unsupported algorithm, or contains invalid key material.
     pub fn from_jwk(private_jwk: jwk::PrivateJwk) -> Result<Self, JwkError> {
         let alg = private_jwk.algorithm.as_deref().ok_or_else(|| {
             UnsupportedAlgorithmSnafu {
@@ -782,8 +786,8 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// The secret could not be accessed, the JSON is invalid,
-    /// or the JWK is not a valid private key.
+    /// Returns a [`JwkLoadError`] if the secret cannot be accessed, the JSON is
+    /// invalid, or the JWK is not a valid private key.
     pub async fn load_jwk<S: Secret<Output = SecretString>>(
         secret: S,
     ) -> Result<Self, JwkLoadError> {

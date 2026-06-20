@@ -3,10 +3,11 @@ use crate::{
     secrets::{SecretBytes, SecretDecoder},
 };
 
-/// Decodes hex-encoded text into `SecretBox<[u8]>`.
+/// Decodes hex-encoded text into `SecretBytes`.
 ///
-/// Trims whitespace before decoding. Expects the bytes to be valid UTF-8
-/// containing hexadecimal characters (0-9, a-f, A-F).
+/// Trims leading and trailing whitespace before decoding (interior whitespace
+/// is not allowed). Expects the bytes to be valid UTF-8 containing hexadecimal
+/// characters (0-9, a-f, A-F).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HexEncoding;
 

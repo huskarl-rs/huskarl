@@ -1,17 +1,28 @@
-//! `WebCrypto` implementation of JWS signers.
+//! `WebCrypto` (`SubtleCrypto`) implementations of huskarl's crypto traits: JWS
+//! signing and verification, plus AES-GCM AEAD. wasm32-only.
+//!
+//! - [`asymmetric`] provides the JWS signer/verifier key types
+//!   ([`PrivateKey`](asymmetric::signer::PrivateKey),
+//!   [`AsymmetricPublicKey`](asymmetric::verifier::AsymmetricPublicKey)).
+//! - [`WebCryptoVerifierPlatform`] builds a verifier from a public JWK; it is the
+//!   default verifier platform on wasm targets.
+//! - [`aead`] provides an AES-GCM AEAD cipher ([`AesGcmKey`](aead::AesGcmKey)).
+//!
+//! Because `WebCrypto` is async, signing, verification, and key import are `async`.
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![warn(clippy::pedantic)]
-#![warn(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod error;
 mod factory;
 
-/// AES-GCM AEAD (e.g. for cookie sealing).
 pub mod aead;
-/// Asymmetric JWS signing and verification.
 pub mod asymmetric;
 pub(crate) mod helpers;
 

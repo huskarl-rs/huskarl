@@ -1,7 +1,17 @@
-//! Integrates `reqwest` with the `huskarl` set of crates as a HTTP client.
+//! An [`HttpClient`] for the huskarl crates, backed by [`reqwest`].
 //!
-//! It provides the necessary integration to allow reqwest to make calls for
-//! huskarl. Also included is mTLS configuration.
+//! [`ReqwestClient`] is the entry point — build one with its `builder()` and
+//! hand it to a grant, authorizer, or validator. The [`mtls`] module supplies
+//! the mTLS providers (RFC 8705) for the builder.
+
+#![forbid(unsafe_code)]
+#![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![warn(clippy::pedantic)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod mtls;
 
@@ -13,6 +23,11 @@ use huskarl_core::{
     platform::MaybeSendBoxFuture,
 };
 
+/// A [`reqwest`]-backed [`HttpClient`] for the huskarl crates.
+///
+/// Build one with `ReqwestClient::builder()`, or convert an existing
+/// [`reqwest::Client`] with `From`; then pass it to a grant, authorizer, or
+/// validator. Cheap to clone (wraps `reqwest::Client`).
 #[derive(Clone)]
 pub struct ReqwestClient {
     client: reqwest::Client,
@@ -44,8 +59,17 @@ impl From<reqwest::Client> for ReqwestClient {
 
 #[bon::bon]
 impl ReqwestClient {
+    /// Builds a [`ReqwestClient`]. All arguments are optional with sensible
+    /// defaults; mTLS is configured via an [`mtls`] provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] of kind [`Config`](huskarl_core::ErrorKind::Config)
+    /// if the mTLS identity cannot be applied or the client fails to build.
     #[builder]
     pub async fn new(
+        /// The `User-Agent` header sent with each request. Defaults to
+        /// `huskarl/<version>`; pass `None` to send no `User-Agent`.
         #[builder(required, into, default = Some(concat!("huskarl/", env!("CARGO_PKG_VERSION")).to_string()))]
         user_agent: Option<String>,
 
@@ -86,6 +110,8 @@ impl ReqwestClient {
         #[builder(required, default = Some(std::time::Duration::from_secs(30)))]
         timeout: Option<std::time::Duration>,
 
+        /// Escape hatch for arbitrary [`reqwest::ClientBuilder`] configuration not
+        /// covered by the other options, applied just before the client is built.
         configure_builder: Option<
             Box<dyn FnOnce(reqwest::ClientBuilder) -> reqwest::ClientBuilder>,
         >,
@@ -103,7 +129,7 @@ impl ReqwestClient {
         }
 
         if let Some(user_agent) = user_agent {
-            reqwest_builder = reqwest_builder.user_agent(user_agent)
+            reqwest_builder = reqwest_builder.user_agent(user_agent);
         }
 
         #[cfg(all(
@@ -145,6 +171,7 @@ impl ReqwestClient {
         not(target_arch = "wasm32"),
         any(feature = "rustls-tls", feature = "native-tls")
     ))]
+    #[must_use]
     pub fn identity(&self) -> Option<&reqwest::Identity> {
         self.identity.as_ref()
     }
@@ -174,7 +201,56 @@ fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
     Error::new(ErrorKind::Transport { retryable }, source)
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+impl HttpClient for ReqwestClient {
+    fn uses_mtls(&self) -> bool {
+        self.uses_mtls
+    }
+
+    /// Executes an `http::Request` using the `reqwest::Client`.
+    ///
+    /// Converts the `http::Request<Bytes>` into a `reqwest::Request`, sends
+    /// it, and reads the full response body.
+    fn execute(
+        &self,
+        request: Request<Bytes>,
+        idempotency: Idempotency,
+    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+        Box::pin(async move {
+            let (parts, body) = request.into_parts();
+            let reqwest_request = self
+                .client
+                .request(parts.method, parts.uri.to_string())
+                .headers(parts.headers)
+                .body(body)
+                .build()
+                .map_err(|e| {
+                    Error::new(ErrorKind::Config, e).with_context("building HTTP request")
+                })?;
+
+            let response = self
+                .client
+                .execute(reqwest_request)
+                .await
+                .map_err(|e| transport_error(e, idempotency))?;
+
+            let status = response.status();
+            let headers = response.headers().clone();
+            let body = response
+                .bytes()
+                .await
+                .map_err(|e| transport_error(e, idempotency))?;
+
+            Ok(HttpResponse {
+                status,
+                headers,
+                body,
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use std::time::Duration;
 
@@ -240,53 +316,5 @@ mod tests {
             error.kind(),
             ErrorKind::Transport { retryable: false }
         ));
-    }
-}
-
-impl HttpClient for ReqwestClient {
-    fn uses_mtls(&self) -> bool {
-        self.uses_mtls
-    }
-
-    /// Executes an `http::Request` using the `reqwest::Client`.
-    ///
-    /// Converts the `http::Request<Bytes>` into a `reqwest::Request`, sends
-    /// it, and reads the full response body.
-    fn execute(
-        &self,
-        request: Request<Bytes>,
-        idempotency: Idempotency,
-    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-        Box::pin(async move {
-            let (parts, body) = request.into_parts();
-            let reqwest_request = self
-                .client
-                .request(parts.method, parts.uri.to_string())
-                .headers(parts.headers)
-                .body(body)
-                .build()
-                .map_err(|e| {
-                    Error::new(ErrorKind::Config, e).with_context("building HTTP request")
-                })?;
-
-            let response = self
-                .client
-                .execute(reqwest_request)
-                .await
-                .map_err(|e| transport_error(e, idempotency))?;
-
-            let status = response.status();
-            let headers = response.headers().clone();
-            let body = response
-                .bytes()
-                .await
-                .map_err(|e| transport_error(e, idempotency))?;
-
-            Ok(HttpResponse {
-                status,
-                headers,
-                body,
-            })
-        })
     }
 }

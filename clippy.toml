@@ -1,0 +1,7 @@
+# Production code is held to `deny(clippy::unwrap_used / expect_used / panic)`
+# (set at each crate root). Test code favours readability over exhaustive error
+# handling, so `unwrap`/`expect`/`panic` inside `#[cfg(test)]` modules and
+# `#[test]` functions are intentional and exempt.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

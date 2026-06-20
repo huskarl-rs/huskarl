@@ -1,7 +1,9 @@
 //! Token revocation (RFC 7009).
 //!
-//! Provides the ability to revoke access tokens and refresh tokens at an
-//! authorization server's revocation endpoint.
+//! Revoke an access or refresh token at the authorization server's revocation
+//! endpoint via [`TokenRevocation`]. Any [`RevocableToken`] — an [`AccessToken`]
+//! or a [`RefreshToken`] — can be revoked, and a successful revocation returns an
+//! empty `200`. Build the client directly or from authorization-server metadata.
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -43,7 +45,14 @@ impl RevocableToken for RefreshToken {
     }
 }
 
-/// Implementation of token revocation.
+/// Revokes access and refresh tokens at an authorization server's revocation
+/// endpoint (RFC 7009).
+///
+/// Call [`revoke`](Self::revoke) with any [`RevocableToken`]. Construct it with
+/// [`builder`](Self::builder), or with `builder_from_metadata` to fill the
+/// endpoint and issuer from [`AuthorizationServerMetadata`](crate::core::server_metadata::AuthorizationServerMetadata).
+/// Revocation requests are authenticated with the configured client
+/// authentication.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
 pub struct TokenRevocation {

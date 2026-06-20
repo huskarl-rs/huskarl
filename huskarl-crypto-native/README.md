@@ -13,7 +13,16 @@
 
 cargo-reedme: info-end -->
 
-Native rust implementation of JWS signers.
+Native (RustCrypto-backed) implementations of huskarl’s crypto traits: JWS
+signing and verification, plus AEAD encryption.
+
+- [`asymmetric`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/asymmetric/) and [`symmetric`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/symmetric/) provide the JWS signer/verifier key types
+  ([`PrivateKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/asymmetric/signer/struct.PrivateKey.html),
+  [`AsymmetricPublicKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/asymmetric/verifier/struct.AsymmetricPublicKey.html), and
+  [`SymmetricKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/symmetric/struct.SymmetricKey.html)).
+- [`NativeVerifierPlatform`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/factory/struct.NativeVerifierPlatform.html) builds a verifier from a public JWK; it is the
+  feature-gated default verifier platform for the ecosystem.
+- [`aead`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/) provides an AES-GCM AEAD cipher ([`AesGcmKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/struct.AesGcmKey.html)).
 
 The following JWS algorithms are available:
 

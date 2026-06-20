@@ -1,6 +1,10 @@
-//! Implements JWS signing keys on WASM using the WebCrypto/Subtle API.
+//! JWS signing with asymmetric private keys via the WebCrypto/SubtleCrypto API,
+//! backing huskarl-core's [`JwsSigner`] / [`AsymmetricJwsSigner`] traits.
 //!
-//! Currently, the following JWS algorithms are available:
+//! [`PrivateKey`] is the entry type; generate one with [`PrivateKey::generate`].
+//! Because `WebCrypto` is async, construction and signing are `async`.
+//!
+//! The following JWS algorithms are available:
 //!
 //! - Asymmetric (NIST elliptic curves)
 //!   - ES256
@@ -44,9 +48,12 @@ struct PrivateKeyInner {
     public_jwk: PublicJwk,
 }
 
-/// A non-exportable asymmetric private key used to create JWS signatures.
+/// A non-exportable asymmetric private key used to create JWS signatures
+/// (ES256/384, RS/PS 256/384/512, Ed25519), implementing [`JwsSigner`] and
+/// [`AsymmetricJwsSigner`].
 ///
-/// Keys used here are not extractable by JavaScript.
+/// Generate one with [`generate`](Self::generate). Keys are not extractable by
+/// JavaScript; the handle is cheap to clone (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct PrivateKey {
     inner: Arc<PrivateKeyInner>,
@@ -61,7 +68,13 @@ pub const RSA_MODULUS_3072: u32 = 3072;
 /// RSA modulus length of 4096 bits.
 pub const RSA_MODULUS_4096: u32 = 4096;
 
-/// Algorithm supported by this key.
+/// The JWS signature algorithm (and, for RSA, the modulus length) for a
+/// generated [`PrivateKey`].
+///
+/// The RSA variants carry a `modulus_length` in bits: traditionally 2048
+/// ([`RSA_MODULUS_2048`]), with 3072 ([`RSA_MODULUS_3072`]) a common
+/// recommendation and 4096 ([`RSA_MODULUS_4096`]) where required. Cost grows
+/// polynomially with modulus length while the security gain is sub-linear.
 #[derive(Debug, Serialize, Clone, Copy)]
 pub enum GenerateAlgorithm {
     /// ES256
@@ -70,62 +83,32 @@ pub enum GenerateAlgorithm {
     Es384,
     /// RS256
     Rs256 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        ///
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// RS384
     Rs384 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        ///
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// RS512
     Rs512 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        ///
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// PS256
     Ps256 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        ///
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// PS384
     Ps384 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        ///
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// PS512
     Ps512 {
-        /// Modulus length in bits.
-        ///
-        /// Traditionally 2048, but 3072 is a common recommendation, and some systems require 4096.
-        ///
-        /// The computational cost grows polynomially with modulus length, while the security gain
-        /// is sub-linear — doubling the modulus size does not double the security.
+        /// Modulus length in bits (see the type-level docs for guidance).
         modulus_length: u32,
     },
     /// `EdDSA` (polymorphic algorithm name)
@@ -259,8 +242,8 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// May return an error if this key type is not supported, or there were
-    /// issues getting the corresponding public key information for the private key.
+    /// Returns [`GenerateError`] if `WebCrypto` is unavailable, key generation
+    /// fails, or the public JWK cannot be derived.
     pub async fn generate(
         algorithm: GenerateAlgorithm,
         kid: Option<String>,

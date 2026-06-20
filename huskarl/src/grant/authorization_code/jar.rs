@@ -11,7 +11,14 @@ use crate::{
     grant::authorization_code::types::AuthorizationPayloadWithClientId,
 };
 
-/// Implementation for how to create a JAR (JWT-secured authorization request).
+/// Produces a JWT-secured authorization request (JAR, RFC 9101) object.
+///
+/// With JAR, the initial authorization-request parameters are signed into a JWT
+/// — the *request object* — instead of being sent as plain URL query parameters,
+/// adding authenticity (the request demonstrably comes from the client) and
+/// integrity (it cannot be tampered with in transit). Implement this trait to
+/// produce that object; the only built-in is [`NoJar`], the default, which
+/// produces none.
 ///
 /// This trait is dyn-capable: grants store it as `Arc<dyn Jar>`. Implement it
 /// with a `Box::pin(async move { ... })` method body.
@@ -24,7 +31,7 @@ pub trait Jar: MaybeSendSync {
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
 }
 
-/// An implementation of the Jar trait that indicates an inability to create a JAR request.
+/// A [`Jar`] that produces no request object — the default, with JAR disabled.
 #[derive(Debug, Clone, Copy)]
 pub struct NoJar;
 

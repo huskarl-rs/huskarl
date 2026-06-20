@@ -1,4 +1,7 @@
-//! Helper macros for the huskarl crate.
+//! The [`from_metadata`](macro@from_metadata) attribute macro for the huskarl crates.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use proc_macro::TokenStream;
 

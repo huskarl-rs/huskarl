@@ -127,9 +127,9 @@ pub trait AeadDecryptor: std::fmt::Debug + MaybeSendSync {
     /// Asynchronously decrypts the given ciphertext with the provided nonce, tag, and associated data.
     ///
     /// `cipher_match` carries the selection criteria (algorithm and key ID) from the
-    /// caller, when available. Multi-key implementations like
-    /// multi-key decryptors use this to dispatch to the correct key. Single-key
-    /// implementations may ignore it.
+    /// caller, when available. Multi-key implementations use this to dispatch to
+    /// the correct key without trying every candidate. Single-key implementations
+    /// may ignore it.
     ///
     /// # Errors
     ///
@@ -377,16 +377,13 @@ impl<C: AeadEncryptor> AeadSealer for AeadV1Cipher<C> {
         Box::pin(async move {
             let output = self.encrypt(plaintext, aad).await?;
 
-            let nonce_len: u8 = output
-                .nonce
-                .len()
-                .try_into()
-                .expect("nonce length exceeds u8::MAX");
-            let tag_len: u8 = output
-                .tag
-                .len()
-                .try_into()
-                .expect("tag length exceeds u8::MAX");
+            let nonce_len: u8 = output.nonce.len().try_into().map_err(|_| {
+                Error::new(crate::ErrorKind::Crypto, "nonce length exceeds u8::MAX")
+            })?;
+            let tag_len: u8 =
+                output.tag.len().try_into().map_err(|_| {
+                    Error::new(crate::ErrorKind::Crypto, "tag length exceeds u8::MAX")
+                })?;
 
             let mut bundle = Vec::with_capacity(
                 3 + output.nonce.len() + output.ciphertext.len() + output.tag.len(),

@@ -4,7 +4,9 @@ use crate::core::platform::MaybeSendSync;
 
 /// The outcome of a token validation attempt.
 ///
-/// Passed to the [`OnValidate`] callback registered on a validator.
+/// Passed to the [`OnValidate`] callback registered on a validator. Which
+/// variants can occur depends on the validator — e.g. `CallError` arises only
+/// from introspection, never from the self-contained RFC 9068 path.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::IntoStaticStr, strum::AsRefStr)]
 #[strum(serialize_all = "snake_case")]
@@ -17,7 +19,7 @@ pub enum ValidationOutcome {
     ExtractError,
     /// Token was invalid — bad signature, expired, wrong issuer, or inactive.
     InvalidToken,
-    /// Sender-constraint binding check failed (DPoP or mTLS).
+    /// Sender-constraint binding check failed (`DPoP` or mTLS).
     BindingError,
     /// Introspection endpoint call failed (infrastructure error, not a bad token).
     CallError,
@@ -25,6 +27,7 @@ pub enum ValidationOutcome {
 
 impl ValidationOutcome {
     /// Returns a short static string label suitable for use as a metrics tag.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         self.into()
     }
@@ -59,6 +62,6 @@ pub trait OnValidate: MaybeSendSync {
 
 impl<F: Fn(ValidationOutcome) + MaybeSendSync> OnValidate for F {
     fn on_validate(&self, outcome: ValidationOutcome) {
-        self(outcome)
+        self(outcome);
     }
 }

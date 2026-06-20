@@ -18,7 +18,7 @@ pub struct ValidatorMetadata {
     /// `None` if not known or if the authorization server does not have an issuer URI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_servers: Option<Vec<String>>,
-    /// DPoP proof signing algorithms accepted by this validator.
+    /// `DPoP` proof signing algorithms accepted by this validator.
     ///
     /// `None` if unrestricted (the validator accepts any algorithm its verifier supports).
     /// When `None`, this field should be omitted from RFC 9728 metadata.
@@ -65,7 +65,7 @@ impl ValidatorMetadata {
     /// a 5xx status code and no `WWW-Authenticate` header, since re-authenticating would
     /// not resolve the failure.
     ///
-    /// If both Bearer and DPoP are supported, challenges for both are returned, as
+    /// If both Bearer and `DPoP` are supported, challenges for both are returned, as
     /// recommended by RFC 9449 §7.1. Per RFC 7235, the challenges may be sent as
     /// separate `WWW-Authenticate` headers or joined with `, ` on a single header —
     /// both forms are equivalent.
@@ -101,7 +101,8 @@ impl ValidatorMetadata {
         error_uri: Option<&str>,
     ) -> Vec<String> {
         let mut challenges = Vec::new();
-        let attempted_scheme = error.and_then(|e| e.attempted_scheme());
+        let attempted_scheme =
+            error.and_then(super::super::error::ToRfc6750Error::attempted_scheme);
 
         let dpop_supported = self.dpop_signing_alg_values_supported.is_some()
             || self.dpop_bound_access_tokens_required == Some(true);
@@ -199,14 +200,11 @@ impl ValidatorMetadata {
     }
 }
 
-/// A trait for validators that can describe their configuration.
-///
-/// The returned [`ValidatorMetadata`] can be used to populate a Protected Resource
-/// Metadata document (RFC 9728).
+/// Describes how a validator is configured, for populating a Protected Resource
+/// Metadata document (RFC 9728) — see the returned [`ValidatorMetadata`].
 pub trait ProvideValidatorMetadata {
-    /// Returns metadata describing how this validator is configured.
-    ///
-    /// The resource is the URL of the protected resource.
+    /// Returns metadata describing how this validator is configured, for the
+    /// protected resource at `resource`.
     fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata;
 }
 

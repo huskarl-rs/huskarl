@@ -2,7 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::secrets::SecretString;
 
-/// An `OAuth2` refresh token.
+/// An `OAuth2` refresh token, used to obtain new access tokens without
+/// re-running the interactive flow.
+///
+/// May be `DPoP`-bound (RFC 9449): [`dpop_jkt`](Self::dpop_jkt) carries the
+/// thumbprint of the key the refresh request must be proven with.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshToken {
     token: SecretString,

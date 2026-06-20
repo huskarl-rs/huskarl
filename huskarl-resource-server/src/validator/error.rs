@@ -22,16 +22,16 @@ use crate::{
 #[derive(Debug, Snafu, strum::EnumMessage)]
 #[snafu(visibility(pub(super)))]
 pub enum TokenBindingError {
-    /// The DPoP header is required but missing from the request.
+    /// The `DPoP` header is required but missing from the request.
     #[strum(message = "The DPoP header is missing")]
     MissingDPoPHeader,
-    /// The DPoP header is present but is not valid UTF-8.
+    /// The `DPoP` header is present but is not valid UTF-8.
     #[strum(message = "The DPoP header value is invalid")]
     DPoPHeaderNotString {
         /// The underlying string conversion error.
         source: ToStrError,
     },
-    /// The token has a DPoP key binding (`cnf.jkt`) but was presented as a Bearer token.
+    /// The token has a `DPoP` key binding (`cnf.jkt`) but was presented as a Bearer token.
     ///
     /// Per RFC 9449 §7.1, DPoP-bound tokens MUST be presented using the `DPoP`
     /// token type, not `Bearer`. Accepting a bound token as Bearer would allow an
@@ -39,12 +39,12 @@ pub enum TokenBindingError {
     #[snafu(display("Token is DPoP-bound but was presented as Bearer"))]
     #[strum(message = "The access token is DPoP-bound")]
     DpopRequiredForBoundToken,
-    /// DPoP is required by this resource server but the token was presented as Bearer.
+    /// `DPoP` is required by this resource server but the token was presented as Bearer.
     #[snafu(display("DPoP-bound tokens are required"))]
     #[strum(message = "DPoP is required to access this resource")]
     DpopRequired,
     /// The token `cnf` claim contains a confirmation method that is not supported.
-    /// Only `jkt` (DPoP) and `x5t#S256` (mTLS) are checked; `jwe` and `jku` are rejected
+    /// Only `jkt` (`DPoP`) and `x5t#S256` (mTLS) are checked; `jwe` and `jku` are rejected
     /// rather than silently ignored, per RFC 7800's requirement that applications ensure
     /// confirmation members they require are understood and processed.
     #[snafu(display("Unsupported cnf confirmation method: {method}"))]
@@ -53,9 +53,9 @@ pub enum TokenBindingError {
         /// The name of the unsupported confirmation method.
         method: &'static str,
     },
-    /// The DPoP binding is invalid.
+    /// The `DPoP` binding is invalid.
     DPoPBinding {
-        /// The underlying DPoP binding error.
+        /// The underlying `DPoP` binding error.
         source: DPoPBindingError,
     },
     /// The mTLS binding is invalid.
@@ -108,7 +108,7 @@ impl ToRfc6750Error for TokenBindingError {
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 pub enum ValidateHeadersError {
-    /// Errors in extracting or binding-checking the access token from the request.
+    /// The access token could not be extracted from the request headers.
     #[snafu(display("Token presentation error"))]
     Extract {
         /// The underlying extraction error.
@@ -135,8 +135,9 @@ impl ToRfc6750Error for ValidateHeadersError {
     fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
             Self::Extract { source } => source.attempted_scheme(),
-            Self::Binding { token_type, .. } => Some(*token_type),
-            Self::InvalidJwt { token_type, .. } => Some(*token_type),
+            Self::Binding { token_type, .. } | Self::InvalidJwt { token_type, .. } => {
+                Some(*token_type)
+            }
         }
     }
 

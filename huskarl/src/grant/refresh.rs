@@ -7,22 +7,16 @@
 //!
 //! ## 1. Set up your HTTP client
 //!
-//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//! The examples below use the `huskarl_reqwest` crate; see [Setting up an HTTP
+//! client](crate::grant#setting-up-an-http-client) for the shared setup the rest
+//! of this page assumes.
 //!
-//! ```rust
-//! use huskarl_reqwest::ReqwestClient;
+//! ## 2. Set up client authentication (if not using `to_refresh_grant`)
 //!
-//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 2. Set up client authentication (if not using `to_refresh_grant`).
-//!
-//! When constructing a refresh grant directly (steps 3b/3c), client authentication
-//! must be provided. Any `ClientAuthentication` implementation can be used.
-//! See the client credentials grant for an example using `ClientSecret`.
+//! When constructing a refresh grant directly (steps 3b/3c), provide client
+//! authentication — see [Setting up client
+//! authentication](crate::grant#setting-up-client-authentication). A grant built
+//! via `to_refresh_grant` inherits it from the parent grant.
 //!
 //! ## 3a. Create a refresh grant from an existing grant (most common)
 //!

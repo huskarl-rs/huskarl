@@ -1,4 +1,11 @@
-//! Access token validation traits and implementations.
+//! Access token validation: the [`AccessTokenValidator`] trait and ready-made
+//! implementations of it.
+//!
+//! A validator turns an incoming request's headers into a [`ValidatedRequest`]
+//! (or a typed rejection). Pick the one matching how your tokens are verified:
+//! [`rfc9068::Rfc9068Validator`] for self-contained RFC 9068 JWT access tokens,
+//! [`introspection::IntrospectionValidator`] for RFC 7662 introspection, or
+//! [`custom::CustomValidator`] for an authorization server that follows neither.
 
 mod binding;
 mod common;
@@ -23,7 +30,7 @@ use crate::{
 /// A trait for validators that authenticate and validate access tokens from HTTP requests.
 ///
 /// Implementations handle token extraction from request headers, JWT validation,
-/// and sender-constraint binding checks (DPoP, mTLS).
+/// and sender-constraint binding checks (`DPoP`, mTLS).
 ///
 /// The `outcome` field of [`ValidationResult`] is `Ok(None)` when no authentication header is
 /// present (unauthenticated request), `Ok(Some(_))` when a valid token is found, and `Err(_)`
@@ -49,7 +56,7 @@ pub trait AccessTokenValidator: MaybeSendSync {
 pub struct ValidationResult<C, E> {
     /// The outcome of the validation.
     pub outcome: Result<Option<ValidatedRequest<C>>, E>,
-    /// A DPoP nonce to include in the response `DPoP-Nonce` header, if any.
+    /// A `DPoP` nonce to include in the response `DPoP-Nonce` header, if any.
     pub dpop_nonce: Option<String>,
 }
 
@@ -72,7 +79,7 @@ pub struct ValidatedRequest<Claims> {
     pub expiration: Option<SystemTime>,
     /// The key confirmation claim (`cnf`, RFC 7800), if present.
     ///
-    /// Binds the token to a DPoP key (`jkt`, RFC 9449) or mTLS certificate
+    /// Binds the token to a `DPoP` key (`jkt`, RFC 9449) or mTLS certificate
     /// (`x5t#S256`, RFC 8705).
     pub cnf: Option<ConfirmationClaim>,
     /// Additional claims beyond the registered token claim set.

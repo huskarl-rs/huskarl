@@ -8,30 +8,15 @@
 //!
 //! ## 1. Set up your HTTP client
 //!
-//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+//! The examples below use the `huskarl_reqwest` crate; see [Setting up an HTTP
+//! client](crate::grant#setting-up-an-http-client) for the shared setup the rest
+//! of this page assumes.
 //!
-//! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//!
-//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 2. Set up client authentication (if necessary).
+//! ## 2. Set up client authentication (if necessary)
 //!
 //! Device authorization is commonly used by public clients (CLI tools, smart TVs)
-//! which do not need to authenticate. Use `NoAuth` in that case:
-//!
-//! ```rust
-//! use huskarl::core::client_auth::NoAuth;
-//!
-//! let client_auth = NoAuth;
-//! ```
-//!
-//! For confidential clients, any `ClientAuthentication` implementation can be used.
-//! See the client credentials grant for an example using `ClientSecret`.
+//! that use `NoAuth`; confidential clients pass their credentials instead. See
+//! [Setting up client authentication](crate::grant#setting-up-client-authentication).
 //!
 //! ## 3a. Set up the grant with authorization server metadata
 //!

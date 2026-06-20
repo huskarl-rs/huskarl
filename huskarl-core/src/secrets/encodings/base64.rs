@@ -7,8 +7,8 @@ use crate::{
 
 /// Decodes base64-encoded text into `SecretBytes`.
 ///
-/// Trims whitespace before decoding. Expects the bytes to be valid base64
-/// with padding.
+/// Trims leading and trailing whitespace before decoding (interior whitespace
+/// is not allowed). Expects the bytes to be valid base64 with padding.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Base64Encoding;
 

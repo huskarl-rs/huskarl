@@ -236,6 +236,8 @@ pub struct EcPublicKey {
 
 impl EcPublicKey {
     pub(super) fn canonical_form(&self) -> String {
+        // Serializing a field-less enum to a JSON string is infallible.
+        #[allow(clippy::unwrap_used)]
         let crv = serde_json::to_string(&self.crv).unwrap();
         let x = URL_SAFE_NO_PAD.encode(&self.x);
         let y = URL_SAFE_NO_PAD.encode(&self.y);
@@ -277,6 +279,8 @@ pub struct OkpPublicKey {
 
 impl OkpPublicKey {
     pub(super) fn canonical_form(&self) -> String {
+        // Serializing a field-less enum to a JSON string is infallible.
+        #[allow(clippy::unwrap_used)]
         let crv = serde_json::to_string(&self.crv).unwrap();
         let x = URL_SAFE_NO_PAD.encode(&self.x);
 

@@ -13,6 +13,6 @@
 
 cargo-reedme: info-end -->
 
-Helper macros for the huskarl crate.
+The [`from_metadata`](https://docs.rs/huskarl-macros/latest/huskarl_macros/attr.from_metadata.html) attribute macro for the huskarl crates.
 
 <!-- cargo-reedme: end -->

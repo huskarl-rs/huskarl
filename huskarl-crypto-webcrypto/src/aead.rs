@@ -1,4 +1,9 @@
-//! AES-GCM AEAD over the WebCrypto/Subtle API.
+//! AES-GCM AEAD over the WebCrypto/SubtleCrypto API (e.g. for cookie sealing).
+//!
+//! [`AesGcmKey`] is the AES-128/192/256-GCM cipher implementing huskarl-core's
+//! [`AeadEncryptor`]/[`AeadDecryptor`]; build one from raw key bytes with
+//! [`AesGcmKey::from_secret`], or from an already-imported key with
+//! [`AesGcmKey::from_crypto_key`]. All operations are async.
 
 use std::{borrow::Cow, sync::Arc};
 

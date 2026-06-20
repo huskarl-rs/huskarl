@@ -8,9 +8,9 @@ use crate::secrets::SecretString;
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum FormValue<'a> {
-    /// Represents a non-sensitive value (may be visible in logs, debug messages, etc.).
+    /// A non-sensitive value (may be visible in logs, debug messages, etc.).
     NonSensitive(Cow<'a, str>),
-    /// Represents a sensitive value (debug information is hidden, value is zeroed on drop).
+    /// A sensitive value (hidden from debug output, zeroed on drop).
     Sensitive(Cow<'a, SecretString>),
 }
 

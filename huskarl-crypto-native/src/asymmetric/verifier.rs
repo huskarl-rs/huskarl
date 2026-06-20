@@ -1,4 +1,8 @@
-//! Verifier code for asymmetric keys.
+//! JWS verification with asymmetric public keys (ES256/384, RS/PS 256/384/512,
+//! Ed25519), backing huskarl-core's [`JwsVerifier`] trait.
+//!
+//! [`AsymmetricPublicKey`] is the entry type; build one with
+//! [`AsymmetricPublicKey::from_jwk`].
 
 use std::sync::Arc;
 
@@ -130,14 +134,22 @@ struct AsymmetricPublicKeyInner {
     kid: Option<String>,
 }
 
-/// An asymmetric public key.
+/// An asymmetric public key for JWS verification (ES256/384, RS/PS 256/384/512,
+/// Ed25519), implementing [`JwsVerifier`].
+///
+/// Build one with [`from_jwk`](Self::from_jwk); cheap to clone (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct AsymmetricPublicKey {
     inner: Arc<AsymmetricPublicKeyInner>,
 }
 
 impl AsymmetricPublicKey {
-    /// Creates an asymmetric public key from a JWK.
+    /// Creates an asymmetric public key from a public JWK.
+    ///
+    /// Returns `None` if the JWK cannot be used for verification: its `use` is
+    /// not `sig`, its `key_ops` excludes `verify`, the algorithm is unsupported,
+    /// the key material fails to parse, or — for RSA — the modulus is under 2048
+    /// bits (RFC 7518 §6.3).
     #[must_use]
     pub fn from_jwk(key: jwk::PublicJwk) -> Option<Self> {
         let kid = key.kid;

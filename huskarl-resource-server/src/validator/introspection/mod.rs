@@ -188,7 +188,7 @@ use crate::{
 /// Supports both opaque tokens and JWT tokens. Optionally supports RFC 9701
 /// (JWT Response for Introspection) when configured with a `jws_verifier_factory`.
 ///
-/// Supports DPoP token binding validation when configured with a `jws_verifier_platform`.
+/// Supports `DPoP` token binding validation when configured with a `jws_verifier_platform`.
 ///
 /// Use [`IntrospectionValidator::builder`] to construct an instance.
 pub struct IntrospectionValidator<Claims = ()> {
@@ -206,6 +206,12 @@ pub struct IntrospectionValidator<Claims = ()> {
 #[bon::bon]
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator<Claims> {
     /// Creates a new [`IntrospectionValidator`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if the underlying [`TokenIntrospection`] cannot be
+    /// built — for example, when its JWS verifier factory fails to construct a
+    /// verifier.
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
         generics(setters(vis = "", name = "with_{}_internal")),
@@ -252,13 +258,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// HTTP client for calling the introspection endpoint (also used by default to get JWKS keys).
         #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
         http_client: Arc<dyn HttpClient>,
-        /// Allowed algorithms for DPoP proof signature verification.
+        /// Allowed algorithms for `DPoP` proof signature verification.
         ///
         /// If `None`, any algorithm supported by the verifier is accepted.
         #[builder(into)]
         allowed_dpop_signing_algorithms: Option<Vec<String>>,
-        /// Maximum accepted age of a DPoP proof. Defaults to 60 seconds.
-        #[builder(default = Duration::from_secs(60))]
+        /// Maximum accepted age of a `DPoP` proof. Defaults to 1 minute.
+        #[builder(default = Duration::from_mins(1))]
         max_dpop_proof_age: Duration,
         /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
         ///
@@ -277,23 +283,27 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         jwks_uri: Option<EndpointUrl>,
         /// Cryptographic platform for JWS verification.
         ///
-        /// Used for JWT response (RFC 9701) and DPoP proof verification. When the
+        /// Used for JWT response (RFC 9701) and `DPoP` proof verification. When the
         /// `default-jws-verifier-platform` feature is enabled, defaults to the platform default.
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
-        /// DPoP nonce checker.
+        /// Optional server-side `DPoP` nonce enforcement (RFC 9449 §8). When set,
+        /// proofs must carry a nonce this checker accepts; omitting it disables
+        /// nonce enforcement.
         #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
         dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
-        /// DPoP JTI uniqueness checker.
+        /// `DPoP` JTI uniqueness checker.
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// JWS verifier factory for RFC 9701 JWT response validation.
         ///
         /// When provided (along with `jwks_uri`), a [`JwtValidator`] is built that validates
         /// the outer JWT of introspection responses with content type
         /// `application/token-introspection+jwt`. If the AS returns a JWT response without a
-        /// validator configured, [`IntrospectionCallError::UnexpectedJwtResponse`] is returned.
+        /// validator configured,
+        /// [`IntrospectionCallError::UnexpectedJwtResponse`](crate::introspection::IntrospectionCallError::UnexpectedJwtResponse)
+        /// is returned.
         ///
-        /// [`JwtValidator`]: crate::core::token::validator::JwtValidator
+        /// [`JwtValidator`]: crate::core::jwt::validator::JwtValidator
         #[builder(default = Arc::new(JwksSource::builder().http_client(http_client.clone()).build()))]
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
         /// The HTTP header to extract the access token from.
@@ -353,9 +363,9 @@ impl IntrospectionValidator<()> {
 
     /// Configure the validator from authorization server metadata.
     ///
-    /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Validation
-    /// rules are implemented by the authorization server. Call
-    /// `.with_claims::<MyClaims>()` to use a custom claims type.
+    /// Pre-fills `issuer`, `introspection_endpoint`, `jwks_uri`, and
+    /// `token_endpoint` from the metadata. Call `.with_claims::<MyClaims>()` to
+    /// use a custom claims type.
     #[allow(clippy::type_complexity)]
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
@@ -405,7 +415,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
                 .allowed_signing_algorithms()
                 .map(<[_]>::to_vec),
             dpop_bound_access_tokens_required: Some(self.dpop_binding_checker.required),
-            resource: resource.map(|r| r.to_owned()),
+            resource: resource.map(std::borrow::ToOwned::to_owned),
             bearer_methods_supported: Some(vec!["header"]),
         }
     }

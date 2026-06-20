@@ -80,4 +80,9 @@ echo "HTML report: huskarl-core/fuzz/coverage/${usage_target?}/index.html"
 run = "cargo +nightly docs-rs"
 
 [tasks."reedme"]
-run = "cargo +nightly reedme"
+# The workspace run only covers default-members; huskarl-crypto-webcrypto is
+# excluded there (wasm32-only), so regenerate its README explicitly.
+run = [
+  "cargo +nightly reedme",
+  "cargo +nightly reedme --manifest-path huskarl-crypto-webcrypto/Cargo.toml",
+]

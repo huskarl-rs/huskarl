@@ -26,7 +26,12 @@ pub enum JwsParseError {
     },
 }
 
-/// A parsed compact JWS token.
+/// A compact JWS split into its parts, as produced by [`parse_compact_jws`].
+///
+/// The header and claims are deserialized, but the signature is **not** verified
+/// at this stage — pass it to
+/// [`JwtValidator::validate_parsed_jws`](crate::jwt::validator::JwtValidator::validate_parsed_jws)
+/// to verify and validate. `signing_input` is the byte range the signature covers.
 pub struct ParsedJws<H: Clone + 'static, C: Clone + 'static> {
     /// The header of the JWS token.
     pub header: JwtHeader<'static, H>,
@@ -82,7 +87,7 @@ mod tests {
         platform::{Duration, SystemTime},
     };
 
-    /// Tests example from
+    /// Tests the example values from RFC 7519 §3.1.
     #[test]
     #[expect(
         clippy::duration_suboptimal_units,

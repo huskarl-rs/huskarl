@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{core::platform::Duration, grant::core::mk_scopes, token::IdToken};
 
+/// The authorization-request parameters sent to the authorization endpoint
+/// (RFC 6749 §4.1.1, with the OIDC, PKCE, `DPoP`, and resource-indicator
+/// extensions).
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthorizationPayload<'a> {
     pub(super) response_type: &'static str,
@@ -36,6 +39,9 @@ pub struct AuthorizationPayload<'a> {
     pub(super) resource: Option<&'a [String]>,
 }
 
+/// An [`AuthorizationPayload`] plus the `client_id`, for delivery as plain query
+/// parameters — i.e. when the request is *not* wrapped in a JAR request object
+/// (which conveys the `client_id` separately).
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthorizationPayloadWithClientId<'a> {
     pub(super) client_id: &'a str,
@@ -107,7 +113,7 @@ pub enum Prompt {
 }
 
 impl StartInput {
-    /// Implements a simple complete input to the flow including just scopes.
+    /// Convenience constructor for a start input carrying only scopes.
     ///
     /// This is enough for most use cases; the builder exists as an extensible
     /// API where arbitrary extra fields may be added in future.

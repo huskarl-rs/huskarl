@@ -1,6 +1,6 @@
-//! DPoP proof structural validation.
+//! `DPoP` proof structural validation.
 //!
-//! Validates DPoP proof structure (JWS format, embedded JWK, signature, typ/alg/iat/exp)
+//! Validates `DPoP` proof structure (JWS format, embedded JWK, signature, typ/alg/iat/exp)
 //! and returns the validated claims for downstream binding checks. Does **not** check
 //! htm/htu/ath against request context or thumbprint against `cnf.jkt` — those are
 //! binding-level checks that depend on consumer context.
@@ -20,7 +20,7 @@ use crate::core::{
     platform::{Duration, SystemTime},
 };
 
-/// Claims extracted from a validated DPoP proof.
+/// Claims extracted from a validated `DPoP` proof.
 ///
 /// All claim fields are `Option` because this validator only enforces structural
 /// validity (signature, typ, alg, iat/exp). Whether specific claims like `htm`,
@@ -46,9 +46,9 @@ pub struct ValidatedDpopProof {
     pub exp: Option<u64>,
 }
 
-/// Configuration for DPoP proof structural validation.
+/// Configuration for `DPoP` proof structural validation.
 ///
-/// Validates that a DPoP proof is a well-formed, self-signed JWS with
+/// Validates that a `DPoP` proof is a well-formed, self-signed JWS with
 /// `typ=dpop+jwt`, an asymmetric algorithm, and an embedded JWK. Returns
 /// the proof's claims for downstream binding checks.
 ///
@@ -70,8 +70,8 @@ pub struct ValidatedDpopProof {
 pub struct DpopProofValidator {
     /// Crypto platform for creating signature verifiers from embedded JWKs.
     jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
-    /// Maximum allowed proof age based on `iat`. Default: 60 seconds.
-    #[builder(default = Duration::from_secs(60))]
+    /// Maximum allowed proof age based on `iat`. Default: 1 minute.
+    #[builder(default = Duration::from_mins(1))]
     max_proof_age: Duration,
     /// Allowed signing algorithms. `None` permits any asymmetric algorithm.
     allowed_signing_algorithms: Option<Vec<String>>,
@@ -86,7 +86,7 @@ impl DpopProofValidator {
         self.allowed_signing_algorithms.as_deref()
     }
 
-    /// Validate a DPoP proof's structure and signature.
+    /// Validate a `DPoP` proof's structure and signature.
     ///
     /// On success, returns a [`ValidatedDpopProof`] containing the proof's claims
     /// and the JWK thumbprint. The caller is responsible for binding checks (e.g.
@@ -209,7 +209,7 @@ impl DpopProofError {
     }
 }
 
-/// Errors from DPoP proof structural validation.
+/// Errors from `DPoP` proof structural validation.
 #[derive(Debug, Snafu)]
 pub enum DpopProofError {
     /// Not a valid compact JWS.

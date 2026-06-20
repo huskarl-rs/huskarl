@@ -13,9 +13,10 @@
 
 cargo-reedme: info-end -->
 
-Integrates `reqwest` with the `huskarl` set of crates as a HTTP client.
+An [`HttpClient`](https://docs.rs/huskarl_core/latest/huskarl_core/http/trait.HttpClient.html) for the huskarl crates, backed by [`reqwest`](https://docs.rs/reqwest/latest/reqwest/).
 
-It provides the necessary integration to allow reqwest to make calls for
-huskarl. Also included is mTLS configuration.
+[`ReqwestClient`](https://docs.rs/huskarl-reqwest/latest/huskarl_reqwest/struct.ReqwestClient.html) is the entry point — build one with its `builder()` and
+hand it to a grant, authorizer, or validator. The [`mtls`](https://docs.rs/huskarl-reqwest/latest/huskarl_reqwest/mtls/) module supplies
+the mTLS providers (RFC 8705) for the builder.
 
 <!-- cargo-reedme: end -->

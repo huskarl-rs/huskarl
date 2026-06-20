@@ -1,16 +1,22 @@
-//! A helper for generating PKCE (Proof Key for Code Exchange) pairs.
+//! PKCE (Proof Key for Code Exchange, RFC 7636) verifier/challenge pairs.
+//!
+//! PKCE protects the authorization code against interception and is applied
+//! automatically by the authorization code grant, so callers rarely construct a
+//! [`Pkce`] directly. `S256` is preferred (RFC 9700); `plain` exists only for
+//! servers that cannot do `S256`.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::TryRng as _;
 use sha2::{Digest, Sha256};
 
-/// The PKCE pair generated using the `S256` method of RFC 7636.
+/// A PKCE verifier/challenge pair (RFC 7636).
 pub struct Pkce {
-    /// Verifier
+    /// The secret the client retains and presents at token exchange to prove it
+    /// began the flow.
     pub verifier: String,
-    /// Challenge
+    /// The value derived from the verifier and sent on the authorization request.
     pub challenge: String,
-    /// Method
+    /// The transform relating challenge to verifier: `"S256"` or `"plain"`.
     pub method: &'static str,
 }
 
@@ -54,10 +60,8 @@ impl Pkce {
     }
 }
 
-#[cfg(all(
-    test,
-    all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))
-))]
+#[cfg(test)]
+#[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))]
 mod wasm_tests {
     use wasm_bindgen_test::*;
 

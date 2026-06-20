@@ -20,8 +20,13 @@ pub enum TokenType {
 
 /// Extracts the access token type and value from an HTTP header.
 ///
-/// Returns `None` if the header is absent, or an error if the header is malformed
-/// or uses an unsupported scheme.
+/// Returns `None` if the header is absent.
+///
+/// # Errors
+///
+/// Returns a [`TokenExtractError`] if the header value is not valid UTF-8, does
+/// not consist of exactly a scheme and a token value, or uses an unsupported
+/// scheme.
 pub fn extract_token(
     headers: &HeaderMap,
     token_header: &HeaderName,

@@ -52,7 +52,11 @@ impl ClaimCheck {
     }
 }
 
-/// JWT token validator.
+/// Validates a JWT: verifies the JWS signature and checks the registered claims
+/// (`iss`/`sub`/`aud`/`typ`/`exp`/`iat`/`nbf`, and optionally `jti` uniqueness).
+///
+/// Build one with [`builder`](Self::builder); call [`validate`](Self::validate)
+/// to verify a token and recover its claims.
 #[allow(clippy::struct_excessive_bools)]
 #[allow(clippy::should_implement_trait)] // `sub` is the JWT claim name, not arithmetic subtraction
 #[derive(Debug, Builder)]
@@ -84,11 +88,14 @@ pub struct JwtValidator {
     /// Maximum allowed byte length for the `jti` claim. Defaults to 255.
     #[builder(default = 255)]
     max_jti_len: usize,
-    /// Implementation of a JTI checker to check for uniqueness.
+    /// Optional checker used to reject replayed `jti` values; see
+    /// [`JtiUniquenessChecker`].
     #[builder(with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>)]
     jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
     /// Maximum token age to validate against.
     max_token_age: Option<Duration>,
+    /// Leeway applied to the time-based checks (`exp`, `nbf`, `iat`, and
+    /// `max_token_age`) to tolerate clock skew. Defaults to none.
     #[builder(default)]
     clock_leeway: Duration,
     /// Specifies which `crit` values as allowed.
@@ -452,7 +459,11 @@ impl JwtValidator {
     }
 }
 
-/// A validated JWT, containing the parsed claims and other metadata.
+/// A JWT that passed [`JwtValidator::validate`]: its registered claims plus the
+/// deserialized custom `Claims`.
+///
+/// Produced only by the validator. Transform the custom claims payload with
+/// [`map_claims`](Self::map_claims) or [`try_map_claims`](Self::try_map_claims).
 #[non_exhaustive]
 #[derive(Debug, Builder)]
 pub struct ValidatedJwt<Claims> {
@@ -468,10 +479,8 @@ pub struct ValidatedJwt<Claims> {
     pub issued_at: Option<SystemTime>,
     /// The expiration timestamp of the JWT, if present.
     pub expiration: Option<SystemTime>,
-    /// The key confirmation claim (`cnf`, RFC 7800), if present.
-    ///
-    /// Binds the token to a `DPoP` key (`jkt`, RFC 9449) or mTLS certificate
-    /// (`x5t#S256`, RFC 8705). Independent of the token profile and claims type.
+    /// The key confirmation claim (`cnf`), if present; see [`ConfirmationClaim`]
+    /// for what it binds the token to.
     pub cnf: Option<ConfirmationClaim>,
     /// Additional claims beyond the registered JWT claim set.
     pub claims: Claims,
@@ -520,7 +529,7 @@ impl<Claims> ValidatedJwt<Claims> {
 /// Validation errors that can occur while processing a JWT.
 #[derive(Debug, Snafu)]
 pub enum JwtValidationError {
-    /// The token is invalid.
+    /// The token could not be parsed as a compact JWS.
     Parse {
         /// The underlying error.
         source: JwsParseError,

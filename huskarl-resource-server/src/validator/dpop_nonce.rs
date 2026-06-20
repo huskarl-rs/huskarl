@@ -1,4 +1,10 @@
-//! DPoP nonce checking traits and implementations.
+//! Server-side `DPoP` nonce enforcement (RFC 9449 §8).
+//!
+//! A `DPoP` nonce is a server-chosen value the client must echo in its next
+//! proof, letting the resource server control proof freshness and limit replay.
+//! Implement [`DpopNonceChecker`] to issue and validate nonces, or use the
+//! batteries-included [`SealedTimestampNonce`], which encodes the issue time in
+//! an AEAD-sealed token and so needs no server-side state.
 
 use std::sync::Arc;
 
@@ -10,7 +16,7 @@ use crate::core::{
     platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime},
 };
 
-/// The outcome of a DPoP nonce check.
+/// The outcome of a `DPoP` nonce check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NonceCheck {
     /// The nonce is valid and fresh — no action needed.
@@ -23,9 +29,9 @@ pub enum NonceCheck {
     Invalid(String),
 }
 
-/// Validates DPoP nonces presented by clients.
+/// Validates `DPoP` nonces presented by clients.
 ///
-/// Implement this trait to enforce nonce-based replay protection on DPoP proofs,
+/// Implement this trait to enforce nonce-based replay protection on `DPoP` proofs,
 /// as described in RFC 9449 §8.
 ///
 /// This trait is dyn-capable: validators store it as `Arc<dyn DpopNonceChecker>`.
@@ -84,12 +90,15 @@ pub struct SealedTimestampNonce<S: AeadSealer + AeadUnsealer> {
     /// `Arc<dyn SealedAeadCipher>`.
     sealer: S,
     /// The maximum age of a valid nonce. Defaults to 1 hour.
-    #[builder(into, default = Duration::from_secs(3600))]
+    #[builder(into, default = Duration::from_hours(1))]
     nonce_lifetime: Duration,
     /// How far before expiry a still-valid nonce triggers proactive rotation.
     /// Defaults to 15 minutes.
-    #[builder(into, default = Duration::from_secs(900))]
+    #[builder(into, default = Duration::from_mins(15))]
     renewal_window: Duration,
+    /// AEAD associated data bound into every nonce. The default is fine; change
+    /// it only for domain separation, and keep it stable across requests (seal
+    /// and unseal must use the same value).
     #[builder(into, default = b"dpop-nonce")]
     aad: Vec<u8>,
 }
@@ -99,7 +108,7 @@ impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
         use base64::prelude::*;
         let current_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| Error::new(crate::core::ErrorKind::Dpop, e))?
             .as_secs()
             .to_be_bytes();
         let sealed_bytes = self.sealer.seal(&current_time, &self.aad).await?;
@@ -118,7 +127,7 @@ impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
         let nonce_issued_at = u64::from_be_bytes(timestamp_bytes);
         let current_secs = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
+            .ok()?
             .as_secs();
         Some(current_secs.saturating_sub(nonce_issued_at))
     }

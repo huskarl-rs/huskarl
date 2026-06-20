@@ -166,6 +166,11 @@ pub struct CustomValidator<Claims = ()> {
 #[bon::bon]
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims> {
     /// Creates a new [`CustomValidator`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`Error`] if the [`JwsVerifierFactory`] fails to build a
+    /// verifier — for example, when the JWKS cannot be fetched or parsed.
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
         generics(setters(vis = "", name = "with_{}_internal")),
@@ -180,13 +185,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// If `None`, any algorithm supported by the verifier is accepted.
         #[builder(into)]
         allowed_signing_algorithms: Option<Vec<String>>,
-        /// Allowed algorithms for DPoP proof signature verification.
+        /// Allowed algorithms for `DPoP` proof signature verification.
         ///
         /// If `None`, any algorithm supported by the verifier is accepted.
         #[builder(into)]
         allowed_dpop_signing_algorithms: Option<Vec<String>>,
-        /// Maximum accepted age of a DPoP proof. Defaults to 60 seconds.
-        #[builder(default = Duration::from_secs(60))]
+        /// Maximum accepted age of a `DPoP` proof. Defaults to 1 minute.
+        #[builder(default = Duration::from_mins(1))]
         max_dpop_proof_age: Duration,
         /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
         ///
@@ -209,14 +214,14 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
         /// Access token JTI uniqueness checker.
         token_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
-        /// DPoP nonce checker.
+        /// `DPoP` nonce checker.
         #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
         dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
-        /// DPoP JTI uniqueness checker.
+        /// `DPoP` JTI uniqueness checker.
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// Cryptographic platform for JWS verification.
         ///
-        /// Used for both access token and DPoP proof verification. When the
+        /// Used for both access token and `DPoP` proof verification. When the
         /// `default-jws-verifier-platform` feature is enabled, defaults to the platform default.
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
@@ -389,13 +394,16 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
                 .allowed_signing_algorithms()
                 .map(<[_]>::to_vec),
             dpop_bound_access_tokens_required: Some(self.inner.dpop_binding_checker.required),
-            resource: resource.map(|r| r.to_owned()),
+            resource: resource.map(std::borrow::ToOwned::to_owned),
             bearer_methods_supported: Some(vec!["header"]),
         }
     }
 
-    /// Validates the request headers, returning a [`super::ValidatedRequest`] if a valid token is found,
-    /// or `None` if no authentication was provided.
+    /// Validates the request headers, returning a [`ValidationResult`] whose
+    /// [`outcome`](super::ValidationResult::outcome) is `Ok(Some(_))` for a valid
+    /// token, `Ok(None)` when no authentication was presented, or `Err(_)` when a
+    /// token was present but invalid. Any configured `on_validate` callback fires
+    /// before returning.
     pub async fn validate_request(
         &self,
         headers: &http::HeaderMap,
