@@ -209,22 +209,22 @@ impl Cursor<'_> {
     fn lex_quoted_string(&mut self) -> Option<String> {
         debug_assert_eq!(self.peek(), Some(b'"'));
         self.bump();
-        let mut out = String::new();
+        let mut out = Vec::new();
         loop {
             match self.peek() {
                 None => return None,
                 Some(b'"') => {
                     self.bump();
-                    return Some(out);
+                    return Some(String::from_utf8_lossy(&out).into_owned());
                 }
                 Some(b'\\') => {
                     self.bump();
                     let escaped = self.peek()?;
-                    out.push(char::from(escaped));
+                    out.push(escaped);
                     self.bump();
                 }
                 Some(c) => {
-                    out.push(char::from(c));
+                    out.push(c);
                     self.bump();
                 }
             }
@@ -623,5 +623,20 @@ mod tests {
         assert_eq!(challenges.len(), 3);
         assert_eq!(challenges[1], challenge("DPoP", &[]));
         assert_eq!(challenges[2].param("realm"), Some("y"));
+    }
+
+    // Defence-in-depth: real header values that survive `HeaderValue::to_str`
+    // are visible ASCII, so non-ASCII never reaches the lexer via
+    // `parse_challenges`. Drive `parse_challenge_list` directly to confirm
+    // multibyte UTF-8 in a quoted-string round-trips intact, rather than being
+    // decoded byte-by-byte into mojibake.
+    #[test]
+    fn non_ascii_quoted_value_round_trips() {
+        let value = "über café — naïve 🦀";
+        let mut out = Vec::new();
+        parse_challenge_list(&format!(r#"Bearer error_description="{value}""#), &mut out);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].param("error_description"), Some(value));
     }
 }
