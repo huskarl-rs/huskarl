@@ -22,6 +22,20 @@ impl RefreshToken {
     }
 }
 
+impl PartialEq for RefreshToken {
+    /// Equal when the secret value and `DPoP` binding both match.
+    ///
+    /// `SecretString` has no `PartialEq` of its own (secrets are not casually
+    /// comparable), so this is hand-rolled. It is a plain, **not** constant-time
+    /// comparison — refresh tokens are high-entropy and are only compared
+    /// against the client's own stored values, never attacker-supplied input.
+    fn eq(&self, other: &Self) -> bool {
+        self.token.expose_secret() == other.token.expose_secret() && self.dpop_jkt == other.dpop_jkt
+    }
+}
+
+impl Eq for RefreshToken {}
+
 impl RefreshToken {
     /// Returns the token as a [`SecretString`].
     #[must_use]
