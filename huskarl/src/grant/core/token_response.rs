@@ -15,8 +15,8 @@ use crate::{
 /// Grants produce this internally and convert it via
 /// [`into_token_response`](Self::into_token_response). The builder exists so
 /// tests and integrations can fabricate a [`TokenResponse`] — e.g. to
-/// [`prime`](crate::cache::TokenCache::prime) a token cache without running
-/// a real exchange. Production cold-start should still persist only the
+/// [`prime`](crate::cache::GrantTokenSource::prime) a token source without
+/// running a real exchange. Production cold-start should still persist only the
 /// refresh token (via a
 /// [`RefreshTokenStore`](crate::cache::RefreshTokenStore)) and refresh into
 /// a fresh access token, rather than persisting responses.

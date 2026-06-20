@@ -188,11 +188,13 @@ use bon::Builder;
 use serde::Serialize;
 
 use crate::{
+    cache::GrantParametersSource,
     core::{
-        EndpointUrl,
+        EndpointUrl, Error,
         client_auth::ClientAuthentication,
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
+        platform::MaybeSendBoxFuture,
         secrets::SecretString,
     },
     grant::{
@@ -275,11 +277,6 @@ impl OAuth2ExchangeGrant for JwtBearerGrant {
     type Parameters = JwtBearerGrantParameters;
     type Form<'a> = JwtBearerGrantForm;
 
-    /// A valid assertion may be presented repeatedly until it expires.
-    fn reusable_parameters(&self) -> bool {
-        true
-    }
-
     fn client_id(&self) -> Option<&str> {
         self.client_id.as_deref()
     }
@@ -355,6 +352,25 @@ pub struct JwtBearerGrantParameters {
     scope: Option<String>,
     /// The target resource(s) for the access token (RFC 8707).
     resource: Option<Vec<String>>,
+}
+
+/// A JWT bearer assertion may be presented repeatedly until it expires, so a
+/// fixed value is cloned for each exchange. This replays the same assertion —
+/// fine while it is valid, but once its `exp` passes the cache cannot obtain a
+/// new token. For an assertion the client mints itself, pass a
+/// [`from_fn`](crate::cache::from_fn) source that re-signs a fresh assertion
+/// per exchange instead.
+impl GrantParametersSource<Self> for JwtBearerGrantParameters {
+    fn acquire(&self) -> MaybeSendBoxFuture<'_, Result<Option<Self>, Error>> {
+        let params = self.clone();
+        Box::pin(async move { Ok(Some(params)) })
+    }
+
+    // A rejected (e.g. expired) assertion will only be rejected again; stop
+    // replaying it. For per-exchange minting, use a `from_fn` source instead.
+    fn discard_after_rejection(&self) -> bool {
+        true
+    }
 }
 
 /// JWT bearer grant body.

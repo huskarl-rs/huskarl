@@ -134,11 +134,13 @@ use bon::Builder;
 use serde::Serialize;
 
 use crate::{
+    cache::GrantParametersSource,
     core::{
-        EndpointUrl,
+        EndpointUrl, Error,
         client_auth::ClientAuthentication,
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
+        platform::MaybeSendBoxFuture,
     },
     grant::{
         core::{OAuth2ExchangeGrant, mk_scopes},
@@ -212,11 +214,6 @@ impl core::fmt::Debug for ClientCredentialsGrant {
 impl OAuth2ExchangeGrant for ClientCredentialsGrant {
     type Parameters = ClientCredentialsGrantParameters;
     type Form<'a> = ClientCredentialsGrantForm;
-
-    /// Scopes and resources may be re-submitted freely.
-    fn reusable_parameters(&self) -> bool {
-        true
-    }
 
     fn client_id(&self) -> Option<&str> {
         Some(&self.client_id)
@@ -297,6 +294,21 @@ impl ClientCredentialsGrantParameters {
     #[must_use]
     pub fn new() -> Self {
         Self::builder().build()
+    }
+}
+
+/// Client credentials parameters are reusable: scopes and resources may be
+/// re-submitted freely, so the cache clones them for each exchange. Pass a
+/// value directly to the cache builder; for parameters that vary per request,
+/// use [`from_fn`](crate::cache::from_fn) instead.
+impl GrantParametersSource<Self> for ClientCredentialsGrantParameters {
+    fn acquire(&self) -> MaybeSendBoxFuture<'_, Result<Option<Self>, Error>> {
+        let params = self.clone();
+        Box::pin(async move { Ok(Some(params)) })
+    }
+
+    fn discard_after_rejection(&self) -> bool {
+        true
     }
 }
 

@@ -1,125 +1,66 @@
-//! Cache for `OAuth2` tokens.
+//! Token sources and caching for `OAuth2` tokens.
 //!
-//! A cache for `OAuth2` tokens that supports retrieving tokens, attempting to refresh them,
-//! and allows priming with a valid [`TokenResponse`].
+//! Tokens are produced by a [`TokenSource`] — usually a [`GrantTokenSource`],
+//! which refreshes or runs a grant exchange. [`InMemoryTokenCache`] wraps a
+//! source to add caching, single-flight, and expiry, and is the built-in
+//! [`TokenCache`]: the marker an [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer)
+//! requires so a non-memoizing source can't be wired in by mistake.
 
+mod grant_parameters;
+mod grant_token_source;
 mod in_memory;
+mod token_source;
 
 use std::sync::{Arc, PoisonError, RwLock};
 
+pub use grant_parameters::{
+    FromFn, GrantParametersSource, NoSource, Reusable, SingleUse, from_fn, reusable, single_use,
+};
+pub use grant_token_source::{GrantTokenSource, GrantTokenSourceBuilder};
 pub use in_memory::{InMemoryTokenCache, InMemoryTokenCacheBuilder};
 use snafu::Snafu;
+pub use token_source::TokenSource;
 
 use crate::{
     core::{
         Error,
-        dpop::ResourceServerDPoP,
         platform::{MaybeSendBoxFuture, MaybeSendSync},
     },
-    grant::core::TokenResponse,
     token::RefreshToken,
 };
 
-/// A cache for OAuth tokens that supports retrieving tokens, attempting to refresh them,
-/// and allows priming with a valid [`TokenResponse`].
+/// Marker for a [`TokenSource`] that memoizes tokens — caches and
+/// single-flights them rather than re-producing on every call — and so is safe
+/// to drive an [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer).
 ///
-/// This trait is dyn-capable: implement it on your cache type and the library
-/// consumes it as `Arc<dyn TokenCache>`.
-pub trait TokenCache: MaybeSendSync {
-    /// Retrieves the token response from the cache, refreshing it if necessary and possible.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error of kind
-    /// [`ErrorKind::ReauthRequired`](crate::core::ErrorKind::ReauthRequired)
-    /// only when no token can be obtained without re-running the interactive
-    /// flow (see [`GetTokenError`] for the cases). Transient failures (e.g. a
-    /// retryable transport error during refresh) keep their own
-    /// classification — a later call may succeed, so they are not a reauth
-    /// signal. Other kinds propagate from the underlying exchange.
-    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>>;
+/// It adds no methods of its own: the token-production surface is
+/// [`TokenSource`], and the authorizer consumes `Arc<dyn TokenCache>`. The
+/// built-in implementation is [`InMemoryTokenCache`]. Implement it on your own
+/// memoizing wrapper over a [`TokenSource`] (e.g. a distributed cache);
+/// implementing it is a promise that the wrapper caches, which is why the
+/// authorizer requires it — a raw producer like
+/// [`GrantTokenSource`] is *not* a `TokenCache`, so it can't be wired in by
+/// mistake and re-run on every request.
+///
+/// Token *injection* (the former `prime`) is a source concern — see
+/// [`GrantTokenSource::prime`].
+pub trait TokenCache: TokenSource {}
 
-    /// Returns a reference to the resource server `DPoP` proof implementation.
-    ///
-    /// Use [`NoDPoP`](crate::core::dpop::NoDPoP) when the grant does not use `DPoP`.
-    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP;
-
-    /// Primes the cache with a valid [`TokenResponse`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if persisting the response's refresh token to the
-    /// underlying [`RefreshTokenStore`] fails.
-    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>>;
-
-    /// Invalidates the cache, forcing a refresh on the next [`TokenCache::get_token_response`] call.
-    fn invalidate(&self);
-}
-
-impl<T: TokenCache + ?Sized> TokenCache for &T {
-    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
-        (**self).get_token_response()
-    }
-
-    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
-        (**self).resource_server_dpop()
-    }
-
-    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
-        (**self).prime(response)
-    }
-
-    fn invalidate(&self) {
-        (**self).invalidate();
-    }
-}
-
-impl<T: TokenCache + ?Sized> TokenCache for Box<T> {
-    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
-        (**self).get_token_response()
-    }
-
-    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
-        (**self).resource_server_dpop()
-    }
-
-    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
-        (**self).prime(response)
-    }
-
-    fn invalidate(&self) {
-        (**self).invalidate();
-    }
-}
-
-impl<T: TokenCache + ?Sized> TokenCache for Arc<T> {
-    fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
-        (**self).get_token_response()
-    }
-
-    fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
-        (**self).resource_server_dpop()
-    }
-
-    fn prime(&self, response: Arc<TokenResponse>) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
-        (**self).prime(response)
-    }
-
-    fn invalidate(&self) {
-        (**self).invalidate();
-    }
-}
+impl<T: TokenCache + ?Sized> TokenCache for &T {}
+impl<T: TokenCache + ?Sized> TokenCache for Box<T> {}
+impl<T: TokenCache + ?Sized> TokenCache for Arc<T> {}
 
 /// Source vocabulary for token acquisition failures.
 ///
 /// Carried as the source of errors returned by
-/// [`TokenCache::get_token_response`] when both the cache and its fallbacks
+/// [`TokenSource::token`] when both the cache and its fallbacks
 /// were exhausted. The error kind is
 /// [`ErrorKind::ReauthRequired`](crate::core::ErrorKind::ReauthRequired)
-/// unless an automatic recovery path remains (e.g. a retained refresh token
-/// after a transient failure), in which case the underlying retryable
-/// classification is kept — match on the error kind rather than downcasting
-/// to this type.
+/// only when no automatic recovery path remains. When one does, a non-reauth
+/// kind is kept: the underlying retryable classification (e.g. a retained
+/// refresh token after a transient failure), or
+/// [`ErrorKind::Backoff`](crate::core::ErrorKind::Backoff) while the source is
+/// cooling down. Match on the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
 pub enum GetTokenError {
     /// Token refresh failed and no grant parameters were available to fall back to.
@@ -138,16 +79,33 @@ pub enum GetTokenError {
         /// The error from the failed exchange attempt.
         exchange_source: Error,
     },
+    /// A from-scratch exchange failed and no refresh token was available to
+    /// fall back to.
+    #[snafu(display("token exchange failed and no refresh token was available: {source}"))]
+    ExchangeFailed {
+        /// The underlying exchange error.
+        source: Error,
+    },
     /// No refresh token is stored and no grant parameters were provided —
     /// there is no way to obtain a token.
     #[snafu(display("no refresh token is stored and no grant parameters were provided"))]
     NoTokenSource,
+    /// The token source is backing off after repeated non-recoverable failures.
+    ///
+    /// A later call (after the cooldown) may succeed once the underlying cause
+    /// is fixed — e.g. a revoked signing key is rotated. Reported under
+    /// [`Backoff`](crate::core::ErrorKind::Backoff): no token can be obtained
+    /// right now, but this is a "retry later, automatically" signal — *not*
+    /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired), so callers
+    /// should retry on a delay rather than re-running the interactive flow.
+    #[snafu(display("token source backed off after repeated failures; retry after cooldown"))]
+    Backoff,
 }
 
 #[cfg(test)]
 mod tests {
     use crate::{
-        cache::{InMemoryRefreshTokenStore, InMemoryTokenCache},
+        cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
         core::{client_auth::NoAuth, http::HttpClient},
         grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
     };
@@ -169,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_setup() {
-        let _cache = InMemoryTokenCache::builder()
+        let source = GrantTokenSource::builder()
             .grant(
                 ClientCredentialsGrant::builder()
                     .client_id("client_id")
@@ -185,6 +143,7 @@ mod tests {
             )
             .refresh_store(InMemoryRefreshTokenStore::default())
             .build();
+        let _cache = InMemoryTokenCache::builder().source(source).build();
     }
 }
 

@@ -134,11 +134,13 @@ use bon::Builder;
 use serde::Serialize;
 
 use crate::{
+    cache::GrantParametersSource,
     core::{
-        EndpointUrl,
+        EndpointUrl, Error,
         client_auth::ClientAuthentication,
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
+        platform::MaybeSendBoxFuture,
         secrets::SecretString,
     },
     grant::{
@@ -219,11 +221,6 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
     type Parameters = TokenExchangeGrantParameters;
     type Form<'a> = TokenExchangeGrantForm;
 
-    /// Subject and actor tokens may be exchanged repeatedly while they remain valid.
-    fn reusable_parameters(&self) -> bool {
-        true
-    }
-
     fn client_id(&self) -> Option<&str> {
         self.client_id.as_deref()
     }
@@ -302,6 +299,21 @@ pub struct TokenExchangeGrantParameters {
     requested_token_type: Option<String>,
     /// An optional security token representing the party acting on behalf of the subject.
     actor: Option<SecurityToken>,
+}
+
+/// Token exchange parameters are reusable: subject and actor tokens may be
+/// exchanged repeatedly while they remain valid, so the cache clones them for
+/// each exchange. Pass a value directly to the cache builder; for tokens that
+/// must be refetched per request, use [`from_fn`](crate::cache::from_fn).
+impl GrantParametersSource<Self> for TokenExchangeGrantParameters {
+    fn acquire(&self) -> MaybeSendBoxFuture<'_, Result<Option<Self>, Error>> {
+        let params = self.clone();
+        Box::pin(async move { Ok(Some(params)) })
+    }
+
+    fn discard_after_rejection(&self) -> bool {
+        true
+    }
 }
 
 /// A security token used as the subject or actor in a token exchange.

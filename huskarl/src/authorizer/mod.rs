@@ -75,7 +75,6 @@ use http::{HeaderMap, HeaderName, Method, Uri, header::AUTHORIZATION};
 use crate::{
     cache::TokenCache,
     core::{Error, ErrorKind},
-    grant::core::TokenResponse,
     token::AccessToken,
 };
 
@@ -84,7 +83,8 @@ use crate::{
 /// Built with [`HttpAuthorizer::builder`]; the only required input is the
 /// cache (typically an
 /// [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache) wrapping a
-/// grant). Carries no type parameters, so it stores directly in application
+/// [`GrantTokenSource`](crate::cache::GrantTokenSource)). Carries no type
+/// parameters, so it stores directly in application
 /// state. See the [module docs](self) for the request loop.
 #[derive(Builder)]
 pub struct HttpAuthorizer {
@@ -124,7 +124,7 @@ impl HttpAuthorizer {
     /// interactive flow must run again, while retryable transport failures
     /// keep their own classification.
     pub async fn get_headers(&self, method: &Method, uri: &Uri) -> Result<HeaderMap, Error> {
-        let token = self.cache.get_token_response().await?;
+        let token = self.cache.token().await?;
 
         let mut headers = HeaderMap::new();
 
@@ -182,16 +182,6 @@ impl HttpAuthorizer {
     /// Returns a reference to the underlying token cache.
     pub fn cache(&self) -> &dyn TokenCache {
         self.cache.as_ref()
-    }
-
-    /// Primes the cache with an existing token response — the handoff from
-    /// the login path, e.g. after an initial authorization code exchange.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the cache fails to persist the response's refresh token.
-    pub async fn prime(&self, response: Arc<TokenResponse>) -> Result<(), Error> {
-        self.cache.prime(response).await
     }
 
     /// Invalidates the cached token, forcing a refresh on the next call to
@@ -257,10 +247,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-    use crate::{
-        core::{dpop::NoDPoP, platform::MaybeSendBoxFuture},
-        grant::core::TokenResponse,
-    };
+    use crate::{core::platform::MaybeSendBoxFuture, grant::core::TokenResponse};
 
     /// A cache stub that records [`TokenCache::invalidate`] calls; the token
     /// acquisition methods are never exercised by these tests.
@@ -269,26 +256,19 @@ mod tests {
         invalidated: Arc<AtomicBool>,
     }
 
-    impl TokenCache for FakeCache {
-        fn get_token_response(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
+    impl crate::cache::TokenSource for FakeCache {
+        fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
             Box::pin(async { Err(Error::from(ErrorKind::Config)) })
         }
 
-        fn resource_server_dpop(&self) -> &dyn crate::core::dpop::ResourceServerDPoP {
-            &NoDPoP
-        }
-
-        fn prime(
-            &self,
-            _response: Arc<TokenResponse>,
-        ) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
-            Box::pin(async { Ok(()) })
-        }
+        // Bearer fake: relies on the `NoDPoP` default for `resource_server_dpop`.
 
         fn invalidate(&self) {
             self.invalidated.store(true, Ordering::Relaxed);
         }
     }
+
+    impl TokenCache for FakeCache {}
 
     fn authorizer() -> (HttpAuthorizer, Arc<AtomicBool>) {
         let cache = FakeCache::default();

@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.8.0"
+version = "0.9.0-pre.0"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-native"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "aes-gcm",
  "base64",

@@ -127,9 +127,11 @@ fn serialize_form_error(source: serde_html_form::ser::Error) -> Error {
 
 /// Parses an error response body as an `OAuth2` error. Always returns an error.
 ///
-/// Classification: `invalid_grant` → [`ErrorKind::InvalidGrant`],
-/// `use_dpop_nonce` → [`ErrorKind::Dpop`], any 5xx →
-/// [`ErrorKind::Transport`] (retryable), other `OAuth2` errors →
+/// Classification: `invalid_grant` → [`ErrorKind::InvalidGrant`] (the
+/// credential is dead); `invalid_scope`/`invalid_target`/`invalid_resource` →
+/// [`ErrorKind::RequestRejected`] (the credential is fine, the request was
+/// wrong); `use_dpop_nonce` → [`ErrorKind::Dpop`]; any 5xx →
+/// [`ErrorKind::Transport`] (retryable); other `OAuth2` errors →
 /// [`ErrorKind::Protocol`]. The raw OAuth error code is carried on the error.
 fn parse_oauth2_error_response(
     status: http::StatusCode,
@@ -141,6 +143,11 @@ fn parse_oauth2_error_response(
             let code = error_body.error.clone();
             let kind = match code.as_str() {
                 "invalid_grant" => ErrorKind::InvalidGrant,
+                // Request-shape rejections: the credential is intact, only the
+                // request needs adjusting (a narrower scope, a valid resource).
+                "invalid_scope" | "invalid_target" | "invalid_resource" => {
+                    ErrorKind::RequestRejected
+                }
                 "use_dpop_nonce" => ErrorKind::Dpop,
                 _ if status.is_server_error() => ErrorKind::Transport { retryable: true },
                 _ => ErrorKind::Protocol,
