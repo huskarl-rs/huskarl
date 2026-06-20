@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Breaking: Update HttpAuthorizer to accept a GrantTokenSource which is capable
    of regenerating grant parameters (e.g. useful for JWT bearer grant). Also this
    unifies with the idea of priming the token source.
+ - Allow token cache to refresh before the token actually expires, while all but
+   one request use the existing still valid token.
 
 ## [0.8.0] - 2026-06-15
 

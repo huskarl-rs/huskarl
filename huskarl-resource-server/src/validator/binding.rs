@@ -615,7 +615,7 @@ mod tests {
     ) -> SecretString {
         Jwt::builder()
             .typ("dpop+jwt")
-            .issued_now_expires_after(Duration::from_secs(60))
+            .issued_now_expires_after(Duration::from_mins(1))
             .jwk(embedded.public_key_jwk().into_owned())
             .claims(claims)
             .build()
