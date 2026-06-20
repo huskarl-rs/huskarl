@@ -21,7 +21,7 @@ pub struct Pkce {
 }
 
 impl Pkce {
-    /// Creates a new PKCE verifier and challenger pair using the `S256` method of RFC 7636.
+    /// Creates a new PKCE verifier/challenge pair using the `S256` method of RFC 7636.
     #[must_use]
     pub fn generate_s256_pair() -> Self {
         let mut verifier_bytes = [0u8; 32];
@@ -43,7 +43,7 @@ impl Pkce {
         }
     }
 
-    /// Creates a new PKCE verifier and challenger pair using the `plain` method of RFC 7636.
+    /// Creates a new PKCE verifier/challenge pair using the `plain` method of RFC 7636.
     #[must_use]
     pub fn generate_plain_pair() -> Self {
         let mut verifier_bytes = [0u8; 32];

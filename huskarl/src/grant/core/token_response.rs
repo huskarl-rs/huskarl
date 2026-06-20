@@ -16,10 +16,9 @@ use crate::{
 /// [`into_token_response`](Self::into_token_response). The builder exists so
 /// tests and integrations can fabricate a [`TokenResponse`] — e.g. to
 /// [`prime`](crate::cache::GrantTokenSource::prime) a token source without
-/// running a real exchange. Production cold-start should still persist only the
-/// refresh token (via a
-/// [`RefreshTokenStore`](crate::cache::RefreshTokenStore)) and refresh into
-/// a fresh access token, rather than persisting responses.
+/// running a real exchange. To persist credentials across restarts, store the
+/// refresh token in a [`RefreshTokenStore`](crate::cache::RefreshTokenStore) and
+/// refresh into a fresh access token, rather than persisting whole responses.
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 #[builder(on(String, into), on(SecretString, into))]
 pub struct RawTokenResponse {
@@ -61,8 +60,8 @@ pub struct RawTokenResponse {
 /// into typed form (the access token already classified as bearer or
 /// `DPoP`-bound). Read them via [`access_token`](Self::access_token),
 /// [`refresh_token`](Self::refresh_token), and [`id_token`](Self::id_token);
-/// read any non-standard fields with [`get_extra`](Self::get_extra) (or reach
-/// the whole [`raw_token_response`](Self::raw_token_response)).
+/// read any non-standard fields with [`get_extra`](Self::get_extra) (or the
+/// whole [`raw_token_response`](Self::raw_token_response)).
 ///
 /// [`exchange`]: crate::grant::core::OAuth2ExchangeGrant::exchange
 #[derive(Debug, Clone)]

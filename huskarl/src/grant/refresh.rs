@@ -133,17 +133,11 @@ use crate::{
     token::RefreshToken,
 };
 
-/// An `OAuth2` refresh grant.
+/// An `OAuth2` refresh grant (RFC 6749 §6).
 ///
-/// This grant is used to get a new access token, after receiving a
-/// refresh token from a previous request to the token endpoint.
-///
-/// It allows potential extension of access to resource servers
-/// after an access token expires, by asking the authorization server
-/// for a new token. This offers the opportunity for the authorization
-/// server to consider if continued access is appropriate.
-///
-/// See the [module documentation][crate::grant::refresh] for a usage guide.
+/// Exchanges a refresh token from a previous token-endpoint response for a new
+/// access token. See the [module documentation][crate::grant::refresh] for a
+/// usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
 #[builder(on(String, into))]

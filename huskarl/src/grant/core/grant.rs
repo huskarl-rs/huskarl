@@ -45,12 +45,10 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns the configured issuer.
     fn issuer(&self) -> Option<&str>;
 
-    /// Returns the configured client auth, if the client authenticates.
-    ///
-    /// `None` for a grant that does not authenticate the client to the token
-    /// endpoint. The grant carries its own authorization (an assertion or an
-    /// existing token), so client authentication is an independent, optional
-    /// concern (RFC 7523 §3.1, RFC 8693 §2).
+    /// Returns the configured client auth, or `None` when the client does not
+    /// authenticate to the token endpoint — the grant then carries its own
+    /// authorization (an assertion or an existing token). See [Setting up client
+    /// authentication](crate::grant#setting-up-client-authentication).
     fn client_auth(&self) -> Option<&dyn ClientAuthentication>;
 
     /// Returns the bound `DPoP` thumbprint for the session.
@@ -64,9 +62,9 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// metadata.
     ///
     /// This is the authorization server's canonical token endpoint, before any
-    /// RFC 8705 §5 mTLS-alias resolution, and the audience for
-    /// [`Audience::TokenEndpoint`] client assertions — which identify the
-    /// authorization server by its token endpoint rather than the
+    /// RFC 8705 §5 mTLS-alias resolution. It is the audience for
+    /// [`Audience::TokenEndpoint`] client assertions, which identify the
+    /// authorization server by its published token endpoint rather than the
     /// (possibly mTLS-aliased) endpoint actually contacted.
     ///
     /// [`Audience::TokenEndpoint`]: crate::core::client_auth::Audience::TokenEndpoint

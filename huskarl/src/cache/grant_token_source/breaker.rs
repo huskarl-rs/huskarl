@@ -1,10 +1,11 @@
-//! Backoff breaker bounding a doomed from-scratch grant-exchange loop.
+//! The backoff breaker used by [`GrantTokenSource`](super::GrantTokenSource) to
+//! bound repeated from-scratch failures.
 
 use std::sync::{Mutex, PoisonError};
 
 use crate::core::platform::{Duration, SystemTime};
 
-/// Backoff breaker bounding a doomed from-scratch acquisition loop.
+/// Backoff breaker bounding repeated non-recoverable from-scratch acquisitions.
 ///
 /// A self-contained state machine: it counts consecutive non-recoverable
 /// failures and, once `threshold` of them accrue, opens for `cooldown`.
