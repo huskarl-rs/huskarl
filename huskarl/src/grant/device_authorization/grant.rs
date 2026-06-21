@@ -245,7 +245,6 @@ pub struct DeviceAuthorizationGrantForm {
     grant_type: &'static str,
     /// The device verification code, `device_code`, from the authorization response (RFC 8628 §3.4).
     device_code: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     resource: Option<Vec<String>>,
 }
 
@@ -341,7 +340,6 @@ const fn default_interval() -> u32 {
 #[derive(Debug, Serialize)]
 struct DeviceAuthorizationRequest<'a> {
     scope: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     resource: Option<&'a [String]>,
 }
 

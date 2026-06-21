@@ -42,7 +42,6 @@ form_urlencoded = { workspace = true }
 http = { version = "1", default-features = false, features = ["std"] }
 rand = { workspace = true }
 serde = { workspace = true }
-serde_html_form = { version = "0.4", default-features = false, features = ["ser", "std"] }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 snafu = { workspace = true }

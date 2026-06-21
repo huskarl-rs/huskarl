@@ -298,9 +298,7 @@ impl GrantParametersSource<Self> for ClientCredentialsGrantParameters {
 #[derive(Debug, Serialize)]
 pub struct ClientCredentialsGrantForm {
     grant_type: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     resource: Option<Vec<String>>,
 }
 
@@ -336,7 +334,7 @@ mod tests {
                 "https://other.example.com".to_string(),
             ]),
         };
-        let encoded = serde_html_form::to_string(&form).unwrap();
+        let encoded = crate::core::oauth_form::to_string(&form).unwrap();
         assert!(
             encoded.contains("resource=https%3A%2F%2Fapi.example.com"),
             "first resource not found in: {encoded}"

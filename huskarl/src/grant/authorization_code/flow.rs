@@ -399,7 +399,7 @@ fn build_authorization_payload<'a>(
 }
 
 fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Result<Uri, Error> {
-    let query = serde_html_form::to_string(&payload).map_err(|e| {
+    let query = crate::core::oauth_form::to_string(&payload).map_err(|e| {
         Error::new(ErrorKind::Config, e).with_context("encoding authorization request parameters")
     })?;
     let separator = if endpoint.as_uri().query().is_some() {
@@ -408,7 +408,7 @@ fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Resul
         '?'
     };
     let uri_string = format!("{}{separator}{query}", endpoint.as_uri());
-    // serde_html_form only emits valid query characters, so the result is
+    // The form encoder only emits valid query characters, so the result is
     // well-formed — but `http::Uri` caps the total URI length at u16::MAX,
     // which large parameters (notably `id_token_hint`, an entire JWT) can
     // exceed. PAR is the spec-blessed delivery for oversized requests.
