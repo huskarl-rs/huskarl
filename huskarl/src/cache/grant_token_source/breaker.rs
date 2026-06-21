@@ -81,7 +81,7 @@ mod breaker_tests {
     use super::Breaker;
     use crate::core::platform::Duration;
 
-    const COOLDOWN: Duration = Duration::from_secs(60);
+    const COOLDOWN: Duration = Duration::from_mins(1);
 
     #[test]
     fn opens_after_threshold_consecutive_failures() {

@@ -18,7 +18,7 @@ mod validated_jwt;
 
 use checks::{check_aud, check_str_claim, check_temporal, check_typ};
 pub use claim_check::ClaimCheck;
-pub use validated_jwt::ValidatedJwt;
+pub use validated_jwt::{ValidatedJwt, ValidatedJwtBuilder};
 
 /// Validates a JWT: verifies the JWS signature and checks the registered claims
 /// (`iss`/`sub`/`aud`/`typ`/`exp`/`iat`/`nbf`, and optionally `jti` uniqueness).

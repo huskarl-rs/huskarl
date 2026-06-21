@@ -556,7 +556,7 @@ fn assert_invalid_grant(err: &Error) {
 #[tokio::test]
 async fn breaker_trips_after_threshold_and_backs_off() {
     let http = MockHttpClient::default();
-    let source = dynamic_source(http.clone(), 2, std::time::Duration::from_secs(60));
+    let source = dynamic_source(http.clone(), 2, std::time::Duration::from_mins(1));
 
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
@@ -594,7 +594,7 @@ async fn breaker_half_opens_after_cooldown() {
 #[tokio::test]
 async fn breaker_resets_on_success() {
     let http = MockHttpClient::default();
-    let source = dynamic_source(http.clone(), 2, std::time::Duration::from_secs(60));
+    let source = dynamic_source(http.clone(), 2, std::time::Duration::from_mins(1));
 
     // A success between failures resets the count, so two failures spread
     // across a success never trip the (threshold 2) breaker.
@@ -620,7 +620,7 @@ async fn breaker_resets_on_success() {
 #[tokio::test]
 async fn breaker_disabled_with_zero_threshold() {
     let http = MockHttpClient::default();
-    let source = dynamic_source(http.clone(), 0, std::time::Duration::from_secs(60));
+    let source = dynamic_source(http.clone(), 0, std::time::Duration::from_mins(1));
 
     // Disabled: repeated failures never back off — each call reaches the
     // endpoint and surfaces InvalidGrant.

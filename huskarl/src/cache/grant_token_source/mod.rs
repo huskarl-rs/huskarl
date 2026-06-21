@@ -145,8 +145,8 @@ pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     #[builder(default = 3)]
     breaker_threshold: u32,
     /// How long the source backs off once `breaker_threshold` is reached, before
-    /// allowing a trial again. Defaults to 60 seconds.
-    #[builder(default = Duration::from_secs(60))]
+    /// allowing a trial again. Defaults to 1 minute.
+    #[builder(default = Duration::from_mins(1))]
     breaker_cooldown: Duration,
     #[builder(skip)]
     breaker: Breaker,

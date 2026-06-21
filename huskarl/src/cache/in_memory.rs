@@ -29,6 +29,28 @@ use crate::{
 /// error contract. To prime or inspect that source after it is in the cache,
 /// hold it in an `Arc` and reach it via [`source`](Self::source) (or your own
 /// clone).
+///
+/// # Refresh-ahead
+///
+/// By default a token is refreshed only once it reaches the hard
+/// [`expires_margin`](InMemoryTokenCacheBuilder::expires_margin), at which point
+/// the acquiring caller blocks on the source. Set
+/// [`refresh_ahead`](InMemoryTokenCacheBuilder::refresh_ahead) to a *larger*
+/// margin to refresh proactively while the token is still valid: a request that
+/// finds the token inside the refresh-ahead window (but still good) refreshes it
+/// *without blocking other callers* — concurrent requests are served the
+/// still-valid token rather than stalling behind the refresh, and a failed
+/// attempt is non-fatal because the current token still covers it (a later call
+/// retries). One caller is elected per refresh via a non-blocking lock, so the
+/// source is never stampeded.
+///
+/// This needs no background task and works anywhere, including serverless: the
+/// refresh is driven by the request that observes the window. It does not make
+/// the refresh *invisible* on a single-threaded/serverless invocation — the
+/// elected caller still awaits it — but it moves the work earlier, while the
+/// token has slack, and stops concurrent callers from blocking. Leave it unset
+/// (the default) for the original synchronous-at-margin behaviour. A value at or
+/// below `expires_margin` leaves the window empty and is inert.
 #[derive(Builder)]
 pub struct InMemoryTokenCache<Src: TokenSource> {
     /// The source tokens are pulled from when the cache holds no valid token, or
@@ -40,6 +62,11 @@ pub struct InMemoryTokenCache<Src: TokenSource> {
     /// Default lifetime assumed for tokens that do not include an `expires_in` field.
     #[builder(default = Duration::from_hours(1))]
     default_expires_in: Duration,
+    /// When set, the margin at which a still-valid token is refreshed ahead of
+    /// the hard [`expires_margin`](Self::expires_margin), without blocking
+    /// concurrent callers. See [Refresh-ahead](Self#refresh-ahead). Must exceed
+    /// `expires_margin` to have any effect.
+    refresh_ahead: Option<Duration>,
     #[builder(skip)]
     cached: ArcSwapOption<TokenResponse>,
     #[builder(skip)]
@@ -51,6 +78,7 @@ impl<Src: TokenSource> core::fmt::Debug for InMemoryTokenCache<Src> {
         f.debug_struct("InMemoryTokenCache")
             .field("expires_margin", &self.expires_margin)
             .field("default_expires_in", &self.default_expires_in)
+            .field("refresh_ahead", &self.refresh_ahead)
             .finish_non_exhaustive()
     }
 }
@@ -85,6 +113,51 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
                 .is_expired(self.default_expires_in, self.expires_margin)
         })
     }
+
+    /// Whether a still-valid token sits inside the refresh-ahead window — past
+    /// the larger `refresh_ahead` margin but not yet the hard `expires_margin`.
+    /// Always `false` when refresh-ahead is unset.
+    fn in_refresh_ahead_window(&self, token: &TokenResponse) -> bool {
+        self.refresh_ahead.is_some_and(|ahead| {
+            token
+                .access_token()
+                .is_expired(self.default_expires_in, ahead)
+        })
+    }
+
+    /// Refreshes a token that is valid but inside the refresh-ahead window,
+    /// without blocking concurrent callers.
+    ///
+    /// One caller is elected via a non-blocking lock; the rest are handed the
+    /// still-valid `current` token. Because that token still covers the request,
+    /// a failed refresh is swallowed (a later call retries) — the slack is the
+    /// point of refreshing ahead.
+    async fn refresh_ahead_now(&self, current: Arc<TokenResponse>) -> Arc<TokenResponse> {
+        // Non-blocking: if the lock is held, another caller is already
+        // refreshing (ahead or at the hard margin). Serve the valid token.
+        let Ok(_refresh_lock) = self.refresh_lock.try_lock() else {
+            return current;
+        };
+
+        // Re-check under the lock: a concurrent refresh may have already moved
+        // the token out of the window, or a pending token may now supersede it.
+        if !self.source.has_pending_token()
+            && let Some(token) = self.get_valid_cached()
+            && !self.in_refresh_ahead_window(&token)
+        {
+            return token;
+        }
+
+        match self.source.token().await {
+            Ok(token) => {
+                self.cached.store(Some(token.clone()));
+                token
+            }
+            // The current token is still valid; serve it and let a later call
+            // retry rather than failing a request that needs no new token yet.
+            Err(_) => current,
+        }
+    }
 }
 
 impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
@@ -96,6 +169,12 @@ impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
             if !self.source.has_pending_token()
                 && let Some(token) = self.get_valid_cached()
             {
+                // Valid, but inside the refresh-ahead window: refresh it now
+                // without blocking other callers (no-op when refresh-ahead is
+                // unset, so this is the original fast path by default).
+                if self.in_refresh_ahead_window(&token) {
+                    return Ok(self.refresh_ahead_now(token).await);
+                }
                 return Ok(token);
             }
 
@@ -188,7 +267,13 @@ mod tests {
                 .unwrap()
                 .pop_front()
                 .expect("unexpected extra token() call");
-            Box::pin(async move { result.map(Arc::new) })
+            Box::pin(async move {
+                // Yield once while the caller holds the refresh lock, so a
+                // joined sibling is polled mid-acquisition — exercising the
+                // single-flight and refresh-ahead non-blocking paths.
+                tokio::task::yield_now().await;
+                result.map(Arc::new)
+            })
         }
 
         fn has_pending_token(&self) -> bool {
@@ -320,5 +405,80 @@ mod tests {
         assert_eq!(access_of(&a.unwrap()), "t1");
         assert_eq!(access_of(&b.unwrap()), "t1");
         assert_eq!(cache.source().calls(), 1);
+    }
+
+    /// A `refresh_ahead` larger than the token's lifetime puts every served
+    /// token in the window immediately, while a small `expires_margin` keeps it
+    /// valid — a deterministic way to exercise refresh-ahead without sleeping.
+    fn refresh_ahead_cache(
+        results: impl IntoIterator<Item = Result<TokenResponse, Error>>,
+    ) -> InMemoryTokenCache<FakeSource> {
+        InMemoryTokenCache::builder()
+            .source(FakeSource::new(results))
+            .expires_margin(Duration::from_secs(30))
+            .refresh_ahead(Duration::from_mins(2))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn refresh_ahead_refreshes_a_still_valid_token() {
+        // expires_in 100s: valid against the 30s hard margin, but inside the
+        // 120s refresh-ahead window from the moment it is served.
+        let cache = refresh_ahead_cache([Ok(token("t1", 100)), Ok(token("t2", 100))]);
+
+        // Cold start: the slow path fetches t1.
+        assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
+        assert_eq!(cache.source().calls(), 1);
+
+        // t1 is valid but in the window, so the next call refreshes ahead and
+        // serves the fresh t2.
+        assert_eq!(access_of(&cache.token().await.unwrap()), "t2");
+        assert_eq!(cache.source().calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn refresh_ahead_failure_serves_the_valid_token() {
+        // The ahead-refresh fails, but the current token still covers the
+        // request: the error is swallowed and the valid token is served.
+        let cache = refresh_ahead_cache([
+            Ok(token("t1", 100)),
+            Err(Error::from(crate::core::ErrorKind::ReauthRequired)),
+        ]);
+
+        assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
+        // Refresh attempted (calls == 2) but failed; t1 is served regardless.
+        assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
+        assert_eq!(cache.source().calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn without_refresh_ahead_a_valid_token_is_not_refreshed() {
+        // Same token shape, but refresh-ahead unset: the cached token is served
+        // without a second source call — the default behaviour is unchanged.
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([Ok(token("t1", 100))]))
+            .expires_margin(Duration::from_secs(30))
+            .build();
+
+        assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
+        assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
+        assert_eq!(cache.source().calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn refresh_ahead_does_not_block_concurrent_callers() {
+        // Warm the cache with t1, then fire two concurrent in-window calls.
+        // Exactly one is elected to refresh (serving t2); the other fails the
+        // non-blocking lock and is served the still-valid t1.
+        let cache = refresh_ahead_cache([Ok(token("t1", 100)), Ok(token("t2", 100))]);
+        assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
+
+        let (a, b) = tokio::join!(cache.token(), cache.token());
+        let served: std::collections::HashSet<_> =
+            [access_of(&a.unwrap()), access_of(&b.unwrap())].into();
+
+        // One refresh happened (t2 minted), one caller reused t1 — no stampede.
+        assert_eq!(served, ["t1".to_owned(), "t2".to_owned()].into());
+        assert_eq!(cache.source().calls(), 2);
     }
 }
