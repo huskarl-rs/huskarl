@@ -394,6 +394,7 @@ fn build_authorization_payload<'a>(
             login_hint: start_input.login_hint.as_deref(),
             acr_values: start_input.acr_values.as_ref().map(|l| l.join(" ")),
             resource: start_input.resource.as_deref(),
+            authorization_details: start_input.authorization_details.as_deref(),
         },
     }
 }
@@ -474,6 +475,56 @@ mod tests {
         let url = start_url(&grant).await;
         assert!(url.contains("code_challenge_method=S256"), "{url}");
         assert!(url.contains("code_challenge="), "{url}");
+    }
+
+    #[tokio::test]
+    async fn authorization_details_carried_as_a_single_json_value() {
+        use crate::core::AuthorizationDetail;
+
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let start_input = StartInput::builder()
+            .scopes(["openid"])
+            .authorization_details(vec![
+                AuthorizationDetail::builder("payment_initiation")
+                    .with("actions", serde_json::json!(["initiate"]))
+                    .build(),
+            ])
+            .build();
+
+        let url = grant
+            .start(start_input)
+            .await
+            .unwrap()
+            .authorization_url
+            .to_string();
+
+        // RFC 9396 §3: one `authorization_details` parameter carrying URL-encoded
+        // JSON (`%5B%7B` is `[{`), not repeated keys like a scalar list.
+        assert_eq!(url.matches("authorization_details=").count(), 1, "{url}");
+        assert!(url.contains("authorization_details=%5B%7B"), "{url}");
+    }
+
+    #[test]
+    fn start_input_scope_is_optional() {
+        // RFC 6749 §3.1.1 / RFC 9396 §3: a request may omit scope and carry only
+        // authorization_details.
+        let start_input = StartInput::builder()
+            .authorization_details(vec![
+                crate::core::AuthorizationDetail::builder("payment_initiation").build(),
+            ])
+            .build();
+        assert!(start_input.scopes.is_none());
+        assert!(start_input.authorization_details.is_some());
     }
 
     #[tokio::test]

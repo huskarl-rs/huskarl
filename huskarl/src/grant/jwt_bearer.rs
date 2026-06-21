@@ -310,6 +310,7 @@ impl OAuth2ExchangeGrant for JwtBearerGrant {
             assertion: params.assertion,
             scope: params.scope,
             resource: params.resource,
+            authorization_details: params.authorization_details,
         }
     }
 }
@@ -333,6 +334,8 @@ pub struct JwtBearerGrantParameters {
     scope: Option<String>,
     /// The target resource(s) for the access token (RFC 8707).
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
 /// A JWT bearer assertion may be presented repeatedly until it expires, so a
@@ -355,12 +358,14 @@ impl GrantParametersSource<Self> for JwtBearerGrantParameters {
 }
 
 /// JWT bearer grant body.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Builder)]
 pub struct JwtBearerGrantForm {
     grant_type: &'static str,
     assertion: SecretString,
     scope: Option<String>,
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
 #[cfg(test)]
@@ -405,12 +410,10 @@ mod tests {
 
     #[test]
     fn test_form_serializes_grant_type_and_assertion() {
-        let form = super::JwtBearerGrantForm {
-            grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            assertion: SecretString::new("header.payload.signature"),
-            scope: None,
-            resource: None,
-        };
+        let form = super::JwtBearerGrantForm::builder()
+            .grant_type("urn:ietf:params:oauth:grant-type:jwt-bearer")
+            .assertion(SecretString::new("header.payload.signature"))
+            .build();
         let encoded = crate::core::oauth_form::to_string(&form).unwrap();
         assert!(
             encoded.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer"),

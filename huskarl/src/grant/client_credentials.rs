@@ -248,6 +248,7 @@ impl OAuth2ExchangeGrant for ClientCredentialsGrant {
             grant_type: "client_credentials",
             scope: params.scope,
             resource: params.resource,
+            authorization_details: params.authorization_details,
         }
     }
 }
@@ -260,6 +261,8 @@ pub struct ClientCredentialsGrantParameters {
     scope: Option<String>,
     /// The target resource(s) for the access token.
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
 impl Default for ClientCredentialsGrantParameters {
@@ -295,11 +298,13 @@ impl GrantParametersSource<Self> for ClientCredentialsGrantParameters {
 }
 
 /// Client credentials grant body.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Builder)]
 pub struct ClientCredentialsGrantForm {
     grant_type: &'static str,
     scope: Option<String>,
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
 #[cfg(test)]
@@ -326,14 +331,13 @@ mod tests {
 
     #[test]
     fn test_resource_serializes_as_repeated_keys() {
-        let form = super::ClientCredentialsGrantForm {
-            grant_type: "client_credentials",
-            scope: None,
-            resource: Some(vec![
-                "https://api.example.com".to_string(),
-                "https://other.example.com".to_string(),
-            ]),
-        };
+        let form = super::ClientCredentialsGrantForm::builder()
+            .grant_type("client_credentials")
+            .resource(vec![
+                "https://api.example.com".into(),
+                "https://other.example.com".into(),
+            ])
+            .build();
         let encoded = crate::core::oauth_form::to_string(&form).unwrap();
         assert!(
             encoded.contains("resource=https%3A%2F%2Fapi.example.com"),

@@ -145,6 +145,7 @@ mod tests {
             login_hint: None,
             acr_values: None,
             resource: None,
+            authorization_details: None,
         }
     }
 

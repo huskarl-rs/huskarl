@@ -2,7 +2,11 @@ use bon::Builder;
 use rand::TryRng as _;
 use serde::{Deserialize, Serialize};
 
-use crate::{core::platform::Duration, grant::core::mk_scopes, token::IdToken};
+use crate::{
+    core::{AuthorizationDetail, platform::Duration},
+    grant::core::mk_scopes,
+    token::IdToken,
+};
 
 /// The authorization-request parameters sent to the authorization endpoint
 /// (RFC 6749 §4.1.1, with the OIDC, PKCE, `DPoP`, and resource-indicator
@@ -37,6 +41,8 @@ pub struct AuthorizationPayload<'a> {
     pub(super) acr_values: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) resource: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) authorization_details: Option<&'a [AuthorizationDetail]>,
 }
 
 /// An [`AuthorizationPayload`] plus the `client_id`, for delivery as plain query
@@ -57,9 +63,12 @@ pub struct StartInput {
     pub(super) state: String,
     #[builder(finish_fn)]
     pub(super) nonce: String,
-    #[builder(required, with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
+    #[builder(required, default, with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
     pub(super) scopes: Option<String>,
     pub(super) resource: Option<Vec<String>>,
+    /// RFC 9396 Rich Authorization Requests: fine-grained authorization
+    /// requirements expressed as typed authorization-details objects.
+    pub(super) authorization_details: Option<Vec<AuthorizationDetail>>,
 
     // OIDC Core parameters.
     /// Specifies how the Authorization Server displays the authentication and consent user interface pages to the End-User.
