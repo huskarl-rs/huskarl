@@ -1,4 +1,5 @@
 [tools]
+"aqua:EmbarkStudios/cargo-deny" = "latest"
 "aqua:drager/wasm-pack" = "latest"
 "aqua:wasm-bindgen/wasm-pack" = "latest"
 "cargo:cargo-docs-rs" = "latest"
