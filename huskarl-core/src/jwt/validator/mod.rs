@@ -25,6 +25,13 @@ pub use validated_jwt::{ValidatedJwt, ValidatedJwtBuilder};
 ///
 /// Build one with [`builder`](Self::builder); call [`validate`](Self::validate)
 /// to verify a token and recover its claims.
+///
+/// # Warning
+///
+/// By default `exp` is **not** required: a validly-signed token with no expiry
+/// is accepted. Set `require_exp(true)` on the [builder](Self::builder) unless
+/// non-expiring tokens are intentional. The bundled profiles (RFC 9068 access
+/// tokens, OIDC ID tokens) already enable it.
 #[allow(clippy::struct_excessive_bools)]
 #[allow(clippy::should_implement_trait)] // `sub` is the JWT claim name, not arithmetic subtraction
 #[derive(Debug, Builder)]
