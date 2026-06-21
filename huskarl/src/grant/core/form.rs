@@ -194,11 +194,26 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
         Error::new(
             ErrorKind::Protocol,
             HandleResponseError::UnparseableSuccessResponse {
-                body: String::from_utf8_lossy(body).into_owned(),
+                body: RedactedBody(String::from_utf8_lossy(body).into_owned()),
                 source,
             },
         )
     })
+}
+
+/// A captured response body whose contents are withheld from `Debug`.
+///
+/// A successful token-endpoint response carries cleartext access and refresh
+/// tokens. Capturing the raw body into an error and letting it surface through
+/// `{:?}` — directly, or via the wrapping [`Error`]'s source chain — would leak
+/// those tokens to logs. The body is retained only so the error can be
+/// constructed; its contents are never rendered.
+pub struct RedactedBody(String);
+
+impl std::fmt::Debug for RedactedBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[REDACTED {} bytes]", self.0.len())
+    }
 }
 
 /// Source vocabulary for `OAuth2` token-endpoint response failures.
@@ -227,7 +242,7 @@ pub enum HandleResponseError {
     #[snafu(display("Failed to parse successful response as an OAuth2 payload"))]
     UnparseableSuccessResponse {
         /// The unparseable body.
-        body: String,
+        body: RedactedBody,
         /// The underlying error.
         source: serde_json::Error,
     },

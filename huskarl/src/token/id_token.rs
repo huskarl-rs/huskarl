@@ -22,8 +22,14 @@ use crate::core::{
 /// is unverified — validate it with [`IdTokenValidator`] before trusting any
 /// claim. [`token`](Self::token) exposes the raw string, e.g. to pass back as an
 /// `id_token_hint`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IdToken(String);
+
+impl std::fmt::Debug for IdToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("IdToken").field(&"[REDACTED]").finish()
+    }
+}
 
 impl IdToken {
     /// Exposes the raw compact-JWS string. Validate with [`IdTokenValidator`]
@@ -675,6 +681,15 @@ mod tests {
             .validate(&token, None)
             .await;
         assert_eq!(result.is_err(), expect_err, "got {result:?}");
+    }
+
+    #[test]
+    fn id_token_debug_redacts_the_raw_jws() {
+        let token = IdToken::from("eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9.sig");
+        let rendered = format!("{token:?}");
+        assert!(rendered.contains("[REDACTED]"), "got {rendered}");
+        assert!(!rendered.contains("alice"), "got {rendered}");
+        assert!(!rendered.contains("eyJ"), "got {rendered}");
     }
 
     #[test]
