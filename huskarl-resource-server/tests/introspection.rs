@@ -59,7 +59,10 @@ async fn validate(
 async fn matching_audience_is_accepted() {
     let server = MockServer::start();
     let mock = server.mock(|when, then| {
-        when.method(POST).path("/introspect");
+        when.method(POST)
+            .path("/introspect")
+            .form_urlencoded_tuple("token", "token-abc")
+            .form_urlencoded_tuple("token_type_hint", "access_token");
         then.status(200)
             .header("content-type", "application/json")
             .body(r#"{"active": true, "aud": "api://rs1", "sub": "user-123"}"#);
