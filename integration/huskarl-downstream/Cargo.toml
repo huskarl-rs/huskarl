@@ -2,6 +2,7 @@
 name = "huskarl-downstream"
 version = "0.0.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
 publish = false
 description = "Scratch downstream consumer — verifies ergonomics from outside the library"
 
