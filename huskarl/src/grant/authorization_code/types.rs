@@ -24,7 +24,8 @@ pub struct AuthorizationPayload<'a> {
     pub(super) code_challenge_method: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) dpop_jkt: Option<String>,
-    pub(super) nonce: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) nonce: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) display: Option<&'a Display>,
     #[serde(skip_serializing_if = "Option::is_none")]
