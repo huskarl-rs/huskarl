@@ -57,6 +57,12 @@ pub struct AuthorizationServerMetadata {
     pub registration_endpoint: Option<EndpointUrl>,
     /// Array containing a list of the OAuth 2.0 "scope" values that this authorization server supports.
     pub scopes_supported: Option<Vec<String>>,
+    /// Array containing a list of the RFC 9396 `authorization_details` type values
+    /// that this authorization server supports (RFC 9396 §10).
+    ///
+    /// The `authorization_details` equivalent of [`scopes_supported`](Self::scopes_supported);
+    /// a client can consult it to discover which types the server accepts.
+    pub authorization_details_types_supported: Option<Vec<String>>,
     /// Array containing a list of the OAuth 2.0 "`response_type`" values that this authorization server supports.
     pub response_types_supported: Vec<String>,
     /// Array containing a list of the OAuth 2.0 "`response_mode`" values that this authorization server supports
@@ -287,6 +293,8 @@ mod tests {
              "scopes_supported":
                ["openid", "profile", "email", "address",
                 "phone", "offline_access"],
+             "authorization_details_types_supported":
+               ["payment_initiation", "account_information"],
              "response_types_supported":
                ["code", "code id_token", "id_token", "id_token token"],
              "acr_values_supported":
@@ -333,6 +341,13 @@ mod tests {
             "https://server.example.com/connect/authorize"
                 .parse::<EndpointUrl>()
                 .ok()
+        );
+        assert_eq!(
+            parsed.authorization_details_types_supported,
+            Some(vec![
+                "payment_initiation".to_string(),
+                "account_information".to_string(),
+            ])
         );
     }
 }
