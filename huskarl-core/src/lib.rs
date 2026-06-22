@@ -35,6 +35,7 @@ pub mod error;
 pub mod http;
 pub mod jwk;
 pub mod jwt;
+pub mod oauth_form;
 pub mod platform;
 pub mod prelude;
 pub mod secrets;
