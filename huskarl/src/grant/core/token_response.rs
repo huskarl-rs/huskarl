@@ -61,8 +61,8 @@ pub struct RawTokenResponse {
 /// into typed form (the access token already classified as bearer or
 /// `DPoP`-bound). Read them via [`access_token`](Self::access_token),
 /// [`refresh_token`](Self::refresh_token), and [`id_token`](Self::id_token);
-/// reach any non-standard fields through
-/// [`raw_token_response`](Self::raw_token_response).
+/// read any non-standard fields with [`get_extra`](Self::get_extra) (or reach
+/// the whole [`raw_token_response`](Self::raw_token_response)).
 ///
 /// [`exchange`]: crate::grant::core::OAuth2ExchangeGrant::exchange
 #[derive(Debug, Clone)]
@@ -95,6 +95,12 @@ impl TokenResponse {
     #[must_use]
     pub fn authorization_details(&self) -> Option<&[AuthorizationDetail]> {
         self.raw.authorization_details.as_deref()
+    }
+
+    /// Gets a non-standard field from the token response.
+    #[must_use]
+    pub fn get_extra(&self, key: &str) -> Option<&Value> {
+        self.raw.get_extra(key)
     }
 
     /// Returns the underlying raw response, for reading non-standard
