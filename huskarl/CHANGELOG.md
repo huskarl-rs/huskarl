@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Allow token cache to refresh before the token actually expires, while all but
    one request use the existing still valid token.
  - Save RAR `authorization_details` as an extra field in token response.
+ - Read allowed ID tokens algorithms from AS metadata.
 
 ## [0.8.0] - 2026-06-15
 

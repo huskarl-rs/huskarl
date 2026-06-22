@@ -51,6 +51,15 @@ pub struct DeviceAuthorizationGrant {
     )]
     dpop: Arc<dyn AuthorizationServerDPoP>,
 
+    /// Minimum delay between token-endpoint polls, in seconds.
+    ///
+    /// Enforced even when the server supplies a smaller (or zero) `interval`,
+    /// so a misbehaving or malicious authorization server cannot drive a tight
+    /// polling loop (RFC 8628 §3.5 expects clients to throttle their polling).
+    /// Defaults to [`DEFAULT_MIN_POLL_INTERVAL_SECS`] (RFC 8628 §3.2 baseline).
+    #[builder(default = DEFAULT_MIN_POLL_INTERVAL_SECS)]
+    min_poll_interval_secs: u32,
+
     /// The issuer for tokens created by the authorization server.
     #[from_metadata(path = "issuer")]
     issuer: Option<String>,
@@ -185,7 +194,11 @@ impl DeviceAuthorizationGrant {
         resource: Option<Vec<String>>,
     ) -> Result<TokenResponse, PollError> {
         loop {
-            sleep(Duration::from_secs(pending_state.interval_secs.into())).await;
+            // Clamp to the configured floor: a server (or a deserialized
+            // pending state) can carry `interval: 0`, which would otherwise
+            // spin a zero-delay hot loop hammering the token endpoint.
+            let interval_secs = pending_state.interval_secs.max(self.min_poll_interval_secs);
+            sleep(Duration::from_secs(interval_secs.into())).await;
 
             if let PollResult::Complete(token_response) =
                 self.poll(pending_state, resource.clone()).await?
@@ -332,11 +345,17 @@ struct DeviceAuthorizationResponse {
     interval: u32,
 }
 
-/// Default polling interval in seconds.
+/// Default polling interval in seconds (RFC 8628 §3.2), used when the device
+/// authorization response omits `interval`.
 #[inline]
 const fn default_interval() -> u32 {
     5
 }
+
+/// Default minimum delay between token-endpoint polls, in seconds (RFC 8628
+/// §3.2 baseline cadence). Configurable per grant via
+/// [`DeviceAuthorizationGrant`]'s `min_poll_interval_secs` builder setter.
+pub const DEFAULT_MIN_POLL_INTERVAL_SECS: u32 = 5;
 
 #[derive(Debug, Serialize)]
 struct DeviceAuthorizationRequest<'a> {
@@ -570,5 +589,49 @@ mod tests {
         );
         let result = g.poll(&mut pending(), None).await.unwrap();
         assert!(matches!(result, PollResult::Complete(_)));
+    }
+
+    #[test]
+    fn min_poll_interval_defaults_to_baseline_and_is_configurable() {
+        let g = grant(StatusCode::OK, "{}");
+        assert_eq!(g.min_poll_interval_secs, DEFAULT_MIN_POLL_INTERVAL_SECS);
+
+        let configured = DeviceAuthorizationGrant::builder()
+            .client_id("device-client")
+            .http_client(FakeClient {
+                status: StatusCode::OK,
+                body: "{}",
+            })
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example/token".parse::<EndpointUrl>().unwrap())
+            .device_authorization_endpoint(
+                "https://as.example/device".parse::<EndpointUrl>().unwrap(),
+            )
+            .min_poll_interval_secs(30)
+            .build();
+        assert_eq!(configured.min_poll_interval_secs, 30);
+    }
+
+    /// A server-supplied `interval: 0` must not spin a zero-delay hot loop:
+    /// `poll_to_completion` waits at least the configured floor before polling.
+    #[tokio::test(start_paused = true)]
+    async fn poll_to_completion_enforces_interval_floor_on_zero() {
+        let g = grant(
+            StatusCode::OK,
+            r#"{"access_token":"at-123","token_type":"bearer"}"#,
+        );
+        let mut state = PendingState {
+            device_code: "dev-code".to_string(),
+            interval_secs: 0,
+        };
+
+        let start = tokio::time::Instant::now();
+        g.poll_to_completion(&mut state, None).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= std::time::Duration::from_secs(DEFAULT_MIN_POLL_INTERVAL_SECS.into()),
+            "expected at least the {DEFAULT_MIN_POLL_INTERVAL_SECS}s floor, slept {elapsed:?}"
+        );
     }
 }

@@ -149,7 +149,6 @@ pub async fn run_auth_code_flow<
     client_auth: Auth,
     dpop: D,
     scopes: impl IntoIterator<Item = impl Into<String>>,
-    allowed_id_token_signed_response_algs: Option<std::collections::HashSet<String>>,
     jar: J,
 ) -> Result<(TokenResponse, HttpAuthorizer), String> {
     let listener = bind_loopback(0)
@@ -167,7 +166,6 @@ pub async fn run_auth_code_flow<
         scopes,
         &listener,
         &redirect_uri,
-        allowed_id_token_signed_response_algs,
         jar,
     )
     .await
@@ -193,7 +191,6 @@ pub async fn run_auth_code_flow_with_listener<
     scopes: impl IntoIterator<Item = impl Into<String>>,
     listener: &TcpListener,
     redirect_uri: &str,
-    allowed_id_token_signed_response_algs: Option<std::collections::HashSet<String>>,
     jar: J,
 ) -> Result<(TokenResponse, HttpAuthorizer), String> {
     let metadata = AuthorizationServerMetadata::oidc_fetch()
@@ -225,7 +222,6 @@ pub async fn run_auth_code_flow_with_listener<
                 .http_client(http_client.clone())
                 .build(),
         ))
-        .maybe_allowed_id_token_signed_response_algs(allowed_id_token_signed_response_algs)
         .build()
         .await
         .map_err(|e| format!("failed to build grant: {e}"))?;

@@ -136,11 +136,6 @@ async fn run_fapi2_plan<J: Jar + Clone + 'static>(
             ["openid", "profile", "email"],
             &listener,
             &redirect_uri,
-            Some(std::collections::HashSet::from([
-                "PS256".to_string(),
-                "ES256".to_string(),
-                "EdDSA".to_string(),
-            ])),
             jar,
         )
         .await;

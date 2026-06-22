@@ -194,6 +194,30 @@ impl AuthorizationCodeGrant {
         #[builder(default)]
         disable_pkce: bool,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
+        /// Restricts accepted ID token signature algorithms to this set.
+        ///
+        /// When built via
+        /// [`builder_from_metadata`](Self::builder_from_metadata), this is
+        /// seeded from the server's `id_token_signing_alg_values_supported`
+        /// (OIDC Discovery 1.0 §3), pinning the ID-token `alg` to what the
+        /// issuer advertises (the insecure `none` value is dropped, and is
+        /// rejected unconditionally regardless). On the plain
+        /// [`builder`](Self::builder) path it is unset unless supplied
+        /// explicitly; left unset, any algorithm the verifier supports is
+        /// accepted.
+        #[from_metadata(
+            with = |m: &crate::core::server_metadata::AuthorizationServerMetadata| m
+                .id_token_signing_alg_values_supported
+                .as_ref()
+                .map(|algs| {
+                    algs.iter()
+                        .filter(|a| *a != "none")
+                        .cloned()
+                        .collect::<HashSet<String>>()
+                })
+                .filter(|algs| !algs.is_empty()),
+            maybe
+        )]
         allowed_id_token_signed_response_algs: Option<HashSet<String>>,
         #[cfg(not(feature = "default-jws-verifier-platform"))] jws_verifier_platform: Option<
             Arc<dyn JwsVerifierPlatform>,

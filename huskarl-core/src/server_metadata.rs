@@ -142,6 +142,13 @@ pub struct AuthorizationServerMetadata {
     ///
     /// `OpenID` Connect Core 1.0
     pub userinfo_endpoint: Option<EndpointUrl>,
+    /// Array containing a list of the JWS "alg" values supported by the OP for
+    /// the ID token to encode the Claims in a JWT (OIDC Discovery 1.0 §3).
+    ///
+    /// A relying party can use this to pin the set of acceptable ID-token
+    /// signature algorithms; the authorization code grant seeds its
+    /// `allowed_id_token_signed_response_algs` from it.
+    pub id_token_signing_alg_values_supported: Option<Vec<String>>,
     /// URL of an OP iframe that supports cross-origin communications for session state information
     /// with the RP Client, using the HTML5 postMessage API.
     ///

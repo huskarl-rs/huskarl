@@ -122,7 +122,6 @@ async fn run_plan(plan_name: &str) -> Vec<String> {
             ["openid", "profile", "email"],
             &listener,
             &redirect_uri,
-            None,
             NoJar,
         )
         .await;
