@@ -28,6 +28,7 @@ backend, or secret source.
 mod endpoint_url;
 mod uuid;
 
+pub mod authorization_details;
 pub mod client_auth;
 pub mod crypto;
 pub mod dpop;
@@ -42,5 +43,6 @@ pub mod secrets;
 pub mod serde_utils;
 pub mod server_metadata;
 
+pub use authorization_details::AuthorizationDetail;
 pub use endpoint_url::EndpointUrl;
 pub use error::{Error, ErrorKind};

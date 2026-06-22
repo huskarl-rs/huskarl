@@ -253,6 +253,7 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
         TokenExchangeGrantForm {
             grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
             resource: params.resource,
+            authorization_details: params.authorization_details,
             audience: params.audience,
             scope: params.scope,
             requested_token_type: params.requested_token_type,
@@ -272,6 +273,8 @@ pub struct TokenExchangeGrantParameters {
     subject: SecurityToken,
     /// The URI of a resource server where the requested token will be used.
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
     /// The logical name of the target service or resource where the requested token will be used.
     audience: Option<String>,
     /// The requested scope(s) for the issued security token.
@@ -395,6 +398,11 @@ mod tests {
             .audience("https://api.example")
             .scopes(["read", "write"])
             .requested_token_type("urn:ietf:params:oauth:token-type:access_token")
+            .authorization_details(vec![
+                crate::core::AuthorizationDetail::builder("payment_initiation")
+                    .with("actions", serde_json::json!(["initiate"]))
+                    .build(),
+            ])
             .build();
 
         let encoded = crate::core::oauth_form::to_string(&grant().build_form(params)).unwrap();
@@ -408,6 +416,8 @@ mod tests {
             "audience=https%3A%2F%2Fapi.example",
             "scope=read+write",
             "requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
+            // RFC 9396 §6: one parameter carrying URL-encoded JSON (`%5B%7B` = `[{`).
+            "authorization_details=%5B%7B",
         ] {
             assert!(
                 encoded.contains(expected),
@@ -513,6 +523,8 @@ mod tests {
 pub struct TokenExchangeGrantForm {
     grant_type: &'static str,
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
     audience: Option<String>,
     scope: Option<String>,
     requested_token_type: Option<String>,

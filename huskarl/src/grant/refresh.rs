@@ -252,6 +252,7 @@ impl OAuth2ExchangeGrant for RefreshGrant {
             refresh_token: params.refresh_token.token().clone(),
             scope: params.scope,
             resource: params.resource,
+            authorization_details: params.authorization_details,
         }
     }
 }
@@ -266,6 +267,8 @@ pub struct RefreshGrantParameters {
     scope: Option<String>,
     /// The target resource(s) for the access token.
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
 impl RefreshGrantParameters {
@@ -280,12 +283,14 @@ impl RefreshGrantParameters {
 }
 
 /// Refresh grant body.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Builder)]
 pub struct RefreshGrantForm {
     grant_type: &'static str,
     refresh_token: SecretString,
     scope: Option<String>,
     resource: Option<Vec<String>>,
+    /// RFC 9396 `authorization_details` requested for the issued access token.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
 #[cfg(test)]
@@ -294,12 +299,10 @@ mod tests {
 
     #[test]
     fn refresh_form_serializes_token_as_plain_string() {
-        let form = RefreshGrantForm {
-            grant_type: "refresh_token",
-            refresh_token: SecretString::new("my-refresh-token"),
-            scope: None,
-            resource: None,
-        };
+        let form = RefreshGrantForm::builder()
+            .grant_type("refresh_token")
+            .refresh_token(SecretString::new("my-refresh-token"))
+            .build();
         let encoded = crate::core::oauth_form::to_string(&form).unwrap();
         assert_eq!(
             encoded,
@@ -309,15 +312,14 @@ mod tests {
 
     #[test]
     fn refresh_form_resource_serializes_as_repeated_keys() {
-        let form = RefreshGrantForm {
-            grant_type: "refresh_token",
-            refresh_token: SecretString::new("tok"),
-            scope: None,
-            resource: Some(vec![
-                "https://api.example.com".to_string(),
-                "https://other.example.com".to_string(),
-            ]),
-        };
+        let form = RefreshGrantForm::builder()
+            .grant_type("refresh_token")
+            .refresh_token(SecretString::new("tok"))
+            .resource(vec![
+                "https://api.example.com".into(),
+                "https://other.example.com".into(),
+            ])
+            .build();
         let encoded = crate::core::oauth_form::to_string(&form).unwrap();
         assert!(
             encoded.contains("resource=https%3A%2F%2Fapi.example.com"),

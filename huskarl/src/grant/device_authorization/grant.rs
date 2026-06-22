@@ -121,6 +121,7 @@ impl DeviceAuthorizationGrant {
         let payload = DeviceAuthorizationRequest {
             scope: start_input.scopes.as_deref(),
             resource: start_input.resource.as_deref(),
+            authorization_details: start_input.authorization_details.as_deref(),
         };
 
         let device_auth_endpoint = &self.effective_device_authorization_endpoint;
@@ -341,6 +342,7 @@ const fn default_interval() -> u32 {
 struct DeviceAuthorizationRequest<'a> {
     scope: Option<&'a str>,
     resource: Option<&'a [String]>,
+    authorization_details: Option<&'a [crate::core::AuthorizationDetail]>,
 }
 
 /// The output information from starting the device authorization flow.
@@ -398,9 +400,12 @@ pub enum PollResult {
 /// The input to start the device authorization flow.
 #[derive(Debug, Clone, Builder)]
 pub struct StartInput {
-    #[builder(required, with = |scopes: impl IntoIterator<Item = impl Into<String>>| crate::grant::core::mk_scopes(scopes))]
+    #[builder(required, default, with = |scopes: impl IntoIterator<Item = impl Into<String>>| crate::grant::core::mk_scopes(scopes))]
     scopes: Option<String>,
     resource: Option<Vec<String>>,
+    /// RFC 9396 Rich Authorization Requests, sent on the device authorization
+    /// request alongside (or instead of) `scopes`.
+    authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
 impl StartInput {
@@ -469,6 +474,41 @@ mod tests {
             device_code: "dev-code".to_string(),
             interval_secs: 5,
         }
+    }
+
+    #[test]
+    fn device_authorization_request_carries_authorization_details() {
+        let details = vec![
+            crate::core::AuthorizationDetail::builder("payment_initiation")
+                .with("actions", serde_json::json!(["initiate"]))
+                .build(),
+        ];
+        let payload = DeviceAuthorizationRequest {
+            scope: Some("openid"),
+            resource: None,
+            authorization_details: Some(&details),
+        };
+
+        let encoded = crate::core::oauth_form::to_string(&payload).unwrap();
+        assert!(encoded.contains("scope=openid"), "encoded: {encoded}");
+        // RFC 9396 §3: one parameter carrying URL-encoded JSON (`%5B%7B` = `[{`).
+        assert!(
+            encoded.contains("authorization_details=%5B%7B"),
+            "encoded: {encoded}"
+        );
+    }
+
+    #[test]
+    fn start_input_scope_is_optional() {
+        // RFC 6749 §3.1.1 / RFC 9396 §3: scope is optional; a request may carry
+        // only authorization_details.
+        let input = StartInput::builder()
+            .authorization_details(vec![
+                crate::core::AuthorizationDetail::builder("payment_initiation").build(),
+            ])
+            .build();
+        assert!(input.scopes.is_none());
+        assert!(input.authorization_details.is_some());
     }
 
     #[tokio::test]
