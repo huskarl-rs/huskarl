@@ -279,9 +279,7 @@ pub struct AuthorizationCodeGrantForm<'a> {
     grant_type: &'static str,
     code: String,
     redirect_uri: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     code_verifier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     resource: Option<Vec<String>>,
 }
 

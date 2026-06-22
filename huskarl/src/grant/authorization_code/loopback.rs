@@ -53,6 +53,13 @@ pub enum LoopbackError {
         /// The `error_description` field in the `OAuth2` error response.
         error_description: Option<String>,
     },
+    /// The callback parameters could not be parsed (malformed query, or a
+    /// single-valued parameter that appeared more than once — RFC 6749 §3.1).
+    #[snafu(display("Failed to parse callback parameters: {source}"))]
+    InvalidCallbackParameters {
+        /// The underlying parse error.
+        source: crate::core::oauth_form::Error,
+    },
     /// Missing required parameter.
     #[snafu(display("Missing required parameter: {param}"))]
     MissingParameter {
@@ -74,6 +81,7 @@ impl LoopbackError {
         match self {
             LoopbackError::InvalidRedirectUri { .. }
             | LoopbackError::OAuthError { .. }
+            | LoopbackError::InvalidCallbackParameters { .. }
             | LoopbackError::MissingParameter { .. } => false,
             LoopbackError::Accept { .. } | LoopbackError::ReadRequest { .. } => true,
             LoopbackError::Complete { source } => source.is_retryable(),
@@ -180,7 +188,7 @@ fn error_query_string(ctx: &ErrorContext) -> String {
         },
     };
 
-    serde_html_form::to_string(&params).unwrap_or_default()
+    crate::core::oauth_form::to_string(&params).unwrap_or_default()
 }
 
 fn to_error_context(port: u16, err: &LoopbackError) -> ErrorContext {
@@ -418,44 +426,44 @@ async fn read_request_path_inner(stream: &mut TcpStream) -> Result<Option<String
 }
 
 fn parse_callback_params(path_and_query: &str) -> Result<CompleteInput, LoopbackError> {
-    // Parse the URL to extract query parameters. This shouldn't fail since we
-    // control the format, but a malformed request line is handled gracefully.
-    let url = Url::parse(&format!("http://localhost{path_and_query}"))
-        .context(InvalidRedirectUriSnafu)?;
-
-    let mut code: Option<String> = None;
-    let mut state: Option<String> = None;
-    let mut error: Option<String> = None;
-    let mut error_description: Option<String> = None;
-    let mut iss: Option<String> = None;
-
-    // Extract query parameters using the url crate
-    for (key, value) in url.query_pairs() {
-        match key.as_ref() {
-            "code" => code = Some(value.to_string()),
-            "state" => state = Some(value.to_string()),
-            "error" => error = Some(value.to_string()),
-            "iss" => iss = Some(value.to_string()),
-            "error_description" => error_description = Some(value.to_string()),
-            _ => {} // Ignore other parameters
-        }
+    /// The authorization-response parameters delivered to the redirect URI
+    /// (RFC 6749 §4.1.2 / §4.1.2.1, plus the RFC 9207 `iss`). Unknown
+    /// parameters are ignored; a repeated single-valued parameter is rejected.
+    #[derive(serde::Deserialize)]
+    struct CallbackParams {
+        code: Option<String>,
+        state: Option<String>,
+        error: Option<String>,
+        error_description: Option<String>,
+        iss: Option<String>,
     }
 
-    // Check for OAuth error response first
-    if let Some(error) = error {
+    // The callback parameters are the query component. For `response_mode=form_post`
+    // the body is folded in as a query string upstream, so this handles both.
+    let query = path_and_query.split_once('?').map_or("", |(_, q)| q);
+
+    let params: CallbackParams =
+        crate::core::oauth_form::from_str(query).context(InvalidCallbackParametersSnafu)?;
+
+    // An OAuth error response takes precedence (RFC 6749 §4.1.2.1).
+    if let Some(error) = params.error {
         return Err(LoopbackError::OAuthError {
             error,
-            error_description,
+            error_description: params.error_description,
         });
     }
 
-    let code = code.ok_or(LoopbackError::MissingParameter { param: "code" })?;
-    let state = state.ok_or(LoopbackError::MissingParameter { param: "state" })?;
+    let code = params
+        .code
+        .ok_or(LoopbackError::MissingParameter { param: "code" })?;
+    let state = params
+        .state
+        .ok_or(LoopbackError::MissingParameter { param: "state" })?;
 
     Ok(CompleteInput::builder()
         .code(code)
         .state(state)
-        .maybe_iss(iss)
+        .maybe_iss(params.iss)
         .build())
 }
 
@@ -714,6 +722,30 @@ mod tests {
         assert!(matches!(
             &err,
             LoopbackError::MissingParameter { param: "code" }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_parameter_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+                Ok(ok_token_response())
+            })
+            .await
+        });
+
+        // A repeated single-valued parameter is rejected (RFC 6749 §3.1),
+        // rather than silently taking one value.
+        send_http_request(addr, "GET /callback?code=abc&state=xyz&state=zzz HTTP/1.1").await;
+        send_http_request(addr, "GET /failure HTTP/1.1").await;
+
+        let err = handle.await.unwrap().unwrap_err();
+        assert!(matches!(
+            &err,
+            LoopbackError::InvalidCallbackParameters { .. }
         ));
     }
 

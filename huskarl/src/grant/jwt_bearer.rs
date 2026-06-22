@@ -359,9 +359,7 @@ impl GrantParametersSource<Self> for JwtBearerGrantParameters {
 pub struct JwtBearerGrantForm {
     grant_type: &'static str,
     assertion: SecretString,
-    #[serde(skip_serializing_if = "Option::is_none")]
     scope: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     resource: Option<Vec<String>>,
 }
 
@@ -413,7 +411,7 @@ mod tests {
             scope: None,
             resource: None,
         };
-        let encoded = serde_html_form::to_string(&form).unwrap();
+        let encoded = crate::core::oauth_form::to_string(&form).unwrap();
         assert!(
             encoded.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer"),
             "grant_type not found in: {encoded}"

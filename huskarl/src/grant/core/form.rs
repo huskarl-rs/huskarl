@@ -9,6 +9,7 @@ use crate::core::{
     client_auth::AuthenticationParams,
     dpop::AuthorizationServerDPoP,
     http::{HttpClient, Idempotency},
+    oauth_form,
 };
 
 #[derive(Builder)]
@@ -24,7 +25,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     pub async fn build_request(&self) -> Result<Request<Bytes>, Error> {
         let headers = self.auth_params.headers.clone().unwrap_or_default();
 
-        let mut body = serde_html_form::to_string(self.form)
+        let mut body = oauth_form::to_string(self.form)
             .map_err(|e| serialize_form_error(e).with_context("serializing exchange parameters"))?;
 
         if let Some(kv) = &self.auth_params.form_params {
@@ -32,7 +33,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
                 body.push('&');
             }
 
-            serde_html_form::push_to_string(&mut body, kv).map_err(|e| {
+            oauth_form::push_to_string(&mut body, kv).map_err(|e| {
                 serialize_form_error(e).with_context("serializing authentication parameters")
             })?;
         }
@@ -121,7 +122,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     }
 }
 
-fn serialize_form_error(source: serde_html_form::ser::Error) -> Error {
+fn serialize_form_error(source: oauth_form::Error) -> Error {
     Error::new(ErrorKind::Config, source)
 }
 

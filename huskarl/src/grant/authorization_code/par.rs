@@ -209,7 +209,7 @@ mod tests {
             request: "the-jar-jwt",
         };
         assert_eq!(
-            serde_html_form::to_string(&body).unwrap(),
+            crate::core::oauth_form::to_string(&body).unwrap(),
             "request=the-jar-jwt"
         );
     }
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn par_body_expanded_serializes_the_authorization_payload() {
         let body = ParBody::Expanded(Box::new(payload()));
-        let encoded = serde_html_form::to_string(&body).unwrap();
+        let encoded = crate::core::oauth_form::to_string(&body).unwrap();
 
         assert!(encoded.contains("response_type=code"), "encoded: {encoded}");
         assert!(encoded.contains("state=state-xyz"), "encoded: {encoded}");
@@ -232,7 +232,7 @@ mod tests {
             client_id: "client-1",
             request_uri: "urn:ietf:params:oauth:request_uri:abc",
         };
-        let encoded = serde_html_form::to_string(&push).unwrap();
+        let encoded = crate::core::oauth_form::to_string(&push).unwrap();
         assert!(encoded.contains("client_id=client-1"), "encoded: {encoded}");
         assert!(encoded.contains("request_uri=urn"), "encoded: {encoded}");
     }
