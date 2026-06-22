@@ -367,6 +367,7 @@ struct DeviceAuthorizationRequest<'a> {
 /// The output information from starting the device authorization flow.
 #[derive(Debug, Builder)]
 #[builder(on(String, into))]
+#[non_exhaustive]
 pub struct StartOutput {
     /// The end-user verification code.
     pub user_code: String,
@@ -383,6 +384,7 @@ pub struct StartOutput {
 /// The pending state information (to be passed to the `poll` function).
 #[derive(Debug, Builder, Serialize, Deserialize)]
 #[builder(on(String, into))]
+#[non_exhaustive]
 pub struct PendingState {
     /// The device verification code.
     pub device_code: String,
@@ -395,6 +397,7 @@ pub struct PendingState {
 /// The `AccessDenied` and `TokenExpired` variants are control flow for
 /// device-flow UIs; everything else carries the underlying [`Error`].
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum PollError {
     /// Access was denied.
     AccessDenied,

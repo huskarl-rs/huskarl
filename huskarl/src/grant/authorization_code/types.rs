@@ -95,6 +95,7 @@ pub struct StartInput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub enum Display {
     #[serde(rename = "page")]
     Page,
@@ -109,6 +110,7 @@ pub enum Display {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub enum Prompt {
     #[serde(rename = "none")]
     None,
@@ -139,6 +141,7 @@ impl<S: start_input_builder::IsComplete> StartInputBuilder<S> {
 }
 
 /// The result of starting the authorization code flow.
+#[non_exhaustive]
 pub struct StartOutput {
     /// The URL to redirect the user to for authorization.
     pub authorization_url: http::Uri,
@@ -162,6 +165,7 @@ pub struct CompleteInput {
 
 /// The information needed to be stored from the initial flow setup, for use in the callback.
 #[derive(Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PendingState {
     /// The redirect URI.
     ///

@@ -9,6 +9,7 @@ use snafu::Snafu;
 /// the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
+#[non_exhaustive]
 pub enum CompleteError {
     /// There was a mismatch between the required and returned issuer values.
     #[snafu(display("Issuer mismatch: original = {}, callback = {}", original, callback))]
@@ -45,6 +46,7 @@ pub enum CompleteError {
 /// errors returned by the grant builder.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
+#[non_exhaustive]
 pub enum BuildError {
     /// A JWS verifier factory was provided but no verifier platform is available.
     #[snafu(display(

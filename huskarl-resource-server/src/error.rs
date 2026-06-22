@@ -91,6 +91,7 @@ impl TokenValidationError {
     strum::EnumString,
 )]
 #[strum(serialize_all = "snake_case")]
+#[non_exhaustive]
 pub enum TokenErrorCode {
     /// The request is malformed. Respond with HTTP 400.
     InvalidRequest,

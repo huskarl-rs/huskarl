@@ -62,6 +62,7 @@ impl<T: TokenCache + ?Sized> TokenCache for Arc<T> {}
 /// [`ErrorKind::Backoff`](crate::core::ErrorKind::Backoff) while the source is
 /// cooling down. Match on the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum GetTokenError {
     /// Token refresh failed and no grant parameters were available to fall back to.
     #[snafu(display("token refresh failed and no grant parameters were available: {source}"))]

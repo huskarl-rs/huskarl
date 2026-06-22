@@ -25,6 +25,7 @@ use crate::core::{
 /// All claim fields are `Option` because this validator only enforces structural
 /// validity (signature, typ, alg, iat/exp). Whether specific claims like `htm`,
 /// `htu`, or `ath` are required is a consumer-level decision.
+#[non_exhaustive]
 pub struct ValidatedDpopProof {
     /// HTTP method the proof was created for (`htm` claim).
     pub htm: Option<String>,
@@ -211,6 +212,7 @@ impl DpopProofError {
 
 /// Errors from `DPoP` proof structural validation.
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum DpopProofError {
     /// Not a valid compact JWS.
     #[snafu(display("Bad DPoP proof format"))]

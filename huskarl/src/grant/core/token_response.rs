@@ -205,6 +205,7 @@ impl RawTokenResponse {
 
 /// A [`RawTokenResponse`] that cannot be converted into a [`TokenResponse`].
 #[derive(Debug, Clone, PartialEq, Snafu)]
+#[non_exhaustive]
 pub enum InvalidTokenResponse {
     /// The response is `DPoP`-typed but no `DPoP` key thumbprint was provided.
     #[snafu(display("No DPoP thumbprint provided"))]

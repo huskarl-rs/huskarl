@@ -61,6 +61,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         authorization_url,
         expires_in: _,
         pending_state,
+        ..
     } = grant
         .start(StartInput::scopes(["test"]))
         .await

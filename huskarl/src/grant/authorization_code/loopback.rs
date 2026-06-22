@@ -26,6 +26,7 @@ use crate::{
 /// The `OAuthError` variant is control flow for login UIs (e.g. the user
 /// denied access); the rest carry the underlying failure.
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum LoopbackError {
     /// Invalid redirect URI in callback.
     #[snafu(display("Invalid redirect URI in callback state: {source}"))]
@@ -96,6 +97,7 @@ pub struct SuccessContext {
 }
 
 /// Context passed to the error page renderer.
+#[non_exhaustive]
 pub enum ErrorContext {
     /// The authorization server returned an OAuth error response (e.g. `access_denied`).
     OAuthError {

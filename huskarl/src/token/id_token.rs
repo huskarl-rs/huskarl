@@ -54,6 +54,7 @@ impl From<String> for IdToken {
 
 /// Claims for a standard `OpenID` Connect ID token.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct IdTokenClaims {
     /// The nonce value from the token claims.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,6 +98,7 @@ pub struct IdTokenClaims {
 /// optional on ID-token claims but required on `UserInfo` responses, so each
 /// outer type carries its own.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StandardOidcProfileClaims {
     /// End-User's full name in displayable form.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -163,6 +165,7 @@ pub struct StandardOidcProfileClaims {
 
 /// Standard `OpenID` Connect address claim as defined in OIDC Core §5.1.1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StandardOidcAddressClaims {
     /// Full mailing address, formatted for display or use on a mailing label.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -329,6 +332,7 @@ impl IdTokenValidator {
 
 /// Errors that can occur when validating an ID token.
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum IdTokenValidationError {
     /// Base JWT errors.
     Jwt {
