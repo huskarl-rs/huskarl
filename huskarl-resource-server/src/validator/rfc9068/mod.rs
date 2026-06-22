@@ -420,6 +420,10 @@ pub struct Rfc9068AccessTokenClaims<ExtraClaims = ()> {
     /// Space-separated list of scopes associated with the token (RFC 9068 §2.2.3).
     pub scope: Option<String>,
     /// Additional claims beyond the RFC 9068 standard set.
+    ///
+    /// Non-RFC-9068 claims — including the RFC 9396 `authorization_details` a
+    /// deployment may add per §9.1 — are captured here via the `ExtraClaims`
+    /// type a caller supplies; this struct models only the RFC 9068 claim set.
     #[serde(flatten)]
     pub extra_claims: ExtraClaims,
 }

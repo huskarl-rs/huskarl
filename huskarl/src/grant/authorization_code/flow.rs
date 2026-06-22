@@ -554,6 +554,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn id_token_algs_default_from_metadata_dropping_none() {
+        // OIDC Discovery `id_token_signing_alg_values_supported` seeds the
+        // allowlist so the ID-token `alg` is pinned to what the issuer
+        // advertises; the insecure `none` value is dropped.
+        let metadata: AuthorizationServerMetadata = serde_json::from_value(serde_json::json!({
+            "issuer": "https://as.example.com",
+            "authorization_endpoint": "https://as.example.com/authorize",
+            "token_endpoint": "https://as.example.com/token",
+            "response_types_supported": ["code"],
+            "id_token_signing_alg_values_supported": ["RS256", "ES256", "none"],
+        }))
+        .unwrap();
+
+        let grant: Grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
+            .unwrap()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let algs = grant
+            .allowed_id_token_signed_response_algs
+            .expect("allowlist defaulted from metadata");
+        assert!(algs.contains("RS256"), "{algs:?}");
+        assert!(algs.contains("ES256"), "{algs:?}");
+        assert!(
+            !algs.contains("none"),
+            "insecure `none` must be dropped: {algs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn id_token_algs_unset_when_metadata_omits_them() {
+        let metadata: AuthorizationServerMetadata = serde_json::from_value(serde_json::json!({
+            "issuer": "https://as.example.com",
+            "authorization_endpoint": "https://as.example.com/authorize",
+            "token_endpoint": "https://as.example.com/token",
+            "response_types_supported": ["code"],
+        }))
+        .unwrap();
+
+        let grant: Grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
+            .unwrap()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        assert!(grant.allowed_id_token_signed_response_algs.is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_id_token_algs_via_plain_builder() {
+        // The plain `builder()` path takes an explicit allowlist (no metadata
+        // seeding), pinning exactly the configured algorithms.
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .allowed_id_token_signed_response_algs(
+                ["PS256".to_string()]
+                    .into_iter()
+                    .collect::<std::collections::HashSet<_>>(),
+            )
+            .build()
+            .await
+            .unwrap();
+
+        let algs = grant
+            .allowed_id_token_signed_response_algs
+            .expect("explicit allowlist");
+        assert_eq!(algs.len(), 1, "{algs:?}");
+        assert!(algs.contains("PS256"), "{algs:?}");
+    }
+
+    #[tokio::test]
     async fn plain_only_metadata_uses_plain() {
         let grant = AuthorizationCodeGrant::builder()
             .client_id("client")

@@ -321,6 +321,10 @@ pub(crate) struct IntrospectionResponse<Claims = ()> {
     /// The key confirmation claim (`cnf`, RFC 7800), if present.
     pub cnf: Option<ConfirmationClaim>,
     /// Additional claims beyond the standard introspection response fields.
+    ///
+    /// RFC 9396 `authorization_details` (a §9.2 top-level member) is not a
+    /// registered field here; it flows into `claims`, so a caller that wants it
+    /// typed includes an `authorization_details` field in their `Claims` type.
     #[serde(flatten)]
     pub claims: Claims,
 }

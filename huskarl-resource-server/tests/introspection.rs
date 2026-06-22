@@ -84,6 +84,64 @@ async fn matching_audience_is_accepted() {
     mock.assert();
 }
 
+/// RFC 9396 §9.2: `authorization_details` is not a registered introspection
+/// field, so a caller captures it by typing it in their own `Claims`, where it
+/// arrives via the flattened claims.
+#[tokio::test]
+async fn authorization_details_flow_into_typed_claims() {
+    use huskarl_resource_server::core::AuthorizationDetail;
+
+    #[derive(serde::Deserialize, Clone)]
+    struct RarClaims {
+        authorization_details: Option<Vec<AuthorizationDetail>>,
+    }
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/introspect");
+        then.status(200).header("content-type", "application/json").body(
+            r#"{"active": true, "aud": "api://rs1", "authorization_details": [{"type": "payment_initiation", "actions": ["initiate"]}]}"#,
+        );
+    });
+
+    let http_client = ReqwestClient::builder().build().await.unwrap();
+    let validator = IntrospectionValidator::builder()
+        .with_claims::<RarClaims>()
+        .client_id("my-resource-server")
+        .introspection_endpoint(
+            format!("http://{}/introspect", server.address())
+                .parse::<EndpointUrl>()
+                .unwrap(),
+        )
+        .audience(ClaimCheck::required_value("api://rs1"))
+        .client_auth(NoAuth)
+        .http_client(http_client)
+        .build()
+        .await
+        .unwrap();
+
+    let validated = validator
+        .validate_request(
+            &bearer_headers(),
+            &http::Method::GET,
+            &"https://api.example.com/data".parse().unwrap(),
+            None,
+        )
+        .await
+        .outcome
+        .expect("token should validate")
+        .expect("token should be present");
+
+    let details = validated
+        .claims
+        .authorization_details
+        .as_deref()
+        .expect("authorization_details present in typed claims");
+    assert_eq!(details.len(), 1);
+    assert_eq!(details[0].r#type, "payment_initiation");
+    mock.assert();
+}
+
 #[tokio::test]
 async fn wrong_audience_is_rejected() {
     let server = MockServer::start();

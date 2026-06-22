@@ -83,6 +83,10 @@ pub struct ValidatedRequest<Claims> {
     /// (`x5t#S256`, RFC 8705).
     pub cnf: Option<ConfirmationClaim>,
     /// Additional claims beyond the registered token claim set.
+    ///
+    /// Format-specific and extension claims (e.g. RFC 9068 `client_id` and the
+    /// RFC 9396 `authorization_details`) live here, in the typed claims type —
+    /// not as fields on this struct, which carries only the universal token set.
     pub claims: Claims,
     /// Raw introspection JWT (RFC 9701), if the authorization server returned one.
     ///
