@@ -6,7 +6,7 @@ use serde_json::Value;
 use snafu::Snafu;
 
 use crate::{
-    core::{platform::Duration, secrets::SecretString},
+    core::{AuthorizationDetail, platform::Duration, secrets::SecretString},
     token::{AccessToken, BearerAccessToken, DpopAccessToken, IdToken, RefreshToken},
 };
 
@@ -46,6 +46,10 @@ pub struct RawTokenResponse {
     /// The issued token type.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub issued_token_type: Option<String>,
+    /// The authorization details granted to the token (RFC 9396 §7), which may
+    /// differ from those requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_details: Option<Vec<AuthorizationDetail>>,
     /// Other fields received from the token endpoint.
     #[serde(flatten)]
     extra: Option<HashMap<String, Value>>,
@@ -85,6 +89,12 @@ impl TokenResponse {
     #[must_use]
     pub fn id_token(&self) -> Option<&IdToken> {
         self.raw.id_token.as_ref()
+    }
+
+    /// Returns the authorization details granted to the token (RFC 9396 §7).
+    #[must_use]
+    pub fn authorization_details(&self) -> Option<&[AuthorizationDetail]> {
+        self.raw.authorization_details.as_deref()
     }
 
     /// Returns the underlying raw response, for reading non-standard
@@ -383,5 +393,34 @@ mod test {
             err_token_response,
             InvalidTokenResponse::NoDpopThumbprint
         ));
+    }
+
+    #[test]
+    fn parse_token_response_with_authorization_details() {
+        let token_response_str = r#"
+{
+  "access_token":"tok",
+  "token_type":"DPoP",
+  "authorization_details":[
+    {"type":"payment_initiation","actions":["initiate"]}
+  ]
+}
+            "#;
+
+        let raw: RawTokenResponse =
+            serde_json::from_str(token_response_str).expect("parsing succeeds");
+
+        let details = raw
+            .authorization_details
+            .as_deref()
+            .expect("authorization_details present");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].r#type, "payment_initiation");
+        assert_eq!(
+            details[0].fields.get("actions"),
+            Some(&serde_json::json!(["initiate"]))
+        );
+        // It deserializes into the typed field rather than being swept into `extra`.
+        assert!(raw.get_extra("authorization_details").is_none());
     }
 }
