@@ -4,19 +4,20 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, StatusCode};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use snafu::{ResultExt as _, Snafu, ensure};
 
 use crate::{
     core::{
         EndpointUrl, Error,
-        client_auth::{ClientAuthentication, FormValue},
+        client_auth::ClientAuthentication,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         http::{HttpClient, HttpResponse, Idempotency},
         jwt::{
             ConfirmationClaim,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
         },
+        oauth_form,
         platform::{Duration, SystemTime},
         secrets::SecretString,
     },
@@ -135,6 +136,14 @@ impl TokenIntrospection {
     }
 }
 
+/// The RFC 7662 introspection request body parameters (client-authentication
+/// parameters are appended separately).
+#[derive(Serialize)]
+struct IntrospectionRequest<'a> {
+    token: &'a str,
+    token_type_hint: &'a str,
+}
+
 impl TokenIntrospection {
     /// Calls the introspection endpoint and returns a [`ValidatedRequest`] if the token is active.
     ///
@@ -162,20 +171,19 @@ impl TokenIntrospection {
             .context(ClientAuthSnafu)?;
 
         let (body, auth_headers) = {
-            let mut serializer = form_urlencoded::Serializer::new(String::new());
-            serializer.append_pair("token", access_token.expose_secret());
-            serializer.append_pair("token_type_hint", "access_token");
+            let mut body = oauth_form::to_string(&IntrospectionRequest {
+                token: access_token.expose_secret(),
+                token_type_hint: "access_token",
+            })
+            .context(SerializeRequestSnafu)?;
+            // Client-auth form parameters (e.g. `client_id`/`client_secret`); their
+            // `FormValue` serialization handles sensitive vs non-sensitive values.
             if let Some(form_params) = &auth_params.form_params {
-                for (key, value) in form_params {
-                    let value_str: &str = match value {
-                        FormValue::NonSensitive(s) => s.as_ref(),
-                        FormValue::Sensitive(s) => s.expose_secret(),
-                        _ => continue,
-                    };
-                    serializer.append_pair(key, value_str);
-                }
+                body.push('&');
+                oauth_form::push_to_string(&mut body, form_params)
+                    .context(SerializeRequestSnafu)?;
             }
-            (Bytes::from(serializer.finish()), auth_params.headers)
+            (Bytes::from(body), auth_params.headers)
         };
 
         let (mut parts, ()) = Request::new(()).into_parts();
@@ -377,6 +385,7 @@ where
 
 /// Error returned by [`TokenIntrospection::introspect`].
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum IntrospectionCallError {
     /// Client authentication failed.
     #[snafu(display("Client authentication failed"))]
@@ -430,6 +439,12 @@ pub enum IntrospectionCallError {
         /// The invalid timestamp value.
         value: i64,
     },
+    /// Failed to serialize the introspection request body.
+    #[snafu(display("Failed to serialize introspection request body"))]
+    SerializeRequest {
+        /// The underlying serialization error.
+        source: oauth_form::Error,
+    },
 }
 
 impl IntrospectionCallError {
@@ -446,7 +461,8 @@ impl IntrospectionCallError {
             Self::ClientAuth { .. } | Self::HttpRequest { .. } | Self::BadStatus { .. } => {
                 TokenValidationError::Server(http::StatusCode::SERVICE_UNAVAILABLE)
             }
-            Self::ParseJsonResponse { .. }
+            Self::SerializeRequest { .. }
+            | Self::ParseJsonResponse { .. }
             | Self::UnexpectedJwtResponse
             | Self::JwtResponse { .. }
             | Self::MalformedJwtResponseBody
@@ -461,7 +477,8 @@ impl IntrospectionCallError {
     pub fn error_description(&self) -> Option<String> {
         match self {
             Self::TokenInactive => Some("The access token is revoked".to_string()),
-            Self::ClientAuth { .. }
+            Self::SerializeRequest { .. }
+            | Self::ClientAuth { .. }
             | Self::HttpRequest { .. }
             | Self::BadStatus { .. }
             | Self::ParseJsonResponse { .. }

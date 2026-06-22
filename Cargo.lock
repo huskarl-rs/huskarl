@@ -1222,12 +1222,11 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.8.0"
+version = "0.9.0-pre.0"
 dependencies = [
  "base64",
  "bon",
  "bytes",
- "form_urlencoded",
  "getrandom 0.4.3",
  "gloo-timers",
  "http",
