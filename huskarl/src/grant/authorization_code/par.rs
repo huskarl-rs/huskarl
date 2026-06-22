@@ -136,7 +136,7 @@ mod tests {
             code_challenge: None,
             code_challenge_method: None,
             dpop_jkt: None,
-            nonce: "nonce-1",
+            nonce: Some("nonce-1"),
             display: None,
             prompt: None,
             max_age: None,

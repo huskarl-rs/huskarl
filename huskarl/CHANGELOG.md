@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    one request use the existing still valid token.
  - Save RAR `authorization_details` as an extra field in token response.
  - Read allowed ID tokens algorithms from AS metadata.
+ - Only send `nonce` value in authorization request for openid scope (overrideable).
 
 ## [0.8.0] - 2026-06-15
 

@@ -93,6 +93,10 @@ pub struct AuthorizationCodeGrant {
     /// rejects requests containing PKCE parameters.
     pub(super) disable_pkce: bool,
 
+    /// Whether to send the OIDC `nonce` parameter; `None` follows the request
+    /// scope (sent only when `openid` is requested). See the `new` builder.
+    pub(super) send_oidc_nonce: Option<bool>,
+
     /// Set to true to prefer PAR when available.
     pub(super) prefer_pushed_authorization_requests: bool,
 
@@ -193,6 +197,16 @@ impl AuthorizationCodeGrant {
         /// rejects requests containing PKCE parameters.
         #[builder(default)]
         disable_pkce: bool,
+        /// Controls whether the OIDC `nonce` parameter (OIDC Core 1.0 §3.1.2.1)
+        /// is sent in the authorization request.
+        ///
+        /// `nonce` is an `OpenID` Connect parameter — it binds an ID token to the
+        /// request. By default (`None`) it is sent only when the request scope
+        /// contains `openid`, so OIDC flows get it and pure-OAuth servers (such
+        /// as those that strictly reject unknown parameters) do not. Set
+        /// `Some(true)`/`Some(false)` to force it on or off regardless of scope.
+        #[builder(required, default)]
+        send_oidc_nonce: Option<bool>,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
         /// Restricts accepted ID token signature algorithms to this set.
         ///
@@ -275,6 +289,7 @@ impl AuthorizationCodeGrant {
             code_challenge_methods_supported,
             redirect_uri,
             disable_pkce,
+            send_oidc_nonce,
             prefer_pushed_authorization_requests,
             allowed_id_token_signed_response_algs,
         })

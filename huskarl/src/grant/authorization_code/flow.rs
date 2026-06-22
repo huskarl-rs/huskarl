@@ -382,10 +382,20 @@ fn build_authorization_payload<'a>(
             code_challenge: pkce.map(|p| p.challenge.as_ref()),
             code_challenge_method: pkce.map(|p| p.method),
             dpop_jkt,
-            // Always sent, even without the `openid` scope: servers ignore
-            // unrecognized parameters (RFC 6749 §3.1), and ID-token
-            // validation then always has a nonce to bind against.
-            nonce: &start_input.nonce,
+            // `nonce` is an OIDC parameter (OIDC Core 1.0 §3.1.2.1), so by
+            // default it rides the `openid` scope: OIDC flows get it (binding
+            // any returned ID token), pure-OAuth servers that strictly reject
+            // unknown parameters do not. `send_oidc_nonce` forces either way.
+            nonce: {
+                let is_oidc = start_input
+                    .scopes
+                    .as_deref()
+                    .is_some_and(|s| s.split(' ').any(|scope| scope == "openid"));
+                grant
+                    .send_oidc_nonce
+                    .unwrap_or(is_oidc)
+                    .then_some(start_input.nonce.as_str())
+            },
             display: start_input.display.as_ref(),
             prompt: start_input.prompt.as_ref(),
             max_age: start_input.max_age.as_ref(),
