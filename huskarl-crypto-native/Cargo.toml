@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-crypto-native"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 rust-version = "1.92"
 description = "Native crypto for huskarl (OAuth2 client) ecosystem."
@@ -16,8 +16,10 @@ huskarl-core = { workspace = true }
 ed25519-dalek = { version = "=3.0.0-rc.1", default-features = false, features = ["pem", "zeroize"] }
 hmac = { version = "0.13", default-features = true }
 pkcs8 = { version = "0.11", default-features = false }
-p256 = { version = "=0.14.0-rc.12", default-features = false, features = ["ecdsa", "pem", "std"] }
-p384 = { version = "=0.14.0-rc.12", default-features = false, features = ["ecdsa", "pem"] }
+p256 = { version = "=0.14.0-rc.13", default-features = false, features = ["ecdsa", "pem", "std"] }
+p384 = { version = "=0.14.0-rc.13", default-features = false, features = ["ecdsa", "pem"] }
+# Transitive rc dep
+primeorder = { version = "=0.14.0-rc.13", default-features = false }
 rand = { version = "0.10", default-features = false, features = ["std", "sys_rng", "thread_rng"] }
 rsa = { version = "=0.10.0-rc.18", default-features = false, features = ["encoding", "sha2"] }
 sha2 = { version = "0.11", default-features = false }
