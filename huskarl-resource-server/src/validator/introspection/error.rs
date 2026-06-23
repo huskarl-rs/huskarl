@@ -12,6 +12,7 @@ use crate::{
 /// Error returned by [`super::IntrospectionValidator::validate_request`].
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
+#[non_exhaustive]
 pub enum IntrospectionValidateError {
     /// Failed to extract the access token from the request headers.
     #[snafu(display("Token presentation error"))]

@@ -135,6 +135,7 @@ fn cert_thumbprint(der: &[u8]) -> String {
 
 /// Error returned by [`check_mtls_binding`].
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum MtlsBindingError {
     /// Token has a certificate thumbprint binding (`cnf.x5t#S256`) but no client
     /// certificate was provided to verify against.
@@ -241,6 +242,7 @@ impl DPoPBindingChecker {
 
 /// Error returned by [`DPoPBindingChecker::check`].
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum DPoPBindingError {
     /// The token has no `cnf.jkt` thumbprint binding.
     #[snafu(display("Token has no DPoP key thumbprint binding"))]

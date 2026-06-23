@@ -63,6 +63,7 @@ pub fn extract_token(
 // `#[strum(message)]` on each variant carries the client-facing RFC 6750
 // `error_description`; the doc comment is the operator-facing `Display`.
 #[derive(Debug, Snafu, strum::EnumMessage)]
+#[non_exhaustive]
 pub enum TokenExtractError {
     /// The token header value is not valid UTF-8.
     #[strum(message = "The access token header value is not a valid string")]

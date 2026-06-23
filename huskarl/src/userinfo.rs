@@ -354,6 +354,7 @@ impl UserInfoClient {
 /// wanting typed access deserialize individual values on demand, e.g.
 /// `serde_json::from_value(user_info.extra.remove("groups")?)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UserInfo {
     /// Subject identifier.
     pub sub: String,
@@ -373,6 +374,7 @@ pub struct UserInfo {
 /// Carried as the source of [`ErrorKind::Config`] errors returned by the builder —
 /// match on the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum UserInfoBuildError {
     /// `issuer` is required when JWT validation is configured.
     #[snafu(display("issuer is required when JWT validation is configured for UserInfo"))]
@@ -387,6 +389,7 @@ pub enum UserInfoBuildError {
 /// Carried as the source of errors returned by [`UserInfoClient::get`] —
 /// match on the error kind rather than downcasting to this type.
 #[derive(Debug, Snafu)]
+#[non_exhaustive]
 pub enum UserInfoError {
     /// Could not build the Authorization header from the access token.
     #[snafu(display("Failed to build Authorization header for UserInfo request"))]

@@ -21,6 +21,7 @@ use crate::{
 // message and are handled explicitly in `ToRfc6750Error::error_description`.
 #[derive(Debug, Snafu, strum::EnumMessage)]
 #[snafu(visibility(pub(super)))]
+#[non_exhaustive]
 pub enum TokenBindingError {
     /// The `DPoP` header is required but missing from the request.
     #[strum(message = "The DPoP header is missing")]
@@ -107,6 +108,7 @@ impl ToRfc6750Error for TokenBindingError {
 /// Errors that can occur while extracting and binding-checking an access token from request headers.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
+#[non_exhaustive]
 pub enum ValidateHeadersError {
     /// The access token could not be extracted from the request headers.
     #[snafu(display("Token presentation error"))]
