@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-crypto-native"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2024"
 rust-version = "1.92"
 description = "Native crypto for huskarl (OAuth2 client) ecosystem."
@@ -28,7 +28,7 @@ serde_json = { version = "1", default-features = false, features = ["std"] }
 snafu = { version = "0.9", default-features = false, features = ["rust_1_81", "std"] }
 strum = { workspace = true }
 subtle = { version = "2.6.1", default-features = false }
-aes-gcm = { version = "=0.11.0-rc.4", default-features = false, features = ["aes", "alloc", "rand_core", "zeroize"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "rand_core", "zeroize"] }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
