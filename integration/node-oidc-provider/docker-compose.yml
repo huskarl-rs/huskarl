@@ -1,0 +1,9 @@
+services:
+  node-oidc-provider:
+    build: .
+    ports:
+      # Loopback-only. 3000 = the provider; the auth-code test binds its own
+      # loopback redirect port in the test process.
+      - "127.0.0.1:3000:3000"
+    environment:
+      ISSUER: http://127.0.0.1:3000

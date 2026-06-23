@@ -1,0 +1,9 @@
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.44.0
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      # 5556 = Dex (5557 is the test's loopback redirect, bound by the test process).
+      - "127.0.0.1:5556:5556"
+    volumes:
+      - ./config.yaml:/etc/dex/config.yaml:ro

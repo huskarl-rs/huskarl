@@ -16,9 +16,6 @@ readme = "README.md"
 
 [features]
 default = ["default-jws-verifier-platform"]
-# Enables integration tests that require a running Keycloak instance.
-# See integration/README.md for setup instructions.
-keycloak-tests = []
 
 # When enabled, adds support for the platform default crypto implementation.
 default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypto-webcrypto"]
@@ -83,8 +80,6 @@ wasm-bindgen-test = "0.3"
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 huskarl = { path = ".", features = ["authorization-flow-loopback"] }
 huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
-huskarl-testkit = { path = "../integration/huskarl-testkit" }
-pem = "3"
 rstest = { version = "0.26", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "time"] }
 reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
