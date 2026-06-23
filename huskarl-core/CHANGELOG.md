@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
  - Added oauth_form, a serde serializer/deserializer for OAuth 2.1
  - Set a max limit on the number of keys loaded by `JwksSource` (100 by default).
+ - Default client credentials auth changes to form rather than basic. Adds a
+   builder parameter to allow this to be altered.
 
 ## [0.7.0] - 2026-06-15
 

@@ -16,7 +16,7 @@ mod no_auth;
 use std::sync::Arc;
 
 use bon::Builder;
-pub use client_secret::ClientSecret;
+pub use client_secret::{ClientSecret, ClientSecretBuilder};
 pub use form_value::FormValue;
 use http::HeaderMap;
 pub use jwt_bearer::{Audience, JwtBearer, JwtBearerBuilder, MissingIssuer, MissingTokenEndpoint};

@@ -355,8 +355,14 @@ mod tests {
         assert_eq!(value["token_endpoint_auth_signing_alg"], "RS256");
         assert_eq!(value["default_max_age"], 3600);
         assert_eq!(value["require_auth_time"], true);
-        assert_eq!(value["default_acr_values"], serde_json::json!(["urn:mace:incommon:iap:silver"]));
-        assert_eq!(value["request_uris"], serde_json::json!(["https://app.example/req/1"]));
+        assert_eq!(
+            value["default_acr_values"],
+            serde_json::json!(["urn:mace:incommon:iap:silver"])
+        );
+        assert_eq!(
+            value["request_uris"],
+            serde_json::json!(["https://app.example/req/1"])
+        );
 
         // A server echo deserializes back into the typed fields, leaving `extra`
         // empty.
@@ -365,7 +371,11 @@ mod tests {
         assert_eq!(parsed.request_object_signing_alg.as_deref(), Some("ES256"));
         assert_eq!(parsed.default_max_age, Some(3600));
         assert_eq!(parsed.require_auth_time, Some(true));
-        assert!(parsed.extra.is_empty(), "typed fields must not fall into extra: {:?}", parsed.extra);
+        assert!(
+            parsed.extra.is_empty(),
+            "typed fields must not fall into extra: {:?}",
+            parsed.extra
+        );
     }
 
     #[test]
