@@ -164,7 +164,7 @@ impl AuthorizationCodeGrant {
             && (self.prefer_pushed_authorization_requests
                 || self.require_pushed_authorization_requests)
         {
-            self.deliver_via_par(&payload.rest, request_object.as_ref(), par_url)
+            self.deliver_via_par(&payload, request_object.as_ref(), par_url)
                 .await?
         } else {
             self.deliver_direct(&payload, request_object.as_ref())?
@@ -209,12 +209,14 @@ impl AuthorizationCodeGrant {
 
     async fn deliver_via_par(
         &self,
-        payload: &AuthorizationPayload<'_>,
+        payload: &AuthorizationPayloadWithClientId<'_>,
         request_object: Option<&SecretString>,
         par_url: &EndpointUrl,
     ) -> Result<(Uri, Option<u64>), Error> {
+        // RFC 9126 §2: `client_id` is REQUIRED in the PAR body in both forms.
         let par_body = match request_object {
             Some(jwt) => par::ParBody::Jar {
+                client_id: &self.client_id,
                 request: jwt.expose_secret(),
             },
             None => par::ParBody::Expanded(Box::new(payload.clone())),
@@ -223,7 +225,7 @@ impl AuthorizationCodeGrant {
         let dpop_jkt = self.dpop.get_current_thumbprint();
 
         let par_response = with_dpop_nonce_retry!({
-            let auth_params = self
+            let mut auth_params = self
                 .client_auth
                 .authentication_params(
                     &self.client_id,
@@ -233,6 +235,12 @@ impl AuthorizationCodeGrant {
                     self.token_endpoint_auth_methods_supported.as_deref(),
                 )
                 .await?;
+
+            // Avoid having `client_id` in the body twice, if it is also
+            // added by client auth.
+            if let Some(form) = auth_params.form_params.as_mut() {
+                form.retain(|(name, _)| *name != "client_id");
+            }
 
             par::make_par_call(
                 self.http_client.as_ref(),
