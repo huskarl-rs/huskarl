@@ -245,11 +245,12 @@ impl DeviceAuthorizationGrant {
 
 /// Parameters passed to each token request.
 #[derive(Debug, Clone, Builder)]
+#[builder(on(String, into))]
 pub struct DeviceAuthorizationGrantParameters {
     /// The device verification code, `device_code`, from the device authorization response.
-    pub device_code: String,
+    device_code: String,
     /// The target resource(s) for the access token.
-    pub resource: Option<Vec<String>>,
+    resource: Option<Vec<String>>,
 }
 
 /// Device authorization grant body.

@@ -255,6 +255,7 @@ impl OAuth2ExchangeGrant for ClientCredentialsGrant {
 
 /// Parameters when requesting a token using the client credentials grant.
 #[derive(Debug, Clone, Builder)]
+#[builder(on(String, into))]
 pub struct ClientCredentialsGrantParameters {
     /// The requested scope(s) for the access token.
     #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
