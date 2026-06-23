@@ -298,18 +298,16 @@ impl AuthorizationCodeGrant {
 
 /// Parameters passed to each token request.
 #[derive(Debug, Clone, Builder)]
+#[builder(on(String, into))]
 pub struct AuthorizationCodeGrantParameters {
     /// The bound `DPoP` JWT thumbprint, if any has already been computed.
-    #[builder(into)]
-    pub dpop_jkt: Option<String>,
+    pub(super) dpop_jkt: Option<String>,
     /// The temporary authorization code received from the redirect callback.
-    #[builder(into)]
-    pub code: String,
+    pub(super) code: String,
     /// The PKCE verifier.
-    #[builder(into)]
-    pub pkce_verifier: Option<String>,
+    pub(super) pkce_verifier: Option<String>,
     /// The target resource(s) for the access token.
-    pub resource: Option<Vec<String>>,
+    pub(super) resource: Option<Vec<String>>,
 }
 
 /// Authorization code grant body.

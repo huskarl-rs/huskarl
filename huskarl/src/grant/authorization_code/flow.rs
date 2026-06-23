@@ -327,9 +327,9 @@ impl AuthorizationCodeGrant {
         let token = self
             .exchange(AuthorizationCodeGrantParameters {
                 dpop_jkt: pending_state.dpop_jkt.clone(),
-                code: complete_input.code.clone(),
+                code: complete_input.code,
                 pkce_verifier: pending_state.pkce_verifier.clone(),
-                resource: complete_input.resource.clone(),
+                resource: complete_input.resource,
             })
             .await?;
 
