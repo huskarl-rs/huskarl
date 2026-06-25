@@ -5,14 +5,20 @@ use crate::{
         EndpointUrl, Error, client_auth::AuthenticationParams, dpop::AuthorizationServerDPoP,
         http::HttpClient,
     },
-    grant::{authorization_code::types::AuthorizationPayload, core::form::OAuth2FormRequest},
+    grant::{
+        authorization_code::types::AuthorizationPayloadWithClientId, core::form::OAuth2FormRequest,
+    },
 };
 
+/// The body of a pushed authorization request (RFC 9126 §2).
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub(super) enum ParBody<'a> {
-    Expanded(Box<AuthorizationPayload<'a>>),
-    Jar { request: &'a str },
+    Expanded(Box<AuthorizationPayloadWithClientId<'a>>),
+    Jar {
+        client_id: &'a str,
+        request: &'a str,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -54,11 +60,16 @@ mod tests {
     use http::{Request, StatusCode, Uri};
 
     use super::*;
-    use crate::core::{
-        client_auth::{ClientAuthentication, NoAuth},
-        dpop::NoDPoP,
-        http::{HttpResponse, Idempotency},
-        platform::MaybeSendBoxFuture,
+    use crate::{
+        core::{
+            client_auth::{ClientAuthentication, NoAuth},
+            dpop::NoDPoP,
+            http::{HttpResponse, Idempotency},
+            platform::MaybeSendBoxFuture,
+        },
+        grant::authorization_code::types::{
+            AuthorizationPayload, AuthorizationPayloadWithClientId,
+        },
     };
 
     #[derive(Default)]
@@ -162,6 +173,7 @@ mod tests {
             .unwrap();
 
         let body = ParBody::Jar {
+            client_id: "client-1",
             request: "header.payload.signature",
         };
         let response = make_par_call(&client, &par_url, auth, &body, &NoDPoP, None)
@@ -180,6 +192,11 @@ mod tests {
             "body: {}",
             client.body()
         );
+        assert!(
+            client.body().contains("client_id=client-1"),
+            "PAR body must carry client_id (RFC 9126 §2): {}",
+            client.body()
+        );
     }
 
     #[tokio::test]
@@ -196,7 +213,10 @@ mod tests {
             &client,
             &par_url,
             auth,
-            &ParBody::Jar { request: "jwt" },
+            &ParBody::Jar {
+                client_id: "client-1",
+                request: "jwt",
+            },
             &NoDPoP,
             None,
         )
@@ -205,21 +225,27 @@ mod tests {
     }
 
     #[test]
-    fn par_body_jar_serializes_as_request_param() {
+    fn par_body_jar_serializes_client_id_and_request() {
         let body = ParBody::Jar {
+            client_id: "client-1",
             request: "the-jar-jwt",
         };
         assert_eq!(
             crate::core::oauth_form::to_string(&body).unwrap(),
-            "request=the-jar-jwt"
+            "client_id=client-1&request=the-jar-jwt"
         );
     }
 
     #[test]
-    fn par_body_expanded_serializes_the_authorization_payload() {
-        let body = ParBody::Expanded(Box::new(payload()));
+    fn par_body_expanded_serializes_client_id_and_the_authorization_payload() {
+        let body = ParBody::Expanded(Box::new(AuthorizationPayloadWithClientId {
+            client_id: "client-1",
+            rest: payload(),
+        }));
         let encoded = crate::core::oauth_form::to_string(&body).unwrap();
 
+        // `client_id` is REQUIRED in the PAR body (RFC 9126 §2).
+        assert!(encoded.contains("client_id=client-1"), "encoded: {encoded}");
         assert!(encoded.contains("response_type=code"), "encoded: {encoded}");
         assert!(encoded.contains("state=state-xyz"), "encoded: {encoded}");
         assert!(encoded.contains("nonce=nonce-1"), "encoded: {encoded}");
