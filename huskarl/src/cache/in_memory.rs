@@ -1,17 +1,28 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arc_swap::ArcSwapOption;
 use bon::Builder;
+use rand::RngExt as _;
 
 use crate::{
-    cache::{TokenCache, TokenSource},
+    cache::{GrantTokenSource, RefreshTokenStore, TokenCache, TokenSource},
     core::{
         Error,
         dpop::ResourceServerDPoP,
         platform::{Duration, MaybeSendBoxFuture},
     },
-    grant::core::TokenResponse,
+    grant::core::{OAuth2ExchangeGrant, TokenResponse},
 };
+
+/// The jitter band as a fraction of each token's lifetime, before the
+/// [`refresh_jitter`](InMemoryTokenCache::refresh_jitter) cap. See
+/// [Jitter](crate::cache#jitter).
+const JITTER_LIFETIME_FRACTION: f64 = 0.1;
+
+/// Ceiling on the effective [`expires_margin`](InMemoryTokenCache::expires_margin),
+/// as a fraction of each token's lifetime, keeping short-lived tokens servable.
+/// See [Refresh-ahead](crate::cache#refresh-ahead).
+const MARGIN_LIFETIME_FRACTION: f64 = 0.5;
 
 /// In-memory caching wrapper over a [`TokenSource`].
 ///
@@ -30,47 +41,59 @@ use crate::{
 /// hold it in an `Arc` and reach it via [`source`](Self::source) (or your own
 /// clone).
 ///
-/// # Refresh-ahead
-///
-/// By default a token is refreshed only once it reaches the hard
-/// [`expires_margin`](InMemoryTokenCacheBuilder::expires_margin), at which point
-/// the acquiring caller blocks on the source. Set
-/// [`refresh_ahead`](InMemoryTokenCacheBuilder::refresh_ahead) to a *larger*
-/// margin to refresh proactively while the token is still valid: a request that
-/// finds the token inside the refresh-ahead window (but still good) refreshes it
-/// *without blocking other callers* — concurrent requests are served the
-/// still-valid token rather than stalling behind the refresh, and a failed
-/// attempt is non-fatal because the current token still covers it (a later call
-/// retries). One caller is elected per refresh via a non-blocking lock, so the
-/// source is never stampeded.
-///
-/// This needs no background task and works anywhere, including serverless: the
-/// refresh is driven by the request that observes the window. It does not make
-/// the refresh *invisible* on a single-threaded/serverless invocation — the
-/// elected caller still awaits it — but it moves the work earlier, while the
-/// token has slack, and stops concurrent callers from blocking. Leave it unset
-/// (the default) for the original synchronous-at-margin behaviour. A value at or
-/// below `expires_margin` leaves the window empty and is inert.
+/// By default a token is refreshed only once it nears expiry, blocking the
+/// acquiring caller. [`refresh_ahead`](InMemoryTokenCacheBuilder::refresh_ahead)
+/// and [`refresh_jitter`](InMemoryTokenCacheBuilder::refresh_jitter) move that
+/// refresh earlier and off the request's critical path — see
+/// [Refresh-ahead](crate::cache#refresh-ahead) and
+/// [Jitter](crate::cache#jitter).
 #[derive(Builder)]
 pub struct InMemoryTokenCache<Src: TokenSource> {
     /// The source tokens are pulled from when the cache holds no valid token, or
     /// the source has a freshly-injected (primed) token that supersedes it.
     source: Src,
-    /// How early to consider a token expired.
+    /// How early to retire a token before its real expiry, covering clock skew
+    /// and in-flight requests. Capped per token at [`MARGIN_LIFETIME_FRACTION`]
+    /// of its lifetime (see [Refresh-ahead](crate::cache#refresh-ahead)).
+    /// Defaults to 30s.
     #[builder(default = Duration::from_secs(30))]
     expires_margin: Duration,
     /// Default lifetime assumed for tokens that do not include an `expires_in` field.
     #[builder(default = Duration::from_hours(1))]
     default_expires_in: Duration,
-    /// When set, the margin at which a still-valid token is refreshed ahead of
-    /// the hard [`expires_margin`](Self::expires_margin), without blocking
-    /// concurrent callers. See [Refresh-ahead](Self#refresh-ahead). Must exceed
-    /// `expires_margin` to have any effect.
+    /// When set, refresh a still-valid token this far ahead of `expires_margin`,
+    /// off the request's critical path. See
+    /// [Refresh-ahead](crate::cache#refresh-ahead).
     refresh_ahead: Option<Duration>,
+    /// Absolute cap on the per-instance jitter that de-synchronizes fleet
+    /// refreshes; the band itself scales with each token's lifetime. [`None`]
+    /// disables jitter. See [Jitter](crate::cache#jitter). Defaults to `Some(30s)`.
+    #[builder(required, default = Some(Duration::from_secs(30)))]
+    refresh_jitter: Option<Duration>,
+    /// Stable per-instance position in the jitter band, a fraction in `[0, 1)`
+    /// realized lazily (see [`jitter_offset`](Self::jitter_offset)).
+    #[builder(skip)]
+    jitter_cell: OnceLock<f64>,
     #[builder(skip)]
     cached: ArcSwapOption<TokenResponse>,
     #[builder(skip)]
     refresh_lock: tokio::sync::Mutex<()>,
+}
+
+/// A snapshot of what an [`InMemoryTokenCache`] can do right now, from
+/// [`state`](InMemoryTokenCache::state).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CacheState {
+    /// A valid cached (or pending) access token is in hand — a request can be
+    /// served now, with no network round-trip.
+    Active,
+    /// No usable access token, but the source can obtain one without interactive
+    /// authorization (a stored refresh token or a configured credential).
+    Restorable,
+    /// No token, and no way to get one without sending the user through the
+    /// interactive flow again.
+    Unauthenticated,
 }
 
 impl<Src: TokenSource> core::fmt::Debug for InMemoryTokenCache<Src> {
@@ -79,6 +102,7 @@ impl<Src: TokenSource> core::fmt::Debug for InMemoryTokenCache<Src> {
             .field("expires_margin", &self.expires_margin)
             .field("default_expires_in", &self.default_expires_in)
             .field("refresh_ahead", &self.refresh_ahead)
+            .field("refresh_jitter", &self.refresh_jitter)
             .finish_non_exhaustive()
     }
 }
@@ -107,31 +131,72 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
         self.clear().await
     }
 
+    /// This instance's stable position within its jitter band, chosen once in
+    /// `[0, 1)`. Only reached when jitter is enabled.
+    fn jitter_fraction(&self) -> f64 {
+        *self
+            .jitter_cell
+            .get_or_init(|| rand::rng().random_range(0.0..1.0))
+    }
+
+    /// The jitter offset for a token of the given `lifetime`: a stable
+    /// [fraction](Self::jitter_fraction) of a band that is
+    /// [`JITTER_LIFETIME_FRACTION`] of the lifetime, capped at
+    /// [`refresh_jitter`](Self::refresh_jitter) (a [`None`] cap disables jitter).
+    /// See [Jitter](crate::cache#jitter).
+    fn jitter_offset(&self, lifetime: Duration) -> Duration {
+        let Some(cap) = self.refresh_jitter else {
+            return Duration::ZERO;
+        };
+        let band = lifetime.mul_f64(JITTER_LIFETIME_FRACTION).min(cap);
+        band.mul_f64(self.jitter_fraction())
+    }
+
+    /// The hard serve margin for a token of this `lifetime`:
+    /// [`expires_margin`](Self::expires_margin), capped at
+    /// [`MARGIN_LIFETIME_FRACTION`] of the lifetime. See
+    /// [Refresh-ahead](crate::cache#refresh-ahead).
+    fn effective_margin(&self, lifetime: Duration) -> Duration {
+        self.expires_margin
+            .min(lifetime.mul_f64(MARGIN_LIFETIME_FRACTION))
+    }
+
+    /// A cached token still valid to *serve*, judged against the
+    /// [effective serve margin](Self::effective_margin).
     fn get_valid_cached(&self) -> Option<Arc<TokenResponse>> {
         self.cached.load_full().filter(|t| {
-            !t.access_token()
-                .is_expired(self.default_expires_in, self.expires_margin)
+            let access_token = t.access_token();
+            let margin =
+                self.effective_margin(access_token.effective_lifetime(self.default_expires_in));
+            !access_token.is_expired(self.default_expires_in, margin)
         })
     }
 
-    /// Whether a still-valid token sits inside the refresh-ahead window — past
-    /// the larger `refresh_ahead` margin but not yet the hard `expires_margin`.
-    /// Always `false` when refresh-ahead is unset.
-    fn in_refresh_ahead_window(&self, token: &TokenResponse) -> bool {
-        self.refresh_ahead.is_some_and(|ahead| {
-            token
-                .access_token()
-                .is_expired(self.default_expires_in, ahead)
-        })
+    /// Whether a still-valid token has reached its proactive-refresh trigger: the
+    /// refresh-ahead margin if set, else the
+    /// [effective serve margin](Self::effective_margin), brought earlier by
+    /// [jitter](Self::jitter_offset). Always `false` with neither refresh-ahead
+    /// nor jitter. See [Refresh-ahead](crate::cache#refresh-ahead).
+    fn in_refresh_window(&self, token: &TokenResponse) -> bool {
+        let access_token = token.access_token();
+        let lifetime = access_token.effective_lifetime(self.default_expires_in);
+        // Trigger off the same effective margin so the proactive refresh fires
+        // no later than the hard cutoff; `refresh_ahead` opts out, unclamped.
+        let base = self
+            .refresh_ahead
+            .unwrap_or_else(|| self.effective_margin(lifetime));
+        let trigger = base + self.jitter_offset(lifetime);
+        access_token.is_expired(self.default_expires_in, trigger)
     }
 
-    /// Refreshes a token that is valid but inside the refresh-ahead window,
-    /// without blocking concurrent callers.
+    /// Refreshes a token that is valid but past the refresh trigger (the
+    /// jitter band or the refresh-ahead window), without blocking concurrent
+    /// callers.
     ///
     /// One caller is elected via a non-blocking lock; the rest are handed the
     /// still-valid `current` token. Because that token still covers the request,
     /// a failed refresh is swallowed (a later call retries) — the slack is the
-    /// point of refreshing ahead.
+    /// point of refreshing early.
     async fn refresh_ahead_now(&self, current: Arc<TokenResponse>) -> Arc<TokenResponse> {
         // Non-blocking: if the lock is held, another caller is already
         // refreshing (ahead or at the hard margin). Serve the valid token.
@@ -143,7 +208,7 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
         // the token out of the window, or a pending token may now supersede it.
         if !self.source.has_pending_token()
             && let Some(token) = self.get_valid_cached()
-            && !self.in_refresh_ahead_window(&token)
+            && !self.in_refresh_window(&token)
         {
             return token;
         }
@@ -169,10 +234,11 @@ impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
             if !self.source.has_pending_token()
                 && let Some(token) = self.get_valid_cached()
             {
-                // Valid, but inside the refresh-ahead window: refresh it now
-                // without blocking other callers (no-op when refresh-ahead is
-                // unset, so this is the original fast path by default).
-                if self.in_refresh_ahead_window(&token) {
+                // Valid, but past the refresh trigger (jitter band or
+                // refresh-ahead window): refresh now on the non-blocking path so
+                // other callers aren't stalled. With neither jitter nor
+                // refresh-ahead this never fires — the original fast path.
+                if self.in_refresh_window(&token) {
                     return Ok(self.refresh_ahead_now(token).await);
                 }
                 return Ok(token);
@@ -208,6 +274,33 @@ impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
             self.cached.store(None);
             self.source.clear().await
         })
+    }
+}
+
+/// State reporting is available when the source is a [`GrantTokenSource`], the
+/// only source that can authoritatively answer whether a token is restorable.
+impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> InMemoryTokenCache<GrantTokenSource<G, S>> {
+    /// Reports the cache's current [`CacheState`] — serve now, restore without
+    /// interactive login, or re-authorize.
+    ///
+    /// [`Active`](CacheState::Active) reflects this cache's own token exactly; the
+    /// [`Restorable`](CacheState::Restorable) /
+    /// [`Unauthenticated`](CacheState::Unauthenticated) split comes from the
+    /// source, with `max_staleness` bounding the credential check as in
+    /// [`GrantTokenSource::can_restore`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source fails to check its durable credential
+    /// state.
+    pub async fn state(&self, max_staleness: Option<Duration>) -> Result<CacheState, Error> {
+        if self.source.has_pending_token() || self.get_valid_cached().is_some() {
+            return Ok(CacheState::Active);
+        }
+        if self.source.can_restore(max_staleness).await? {
+            return Ok(CacheState::Restorable);
+        }
+        Ok(CacheState::Unauthenticated)
     }
 }
 
@@ -350,6 +443,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn short_lived_token_is_served_not_immediately_refetched() {
+        // A 20s token is shorter than the 30s `expires_margin`. Without the
+        // lifetime clamp its effective margin would equal-or-exceed its life, so
+        // it would be considered expired at issuance and every call would take
+        // the blocking refetch path. The clamp caps the margin at half the
+        // lifetime (10s here), keeping it servable from cache.
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([
+                Ok(token("short", 20)),
+                Ok(token("next", 20)),
+            ]))
+            .refresh_jitter(None)
+            .build();
+
+        assert_eq!(access_of(&cache.token().await.unwrap()), "short");
+        // Served from cache, not refetched.
+        assert_eq!(access_of(&cache.token().await.unwrap()), "short");
+        assert_eq!(cache.source().calls(), 1);
+    }
+
+    #[tokio::test]
     async fn invalidate_forces_refetch() {
         let cache = InMemoryTokenCache::builder()
             .source(FakeSource::new([
@@ -417,6 +531,8 @@ mod tests {
             .source(FakeSource::new(results))
             .expires_margin(Duration::from_secs(30))
             .refresh_ahead(Duration::from_mins(2))
+            // Disabled for deterministic timing; jitter is exercised separately.
+            .refresh_jitter(None)
             .build()
     }
 
@@ -458,11 +574,59 @@ mod tests {
         let cache = InMemoryTokenCache::builder()
             .source(FakeSource::new([Ok(token("t1", 100))]))
             .expires_margin(Duration::from_secs(30))
+            .refresh_jitter(None)
             .build();
 
         assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
         assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
         assert_eq!(cache.source().calls(), 1);
+    }
+
+    #[test]
+    fn jitter_offset_is_capped_and_stable() {
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([]))
+            .refresh_jitter(Some(Duration::from_secs(30)))
+            .build();
+
+        // A long-lived token's proportional band (10% = 6min) exceeds the 30s
+        // cap, so the cap binds and the offset stays within it.
+        let long = Duration::from_hours(1);
+        let offset = cache.jitter_offset(long);
+        assert!(offset <= Duration::from_secs(30), "offset within the cap");
+        assert_eq!(
+            offset,
+            cache.jitter_offset(long),
+            "offset is stable across calls"
+        );
+    }
+
+    #[test]
+    fn jitter_offset_scales_with_short_lifetimes() {
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([]))
+            .refresh_jitter(Some(Duration::from_secs(30)))
+            .build();
+
+        // For a 60s token the proportional band (10% = 6s) is far below the 30s
+        // cap, so the offset can never swallow most of the token's life the way
+        // a fixed 30s offset would.
+        let short = Duration::from_mins(1);
+        let offset = cache.jitter_offset(short);
+        assert!(
+            offset <= Duration::from_secs(6),
+            "offset scaled to the lifetime, not the cap"
+        );
+    }
+
+    #[test]
+    fn disabled_jitter_has_no_offset() {
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([]))
+            .refresh_jitter(None)
+            .build();
+
+        assert_eq!(cache.jitter_offset(Duration::from_hours(1)), Duration::ZERO);
     }
 
     #[tokio::test]

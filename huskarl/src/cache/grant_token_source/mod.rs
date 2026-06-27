@@ -10,7 +10,7 @@ use crate::{
     core::{
         Error, ErrorKind,
         dpop::ResourceServerDPoP,
-        platform::{Duration, MaybeSendBoxFuture},
+        platform::{Duration, MaybeSendBoxFuture, SystemTime},
     },
     grant::{
         core::{OAuth2ExchangeGrant, TokenResponse},
@@ -27,6 +27,44 @@ use breaker::Breaker;
 /// Hand this to an [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache),
 /// which adds caching, single-flight, and expiry on top. Wrap it in an `Arc` and
 /// keep a clone to [`prime`](Self::prime) or inspect it after it is in the cache.
+///
+/// # Examples
+///
+/// Build a source over a grant, then put it behind a cache for an
+/// [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer):
+///
+/// ```rust
+/// # use huskarl::core::client_auth::NoAuth;
+/// # use huskarl::core::http::HttpClient;
+/// # use huskarl::grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters};
+/// use huskarl::{
+///     authorizer::HttpAuthorizer,
+///     cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
+/// };
+/// # async fn example(http_client: impl HttpClient + 'static) {
+/// # let grant = ClientCredentialsGrant::builder()
+/// #     .client_id("client-id")
+/// #     .client_auth(NoAuth)
+/// #     .token_endpoint("https://as.example.com/token".parse().unwrap())
+/// #     .http_client(http_client)
+/// #     .build();
+/// // `grant` is any grant, built as shown in the crate-level examples.
+/// let source = GrantTokenSource::builder()
+///     .grant(grant)
+///     .grant_parameters(ClientCredentialsGrantParameters::builder().build())
+///     .refresh_store(InMemoryRefreshTokenStore::default())
+///     .build();
+///
+/// let authorizer = HttpAuthorizer::builder()
+///     .cache(InMemoryTokenCache::builder().source(source).build())
+///     .build();
+/// # let _ = authorizer;
+/// # }
+/// ```
+///
+/// After an interactive login, hand the freshly obtained token to a running
+/// source with [`prime`](Self::prime) instead of (or alongside) a parameter
+/// source; it is served once and its refresh token persisted.
 ///
 /// # Resolution order
 ///
@@ -46,7 +84,7 @@ use breaker::Breaker;
 /// A source built with no parameter source ([`NoSource`], the default) only
 /// performs steps 1–2, refreshing a [`prime`](Self::prime)d token.
 ///
-/// # When re-authorization is required
+/// # Credential lifecycle
 ///
 /// Two credentials are abandoned once they cannot succeed again, stopping futile
 /// replays:
@@ -81,24 +119,24 @@ use breaker::Breaker;
 ///
 /// # Backoff
 ///
-/// A source that keeps failing non-recoverably from scratch — most often a
-/// [`from_fn`](crate::cache::from_fn) re-signing against a revoked key, where
-/// every fresh value is rejected with `invalid_grant` and the source is never
-/// spent — would otherwise hit the signer and token endpoint on every call. A
-/// breaker bounds this: after `breaker_threshold` consecutive non-recoverable
-/// failures (transient and request-shape failures don't count) the source backs
-/// off for `breaker_cooldown`, then allows one trial per cooldown until it
-/// succeeds. Any success, or a fresh [`prime`](Self::prime), resets it. Tune both
-/// knobs on the builder, or set `breaker_threshold` to `0` to disable.
+/// Some sources keep failing non-recoverably from scratch — most often a
+/// [`from_fn`](crate::cache::from_fn) re-signing against a revoked key: every
+/// fresh value is rejected with `invalid_grant`, the source is never spent, and
+/// each call hits the signer and token endpoint again. A breaker bounds this.
+/// After `breaker_threshold` consecutive non-recoverable failures (transient and
+/// request-shape failures don't count) the source backs off for
+/// `breaker_cooldown`, then allows one trial per cooldown until it succeeds. Any
+/// success, or a fresh [`prime`](Self::prime), resets it; tune both knobs on the
+/// builder.
 ///
 /// The breaker gates only the **from-scratch exchange**: a refresh is still
 /// attempted first on every call, so a usable refresh token always recovers.
 /// While open, the from-scratch path short-circuits with
-/// [`GetTokenError::Backoff`] under [`Backoff`](crate::core::ErrorKind::Backoff)
-/// — without re-running the signer or the exchange — but a retained refresh token
-/// whose latest attempt failed only transiently still surfaces that retryable
-/// error rather than Backoff, because the refresh path can recover independently
-/// of the breaker.
+/// [`GetTokenError::Backoff`] under [`Backoff`](crate::core::ErrorKind::Backoff),
+/// without re-running the signer or the exchange. A retained refresh token whose
+/// latest attempt failed only transiently still surfaces that retryable error
+/// rather than `Backoff`, since the refresh path recovers independently of the
+/// breaker.
 ///
 /// That [`Backoff`](crate::core::ErrorKind::Backoff) is deliberately not
 /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired): an application
@@ -107,6 +145,10 @@ use breaker::Breaker;
 /// distinction.
 #[derive(Builder)]
 pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
+    /// The grant this source runs to obtain tokens — refreshes through its
+    /// [`to_refresh_grant`](OAuth2ExchangeGrant::to_refresh_grant) form, and
+    /// runs a fresh exchange through it directly. Carries its own HTTP client,
+    /// client authentication, and `DPoP` binding.
     pub(crate) grant: G,
     /// Source of parameters for obtaining a token directly from the grant when
     /// no primed or refreshable token is usable.
@@ -126,19 +168,23 @@ pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     /// treated as exhausted. Permanent for the life of the source.
     #[builder(skip)]
     params_spent: AtomicBool,
+    /// Where the refresh token is persisted between calls. Use
+    /// [`InMemoryRefreshTokenStore`](crate::cache::InMemoryRefreshTokenStore)
+    /// for a process-lifetime store, or supply your own
+    /// [`RefreshTokenStore`] (e.g. keychain- or disk-backed) to survive
+    /// restarts — on startup the source refreshes it into a fresh access token.
     refresh_store: S,
     #[builder(skip = grant.dpop().to_resource_server_dpop())]
     resource_server_dpop: Arc<dyn ResourceServerDPoP>,
-    /// Cached knowledge of whether a refresh token is stored.
-    ///
-    /// Reflects operations through this instance. Starts `false`; call
-    /// [`Self::has_refresh_token`] for accurate state on cold init.
-    #[builder(skip)]
-    has_refresh_token_cached: AtomicBool,
     /// A token handed in via [`prime`](Self::prime), served once by the next
     /// [`token`](TokenSource::token) call.
     #[builder(skip)]
     pending: Mutex<Option<TokenResponse>>,
+    /// In-memory view of whether a refresh token is stored, with the time it was
+    /// last reconciled with the store. Backs staleness-bounded
+    /// [`can_restore`](Self::can_restore); `None` until first reconciled.
+    #[builder(skip)]
+    credential_view: Mutex<Option<CredentialView>>,
     /// Consecutive non-recoverable from-scratch failures tolerated before the
     /// source backs off (see [Backoff](#backoff)). `0` disables the breaker.
     /// Defaults to `3`.
@@ -178,8 +224,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> TokenSource for GrantTokenSou
         Box::pin(async move {
             *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = None;
             self.refresh_store.clear().await?;
-            self.has_refresh_token_cached
-                .store(false, Ordering::Relaxed);
+            self.record_credential(false);
             self.breaker.reset();
             Ok(())
         })
@@ -201,7 +246,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
     pub async fn prime(&self, token: TokenResponse) -> Result<(), Error> {
         if let Some(refresh_token) = token.refresh_token() {
             self.refresh_store.set(refresh_token).await?;
-            self.has_refresh_token_cached.store(true, Ordering::Relaxed);
+            self.record_credential(true);
         }
         *self.pending.lock().unwrap_or_else(PoisonError::into_inner) = Some(token);
         // A freshly supplied credential clears any prior backoff.
@@ -229,7 +274,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             Err(e) => e,
         };
 
-        // Bound a doomed from-scratch loop: if recent attempts kept failing
+        // Bound repeated from-scratch failures: if recent attempts kept failing
         // non-recoverably (e.g. a `from_fn` re-signing against a revoked key),
         // back off instead of hitting the signer/endpoint every call. Checked
         // after try_refresh so a usable refresh token still recovers.
@@ -315,7 +360,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
                     self.params_spent.store(true, Ordering::Relaxed);
                 }
                 // A non-recoverable failure on a still-usable (non-spent) source
-                // is the doom-loop case the breaker bounds. Spent sources are
+                // is the repeated-failure case the breaker bounds. Spent sources are
                 // already permanently handled; transient and request-shape
                 // failures have their own recovery (retry / adjust).
                 if Self::counts_toward_breaker(&exchange_source, spent) {
@@ -419,26 +464,80 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         !self.params_spent.load(Ordering::Relaxed) && self.grant_parameters.available()
     }
 
-    /// Returns the cached knowledge of whether a refresh token is stored.
+    /// Returns whether a refresh token is currently stored — the authoritative
+    /// current state, read from the [`RefreshTokenStore`] on every call. Also
+    /// refreshes the in-memory view that backs [`can_restore`](Self::can_restore).
     ///
-    /// This is updated by operations through this instance. On cold init (e.g. after a
-    /// page reload), it starts as `false` regardless of what is in the underlying store.
-    /// Call [`Self::has_refresh_token`] for accurate state when this matters.
-    pub fn has_refresh_token_cached(&self) -> bool {
-        self.has_refresh_token_cached.load(Ordering::Relaxed)
-    }
-
-    /// Returns whether a refresh token is currently stored.
-    ///
-    /// Queries the underlying store directly and updates the cached value as a side effect.
+    /// For a staleness-bounded answer that can skip the store read, or the
+    /// combined cache state, use [`can_restore`](Self::can_restore) /
+    /// [`InMemoryTokenCache::state`](crate::cache::InMemoryTokenCache::state).
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying [`RefreshTokenStore`] fails.
     pub async fn has_refresh_token(&self) -> Result<bool, Error> {
         let has = self.refresh_store.get().await?.is_some();
-        self.has_refresh_token_cached.store(has, Ordering::Relaxed);
+        self.record_credential(has);
         Ok(has)
+    }
+
+    /// Whether a token can be produced without interactive authorization — a
+    /// pending token, a usable parameter source, or a stored refresh token.
+    ///
+    /// `max_staleness` bounds the stored-refresh-token check against the
+    /// in-memory view: `Some(d)` trusts a view reconciled within `d` (else
+    /// re-reads the store), `Some(Duration::ZERO)` always re-reads, and `None`
+    /// trusts any view — correct only when this source is the sole writer of its
+    /// store (see
+    /// [`RefreshTokenStore`](crate::cache::RefreshTokenStore#ownership-and-rotation)).
+    /// The pending and parameter checks are always exact.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconciling with the [`RefreshTokenStore`] fails.
+    pub async fn can_restore(&self, max_staleness: Option<Duration>) -> Result<bool, Error> {
+        // A pending token or a usable parameter source needs no store read.
+        if self.has_pending_token() || self.has_grant_parameters() {
+            return Ok(true);
+        }
+        // Refresh-token presence: trust the in-memory view within the requested
+        // staleness, else reconcile with the store (which also refreshes it).
+        match self.fresh_credential_view(max_staleness) {
+            Some(has) => Ok(has),
+            None => self.has_refresh_token().await,
+        }
+    }
+
+    /// Records the current refresh-token presence and the time it was observed,
+    /// for staleness-bounded [`can_restore`](Self::can_restore).
+    fn record_credential(&self, has_refresh_token: bool) {
+        *self
+            .credential_view
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(CredentialView {
+            has_refresh_token,
+            reconciled_at: SystemTime::now(),
+        });
+    }
+
+    /// The in-memory refresh-token view if it is populated and fresh enough for
+    /// `max_staleness`; `None` means "reconcile with the store". `None`
+    /// staleness trusts any populated view (sole-owner); a populated view that
+    /// is too old, or one never reconciled, returns `None`.
+    fn fresh_credential_view(&self, max_staleness: Option<Duration>) -> Option<bool> {
+        let view = (*self
+            .credential_view
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner))?;
+        match max_staleness {
+            None => Some(view.has_refresh_token),
+            Some(max) => {
+                let age = SystemTime::now()
+                    .duration_since(view.reconciled_at)
+                    .unwrap_or(Duration::MAX);
+                (age <= max).then_some(view.has_refresh_token)
+            }
+        }
     }
 
     /// Attempts to refresh the token.
@@ -446,38 +545,63 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
     /// Returns `Ok(token)` on success, `Err(Some(error))` if the store or the
     /// refresh failed, or `Err(None)` if no refresh token is available.
     ///
-    /// The stored refresh token is discarded only when the server definitively
-    /// rejects it with `invalid_grant` (RFC 6749 §5.2). Transient failures
-    /// (network errors, 5xx responses) leave it in place for later attempts.
+    /// On `invalid_grant` the stored token is discarded only after a
+    /// compare-before-clear (re-read, clear only if it still holds the rejected
+    /// value), so a peer's concurrently-rotated token is retried rather than
+    /// clobbered; see [Sharing a store](crate::cache#sharing-a-store). Transient
+    /// failures leave the token in place.
     async fn try_refresh(&self) -> Result<TokenResponse, Option<Error>> {
-        let refresh_token = self.refresh_store.get().await.map_err(Some)?.ok_or(None)?;
+        // Single owner: the body runs once. The bound stops a peer rotating a
+        // shared token in a tight loop from spinning us indefinitely.
+        const MAX_ATTEMPTS: u32 = 3;
 
-        match self
-            .grant
-            .to_refresh_grant()
-            .exchange(
-                RefreshGrantParameters::builder()
-                    .refresh_token(refresh_token)
-                    .build(),
-            )
-            .await
-        {
-            Ok(token_response) => {
-                self.persist_refresh_token(&token_response).await;
-                Ok(token_response)
-            }
-            Err(err) => {
-                if err.kind() == ErrorKind::InvalidGrant {
-                    // Best-effort: the refresh error below takes precedence
-                    // over a store failure on this already-failing path.
-                    if self.refresh_store.clear().await.is_ok() {
-                        self.has_refresh_token_cached
-                            .store(false, Ordering::Relaxed);
-                    }
+        for attempt in 1..=MAX_ATTEMPTS {
+            let refresh_token = self.refresh_store.get().await.map_err(Some)?.ok_or(None)?;
+
+            let err = match self
+                .grant
+                .to_refresh_grant()
+                .exchange(
+                    RefreshGrantParameters::builder()
+                        .refresh_token(refresh_token.clone())
+                        .build(),
+                )
+                .await
+            {
+                Ok(token_response) => {
+                    self.persist_refresh_token(&token_response).await;
+                    return Ok(token_response);
                 }
-                Err(Some(err))
+                Err(err) => err,
+            };
+
+            if err.kind() != ErrorKind::InvalidGrant {
+                return Err(Some(err));
             }
+
+            // Compare-before-clear: re-read to see whether the rejected token is
+            // still the current one before discarding it.
+            match self.refresh_store.get().await {
+                // A peer rotated it in while our refresh was in flight: retry
+                // with the current token rather than clobbering it.
+                Ok(Some(current)) if attempt < MAX_ATTEMPTS && current != refresh_token => {
+                    continue;
+                }
+                // Store still holds the rejected token: the credential is dead,
+                // so discard it. Best-effort — the refresh error takes precedence
+                // over a store failure on this already-failing path.
+                Ok(Some(current)) if current == refresh_token => {
+                    let _ = self.refresh_store.clear().await;
+                    self.record_credential(false);
+                }
+                // Already empty, a peer hot-rotating past our budget, or the
+                // re-read failed: leave the store untouched and surface the error.
+                _ => {}
+            }
+            return Err(Some(err));
         }
+
+        unreachable!("the final attempt never continues, so the loop always returns");
     }
 
     /// Persists the response's refresh token, if it carries one.
@@ -493,10 +617,19 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             // Best-effort: a persist failure must not fail the acquisition (see
             // the doc comment), so the result is deliberately not propagated.
             if self.refresh_store.set(refresh_token).await.is_ok() {
-                self.has_refresh_token_cached.store(true, Ordering::Relaxed);
+                self.record_credential(true);
             }
         }
     }
+}
+
+/// In-memory record of whether a refresh token was present, and when that was
+/// last confirmed against the store. Backs staleness-bounded
+/// [`GrantTokenSource::can_restore`].
+#[derive(Clone, Copy)]
+struct CredentialView {
+    has_refresh_token: bool,
+    reconciled_at: SystemTime,
 }
 
 #[cfg(test)]
