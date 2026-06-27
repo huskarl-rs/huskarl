@@ -112,6 +112,21 @@ impl AccessToken {
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
     }
+
+    /// The token's effective lifetime: the `expires_in` from the token response,
+    /// or `default_expires_in` when the response carried none. This is the full
+    /// validity span before any `expires_margin` is applied.
+    #[must_use]
+    pub fn effective_lifetime(&self, default_expires_in: Duration) -> Duration {
+        match self {
+            AccessToken::Dpop(dpop_access_token) => {
+                dpop_access_token.effective_lifetime(default_expires_in)
+            }
+            AccessToken::Bearer(bearer_access_token) => {
+                bearer_access_token.effective_lifetime(default_expires_in)
+            }
+        }
+    }
 }
 
 /// An access token, with the `DPoP` token type.
@@ -182,6 +197,13 @@ impl DpopAccessToken {
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
     }
+
+    /// The token's effective lifetime; see
+    /// [`AccessToken::effective_lifetime`].
+    #[must_use]
+    pub fn effective_lifetime(&self, default_expires_in: Duration) -> Duration {
+        self.expires_in.unwrap_or(default_expires_in)
+    }
 }
 
 /// A bearer access token, as used in the `Authorization: Bearer` header.
@@ -237,6 +259,13 @@ impl BearerAccessToken {
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
+    }
+
+    /// The token's effective lifetime; see
+    /// [`AccessToken::effective_lifetime`].
+    #[must_use]
+    pub fn effective_lifetime(&self, default_expires_in: Duration) -> Duration {
+        self.expires_in.unwrap_or(default_expires_in)
     }
 }
 

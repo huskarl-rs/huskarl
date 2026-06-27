@@ -87,6 +87,49 @@ impl RefreshTokenStore for SharedRefreshStore {
     }
 }
 
+/// A store whose `get()` results are scripted, to simulate a peer rotating the
+/// token between our refresh attempt and the compare-before-clear re-read.
+/// Records whether `clear()` was ever called.
+#[derive(Clone, Default)]
+struct ScriptedStore {
+    gets: Arc<Mutex<VecDeque<Option<RefreshToken>>>>,
+    last: Arc<Mutex<Option<RefreshToken>>>,
+    cleared: Arc<AtomicBool>,
+}
+
+impl ScriptedStore {
+    fn script(gets: impl IntoIterator<Item = Option<RefreshToken>>) -> Self {
+        Self {
+            gets: Arc::new(Mutex::new(gets.into_iter().collect())),
+            last: Arc::new(Mutex::new(None)),
+            cleared: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl RefreshTokenStore for ScriptedStore {
+    fn get(&self) -> MaybeSendBoxFuture<'_, Result<Option<RefreshToken>, Error>> {
+        let next = self.gets.lock().unwrap().pop_front();
+        let value = next.unwrap_or_else(|| self.last.lock().unwrap().clone());
+        Box::pin(async move { Ok(value) })
+    }
+
+    fn set<'a>(&'a self, token: &'a RefreshToken) -> MaybeSendBoxFuture<'a, Result<(), Error>> {
+        *self.last.lock().unwrap() = Some(token.clone());
+        Box::pin(async { Ok(()) })
+    }
+
+    fn clear(&self) -> MaybeSendBoxFuture<'_, Result<(), Error>> {
+        self.cleared.store(true, Ordering::Relaxed);
+        *self.last.lock().unwrap() = None;
+        Box::pin(async { Ok(()) })
+    }
+}
+
+fn refresh_token(value: &str) -> RefreshToken {
+    RefreshToken::new(SecretString::new(value), None)
+}
+
 fn assert_get_token_error(err: &Error, kind: ErrorKind, matcher: impl Fn(&GetTokenError) -> bool) {
     assert_eq!(err.kind(), kind);
     let source = std::error::Error::source(err)
@@ -110,6 +153,18 @@ fn valid_response(refresh_token: &str) -> TokenResponse {
         .access_token(SecretString::new("primed-access-token"))
         .token_type("bearer")
         .expires_in(3600)
+        .refresh_token(SecretString::new(refresh_token))
+        .build()
+        .into_token_response(None, SystemTime::now())
+        .expect("valid token response")
+}
+
+/// An already-expired token carrying the given refresh token.
+fn expired_response_with_refresh(refresh_token: &str) -> TokenResponse {
+    RawTokenResponse::builder()
+        .access_token(SecretString::new("expired-access-token"))
+        .token_type("bearer")
+        .expires_in(0)
         .refresh_token(SecretString::new(refresh_token))
         .build()
         .into_token_response(None, SystemTime::now())
@@ -209,7 +264,7 @@ async fn prime_serves_token_then_refreshes() {
         .build();
 
     source.prime(valid_response("rt-primed")).await.unwrap();
-    assert!(source.has_refresh_token_cached());
+    assert!(source.has_refresh_token().await.unwrap());
 
     // The primed token is served once with no network call.
     let token = source.token().await.unwrap();
@@ -248,7 +303,7 @@ async fn refresh_response_without_refresh_token_retains_existing() {
         stored_refresh_token(&store).await.as_deref(),
         Some("rt-original")
     );
-    assert!(source.has_refresh_token_cached());
+    assert!(source.has_refresh_token().await.unwrap());
 }
 
 #[tokio::test]
@@ -290,7 +345,7 @@ async fn transient_refresh_failure_retains_refresh_token() {
         stored_refresh_token(&store).await.as_deref(),
         Some("rt-original")
     );
-    assert!(source.has_refresh_token_cached());
+    assert!(source.has_refresh_token().await.unwrap());
 
     http.push(
         StatusCode::OK,
@@ -311,7 +366,122 @@ async fn invalid_grant_clears_refresh_token() {
     assert_reauth_required(&err, |e| matches!(e, GetTokenError::RefreshFailed { .. }));
 
     assert_eq!(stored_refresh_token(&store).await, None);
-    assert!(!source.has_refresh_token_cached());
+    assert!(!source.has_refresh_token().await.unwrap());
+}
+
+#[tokio::test]
+async fn invalid_grant_with_rotated_token_retries_without_clearing() {
+    // A peer sharing the store rotates rt-original → rt-peer while our refresh
+    // is in flight, so the compare-before-clear re-read sees a changed token
+    // and must retry with it rather than clobber it.
+    let store = ScriptedStore::script([
+        Some(refresh_token("rt-original")), // attempt 1 refreshes with this
+        Some(refresh_token("rt-peer")),     // re-read after invalid_grant: rotated
+        Some(refresh_token("rt-peer")),     // attempt 2 refreshes with the new one
+    ]);
+    let http = MockHttpClient::default();
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http.clone()))
+        .refresh_store(store.clone())
+        .build();
+
+    // Attempt 1 is rejected; attempt 2 (with the rotated token) succeeds.
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"recovered","token_type":"bearer","expires_in":3600}"#,
+    );
+
+    assert_eq!(access_of(&source.token().await.unwrap()), "recovered");
+    assert!(
+        !store.cleared.load(Ordering::Relaxed),
+        "a peer's rotated-in token must not be cleared"
+    );
+}
+
+#[tokio::test]
+async fn can_restore_reflects_credentials() {
+    let http = MockHttpClient::default();
+
+    // A configured parameter source is restorable without any store read.
+    let with_params = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(ClientCredentialsGrantParameters::new())
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+    assert!(with_params.can_restore(Some(Duration::ZERO)).await.unwrap());
+
+    // Nothing usable: no params, no refresh token, no pending token.
+    let empty = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http))
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+    assert!(!empty.can_restore(Some(Duration::ZERO)).await.unwrap());
+}
+
+#[tokio::test]
+async fn can_restore_trusts_cached_view_within_staleness() {
+    let store = SharedRefreshStore::default();
+    let http = MockHttpClient::default();
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http))
+        .refresh_store(store.clone())
+        .build();
+
+    // Priming records "refresh token present" in the in-memory view; consume
+    // the pending token so can_restore reflects the stored token, not pending.
+    source.prime(valid_response("rt")).await.unwrap();
+    source.token().await.unwrap();
+
+    // A peer clears the shared store behind the source's back: the view is stale.
+    store.clear().await.unwrap();
+
+    // `None` trusts the view however stale, so it still reports restorable...
+    assert!(source.can_restore(None).await.unwrap());
+    // ...while a zero staleness bound forces a re-read and sees the truth.
+    assert!(!source.can_restore(Some(Duration::ZERO)).await.unwrap());
+}
+
+#[tokio::test]
+async fn cache_state_reports_active_restorable_unauthenticated() {
+    use crate::cache::{CacheState, InMemoryTokenCache};
+
+    // Active: a primed token is ready to serve.
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(MockHttpClient::default()))
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+    source.prime(valid_response("rt")).await.unwrap();
+    let active = InMemoryTokenCache::builder().source(source).build();
+    assert_eq!(active.state(None).await.unwrap(), CacheState::Active);
+
+    // Restorable: the cached token has expired, but a stored refresh token can
+    // get a new one without interactive login.
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(MockHttpClient::default()))
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+    source
+        .prime(expired_response_with_refresh("rt"))
+        .await
+        .unwrap();
+    let restorable = InMemoryTokenCache::builder().source(source).build();
+    restorable.token().await.unwrap(); // consume the expired pending token
+    assert_eq!(
+        restorable.state(None).await.unwrap(),
+        CacheState::Restorable
+    );
+
+    // Unauthenticated: nothing cached, no credential, no parameter source.
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(MockHttpClient::default()))
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+    let empty = InMemoryTokenCache::builder().source(source).build();
+    assert_eq!(
+        empty.state(None).await.unwrap(),
+        CacheState::Unauthenticated
+    );
 }
 
 #[tokio::test]
