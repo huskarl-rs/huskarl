@@ -73,9 +73,8 @@ impl AuthorizationCodeGrant {
     /// response together with the validated ID token when the flow was an OIDC
     /// flow.
     ///
-    /// Like [`complete_on_loopback`](Self::complete_on_loopback) — same minimal
-    /// callback server and the same errors — but also yields the validated ID
-    /// token.
+    /// Like [`complete_on_loopback`](Self::complete_on_loopback), but also yields
+    /// the validated ID token. Same minimal callback server and the same errors.
     ///
     /// # Errors
     ///
@@ -391,7 +390,7 @@ fn build_authorization_payload<'a>(
             code_challenge_method: pkce.map(|p| p.method),
             dpop_jkt,
             // `nonce` is an OIDC parameter (OIDC Core 1.0 §3.1.2.1), so by
-            // default it rides the `openid` scope: OIDC flows get it (binding
+            // default it is gated on the `openid` scope: OIDC flows get it (binding
             // any returned ID token), pure-OAuth servers that strictly reject
             // unknown parameters do not. `send_oidc_nonce` forces either way.
             nonce: {

@@ -63,6 +63,15 @@
 //! [`invalidate`](HttpAuthorizer::invalidate) yourself before re-sending.
 //! Treating any `401` as a stale token is a common policy, at the cost of an
 //! occasional unnecessary refresh.
+//!
+//! [`process_response`](HttpAuthorizer::process_response) acts on the headers
+//! alone and ignores the status code. That is normally fine, since a
+//! spec-correct `invalid_token` challenge always accompanies a `401`. The one trap is
+//! relaying: if your service copies an upstream server's `WWW-Authenticate`
+//! onto its own response, that header reflects *the upstream's* view of *its*
+//! token, not yours — passing it here would wrongly invalidate your token. Give
+//! [`process_response`](HttpAuthorizer::process_response) only the headers that
+//! describe your own request.
 
 mod challenge;
 
@@ -180,6 +189,17 @@ impl HttpAuthorizer {
     }
 
     /// Returns a reference to the underlying token cache.
+    ///
+    /// This is the erased [`TokenCache`] surface only — it reaches
+    /// [`token`](crate::cache::TokenSource::token),
+    /// [`invalidate`](crate::cache::TokenSource::invalidate), and
+    /// [`clear`](crate::cache::TokenSource::clear), but **not** source-specific
+    /// methods like [`GrantTokenSource::prime`](crate::cache::GrantTokenSource::prime)
+    /// or [`InMemoryTokenCache::state`](crate::cache::InMemoryTokenCache::state),
+    /// which are not reachable through `dyn TokenCache`. To call those on a live
+    /// instance, keep your own `Arc` clone of the concrete source/cache (as the
+    /// [`source`](crate::cache::InMemoryTokenCache::source) docs describe) rather
+    /// than going through here.
     pub fn cache(&self) -> &dyn TokenCache {
         self.cache.as_ref()
     }
@@ -211,14 +231,12 @@ impl HttpAuthorizer {
     ///   §8.1 — servers may rotate the nonce on any response, and the next
     ///   proof must carry the latest value).
     /// - An `invalid_token` challenge (RFC 6750 §3.1) invalidates the cached
-    ///   token, so the next [`Self::get_headers`] acquires a fresh one. This
-    ///   is opportunistic — a server that signals token failure any other
-    ///   way needs [`Self::invalidate`] called from your own context (see
-    ///   the [module docs](self)).
+    ///   token, so the next [`Self::get_headers`] acquires a fresh one.
     ///
-    /// This is bookkeeping only; whether to re-send is yours to decide — the
-    /// [module docs](self) show the loop, and [`parse_challenges`] exposes
-    /// what the server objected to.
+    /// Bookkeeping only — it never re-sends, and only headers are inspected, not
+    /// the status code. See the [module docs](self) for the request loop, when
+    /// to call [`Self::invalidate`] yourself, and the caveat on relaying an
+    /// upstream `WWW-Authenticate` onto a non-`401` response.
     pub fn process_response(&self, uri: &Uri, headers: &HeaderMap) {
         if let Some(nonce) = extract_dpop_nonce(headers) {
             self.set_nonce(uri, nonce);

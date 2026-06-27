@@ -554,9 +554,9 @@ fn get_status_text(status: u16) -> &'static str {
 ///
 /// Only one address family is bound (IPv4 preferred, IPv6 as fallback).
 /// Register the redirect URI with a literal loopback address (`127.0.0.1` or
-/// `[::1]`) rather than `localhost`, per RFC 8252 §7.3 — a `localhost`
-/// redirect may resolve to the family this listener did not bind, in which
-/// case the callback never arrives.
+/// `[::1]`) rather than `localhost`, per RFC 8252 §7.3: a `localhost` redirect
+/// may resolve to the family this listener did not bind, so the callback never
+/// arrives.
 ///
 /// # Errors
 ///

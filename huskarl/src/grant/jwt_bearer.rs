@@ -24,9 +24,8 @@
 //!
 //! ## 2. Set up client authentication (optional)
 //!
-//! As noted above, the assertion stands alone, so authenticating the client is
-//! optional and independent — do it only if your authorization server requires
-//! it, otherwise present none at all. See [Setting up client
+//! The assertion stands alone, so authenticating the client is optional — do it
+//! only if your authorization server requires it. See [Setting up client
 //! authentication](crate::grant#setting-up-client-authentication).
 //!
 //! ## 3a. Set up the grant with authorization server metadata
@@ -205,10 +204,10 @@ pub struct JwtBearerGrant {
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
-    /// The client authentication method. Optional: the assertion is the grant,
-    /// independent of client authentication. Omit it to authenticate the client
-    /// in no way; supply [`NoAuth`](crate::core::client_auth::NoAuth) to send the
-    /// `client_id` without credentials, or any other
+    /// The client authentication method. Optional — the assertion is the grant
+    /// (see the [module docs](self#usage)). Omit it to send no client
+    /// credentials, supply [`NoAuth`](crate::core::client_auth::NoAuth) to send
+    /// the `client_id` without credentials, or any other
     /// [`ClientAuthentication`] to authenticate.
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Option<Arc<dyn ClientAuthentication>>,
@@ -338,12 +337,11 @@ pub struct JwtBearerGrantParameters {
     authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
-/// A JWT bearer assertion may be presented repeatedly until it expires, so a
-/// fixed value is cloned for each exchange. This replays the same assertion —
-/// fine while it is valid, but once its `exp` passes the cache cannot obtain a
-/// new token. For an assertion the client mints itself, pass a
-/// [`from_fn`](crate::cache::from_fn) source that re-signs a fresh assertion
-/// per exchange instead.
+/// A JWT bearer assertion may be presented repeatedly until it expires, so this
+/// fixed source clones the same assertion for each exchange — fine while it is
+/// valid, but once its `exp` passes the cache cannot obtain a new token. For an
+/// assertion the client mints itself, use a [`from_fn`](crate::cache::from_fn)
+/// source that re-signs a fresh assertion per exchange.
 impl GrantParametersSource<Self> for JwtBearerGrantParameters {
     fn acquire(&self) -> MaybeSendBoxFuture<'_, Result<Option<Self>, Error>> {
         let params = self.clone();
@@ -351,7 +349,7 @@ impl GrantParametersSource<Self> for JwtBearerGrantParameters {
     }
 
     // A rejected (e.g. expired) assertion will only be rejected again; stop
-    // replaying it. For per-exchange minting, use a `from_fn` source instead.
+    // replaying it.
     fn discard_after_rejection(&self) -> bool {
         true
     }

@@ -86,11 +86,7 @@ pub struct AuthorizationCodeGrant {
     /// A redirect URL registered with the authorization server.
     pub(super) redirect_uri: String,
 
-    /// Set to true to disable PKCE (RFC 7636) entirely.
-    ///
-    /// PKCE is otherwise always applied, as required by current best practice
-    /// (RFC 9700 §2.1.1). Only disable it for an authorization server that
-    /// rejects requests containing PKCE parameters.
+    /// Whether PKCE (RFC 7636) is disabled; see the `new` builder.
     pub(super) disable_pkce: bool,
 
     /// Whether to send the OIDC `nonce` parameter; `None` follows the request
@@ -100,12 +96,8 @@ pub struct AuthorizationCodeGrant {
     /// Set to true to prefer PAR when available.
     pub(super) prefer_pushed_authorization_requests: bool,
 
-    /// If set, restricts accepted ID token signature algorithms to this set.
-    ///
-    /// When set, the [`crate::token::id_token::IdTokenValidator`] will reject any ID token whose `alg` header
-    /// is not in this set. Use a single-element set to enforce a specific registered
-    /// algorithm (`id_token_signed_response_alg`), or a multi-element set to enforce
-    /// a policy (e.g. the FAPI 2.0 allowed algorithms: PS256, ES256, `EdDSA`).
+    /// If set, restricts accepted ID token signature algorithms; see the `new`
+    /// builder.
     pub(super) allowed_id_token_signed_response_algs: Option<HashSet<String>>,
 }
 
@@ -208,17 +200,17 @@ impl AuthorizationCodeGrant {
         #[builder(required, default)]
         send_oidc_nonce: Option<bool>,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
-        /// Restricts accepted ID token signature algorithms to this set.
+        /// Restricts accepted ID token signature algorithms to this set: the
+        /// [`IdTokenValidator`](crate::token::id_token::IdTokenValidator) rejects
+        /// any ID token whose `alg` header is not listed. Use a single-element
+        /// set to pin one algorithm, or several to enforce a policy (e.g. the
+        /// FAPI 2.0 set: PS256, ES256, `EdDSA`).
         ///
-        /// When built via
-        /// [`builder_from_metadata`](Self::builder_from_metadata), this is
-        /// seeded from the server's `id_token_signing_alg_values_supported`
-        /// (OIDC Discovery 1.0 §3), pinning the ID-token `alg` to what the
-        /// issuer advertises (the insecure `none` value is dropped, and is
-        /// rejected unconditionally regardless). On the plain
-        /// [`builder`](Self::builder) path it is unset unless supplied
-        /// explicitly; left unset, any algorithm the verifier supports is
-        /// accepted.
+        /// [`builder_from_metadata`](Self::builder_from_metadata) seeds it from
+        /// the server's `id_token_signing_alg_values_supported` (OIDC Discovery
+        /// 1.0 §3), minus the insecure `none` (which is rejected unconditionally
+        /// regardless). The plain [`builder`](Self::builder) leaves it unset,
+        /// accepting any algorithm the verifier supports.
         #[from_metadata(
             with = |m: &crate::core::server_metadata::AuthorizationServerMetadata| m
                 .id_token_signing_alg_values_supported

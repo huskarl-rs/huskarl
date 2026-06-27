@@ -70,9 +70,8 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     ///
     /// If the server returns a `DPoP-Nonce` header, the `DPoP` nonce state is updated.
     /// If the error is `use_dpop_nonce`, no retry is performed — wrap the call site
-    /// with [`with_dpop_nonce_retry!`] to retry with freshly generated `auth_params`
-    /// (required to avoid `jti` reuse in `private_key_jwt` client assertions per
-    /// RFC 7523 §3).
+    /// with [`with_dpop_nonce_retry!`], which retries with freshly generated
+    /// `auth_params`.
     pub async fn execute<R: for<'de> Deserialize<'de>>(
         &self,
         http_client: &dyn HttpClient,
@@ -129,9 +128,9 @@ fn serialize_form_error(source: oauth_form::Error) -> Error {
 /// Parses an error response body as an `OAuth2` error. Always returns an error.
 ///
 /// Classification: `invalid_grant` → [`ErrorKind::InvalidGrant`] (the
-/// credential is dead); `invalid_scope`/`invalid_target`/`invalid_resource` →
-/// [`ErrorKind::RequestRejected`] (the credential is fine, the request was
-/// wrong); `use_dpop_nonce` → [`ErrorKind::Dpop`]; any 5xx →
+/// credential is rejected); `invalid_scope`/`invalid_target`/`invalid_resource`
+/// → [`ErrorKind::RequestRejected`] (the credential is valid but the request was
+/// malformed); `use_dpop_nonce` → [`ErrorKind::Dpop`]; any 5xx →
 /// [`ErrorKind::Transport`] (retryable); other `OAuth2` errors →
 /// [`ErrorKind::Protocol`]. The raw OAuth error code is carried on the error.
 fn parse_oauth2_error_response(
@@ -205,10 +204,10 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
 /// A captured response body whose contents are withheld from `Debug`.
 ///
 /// A successful token-endpoint response carries cleartext access and refresh
-/// tokens. Capturing the raw body into an error and letting it surface through
-/// `{:?}` — directly, or via the wrapping [`Error`]'s source chain — would leak
-/// those tokens to logs. The body is retained only so the error can be
-/// constructed; its contents are never rendered.
+/// tokens. Letting the raw body surface through `{:?}` — directly or via the
+/// wrapping [`Error`]'s source chain — would leak those tokens to logs, so the
+/// body is retained only to construct the error and its contents are never
+/// rendered.
 pub struct RedactedBody(String);
 
 impl std::fmt::Debug for RedactedBody {

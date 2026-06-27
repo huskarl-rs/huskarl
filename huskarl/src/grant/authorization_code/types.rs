@@ -80,13 +80,11 @@ pub struct StartInput {
     pub(super) max_age: Option<Duration>,
     /// End-User's preferred languages and scripts for the user interface, ordered by preference.
     pub(super) ui_locales: Option<Vec<String>>,
-    /// ID Token previously issued by the Authorization Server being passed as a hint about the End-User's current or past authenticated session with the Client.
+    /// ID token previously issued by the Authorization Server, passed as a hint
+    /// about the End-User's authenticated session (OIDC Core 1.0 §3.1.2.1).
     ///
-    /// If the End-User identified by the ID Token is already logged in or is logged in as a result of the request (with the OP possibly evaluating other
-    /// information beyond the ID Token in this decision), then the Authorization Server returns a positive response; otherwise, it MUST return an error,
-    /// such as `login_required`. When possible, an `id_token_hint` SHOULD be present when prompt=none is used and an `invalid_request` error MAY be returned if
-    /// it is not; however, the server SHOULD respond successfully when possible, even if it is not present. The Authorization Server need not be listed as
-    /// an audience of the ID Token when it is used as an `id_token_hint` value.
+    /// Typically paired with `prompt=none`. The AS need not be listed as an
+    /// audience of this ID token when it is used as a hint.
     pub(super) id_token_hint: Option<IdToken>,
     /// Hint to the Authorization Server about the login identifier the End-User might use to log in (if necessary)
     pub(super) login_hint: Option<String>,
@@ -169,7 +167,7 @@ pub struct CompleteInput {
 pub struct PendingState {
     /// The redirect URI.
     ///
-    /// In OAuth 2.0, when this specified at the authorization endpoint, it also needs to be
+    /// In OAuth 2.0, when this is specified at the authorization endpoint, it also needs to be
     /// sent to the token endpoint.
     pub redirect_uri: String,
     /// The PKCE verifier.
@@ -177,20 +175,12 @@ pub struct PendingState {
     /// This value is calculated when creating the initial flow, and needs to be sent to the
     /// token endpoint when PKCE is used.
     pub pkce_verifier: Option<String>,
-    /// The state parameter.
-    ///
-    /// The state value passed to the authorization endpoint.
-    ///
-    /// This value is checked for equality against the state value passed to the callback.
+    /// The `state` sent to the authorization endpoint, checked for equality
+    /// against the value returned to the callback (CSRF protection).
     pub state: String,
-    /// Nonce used when verifying any provided ID token.
-    ///
-    /// The nonce value passed to the authorization endpoint.
-    ///
-    /// This value is checked for equality against the nonce claim in any returned ID token.
+    /// The `nonce` sent to the authorization endpoint, checked against the
+    /// `nonce` claim in any returned ID token.
     pub nonce: String,
-    /// The `DPoP` JWT thumbprint.
-    ///
     /// The thumbprint of the `DPoP` key bound to the request.
     pub dpop_jkt: Option<String>,
 }

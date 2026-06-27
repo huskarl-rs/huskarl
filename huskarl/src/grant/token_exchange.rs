@@ -150,11 +150,11 @@ pub struct TokenExchangeGrant {
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
-    /// The client authentication method. Optional: the subject token is the
-    /// grant, independent of client authentication. Omit it to authenticate the
-    /// client in no way; supply [`NoAuth`](crate::core::client_auth::NoAuth) to
-    /// send the `client_id` without credentials, or any other
-    /// [`ClientAuthentication`] to authenticate.
+    /// The client authentication method. Optional — the subject token is the
+    /// grant. Omit it to send no client credentials, supply
+    /// [`NoAuth`](crate::core::client_auth::NoAuth) to send the `client_id`
+    /// without credentials, or any other [`ClientAuthentication`] to
+    /// authenticate.
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Option<Arc<dyn ClientAuthentication>>,
 
