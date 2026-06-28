@@ -58,6 +58,11 @@ impl MultiKeyVerifier {
     ///
     /// Keys with unsupported algorithms are silently skipped.
     ///
+    /// This is a general-purpose constructor with no key-count limit: it may be
+    /// fed from a trusted source (a KMS, an enclave, a local file) as well as a
+    /// remote JWKS. Bounding the key count of an untrusted, remotely-fetched
+    /// document is the fetcher's job — see [`JwksSource`](crate::jwk::JwksSource).
+    ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::Crypto`] if a supported key fails to construct a
