@@ -23,6 +23,14 @@ use huskarl_core::{
     platform::MaybeSendBoxFuture,
 };
 
+/// Default maximum response body size (1 MiB).
+///
+/// Used by [`ReqwestClient::builder`] when no `max_response_bytes` is given.
+/// Comfortably larger than any JWKS, token, introspection, discovery, or
+/// `UserInfo` response in practice, while still bounding the memory a single
+/// response can consume.
+pub const DEFAULT_MAX_RESPONSE_BYTES: usize = 1024 * 1024;
+
 /// A [`reqwest`]-backed [`HttpClient`] for the huskarl crates.
 ///
 /// Build one with `ReqwestClient::builder()`, or convert an existing
@@ -32,6 +40,9 @@ use huskarl_core::{
 pub struct ReqwestClient {
     client: reqwest::Client,
     uses_mtls: bool,
+    /// Maximum number of bytes to read from a response body, or `None` for no
+    /// limit. See the builder's `max_response_bytes` argument.
+    max_response_bytes: Option<usize>,
     /// The mTLS identity used when building this client, if any.
     ///
     /// Retained so callers can build additional clients with the same identity
@@ -48,6 +59,7 @@ impl From<reqwest::Client> for ReqwestClient {
         Self {
             client,
             uses_mtls: false,
+            max_response_bytes: Some(DEFAULT_MAX_RESPONSE_BYTES),
             #[cfg(all(
                 not(target_arch = "wasm32"),
                 any(feature = "rustls-tls", feature = "native-tls")
@@ -110,6 +122,20 @@ impl ReqwestClient {
         #[builder(required, default = Some(std::time::Duration::from_secs(30)))]
         timeout: Option<std::time::Duration>,
 
+        /// Maximum number of bytes to read from a response body before aborting.
+        /// Defaults to [`DEFAULT_MAX_RESPONSE_BYTES`]; pass `None` to read bodies
+        /// of unbounded size.
+        ///
+        /// Bounds the memory a single response can consume, so a malicious or
+        /// compromised endpoint (JWKS, token, introspection, ...) cannot exhaust
+        /// memory by returning a very large or unbounded body. On non-`wasm32`
+        /// the limit is enforced while streaming and aborts before the whole
+        /// body is buffered; on `wasm32` the browser buffers the body, so the
+        /// limit is checked against the advertised `Content-Length` and the
+        /// final size.
+        #[builder(required, default = Some(DEFAULT_MAX_RESPONSE_BYTES))]
+        max_response_bytes: Option<usize>,
+
         /// Escape hatch for arbitrary [`reqwest::ClientBuilder`] configuration not
         /// covered by the other options, applied just before the client is built.
         configure_builder: Option<
@@ -152,6 +178,7 @@ impl ReqwestClient {
                 Error::new(ErrorKind::Config, e).with_context("building HTTP client")
             })?,
             uses_mtls,
+            max_response_bytes,
             #[cfg(all(
                 not(target_arch = "wasm32"),
                 any(feature = "rustls-tls", feature = "native-tls")
@@ -187,6 +214,74 @@ impl ReqwestClient {
 /// processed and only the response lost.
 ///
 /// On `wasm32`, fetch errors are opaque, so nothing is marked retryable.
+/// Builds the error returned when a response body exceeds the configured limit.
+///
+/// Classified as [`ErrorKind::Protocol`] rather than a transport failure: the
+/// server sent something we refuse to process, and re-sending would only pull
+/// the same oversized body, so it must not be retried.
+fn oversize_error(max: usize) -> Error {
+    Error::from(ErrorKind::Protocol)
+        .with_context(format!("response body exceeded {max} byte limit"))
+}
+
+/// Reads a response body, enforcing the optional size cap.
+///
+/// With no cap, reads the whole body. With a cap, rejects early when the
+/// server advertises an oversized `Content-Length`, then (off `wasm32`) streams
+/// the body and aborts as soon as the running total exceeds the limit, so an
+/// unbounded or mislabelled body is never fully buffered.
+async fn read_body(
+    response: reqwest::Response,
+    max_response_bytes: Option<usize>,
+    idempotency: Idempotency,
+) -> Result<Bytes, Error> {
+    let Some(max) = max_response_bytes else {
+        return response
+            .bytes()
+            .await
+            .map_err(|e| transport_error(e, idempotency));
+    };
+
+    if response
+        .content_length()
+        .is_some_and(|len| len > max as u64)
+    {
+        return Err(oversize_error(max));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut response = response;
+        let mut body = bytes::BytesMut::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| transport_error(e, idempotency))?
+        {
+            if body.len() + chunk.len() > max {
+                return Err(oversize_error(max));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body.freeze())
+    }
+
+    // `wasm32` has no streaming body API; the browser buffers the response, so
+    // the `Content-Length` check above is the primary guard and this is a
+    // best-effort cap on the final size.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let body = response
+            .bytes()
+            .await
+            .map_err(|e| transport_error(e, idempotency))?;
+        if body.len() > max {
+            return Err(oversize_error(max));
+        }
+        Ok(body)
+    }
+}
+
 fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
     #[cfg(not(target_arch = "wasm32"))]
     let retryable = source.is_connect()
@@ -209,7 +304,8 @@ impl HttpClient for ReqwestClient {
     /// Executes an `http::Request` using the `reqwest::Client`.
     ///
     /// Converts the `http::Request<Bytes>` into a `reqwest::Request`, sends
-    /// it, and reads the full response body.
+    /// it, and reads the response body up to the configured
+    /// `max_response_bytes` limit.
     fn execute(
         &self,
         request: Request<Bytes>,
@@ -235,10 +331,7 @@ impl HttpClient for ReqwestClient {
 
             let status = response.status();
             let headers = response.headers().clone();
-            let body = response
-                .bytes()
-                .await
-                .map_err(|e| transport_error(e, idempotency))?;
+            let body = read_body(response, self.max_response_bytes, idempotency).await?;
 
             Ok(HttpResponse {
                 status,
@@ -254,9 +347,119 @@ impl HttpClient for ReqwestClient {
 mod tests {
     use std::time::Duration;
 
-    use huskarl_core::{ErrorKind, http::Idempotency};
+    use bytes::Bytes;
+    use http::Request;
+    use huskarl_core::{
+        ErrorKind,
+        http::{HttpClient, Idempotency},
+    };
 
-    use super::transport_error;
+    use super::{DEFAULT_MAX_RESPONSE_BYTES, ReqwestClient, transport_error};
+
+    /// Serves one HTTP/1.1 response on a fresh loopback port, in a background
+    /// thread. When `content_length` is false the body is delimited by
+    /// connection close, so `Content-Length` is absent and the client must
+    /// stream to discover the size. Body-write errors are ignored: a client
+    /// that aborts mid-stream drops the connection, which is the point.
+    fn serve_once(body: Vec<u8>, content_length: bool) -> String {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = stream.read(&mut buf);
+            let header = if content_length {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+                    body.len()
+                )
+            } else {
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n"
+                    .to_string()
+            };
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&body);
+        });
+        format!("http://{addr}/")
+    }
+
+    async fn get(
+        url: &str,
+        max_response_bytes: Option<usize>,
+    ) -> Result<Bytes, huskarl_core::Error> {
+        let client = ReqwestClient::builder()
+            .max_response_bytes(max_response_bytes)
+            .build()
+            .await
+            .unwrap();
+        let request = Request::builder().uri(url).body(Bytes::new()).unwrap();
+        client
+            .execute(request, Idempotency::Idempotent)
+            .await
+            .map(|response| response.body)
+    }
+
+    #[tokio::test]
+    async fn body_within_limit_is_returned() {
+        let url = serve_once(b"{\"ok\":true}".to_vec(), true);
+        let body = get(&url, Some(64)).await.unwrap();
+        assert_eq!(&body[..], b"{\"ok\":true}");
+    }
+
+    #[tokio::test]
+    async fn oversized_content_length_is_rejected_early() {
+        let url = serve_once(vec![b'x'; 5000], true);
+        let error = get(&url, Some(1000)).await.unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Protocol));
+        assert!(!error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn oversized_streamed_body_without_content_length_is_rejected() {
+        let url = serve_once(vec![b'x'; 5000], false);
+        let error = get(&url, Some(1000)).await.unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Protocol));
+        assert!(!error.is_retryable());
+    }
+
+    #[tokio::test]
+    async fn streamed_body_is_reassembled_without_corruption() {
+        // A byte-varied body large enough to span several reads, served without
+        // a Content-Length so the client must reassemble it chunk by chunk.
+        // The cap sits just above the body so streaming runs to completion.
+        let expected: Vec<u8> = (0usize..256 * 1024)
+            .map(|i| u8::try_from(i % 251).unwrap())
+            .collect();
+        let url = serve_once(expected.clone(), false);
+        let body = get(&url, Some(expected.len() + 1)).await.unwrap();
+        assert_eq!(body.len(), expected.len());
+        assert!(
+            body[..] == expected[..],
+            "streamed body must match byte-for-byte"
+        );
+    }
+
+    #[tokio::test]
+    async fn body_exactly_at_limit_is_returned() {
+        let expected = vec![b'x'; 1000];
+        let url = serve_once(expected.clone(), false);
+        let body = get(&url, Some(1000)).await.unwrap();
+        assert_eq!(&body[..], &expected[..]);
+    }
+
+    #[tokio::test]
+    async fn no_limit_reads_a_large_body() {
+        let url = serve_once(vec![b'x'; 5000], true);
+        let body = get(&url, None).await.unwrap();
+        assert_eq!(body.len(), 5000);
+    }
+
+    #[tokio::test]
+    async fn default_limit_is_one_mib() {
+        assert_eq!(DEFAULT_MAX_RESPONSE_BYTES, 1024 * 1024);
+    }
 
     /// Produces a connection-establishment failure by targeting a port that
     /// was just released, so nothing is listening on it.
