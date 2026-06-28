@@ -55,8 +55,8 @@ pub type BoxedSource = Box<dyn std::error::Error + 'static>;
 
 /// An error from a huskarl operation.
 ///
-/// Carries a classification ([`kind`](Error::kind)), the raw RFC 6749 error
-/// code when the authorization server returned one
+/// Carries a classification ([`kind`](Error::kind)), the raw OAuth error code
+/// when the server returned one
 /// ([`oauth_error_code`](Error::oauth_error_code)), and the underlying cause
 /// ([`source`](std::error::Error::source)).
 #[derive(Debug)]
@@ -162,7 +162,8 @@ impl Error {
         self
     }
 
-    /// Attach the raw RFC 6749 §5.2 error code returned by the server.
+    /// Attach the raw OAuth error code returned by the server (see
+    /// [`oauth_error_code`](Self::oauth_error_code) for the codes this covers).
     #[must_use]
     pub fn with_oauth_error_code(mut self, code: impl Into<String>) -> Self {
         self.oauth_error_code = Some(code.into());
@@ -175,7 +176,17 @@ impl Error {
         self.kind
     }
 
-    /// The raw RFC 6749 §5.2 error code, if the server returned one.
+    /// The raw error code from the server's OAuth error response, if it returned
+    /// one.
+    ///
+    /// Most commonly an RFC 6749 §5.2 token-endpoint error code (e.g.
+    /// `invalid_grant`, `invalid_scope`), but the same field carries the
+    /// equivalent code from any OAuth error response, including extension
+    /// responses that reuse the `error` member — for example
+    /// [`use_dpop_nonce`](Self::is_dpop_nonce_required) (RFC 9449) or a dynamic
+    /// client registration error (RFC 7591 §3.2.2, such as
+    /// `invalid_redirect_uri`). It is the verbatim string from the server; match
+    /// on it only against codes defined by the protocol that produced the error.
     #[must_use]
     pub fn oauth_error_code(&self) -> Option<&str> {
         self.oauth_error_code.as_deref()

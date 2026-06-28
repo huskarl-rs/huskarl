@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Read allowed ID tokens algorithms from AS metadata.
  - Only send `nonce` value in authorization request for openid scope (overrideable).
  - Always include `client_id` parameter in PAR requests.
+ - Add Dynamic Client Registration client (RFC 7591).
 
 ## [0.8.0] - 2026-06-15
 
