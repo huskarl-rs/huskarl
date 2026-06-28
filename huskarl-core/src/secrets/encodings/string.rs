@@ -1,20 +1,26 @@
 use crate::{
     error::{Error, ErrorKind},
-    secrets::{SecretDecoder, SecretString},
+    secrets::{SecretBytes, SecretMap, SecretString},
 };
 
-/// Interprets bytes as UTF-8 text, returning a `SecretString`.
+/// Interprets bytes as UTF-8 text: the `SecretBytes` → `SecretString` conversion.
 ///
-/// Trims leading/trailing whitespace from the decoded string.
+/// Trims leading/trailing whitespace from the decoded string — this strips the
+/// trailing newline you get from `echo secret > file`, env vars, and similar,
+/// which is almost never part of the secret. Interior whitespace is preserved
+/// (it can be significant, e.g. a passphrase). If your secret has *significant*
+/// leading/trailing whitespace, keep it as the raw [`SecretBytes`] (don't apply
+/// this conversion) to preserve the exact bytes.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StringEncoding;
 
-impl SecretDecoder for StringEncoding {
-    type Output = SecretString;
+impl SecretMap for StringEncoding {
+    type In = SecretBytes;
+    type Out = SecretString;
 
-    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
-        let s =
-            std::str::from_utf8(bytes).map_err(|source| Error::new(ErrorKind::Config, source))?;
+    fn apply(&self, input: SecretBytes) -> Result<SecretString, Error> {
+        let s = std::str::from_utf8(input.expose_secret())
+            .map_err(|source| Error::new(ErrorKind::Config, source))?;
         Ok(SecretString::new(s.trim()))
     }
 }

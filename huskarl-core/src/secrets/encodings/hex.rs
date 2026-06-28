@@ -1,24 +1,24 @@
 use crate::{
     error::{Error, ErrorKind},
-    secrets::{SecretBytes, SecretDecoder},
+    secrets::{SecretBytes, SecretMap, encodings::strip_ascii_whitespace},
 };
 
-/// Decodes hex-encoded text into `SecretBytes`.
+/// Decodes hex-encoded bytes into `SecretBytes`.
 ///
-/// Trims leading and trailing whitespace before decoding (interior whitespace
-/// is not allowed). Expects the bytes to be valid UTF-8 containing hexadecimal
-/// characters (0-9, a-f, A-F).
+/// All ASCII whitespace is stripped before decoding, so space-separated dumps
+/// and multi-line copy/pasted secrets are accepted. The remaining bytes must be
+/// hexadecimal characters (0-9, a-f, A-F) in even count.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct HexEncoding;
 
-impl SecretDecoder for HexEncoding {
-    type Output = SecretBytes;
+impl SecretMap for HexEncoding {
+    type In = SecretBytes;
+    type Out = SecretBytes;
 
-    fn decode(&self, bytes: &[u8]) -> Result<Self::Output, Error> {
-        let s =
-            std::str::from_utf8(bytes).map_err(|source| Error::new(ErrorKind::Config, source))?;
+    fn apply(&self, input: SecretBytes) -> Result<SecretBytes, Error> {
+        let stripped = strip_ascii_whitespace(input.expose_secret(), |b| b);
         let decoded =
-            hex::decode(s.trim()).map_err(|source| Error::new(ErrorKind::Config, source))?;
+            hex::decode(&*stripped).map_err(|source| Error::new(ErrorKind::Config, source))?;
         Ok(SecretBytes::new(decoded))
     }
 }

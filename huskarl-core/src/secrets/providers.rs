@@ -3,10 +3,12 @@ use std::ffi::OsString;
 use crate::{
     error::{Error, ErrorKind},
     platform::{MaybeSendBoxFuture, MaybeSendSync},
-    secrets::{Secret, SecretDecoder, SecretOutput, SecretString, encodings::StringEncoding},
+    secrets::{
+        Secret, SecretBytes, SecretMap, SecretOutput, SecretString, encodings::StringEncoding,
+    },
 };
 
-/// Retrieves secrets from environment variables with configurable encoding.
+/// Retrieves secrets from environment variables with a configurable mapping.
 #[derive(Debug, Clone)]
 pub struct EnvVarSecret<Output = SecretString> {
     /// The name of the value read from the environment.
@@ -14,15 +16,17 @@ pub struct EnvVarSecret<Output = SecretString> {
 }
 
 impl<O> EnvVarSecret<O> {
-    /// Creates a new environment variable secret provider with the specified encoding.
+    /// Creates a new environment variable secret provider with the specified
+    /// mapping (a byte-input [`SecretMap`], e.g. a decoder or the UTF-8
+    /// conversion).
     ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::Config`] if the environment variable doesn't
-    /// exist, or if the value cannot be decoded.
-    pub fn new<E: SecretDecoder<Output = O>>(
+    /// exist, or if the value cannot be mapped.
+    pub fn new<M: SecretMap<In = SecretBytes, Out = O>>(
         var_name: impl Into<OsString>,
-        encoding: &E,
+        encoding: &M,
     ) -> Result<Self, Error> {
         let var_name = var_name.into();
 
@@ -32,12 +36,14 @@ impl<O> EnvVarSecret<O> {
                 var_name.to_string_lossy()
             ))
         })?;
-        let value = encoding.decode(encoded_value.as_bytes()).map_err(|err| {
-            err.with_context(format!(
-                "decoding environment variable {}",
-                var_name.to_string_lossy()
-            ))
-        })?;
+        let value = encoding
+            .apply(SecretBytes::new(encoded_value.into_bytes()))
+            .map_err(|err| {
+                err.with_context(format!(
+                    "decoding environment variable {}",
+                    var_name.to_string_lossy()
+                ))
+            })?;
 
         Ok(Self { value })
     }
@@ -88,43 +94,37 @@ mod file_secret {
     use crate::{
         error::{Error, ErrorKind},
         platform::MaybeSendBoxFuture,
-        secrets::{Secret, SecretDecoder, SecretOutput, encodings::StringEncoding},
+        secrets::{
+            MappedSecret, Secret, SecretBytes, SecretMap, SecretOutput, encodings::StringEncoding,
+        },
     };
 
-    /// A secret read from a file on each access.
+    /// The raw bytes of a file, read on each access.
+    ///
+    /// Yields the file contents verbatim as [`SecretBytes`], with no decoding.
+    /// Layer a [`SecretMap`] over it with [`Secret::mapped`] (or
+    /// [`MappedSecret`]) to parse an encoded form — [`FileSecret`] is the
+    /// pre-composed convenience for exactly that.
     ///
     /// The file is read asynchronously on each call to
-    /// [`Secret::get_secret_value()`].
-    /// For secret rotation schemes that replace files atomically (write to a
-    /// temporary file then rename), no file locking is needed.
-    ///
-    /// Wrap in [`CachedSecret`](crate::secrets::CachedSecret) to add TTL-based caching or
-    /// to read the file only once.
+    /// [`get_secret_value`](Secret::get_secret_value). For rotation schemes that
+    /// replace files atomically (write to a temporary file then rename), no file
+    /// locking is needed. Wrap in [`CachedSecret`](crate::secrets::CachedSecret)
+    /// to add TTL-based caching or to read the file only once.
     #[derive(Debug, Clone)]
-    pub struct FileSecret<D: SecretDecoder = StringEncoding> {
+    pub struct FileBytes {
         path: PathBuf,
-        decoder: D,
     }
 
-    impl<D: SecretDecoder> FileSecret<D> {
-        /// Creates a new file secret provider with the specified decoder.
-        pub fn new(path: impl Into<PathBuf>, decoder: D) -> Self {
-            Self {
-                path: path.into(),
-                decoder,
-            }
+    impl FileBytes {
+        /// Creates a new file byte source for `path`.
+        pub fn new(path: impl Into<PathBuf>) -> Self {
+            Self { path: path.into() }
         }
     }
 
-    impl FileSecret {
-        /// Creates a new file secret provider returning a [`SecretString`](crate::secrets::SecretString).
-        pub fn string(path: impl Into<PathBuf>) -> Self {
-            Self::new(path, StringEncoding)
-        }
-    }
-
-    impl<D: SecretDecoder> Secret for FileSecret<D> {
-        type Output = D::Output;
+    impl Secret for FileBytes {
+        type Output = SecretBytes;
 
         fn get_secret_value(
             &self,
@@ -142,14 +142,53 @@ mod file_secret {
                     Error::new(kind, source)
                         .with_context(format!("reading secret file {}", self.path.display()))
                 })?;
-                let value = self.decoder.decode(&bytes).map_err(|err| {
-                    err.with_context(format!("decoding secret file {}", self.path.display()))
-                })?;
                 Ok(SecretOutput {
-                    value,
+                    value: SecretBytes::new(bytes),
                     identity: None,
                 })
             })
+        }
+    }
+
+    /// A secret read from a file on each access, mapped through `M`.
+    ///
+    /// A pre-composed [`FileBytes`] + [`MappedSecret`]: it reads the file on
+    /// each access and maps the bytes with the configured [`SecretMap`]
+    /// (defaulting to UTF-8 text via [`StringEncoding`]). Equivalent to
+    /// `FileBytes::new(path).mapped(map)`.
+    ///
+    /// Wrap in [`CachedSecret`](crate::secrets::CachedSecret) to add TTL-based
+    /// caching or to read the file only once.
+    #[derive(Debug, Clone)]
+    pub struct FileSecret<M: SecretMap<In = SecretBytes> = StringEncoding> {
+        inner: MappedSecret<FileBytes, M>,
+    }
+
+    impl<M: SecretMap<In = SecretBytes>> FileSecret<M> {
+        /// Creates a new file secret provider with the specified mapping.
+        pub fn new(path: impl Into<PathBuf>, map: M) -> Self {
+            let path = path.into();
+            let decode_context = format!("decoding secret file {}", path.display());
+            Self {
+                inner: MappedSecret::new(FileBytes::new(path), map).with_context(decode_context),
+            }
+        }
+    }
+
+    impl FileSecret {
+        /// Creates a new file secret provider returning a [`SecretString`](crate::secrets::SecretString).
+        pub fn string(path: impl Into<PathBuf>) -> Self {
+            Self::new(path, StringEncoding)
+        }
+    }
+
+    impl<M: SecretMap<In = SecretBytes>> Secret for FileSecret<M> {
+        type Output = M::Out;
+
+        fn get_secret_value(
+            &self,
+        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+            self.inner.get_secret_value()
         }
     }
 
@@ -158,6 +197,7 @@ mod file_secret {
         use std::io::Write;
 
         use super::*;
+        use crate::secrets::encodings::Base64Encoding;
 
         #[tokio::test]
         async fn file_secret_trims_trailing_newline() {
@@ -176,8 +216,37 @@ mod file_secret {
             assert_eq!(err.kind(), ErrorKind::Config);
             assert!(!err.is_retryable());
         }
+
+        /// A decode failure names the offending file in its context, not just a
+        /// generic "decoding secret value".
+        #[tokio::test]
+        async fn decode_error_names_the_file() {
+            let mut tmp = tempfile::NamedTempFile::new().unwrap();
+            write!(tmp, "not valid base64 !!").unwrap();
+
+            let secret = FileSecret::new(tmp.path(), Base64Encoding);
+            let err = secret.get_secret_value().await.unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::Config);
+            assert!(
+                err.to_string().contains(&tmp.path().display().to_string()),
+                "decode error should name the file: {err}"
+            );
+        }
+
+        /// `FileBytes` yields raw bytes, and `.mapped()` layers an encoding —
+        /// the composition `FileSecret` is built from.
+        #[tokio::test]
+        async fn file_bytes_mapped_composes() {
+            let mut tmp = tempfile::NamedTempFile::new().unwrap();
+            // base64("hello") wrapped across lines — stripped before decoding.
+            write!(tmp, "aGVs\nbG8=").unwrap();
+
+            let secret = FileBytes::new(tmp.path()).mapped(Base64Encoding);
+            let output = secret.get_secret_value().await.unwrap();
+            assert_eq!(output.value.expose_secret(), b"hello");
+        }
     }
 }
 
 #[cfg(feature = "fs")]
-pub use file_secret::FileSecret;
+pub use file_secret::{FileBytes, FileSecret};

@@ -10,8 +10,8 @@ implement your own.
 ## Built-in providers
 
 [`EnvVarSecret`](crate::secrets::EnvVarSecret) reads an environment variable. A
-[`SecretDecoder`](crate::secrets::encodings::SecretDecoder) controls how the
-stored form is interpreted — [`StringEncoding`](crate::secrets::encodings::StringEncoding)
+[`SecretMap`](crate::secrets::SecretMap) controls how the stored form is
+interpreted — [`StringEncoding`](crate::secrets::encodings::StringEncoding)
 for UTF-8 text, [`Base64Encoding`](crate::secrets::encodings::Base64Encoding) or
 [`HexEncoding`](crate::secrets::encodings::HexEncoding) for binary key material:
 
@@ -30,13 +30,60 @@ let signing_key = EnvVarSecret::new("APP_SIGNING_KEY", &Base64Encoding)?;
 ```
 
 With the `fs` feature, `FileSecret` reads from a file on each access —
-convenient for mounted-secret rotation:
+convenient for mounted-secret rotation. It is `FileBytes` (the raw file
+contents) composed with a `SecretMap`; the same composition is available on any
+provider through [`Secret::mapped`](crate::secrets::Secret::mapped):
 
 ```ignore
-use huskarl_core::secrets::FileSecret;
+use huskarl_core::secrets::{FileBytes, FileSecret, encodings::Base64Encoding};
 
 let client_secret = FileSecret::string("/run/secrets/client_secret");
+
+// Equivalent to FileSecret::new(path, Base64Encoding):
+let signing_key = FileBytes::new("/run/secrets/signing_key").mapped(Base64Encoding);
 ```
+
+## Transforming a secret
+
+A fetched value is often not yet the value you need — a store hands back a
+string whose *contents* are base64-encoded key material, or a value that needs
+trimming or parsing. Any [`Secret`](crate::secrets::Secret) can be transformed
+in place, leaving the source (and its `identity`) untouched:
+
+- [`Secret::mapped`](crate::secrets::Secret::mapped) applies a named
+  [`SecretMap`](crate::secrets::SecretMap). Named maps chain, and the result's
+  type can be written out, so it can be stored in a struct field.
+- [`Secret::map`](crate::secrets::Secret::map) and
+  [`Secret::try_map`](crate::secrets::Secret::try_map) take a closure — the
+  convenient form for a one-off transform at the call site.
+
+```rust
+use huskarl_core::secrets::{
+    EnvVarSecret, Secret as _, SecretString,
+    encodings::{Base64Encoding, StringToBytes},
+};
+
+# fn example() -> Result<(), huskarl_core::error::Error> {
+// A string secret whose contents are base64: view it as bytes, then decode.
+let signing_key = EnvVarSecret::string("WRAPPED_SIGNING_KEY")?
+    .mapped(StringToBytes)
+    .mapped(Base64Encoding);
+
+// A one-off transform with a closure, e.g. stripping a legacy prefix.
+let api_key = EnvVarSecret::string("PREFIXED_API_KEY")?
+    .map(|s: SecretString| SecretString::new(s.expose_secret().trim_start_matches("v1:")));
+# let _ = (signing_key, api_key);
+# Ok(())
+# }
+```
+
+A failed transform surfaces as
+[`ErrorKind::Config`](crate::error::ErrorKind::Config); use
+[`with_context`](crate::secrets::MappedSecret::with_context) to name the source
+in the error (`"decoding secret file /run/secrets/key"`). Transforms run on
+every fetch, so wrap the *transformed* secret in
+[`CachedSecret`](crate::secrets::CachedSecret) (below) to memoize the final
+value.
 
 ## A custom provider
 
@@ -77,6 +124,12 @@ Classify failures by intent: a transient fetch failure (a vault timeout) as
 and a persistent one (missing key, bad permissions, undecodable data) as
 [`ErrorKind::Config`](crate::error::ErrorKind::Config). See [the error
 model](crate::_docs::explanation::error_handling).
+
+That one `impl` is the whole integration: the provider composes like the
+built-ins, so [transforms](#transforming-a-secret) chain over it
+(`vault_secret.mapped(StringToBytes).mapped(Base64Encoding)`) and
+[`CachedSecret`](crate::secrets::CachedSecret) wraps it — keep fetching and
+decoding out of the provider and let the decorators do it.
 
 ## Caching
 
