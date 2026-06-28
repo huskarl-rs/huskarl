@@ -37,6 +37,7 @@ huskarl-crypto-native = { version = "0.8", path = "./huskarl-crypto-native" }
 huskarl-crypto-webcrypto = { version = "0.8", path = "./huskarl-crypto-webcrypto" }
 
 bon = { version = "3.9", default-features = false, features = [
+  "alloc",
   "experimental-generics-setters",
   "implied-bounds",
 ] }

@@ -167,6 +167,10 @@ Huskarl supports most `std` platforms, including WASM.
 - RFC 9207 - Authorization Server Issuer Identification
 - RFC 9068 - JWT Profile for OAuth 2.0 Access Tokens
 
+### Client Lifecycle
+
+- RFC 7591 - Dynamic Client Registration
+
 ### OpenID Connect
 
 - OpenID Connect Core 1.0

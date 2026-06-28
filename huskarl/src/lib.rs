@@ -43,6 +43,10 @@ or more calls to the token endpoint.
 Further grants — CIBA, JWT authorization, provider-specific flows — can be implemented in this
 crate or by external crates.
 
+Beyond grants, the [`registration`] module implements OAuth 2.0 Dynamic Client Registration
+(RFC 7591), letting a client register itself with an authorization server and obtain the
+`client_id`/`client_secret` that drive the grants above.
+
 ## Examples
 
 ### Client Credentials Grant
@@ -203,6 +207,7 @@ pub mod authorizer;
 pub mod cache;
 pub mod grant;
 pub mod prelude;
+pub mod registration;
 pub mod revocation;
 pub mod token;
 pub mod userinfo;
