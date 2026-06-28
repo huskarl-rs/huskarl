@@ -16,8 +16,9 @@ use crate::core::{jwk::PublicJwks, secrets::SecretString};
 /// are left off the wire so the server applies its own defaults. The server MAY
 /// substitute or reject requested values, so always consult the response.
 ///
-/// Fields beyond those defined by RFC 7591 — extension parameters — round-trip
-/// through [`extra`](Self::extra).
+/// Beyond the RFC 7591 §2 base parameters, the `OpenID` Connect Dynamic Client
+/// Registration 1.0 §2 extension parameters are also typed. Any other extension
+/// parameter round-trips through [`extra`](Self::extra).
 ///
 /// [`ClientInformationResponse`]: super::ClientInformationResponse
 #[derive(Clone, Debug, Default, Serialize, Deserialize, Builder)]
@@ -120,7 +121,143 @@ pub struct ClientMetadata {
     #[builder(into)]
     pub software_statement: Option<SecretString>,
 
-    /// Extension metadata parameters not defined by RFC 7591.
+    /// Kind of client application — `web` (the default) or `native`
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub application_type: Option<String>,
+
+    /// URL of a JSON file with the client's `redirect_uris`, providing the host
+    /// the server uses when calculating `pairwise` `sub` values (`OpenID`
+    /// Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sector_identifier_uri: Option<String>,
+
+    /// Requested subject identifier type — `pairwise` or `public`
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_type: Option<String>,
+
+    /// JWS `alg` the client requests for signing the ID token
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_token_signed_response_alg: Option<String>,
+
+    /// JWE `alg` the client requests for encrypting the ID token
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_token_encrypted_response_alg: Option<String>,
+
+    /// JWE `enc` the client requests for encrypting the ID token; only valid
+    /// alongside [`id_token_encrypted_response_alg`](Self::id_token_encrypted_response_alg)
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_token_encrypted_response_enc: Option<String>,
+
+    /// JWS `alg` the client requests for signing `UserInfo` responses; if set,
+    /// the response is returned as a signed JWT
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub userinfo_signed_response_alg: Option<String>,
+
+    /// JWE `alg` the client requests for encrypting `UserInfo` responses
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub userinfo_encrypted_response_alg: Option<String>,
+
+    /// JWE `enc` the client requests for encrypting `UserInfo` responses; only
+    /// valid alongside [`userinfo_encrypted_response_alg`](Self::userinfo_encrypted_response_alg)
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub userinfo_encrypted_response_enc: Option<String>,
+
+    /// JWS `alg` the client requests for signing Request Objects, i.e. the JAR
+    /// request object (RFC 9101 §10.5; `OpenID` Connect Dynamic Client
+    /// Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_object_signing_alg: Option<String>,
+
+    /// JWE `alg` the client requests for encrypting Request Objects
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_object_encryption_alg: Option<String>,
+
+    /// JWE `enc` the client requests for encrypting Request Objects; only valid
+    /// alongside [`request_object_encryption_alg`](Self::request_object_encryption_alg)
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_object_encryption_enc: Option<String>,
+
+    /// JWS `alg` the client uses to sign the authentication JWT for the
+    /// `private_key_jwt` and `client_secret_jwt` methods at the token endpoint
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_endpoint_auth_signing_alg: Option<String>,
+
+    /// Default maximum authentication age, in seconds: if the end-user was last
+    /// authenticated longer ago, they must be re-authenticated
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_max_age: Option<u64>,
+
+    /// Whether the `auth_time` claim is required in issued ID tokens
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_auth_time: Option<bool>,
+
+    /// Default requested Authentication Context Class Reference (`acr`) values
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub default_acr_values: Vec<String>,
+
+    /// `https` URI a third party can use to initiate a login at the client
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initiate_login_uri: Option<String>,
+
+    /// `request_uri` values pre-registered for use at the authorization endpoint
+    /// (`OpenID` Connect Dynamic Client Registration 1.0 §2).
+    ///
+    /// `OpenID` Connect Dynamic Client Registration 1.0
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub request_uris: Vec<String>,
+
+    /// Extension metadata parameters beyond those typed above.
     #[serde(flatten)]
     #[builder(default)]
     pub extra: HashMap<String, serde_json::Value>,
@@ -196,6 +333,39 @@ mod tests {
         let parsed: ClientMetadata =
             serde_json::from_value(serde_json::json!({ "jwks": { "keys": [] } })).unwrap();
         assert_eq!(parsed.jwks, Some(PublicJwks::new(vec![])));
+    }
+
+    #[test]
+    fn oidc_dcr_parameters_are_typed_under_their_wire_names_and_round_trip() {
+        let metadata = ClientMetadata::builder()
+            .application_type("web")
+            .request_object_signing_alg("ES256")
+            .token_endpoint_auth_signing_alg("RS256")
+            .default_max_age(3600)
+            .require_auth_time(true)
+            .default_acr_values(vec!["urn:mace:incommon:iap:silver".to_owned()])
+            .request_uris(vec!["https://app.example/req/1".to_owned()])
+            .build();
+
+        let value = serde_json::to_value(&metadata).unwrap();
+        // OIDC DCR parameters serialize under their spec wire names, not nested
+        // under `extra`.
+        assert_eq!(value["application_type"], "web");
+        assert_eq!(value["request_object_signing_alg"], "ES256");
+        assert_eq!(value["token_endpoint_auth_signing_alg"], "RS256");
+        assert_eq!(value["default_max_age"], 3600);
+        assert_eq!(value["require_auth_time"], true);
+        assert_eq!(value["default_acr_values"], serde_json::json!(["urn:mace:incommon:iap:silver"]));
+        assert_eq!(value["request_uris"], serde_json::json!(["https://app.example/req/1"]));
+
+        // A server echo deserializes back into the typed fields, leaving `extra`
+        // empty.
+        let parsed: ClientMetadata = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed.application_type.as_deref(), Some("web"));
+        assert_eq!(parsed.request_object_signing_alg.as_deref(), Some("ES256"));
+        assert_eq!(parsed.default_max_age, Some(3600));
+        assert_eq!(parsed.require_auth_time, Some(true));
+        assert!(parsed.extra.is_empty(), "typed fields must not fall into extra: {:?}", parsed.extra);
     }
 
     #[test]
