@@ -28,15 +28,24 @@ use crate::{
 pub struct JwksSource {
     /// The HTTP client used to fetch the JWKS.
     http_client: Arc<dyn HttpClient>,
+    /// Maximum number of keys accepted from a fetched JWKS document.
+    max_keys: usize,
 }
 
 #[bon]
 impl JwksSource {
     /// Creates a new [`JwksSource`].
     #[builder]
-    pub fn new(http_client: impl HttpClient + 'static) -> Self {
+    pub fn new(
+        http_client: impl HttpClient + 'static,
+        /// Maximum number of keys accepted from a fetched JWKS document before
+        /// the fetch is rejected.
+        #[builder(default = 100)]
+        max_keys: usize,
+    ) -> Self {
         Self {
             http_client: Arc::new(http_client),
+            max_keys,
         }
     }
 }
@@ -54,6 +63,7 @@ impl JwsVerifierFactory for JwksSource {
         platform: Arc<dyn JwsVerifierPlatform>,
     ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
         let client = self.http_client.clone();
+        let max_keys = self.max_keys;
         let Some(uri) = jwks_uri.cloned() else {
             return Box::pin(async {
                 Err(Error::new(
@@ -78,6 +88,13 @@ impl JwsVerifierFactory for JwksSource {
                         .await?;
                         let public_jwks: PublicJwks = jwks.into();
 
+                        if public_jwks.keys.len() > max_keys {
+                            return Err(Error::from(ErrorKind::Protocol).with_context(format!(
+                                "JWKS contains {} keys, exceeding the limit of {max_keys}",
+                                public_jwks.keys.len()
+                            )));
+                        }
+
                         MultiKeyVerifier::from_jwks(&public_jwks, platform.as_ref()).await
                     })
                 })
@@ -85,5 +102,95 @@ impl JwsVerifierFactory for JwksSource {
                 .await?;
             Ok(Arc::new(RetryingVerifier::new(refreshing)) as Arc<dyn JwsVerifier>)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+    use http::{HeaderMap, Request, StatusCode};
+
+    use super::JwksSource;
+    use crate::{
+        EndpointUrl,
+        crypto::verifier::{
+            CreateVerifierError, JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform,
+        },
+        error::{Error, ErrorKind},
+        http::{HttpClient, HttpResponse, Idempotency},
+        jwk::PublicJwk,
+        platform::MaybeSendBoxFuture,
+    };
+
+    /// Serves a fixed JWKS document, however many times it is fetched.
+    struct FakeJwksClient {
+        body: String,
+    }
+
+    impl HttpClient for FakeJwksClient {
+        fn execute(
+            &self,
+            _request: Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            Box::pin(async move {
+                Ok(HttpResponse {
+                    status: StatusCode::OK,
+                    headers: HeaderMap::new(),
+                    body: Bytes::from(self.body.clone()),
+                })
+            })
+        }
+    }
+
+    /// Supports no keys, so the build reaches the key-count guard without
+    /// needing real key material or crypto.
+    #[derive(Debug)]
+    struct UnsupportedPlatform;
+
+    impl JwsVerifierPlatform for UnsupportedPlatform {
+        fn create_verifier_from_jwk(
+            &self,
+            _jwk: PublicJwk,
+        ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, CreateVerifierError>>
+        {
+            Box::pin(async { Err(CreateVerifierError::UnsupportedKey) })
+        }
+    }
+
+    fn jwks_with_keys(n: usize) -> String {
+        let key = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#;
+        let keys = std::iter::repeat_n(key, n).collect::<Vec<_>>().join(",");
+        format!(r#"{{"keys":[{keys}]}}"#)
+    }
+
+    async fn build_source(n_keys: usize, max_keys: usize) -> Result<Arc<dyn JwsVerifier>, Error> {
+        let source = JwksSource::builder()
+            .http_client(FakeJwksClient {
+                body: jwks_with_keys(n_keys),
+            })
+            .max_keys(max_keys)
+            .build();
+        let uri = EndpointUrl::try_from("https://as.example.com/jwks").unwrap();
+        source
+            .build(Some(&uri), Arc::new(UnsupportedPlatform))
+            .await
+    }
+
+    #[tokio::test]
+    async fn fetched_jwks_at_limit_is_accepted() {
+        let limit = 100;
+        let result = build_source(limit, limit).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn fetched_jwks_over_default_limit_is_rejected() {
+        let limit = 100;
+        let error = build_source(limit + 1, limit).await.unwrap_err();
+        assert!(matches!(error.kind(), ErrorKind::Protocol));
+        assert!(!error.is_retryable());
     }
 }
