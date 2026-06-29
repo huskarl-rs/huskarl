@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use base64::prelude::*;
+use bon::Builder;
 use http::HeaderMap;
 
 use crate::{
@@ -12,9 +13,18 @@ use crate::{
 };
 
 /// Client Secret authentication (RFC 6749 §2.3.1)
-#[derive(Clone)]
+///
+/// Use [`ClientSecret::new`] for the common case (`client_secret_post`, the
+/// OAuth 2.1 default). To change the auth method, use [`ClientSecret::builder`]:
+/// `ClientSecret::builder().client_secret(secret).prefer_basic_auth(true).build()`.
+#[derive(Clone, Builder)]
 pub struct ClientSecret {
+    #[builder(with = |secret: impl Secret<Output = SecretString> + 'static| Arc::new(secret) as Arc<dyn Secret<Output = SecretString>>)]
     client_secret: Arc<dyn Secret<Output = SecretString>>,
+    /// Prefer `client_secret_basic` over `client_secret_post` when the server
+    /// advertises both. Defaults to `false` (post-preferred, tracking OAuth 2.1).
+    #[builder(default)]
+    prefer_basic_auth: bool,
 }
 
 impl std::fmt::Debug for ClientSecret {
@@ -24,10 +34,15 @@ impl std::fmt::Debug for ClientSecret {
 }
 
 impl ClientSecret {
-    /// Creates a client secret which uses the underlying secret.
+    /// Creates a client secret which uses the underlying secret, authenticating
+    /// with `client_secret_post` (the OAuth 2.1 default).
+    ///
+    /// To prefer `client_secret_basic` instead, use [`ClientSecret::builder`]
+    /// with `.prefer_basic_auth(true)`.
     pub fn new(secret: impl Secret<Output = SecretString> + 'static) -> ClientSecret {
         ClientSecret {
             client_secret: Arc::new(secret),
+            prefer_basic_auth: false,
         }
     }
 
@@ -85,7 +100,7 @@ impl ClientAuthentication for ClientSecret {
                 .await
                 .map_err(|err| err.with_context("fetching client secret"))?;
 
-            match select_method(allowed_methods) {
+            match select_method(allowed_methods, self.prefer_basic_auth) {
                 ClientSecretMethod::Basic => {
                     Self::basic_authentication_params(client_id, &client_secret.value)
                 }
@@ -108,20 +123,27 @@ enum ClientSecretMethod {
 }
 
 impl ClientSecretMethod {
-    /// Default priority order for method selection.
-    ///
-    /// Basic is preferred (see RFC 6749 section 2.3.1).
-    pub const PRIORITY: &'static [Self] = &[Self::Basic, Self::Post];
+    /// Method preference order. Post-first by default (OAuth 2.1 makes
+    /// `client_secret_post` mandatory-to-support); Basic-first when the client
+    /// opts in via [`ClientSecret::prefer_basic_auth`].
+    fn priority(prefer_basic: bool) -> [Self; 2] {
+        if prefer_basic {
+            [Self::Basic, Self::Post]
+        } else {
+            [Self::Post, Self::Basic]
+        }
+    }
 }
 
-fn select_method(allowed_methods: Option<&[String]>) -> ClientSecretMethod {
+fn select_method(allowed_methods: Option<&[String]>, prefer_basic: bool) -> ClientSecretMethod {
+    let priority = ClientSecretMethod::priority(prefer_basic);
     match allowed_methods {
-        None => ClientSecretMethod::Basic,
-        Some(allowed) => ClientSecretMethod::PRIORITY
+        None => priority[0],
+        Some(allowed) => priority
             .iter()
             .find(|m| allowed.iter().any(|a| a == m.as_ref()))
             .copied()
-            .unwrap_or(ClientSecretMethod::Basic),
+            .unwrap_or(priority[0]),
     }
 }
 
@@ -153,44 +175,79 @@ mod tests {
     // --- select_method ---
 
     #[test]
-    fn select_method_none_returns_basic() {
-        assert_eq!(select_method(None), ClientSecretMethod::Basic);
+    fn select_method_none_defaults_to_post() {
+        assert_eq!(select_method(None, false), ClientSecretMethod::Post);
+        assert_eq!(select_method(None, true), ClientSecretMethod::Basic);
     }
 
     #[test]
-    fn select_method_empty_returns_basic() {
-        assert_eq!(select_method(Some(&[])), ClientSecretMethod::Basic);
+    fn select_method_empty_defaults_to_post() {
+        assert_eq!(select_method(Some(&[]), false), ClientSecretMethod::Post);
+        assert_eq!(select_method(Some(&[]), true), ClientSecretMethod::Basic);
     }
 
     #[test]
     fn select_method_post_only() {
         let methods = vec!["client_secret_post".to_string()];
-        assert_eq!(select_method(Some(&methods)), ClientSecretMethod::Post);
+        // Only post advertised → post, regardless of preference.
+        assert_eq!(
+            select_method(Some(&methods), false),
+            ClientSecretMethod::Post
+        );
+        assert_eq!(
+            select_method(Some(&methods), true),
+            ClientSecretMethod::Post
+        );
     }
 
     #[test]
-    fn select_method_basic_and_post_prefers_basic() {
+    fn select_method_basic_only() {
+        let methods = vec!["client_secret_basic".to_string()];
+        // Only basic advertised → basic, even when post is preferred.
+        assert_eq!(
+            select_method(Some(&methods), false),
+            ClientSecretMethod::Basic
+        );
+        assert_eq!(
+            select_method(Some(&methods), true),
+            ClientSecretMethod::Basic
+        );
+    }
+
+    #[test]
+    fn select_method_both_defaults_to_post() {
         let methods = vec![
             "client_secret_basic".to_string(),
             "client_secret_post".to_string(),
         ];
-        assert_eq!(select_method(Some(&methods)), ClientSecretMethod::Basic);
+        // List order doesn't matter — the client's preference does.
+        assert_eq!(
+            select_method(Some(&methods), false),
+            ClientSecretMethod::Post
+        );
     }
 
     #[test]
-    fn select_method_post_and_basic_prefers_basic() {
+    fn select_method_both_prefer_basic() {
         let methods = vec![
             "client_secret_post".to_string(),
             "client_secret_basic".to_string(),
         ];
-        assert_eq!(select_method(Some(&methods)), ClientSecretMethod::Basic);
+        assert_eq!(
+            select_method(Some(&methods), true),
+            ClientSecretMethod::Basic
+        );
     }
 
     // --- authentication_params ---
 
     #[tokio::test]
     async fn authentication_params_basic() {
-        let secret = ClientSecret::new(MockSecret(SecretString::new("my-secret")));
+        // No advertised methods → defaults to post, so opt into basic explicitly.
+        let secret = ClientSecret::builder()
+            .client_secret(MockSecret(SecretString::new("my-secret")))
+            .prefer_basic_auth(true)
+            .build();
         let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let params = secret
             .authentication_params("my-client", None, Some(&uri), &uri, None)
@@ -230,7 +287,10 @@ mod tests {
 
     #[tokio::test]
     async fn basic_percent_encodes_special_chars() {
-        let secret = ClientSecret::new(MockSecret(SecretString::new("p&ss=w:rd")));
+        let secret = ClientSecret::builder()
+            .client_secret(MockSecret(SecretString::new("p&ss=w:rd")))
+            .prefer_basic_auth(true)
+            .build();
         let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let params = secret
             .authentication_params("cl&ent", None, Some(&uri), &uri, None)
