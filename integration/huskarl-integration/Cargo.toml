@@ -1,0 +1,44 @@
+[package]
+name = "huskarl-integration"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+# Per-provider gate; without it that provider's tests are `#[ignore]`d.
+keycloak = []
+dex = []
+node-oidc = []
+okta = []
+
+[dependencies]
+huskarl = { workspace = true, default-features = true, features = ["authorization-flow-loopback"] }
+# DPoP proof signing keys for the DPoP variant.
+huskarl-crypto-native = { workspace = true }
+huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
+huskarl-resource-server = { path = "../../huskarl-resource-server", default-features = true }
+huskarl-testkit = { path = "../huskarl-testkit" }
+http = "1"
+# Custom `harness = false` test harness for the per-provider `tests/*.rs`.
+libtest-mimic = "0.8"
+pem = "3"
+reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
+serde_json = { workspace = true }
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }
+
+[[test]]
+name = "keycloak"
+harness = false
+
+[[test]]
+name = "dex"
+harness = false
+
+[[test]]
+name = "node_oidc"
+harness = false
+
+[[test]]
+name = "okta"
+harness = false

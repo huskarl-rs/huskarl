@@ -11,7 +11,10 @@ services:
     restart: always
     ports:
       - "127.0.0.1:8080:8080"
-      - "127.0.0.1:8443:8443"
+      # Host 8444 → container 8443 (HTTPS/mTLS). The container still serves 8443;
+      # only the host port differs, so it doesn't collide with the conformance
+      # suite's 8443 and both can run at once.
+      - "127.0.0.1:8444:8443"
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin

@@ -112,7 +112,7 @@ jobs:
           exclude: huskarl-crypto-webcrypto
 
   integration:
-    name: Integration (Keycloak)
+    name: Integration (local providers)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -120,12 +120,41 @@ jobs:
           persist-credentials: false
       - run: rustup update stable --no-self-update
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Start Keycloak
+      # Runs each test in its own process (isolation + per-test timeouts) — see
+      # .config/nextest.toml. Install cargo-binstall first so mise's `cargo:`
+      # backend fetches the prebuilt binary instead of compiling; mise then
+      # installs the same `cargo:cargo-nextest` declared in mise.toml (scoped via
+      # install_args so the rest of the dev toolchain isn't pulled in), keeping
+      # local and CI on one source of truth. Both actions are SHA-pinned.
+      - uses: cargo-bins/cargo-binstall@732870f031d2fb36309d0deaf36abcc704a7be65 # v1.20.1
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          install_args: "cargo:cargo-nextest"
+      - name: Start providers
         working-directory: integration
-        run: docker compose up --wait
+        run: |
+          docker compose up --wait                                                # Keycloak (8080 + 8444)
+          docker compose -f dex/docker-compose.yml up -d                          # Dex (5556)
+          docker compose -f node-oidc-provider/docker-compose.yml up -d --build   # node-oidc (3000)
+          # Dex and node-oidc images carry no healthcheck, so wait on their
+          # discovery endpoints from the host (mirrors the mise `*:up` tasks).
+          for url in \
+            http://127.0.0.1:5556/dex/.well-known/openid-configuration \
+            http://127.0.0.1:3000/.well-known/openid-configuration; do
+            for i in $(seq 1 60); do
+              if curl -sf "$url" >/dev/null 2>&1; then break; fi
+              if [ "$i" -eq 60 ]; then echo "timed out waiting for $url" >&2; exit 1; fi
+              sleep 1
+            done
+          done
+      # Okta is intentionally excluded (hosted; needs a tenant). Without its
+      # feature, the okta binary's trials are ignored.
       - name: Run tests
-        run: cargo test -p huskarl -F keycloak-tests
-      - name: Stop Keycloak
+        run: cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc
+      - name: Stop providers
         working-directory: integration
         if: always()
-        run: docker compose down
+        run: |
+          docker compose down
+          docker compose -f dex/docker-compose.yml down
+          docker compose -f node-oidc-provider/docker-compose.yml down

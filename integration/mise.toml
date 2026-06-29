@@ -1,19 +1,80 @@
-# Keycloak (for huskarl crate integration tests)
+# Coverage report: each provider and the flow variants it exercises (no server
+# needed — derived from each provider's FEATURES const).
+[tasks.matrix]
+run = "cargo run -p huskarl-integration --example coverage"
+
+# Run every local provider's tests in one command (mirrors the PR CI job): bring
+# up the local servers, then run all their test binaries in a single nextest run.
+# Okta is included but only runs when a tenant is configured (OKTA_*); otherwise
+# its trials are ignored, so this is safe with no Okta tenant. Conformance is a
+# separate, slower command — see `conformance:test`.
+[tasks."providers:test"]
+depends = ["keycloak:up", "dex:up", "node-oidc:up"]
+run = "cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc,okta"
+
+# Keycloak (for huskarl crate integration tests). HTTPS/mTLS is on host port 8444
+# (→ container 8443), so it coexists with the conformance suite's 8443.
 [tasks."keycloak:up"]
 run = "docker compose up --wait"
-depends = ["conformance:down"]
 
 [tasks."keycloak:down"]
 run = "docker compose down"
 
 [tasks."keycloak:test"]
-run = "cargo test --manifest-path ../huskarl/Cargo.toml --features keycloak-tests"
+run = "cargo nextest run -p huskarl-integration --test keycloak --features keycloak"
 depends = ["keycloak:up"]
 
-# OpenID Conformance Suite (for huskarl-conformance tests)
+# Dex (for huskarl-integration auth-code tests)
+[tasks."dex:up"]
+run = """
+docker compose -f dex/docker-compose.yml up -d
+for i in $(seq 1 60); do
+  if curl -sf http://127.0.0.1:5556/dex/.well-known/openid-configuration >/dev/null 2>&1; then
+    echo "dex ready"; exit 0
+  fi
+  sleep 1
+done
+echo "dex did not become ready in time" >&2
+exit 1
+"""
+
+[tasks."dex:down"]
+run = "docker compose -f dex/docker-compose.yml down"
+
+[tasks."dex:test"]
+run = "cargo nextest run -p huskarl-integration --test dex --features dex"
+depends = ["dex:up"]
+
+# node-oidc-provider (conformant OIDC oracle for huskarl-integration auth-code tests)
+[tasks."node-oidc:up"]
+run = """
+docker compose -f node-oidc-provider/docker-compose.yml up -d --build
+for i in $(seq 1 60); do
+  if curl -sf http://127.0.0.1:3000/.well-known/openid-configuration >/dev/null 2>&1; then
+    echo "node-oidc-provider ready"; exit 0
+  fi
+  sleep 1
+done
+echo "node-oidc-provider did not become ready in time" >&2
+exit 1
+"""
+
+[tasks."node-oidc:down"]
+run = "docker compose -f node-oidc-provider/docker-compose.yml down"
+
+[tasks."node-oidc:test"]
+run = "cargo nextest run -p huskarl-integration --test node_oidc --features node-oidc"
+depends = ["node-oidc:up"]
+
+# Okta (hosted tenant — no local server; configure via OKTA_* env, see
+# huskarl_testkit::okta). No `up` task: the tenant is provisioned out-of-band.
+[tasks."okta:test"]
+run = "cargo nextest run -p huskarl-integration --test okta --features okta"
+
+# OpenID Conformance Suite (for huskarl-conformance tests). On 8443; coexists
+# with Keycloak now that Keycloak's HTTPS is on 8444.
 [tasks."conformance:up"]
 run = "docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml up --wait"
-depends = ["keycloak:down"]
 
 [tasks."conformance:down"]
 run = "docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml down"

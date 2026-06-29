@@ -5,6 +5,6 @@ runner = "wasmtime"
 # - huskarl-crypto-webcrypto is wasm32-only (its futures are !Send)
 # - the integration harness crates (tokio net, uuid) are host-only
 [alias]
-check-wasm = "check --target wasm32-unknown-unknown --workspace --exclude huskarl-conformance --exclude huskarl-testkit"
+check-wasm = "check --target wasm32-unknown-unknown --workspace --exclude huskarl-conformance --exclude huskarl-integration --exclude huskarl-testkit"
 clippy-wasm = "clippy -p huskarl-crypto-webcrypto --target wasm32-unknown-unknown --all-features --all-targets"
 clippy-host = "clippy --workspace --exclude huskarl-crypto-webcrypto --all-features --all-targets"

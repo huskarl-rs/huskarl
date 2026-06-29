@@ -1,31 +1,27 @@
 [tools]
-"aqua:EmbarkStudios/cargo-deny" = "latest"
-"aqua:drager/wasm-pack" = "latest"
-"aqua:wasm-bindgen/wasm-pack" = "latest"
-"cargo:cargo-docs-rs" = "latest"
-"cargo:cargo-fuzz" = "latest"
-"cargo:cargo-geiger" = "latest"
-"cargo:cargo-llvm-cov" = "latest"
-"cargo:cargo-msrv" = "latest"
-"cargo:cargo-reedme" = "latest"
-"cargo:cargo-semver-checks" = "latest"
-"cargo:cargo-vet" = "latest"
+"aqua:EmbarkStudios/cargo-deny" = "0.19.9"
+"aqua:wasm-bindgen/wasm-pack" = "0.15.0"
+"cargo:cargo-docs-rs" = "1.0.4"
+"cargo:cargo-fuzz" = "0.13.2"
+"cargo:cargo-llvm-cov" = "0.8.7"
+"cargo:cargo-msrv" = "0.19.3"
+"cargo:cargo-nextest" = "0.9.138"
+"cargo:cargo-reedme" = "0.6.1"
+"cargo:cargo-semver-checks" = "0.48.0"
+"cargo:cargo-vet" = "0.10.2"
 wasmtime = "43"
-zizmor = "latest"
+zizmor = "1.25.2"
 
-[tasks."test-integration"]
-run = "cargo test --features=keycloak-tests"
-
-[tasks."test-wasm-chrome"]
+[tasks."wasm:test:chrome"]
 run = "wasm-pack test --headless --chrome -- --lib"
 
-[tasks."test-wasm-firefox"]
+[tasks."wasm:test:firefox"]
 run = "wasm-pack test --headless --firefox -- --lib"
 
-[tasks."test-wasm-node"]
+[tasks."wasm:test:node"]
 run = "wasm-pack test --node -- --lib"
 
-[tasks."test-webcrypto"]
+[tasks."webcrypto:test"]
 description = "WebCrypto crate wasm tests under Node, including the pure-Rust AES-GCM interop suite"
 dir = "huskarl-crypto-webcrypto"
 # The native-seal interop direction draws its nonce from getrandom; select its
@@ -33,7 +29,7 @@ dir = "huskarl-crypto-webcrypto"
 env = { RUSTFLAGS = '--cfg getrandom_backend="wasm_js"' }
 run = "wasm-pack test --node -- --lib"
 
-[tasks."fuzz"]
+[tasks."fuzz:run"]
 description = "Fuzz a huskarl-core target from its seed corpus"
 dir = "huskarl-core"
 usage = '''
@@ -51,7 +47,7 @@ cargo fuzz run "${usage_target?}" "fuzz/corpus/${usage_target?}" "fuzz/seeds/${u
   --target "$host" -- -max_len=16384 ${usage_time:+-max_total_time=$usage_time}
 '''
 
-[tasks."fuzz-coverage"]
+[tasks."fuzz:coverage"]
 description = "Report what a fuzz target's accumulated corpus actually covers"
 dir = "huskarl-core"
 usage = '''
@@ -77,10 +73,10 @@ echo
 echo "HTML report: huskarl-core/fuzz/coverage/${usage_target?}/index.html"
 '''
 
-[tasks."docs-rs"]
+[tasks."docs:rs"]
 run = "cargo +nightly docs-rs"
 
-[tasks."reedme"]
+[tasks."docs:readme"]
 # The workspace run only covers default-members; huskarl-crypto-webcrypto is
 # excluded there (wasm32-only), so regenerate its README explicitly.
 run = [

@@ -1,0 +1,3 @@
+[profile.default]
+# Flag slow at 30s, kill after 60s; no retries (a flaky pass would hide nondeterminism).
+slow-timeout = { period = "30s", terminate-after = 2 }

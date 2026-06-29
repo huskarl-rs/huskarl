@@ -13,8 +13,8 @@ Coverage-guided fuzzing of the attacker-facing parsers (see
 ## Running locally
 
 ```sh
-mise run fuzz jwks            # until interrupted
-mise run fuzz jwks --time 60  # bounded
+mise run fuzz:run jwks            # until interrupted
+mise run fuzz:run jwks --time 60  # bounded
 ```
 
 The task seeds from `seeds/<target>/` (checked in), writes coverage-novel
@@ -36,7 +36,7 @@ rest.) Crashes land in `artifacts/<target>/` (gitignored) — reproduce with
 ## Coverage
 
 ```sh
-mise run fuzz-coverage jwks
+mise run fuzz:coverage jwks
 ```
 
 Replays the accumulated corpus through an instrumented build and prints an

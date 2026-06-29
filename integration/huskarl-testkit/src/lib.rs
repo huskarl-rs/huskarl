@@ -1,9 +1,17 @@
-pub mod admin;
-pub mod client_config;
-pub mod plain_secret;
-pub mod user_config;
+//! Test-support kit for huskarl integration tests.
 
-pub use admin::{CreatedClient, CreatedUser, Error, KeycloakAdmin, TestRealm};
-pub use client_config::{ClientConfig, GrantConfig};
+pub mod dex;
+pub mod keycloak;
+pub mod node_oidc;
+pub mod okta;
+pub mod plain_secret;
+pub mod provider;
+pub mod spec;
+
+pub use dex::DexProvider;
+pub use keycloak::{KeycloakAdmin, KeycloakProvider, TestRealm};
+pub use node_oidc::NodeOidcProvider;
+pub use okta::OktaProvider;
 pub use plain_secret::PlainSecret;
-pub use user_config::UserConfig;
+pub use provider::{Error, TestProvider};
+pub use spec::{ClientSpec, Features, MtlsMaterial, ProvisionedClient, Transport};

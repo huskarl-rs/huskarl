@@ -235,8 +235,9 @@ impl AuthorizationCodeGrant {
                 )
                 .await?;
 
-            // Avoid having `client_id` in the body twice, if it is also
-            // added by client auth.
+            // RFC 9126 §2 requires `client_id` in the PAR body and `ParBody`
+            // already carries it — drop the copy `client_secret_post` adds so it
+            // isn't sent twice.
             if let Some(form) = auth_params.form_params.as_mut() {
                 form.retain(|(name, _)| *name != "client_id");
             }
