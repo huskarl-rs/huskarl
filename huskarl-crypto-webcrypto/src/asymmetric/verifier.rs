@@ -103,6 +103,14 @@ enum Key {
     Ed25519(CryptoKey),
 }
 
+/// RFC 7518 §4.2 sets 2048 bits as the minimum RSA key size for JWS; anything
+/// smaller is rejected rather than imported. `SubtleCrypto.importKey` performs
+/// no such check, so we enforce it here to match the native backend.
+fn rsa_modulus_at_least_2048(rsa_key: &jwk::RsaPublicKey) -> bool {
+    let modulus_bytes = rsa_key.n.iter().skip_while(|&&b| b == 0).count();
+    modulus_bytes >= 2048 / 8
+}
+
 async fn create_rsa_key(
     crypto: &Crypto,
     alg_name: &str,
@@ -172,40 +180,62 @@ impl Key {
             {
                 Some(Key::Es384(create_ec_key(&crypto, "P-384", &jwk).await?))
             }
-            jwk::PublicKey::Rsa(_) if jwk.algorithm.is_none() => Some(Key::Rsa {
-                rs256: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk).await?,
-                rs384: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-384", &jwk).await?,
-                rs512: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-512", &jwk).await?,
-                ps256: create_rsa_key(&crypto, "RSA-PSS", "SHA-256", &jwk).await?,
-                ps384: create_rsa_key(&crypto, "RSA-PSS", "SHA-384", &jwk).await?,
-                ps512: create_rsa_key(&crypto, "RSA-PSS", "SHA-512", &jwk).await?,
-            }),
-            jwk::PublicKey::Rsa(_) if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS256") => {
+            jwk::PublicKey::Rsa(rsa_key)
+                if jwk.algorithm.is_none() && rsa_modulus_at_least_2048(rsa_key) =>
+            {
+                Some(Key::Rsa {
+                    rs256: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk).await?,
+                    rs384: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-384", &jwk).await?,
+                    rs512: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-512", &jwk).await?,
+                    ps256: create_rsa_key(&crypto, "RSA-PSS", "SHA-256", &jwk).await?,
+                    ps384: create_rsa_key(&crypto, "RSA-PSS", "SHA-384", &jwk).await?,
+                    ps512: create_rsa_key(&crypto, "RSA-PSS", "SHA-512", &jwk).await?,
+                })
+            }
+            jwk::PublicKey::Rsa(rsa_key)
+                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS256")
+                    && rsa_modulus_at_least_2048(rsa_key) =>
+            {
                 Some(Key::Rs256(
                     create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk).await?,
                 ))
             }
-            jwk::PublicKey::Rsa(_) if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS384") => {
+            jwk::PublicKey::Rsa(rsa_key)
+                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS384")
+                    && rsa_modulus_at_least_2048(rsa_key) =>
+            {
                 Some(Key::Rs384(
                     create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-384", &jwk).await?,
                 ))
             }
-            jwk::PublicKey::Rsa(_) if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS512") => {
+            jwk::PublicKey::Rsa(rsa_key)
+                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS512")
+                    && rsa_modulus_at_least_2048(rsa_key) =>
+            {
                 Some(Key::Rs512(
                     create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-512", &jwk).await?,
                 ))
             }
-            jwk::PublicKey::Rsa(_) if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS256") => {
+            jwk::PublicKey::Rsa(rsa_key)
+                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS256")
+                    && rsa_modulus_at_least_2048(rsa_key) =>
+            {
                 Some(Key::Ps256(
                     create_rsa_key(&crypto, "RSA-PSS", "SHA-256", &jwk).await?,
                 ))
             }
-            jwk::PublicKey::Rsa(_) if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS384") => {
+            jwk::PublicKey::Rsa(rsa_key)
+                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS384")
+                    && rsa_modulus_at_least_2048(rsa_key) =>
+            {
                 Some(Key::Ps384(
                     create_rsa_key(&crypto, "RSA-PSS", "SHA-384", &jwk).await?,
                 ))
             }
-            jwk::PublicKey::Rsa(_) if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS512") => {
+            jwk::PublicKey::Rsa(rsa_key)
+                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS512")
+                    && rsa_modulus_at_least_2048(rsa_key) =>
+            {
                 Some(Key::Ps512(
                     create_rsa_key(&crypto, "RSA-PSS", "SHA-512", &jwk).await?,
                 ))
@@ -570,6 +600,36 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    /// A sub-2048-bit RSA modulus is below the RFC 7518 §4.2 minimum and is
+    /// rejected before any `SubtleCrypto` import, matching the native backend
+    /// (`from_jwk_rejects_small_rsa_modulus`).
+    #[wasm_bindgen_test]
+    async fn from_jwk_rejects_small_rsa_modulus() {
+        // A 1024-bit modulus (128 bytes) is below the 2048-bit minimum.
+        let jwk = jwk::PublicJwk::builder()
+            .algorithm("RS256")
+            .key(
+                jwk::RsaPublicKey::builder()
+                    .n([0xFF; 128])
+                    .e([0x01, 0x00, 0x01])
+                    .build(),
+            )
+            .build();
+        assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
+
+        // The same undersized key is also rejected when it carries no `alg`
+        // (the all-RSA import arm).
+        let jwk_no_alg = jwk::PublicJwk::builder()
+            .key(
+                jwk::RsaPublicKey::builder()
+                    .n([0xFF; 128])
+                    .e([0x01, 0x00, 0x01])
+                    .build(),
+            )
+            .build();
+        assert!(AsymmetricPublicKey::from_jwk(jwk_no_alg).await.is_none());
     }
 
     /// A P-256 key labelled `ES384` matches no [`Key::new`] arm and is rejected.
