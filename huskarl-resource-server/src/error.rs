@@ -9,17 +9,41 @@
 //! error (include RFC 6750 error details in the response) or a server-side error
 //! (respond with a status code, no error details).
 
+use std::borrow::Cow;
+
 use crate::{TokenType, core::platform::MaybeSendSync};
 
-/// Escapes a value for use in an HTTP quoted-string (RFC 9110 §5.6.4).
+/// Escapes a value for safe inclusion in an HTTP quoted-string (RFC 9110 §5.6.4).
 ///
-/// Backslashes and double-quotes must be escaped with a leading backslash.
-pub(crate) fn escape_quoted(s: &str) -> std::borrow::Cow<'_, str> {
-    if s.contains('"') || s.contains('\\') {
-        std::borrow::Cow::Owned(s.replace('\\', r"\\").replace('"', r#"\""#))
-    } else {
-        std::borrow::Cow::Borrowed(s)
+/// Double-quotes and backslashes are backslash-escaped. Control characters other
+/// than HTAB cannot appear in a quoted-string and would break header framing, so
+/// they are stripped. All other characters — including non-ASCII `obs-text` —
+/// pass through unchanged. The common (clean) case borrows without allocating.
+pub(crate) fn escape_quoted(s: &str) -> Cow<'_, str> {
+    let needs_work = s
+        .chars()
+        .any(|c| c == '"' || c == '\\' || (c.is_control() && c != '\t'));
+    if !needs_work {
+        return Cow::Borrowed(s);
     }
+
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            // Control characters (except HTAB) are invalid in a quoted-string and
+            // would break header framing; drop them rather than emit them.
+            c if c.is_control() && c != '\t' => {}
+            c => out.push(c),
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Returns `true` if `c` is a valid HTTP `token` character (RFC 9110 §5.6.2).
+fn is_tchar(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)
 }
 
 /// A parameter for a `WWW-Authenticate` challenge.
@@ -30,22 +54,31 @@ pub(crate) fn escape_quoted(s: &str) -> std::borrow::Cow<'_, str> {
 pub enum ChallengeParam {
     /// A quoted-string parameter: `key="value"`.
     ///
-    /// The value is automatically escaped per RFC 9110 §5.6.4 — backslashes
-    /// and double-quotes are prefixed with a backslash.
+    /// The value is sanitized per RFC 9110 §5.6.4 when formatted: backslashes and
+    /// double-quotes are backslash-escaped, and control characters (other than
+    /// HTAB) are stripped, so the value cannot break header framing.
     Quoted(&'static str, String),
     /// An unquoted token parameter: `key=value`.
     ///
-    /// The value must be a valid HTTP token (ASCII, no whitespace or delimiters).
+    /// The value should be a valid HTTP token (RFC 9110 §5.6.2). Because an
+    /// unquoted value cannot be escaped, any non-token characters are stripped
+    /// when formatted.
     Token(&'static str, String),
 }
 
 impl ChallengeParam {
     /// Formats this parameter as a `key=value` or `key="escaped-value"` string.
+    ///
+    /// Values are sanitized so the result is always a valid challenge parameter
+    /// regardless of input (see the variant docs).
     #[must_use]
     pub fn format(&self) -> String {
         match self {
             Self::Quoted(key, value) => format!(r#"{}="{}""#, key, escape_quoted(value)),
-            Self::Token(key, value) => format!("{key}={value}"),
+            Self::Token(key, value) => {
+                let value: String = value.chars().filter(|c| is_tchar(*c)).collect();
+                format!("{key}={value}")
+            }
         }
     }
 }
@@ -287,5 +320,37 @@ mod tests {
         }
         // Unknown codes are rejected.
         assert!("not_a_code".parse::<TokenErrorCode>().is_err());
+    }
+
+    #[test]
+    fn escape_quoted_escapes_quote_and_backslash() {
+        assert_eq!(escape_quoted(r#"a"b\c"#), r#"a\"b\\c"#);
+    }
+
+    #[test]
+    fn escape_quoted_clean_input_is_borrowed() {
+        assert!(matches!(escape_quoted("clean value"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn escape_quoted_strips_control_chars_but_keeps_tab_and_unicode() {
+        // CR/LF and other controls are removed (no header-framing injection);
+        // HTAB and non-ASCII obs-text survive.
+        let out = escape_quoted("a\r\nb\u{0007}c\td\u{00e9}");
+        assert_eq!(out, "abc\td\u{00e9}");
+        assert!(!out.contains(['\r', '\n']));
+    }
+
+    #[test]
+    fn token_param_strips_non_token_chars() {
+        // A valid token is unchanged.
+        assert_eq!(
+            ChallengeParam::Token("max_age", "60".to_string()).format(),
+            "max_age=60"
+        );
+        // An injection attempt via a Token value cannot split the header.
+        let injected = ChallengeParam::Token("max_age", "1\r\n2".to_string()).format();
+        assert_eq!(injected, "max_age=12");
+        assert!(!injected.contains(['\r', '\n']));
     }
 }
