@@ -90,6 +90,17 @@ pub enum Idempotency {
 /// interrupted response). With [`Idempotency::Unknown`], the server may
 /// have processed a first attempt that a re-send would replay, so only
 /// never-delivered failures are retryable.
+///
+/// Implementations should bound the size of the response body they buffer.
+/// Every response is read fully into memory ([`HttpResponse::body`]), and the
+/// endpoints the library calls — JWKS, token, introspection, discovery — may
+/// be attacker-influenced (for example an authorization server resolved from
+/// user input). An unbounded read lets a malicious or compromised endpoint
+/// exhaust memory with a very large or never-ending body, so enforce a size
+/// limit while reading — aborting before the whole body is buffered — and
+/// reject an oversized body as
+/// [`ErrorKind::Protocol`](crate::error::ErrorKind::Protocol) rather than a
+/// retryable transport failure: re-sending only pulls the same oversized body.
 pub trait HttpClient: MaybeSendSync {
     /// Executes an HTTP request and returns the fully-read response.
     ///

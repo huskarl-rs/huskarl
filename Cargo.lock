@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-reqwest"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bon",
  "bytes",
