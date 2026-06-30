@@ -5,106 +5,12 @@
 //! implements [`AccessTokenValidator`], so it drops into a `ValidatorLayer`,
 //! Pingora guard, or any other consumer exactly like a single-issuer validator.
 //!
-//! # How routing stays safe
-//!
-//! The issuer is read from the token's payload **without verifying the
-//! signature**, and is used *only* to select a validator. The selected validator
-//! independently re-checks `iss`, the signature (against its own JWKS), the
-//! audience, and any sender-constraint binding — so a token that lies about its
-//! issuer is merely routed to a validator that rejects it. Routing grants no
-//! trust; verification is still done in full by the chosen validator.
-//!
-//! Each per-issuer validator carries its own audience: pin it exactly, because
-//! the audience check is the access boundary. This matters most when a validator
-//! accepts tokens (such as OIDC ID tokens) that a different relying party could
-//! also obtain.
-//!
-//! # Unifying claim types
-//!
-//! Per-issuer validators usually have different claims types. Give them a common
-//! type `C` by wrapping each in [`MapClaims`], whose mapping is a plain
-//! `Fn(SourceClaims) -> C`. The library attaches no semantics to that mapping —
-//! any authorization model your application layers on top of `C` is its own
-//! concern.
-//!
-//! ```no_run
-//! use std::sync::Arc;
-//!
-//! use huskarl_resource_server::{
-//!     core::{jwk::JwksSource, jwt::validator::ClaimCheck},
-//!     validator::{
-//!         custom::CustomValidator,
-//!         multi_issuer::{MapClaims, MultiIssuerValidator},
-//!     },
-//! };
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http = huskarl_reqwest::ReqwestClient::builder().build().await?;
-//! #[derive(Clone, serde::Deserialize)]
-//! struct GoogleIdClaims {
-//!     email: Option<String>,
-//!     email_verified: Option<bool>,
-//! }
-//! #[derive(Clone, serde::Deserialize)]
-//! struct OktaClaims {
-//!     #[serde(default)]
-//!     scp: Vec<String>,
-//! }
-//!
-//! #[derive(Clone)]
-//! struct Principal {
-//!     email: Option<String>,
-//!     scopes: Vec<String>,
-//! }
-//!
-//! let google = CustomValidator::builder()
-//!     .with_claims::<GoogleIdClaims>()
-//!     .authorization_server("https://accounts.google.com")
-//!     .issuer(ClaimCheck::required_value("https://accounts.google.com"))
-//!     .audience(ClaimCheck::required_value("<your-google-oauth-client-id>"))
-//!     .token_type(ClaimCheck::NoCheck)
-//!     .require_jti(false)
-//!     .jwks_uri("https://www.googleapis.com/oauth2/v3/certs".parse()?)
-//!     .jws_verifier_factory(Arc::new(
-//!         JwksSource::builder().http_client(http.clone()).build(),
-//!     ))
-//!     .build()
-//!     .await?;
-//!
-//! let okta = CustomValidator::builder()
-//!     .with_claims::<OktaClaims>()
-//!     .authorization_server("https://example.okta.com/oauth2/default")
-//!     .issuer(ClaimCheck::required_value(
-//!         "https://example.okta.com/oauth2/default",
-//!     ))
-//!     .audience(ClaimCheck::required_value("api://my-resource"))
-//!     .jwks_uri("https://example.okta.com/oauth2/default/v1/keys".parse()?)
-//!     .jws_verifier_factory(Arc::new(
-//!         JwksSource::builder().http_client(http.clone()).build(),
-//!     ))
-//!     .build()
-//!     .await?;
-//!
-//! let validator = MultiIssuerValidator::<Principal>::builder()
-//!     .source(
-//!         "https://accounts.google.com",
-//!         MapClaims::new(google, |c: GoogleIdClaims| Principal {
-//!             email: c.email.filter(|_| c.email_verified == Some(true)),
-//!             scopes: Vec::new(),
-//!         }),
-//!     )
-//!     .source(
-//!         "https://example.okta.com/oauth2/default",
-//!         MapClaims::new(okta, |c: OktaClaims| Principal {
-//!             email: None,
-//!             scopes: c.scp,
-//!         }),
-//!     )
-//!     .build();
-//! # let _ = validator;
-//! # Ok(())
-//! # }
-//! ```
+//! Per-issuer validators usually have different claims types; wrap each in
+//! [`MapClaims`] to give them a common type. For why issuer-based routing is
+//! safe and how to unify claim types, see the [multi-issuer routing
+//! explanation](crate::_docs::explanation::multi_issuer_routing); for a worked
+//! two-issuer example, see the [multi-issuer
+//! guide](crate::_docs::guide::multi_issuer).
 
 pub mod error;
 mod map;

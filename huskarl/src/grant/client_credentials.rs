@@ -1,114 +1,11 @@
 //! Client credentials grant (RFC 6749 §4.4).
 //!
 //! Used when the client is acting on its own behalf, not on behalf of a user.
+//! Client credentials requires client authentication — its credentials *are* the
+//! grant.
 //!
-//! # Usage
-//!
-//! ## 1. Set up your HTTP client
-//!
-//! The examples below use the `huskarl_reqwest` crate; see [Setting up an HTTP
-//! client](crate::grant#setting-up-an-http-client) for the shared setup the rest
-//! of this page assumes.
-//!
-//! ## 2. Set up client authentication
-//!
-//! Client credentials **requires** authentication: the client acts on its own
-//! behalf, so its credentials *are* the grant. See [Setting up client
-//! authentication](crate::grant#setting-up-client-authentication) — the examples
-//! below use a `ClientSecret`.
-//!
-//! ## 3a. Set up the grant with authorization server metadata
-//!
-//! ```rust
-//! use huskarl::{
-//!     core::{client_auth::ClientSecret, server_metadata::AuthorizationServerMetadata},
-//!     grant::client_credentials::ClientCredentialsGrant,
-//! };
-//! # use huskarl::core::http::HttpClient;
-//! # use huskarl::core::secrets::EnvVarSecret;
-//! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
-//! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .build()
-//! #     .await?;
-//! #
-//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
-//!
-//! let metadata = AuthorizationServerMetadata::fetch()
-//!     .http_client(&client)
-//!     .issuer("https://my-issuer")
-//!     .call()
-//!     .await?;
-//!
-//! let grant: ClientCredentialsGrant = ClientCredentialsGrant::builder_from_metadata(&metadata)
-//!     .client_id("client_id")
-//!     .http_client(client)
-//!     .client_auth(client_auth)
-//!     .build();
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 3b. Alternative: Set up the grant without metadata
-//!
-//! ```rust
-//! use huskarl::{
-//!     core::client_auth::ClientSecret, grant::client_credentials::ClientCredentialsGrant,
-//! };
-//! # use huskarl::core::http::HttpClient;
-//! # use huskarl::core::secrets::EnvVarSecret;
-//! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
-//! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .build()
-//! #     .await?;
-//! #
-//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
-//!
-//! let grant: ClientCredentialsGrant = ClientCredentialsGrant::builder()
-//!     .token_endpoint("https://my-server/token".parse()?)
-//!     .client_id("client_id")
-//!     .http_client(client)
-//!     .client_auth(client_auth)
-//!     .build();
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 4. Get an access token.
-//!
-//! ```rust
-//! use huskarl::prelude::*; // Imports OAuth2ExchangeGrant which defines the exchange call.
-//! use huskarl::grant::client_credentials::ClientCredentialsGrantParameters;
-//! use huskarl::token::AccessToken;
-//! # use huskarl::grant::client_credentials::ClientCredentialsGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! # use huskarl::core::http::HttpClient;
-//! # use huskarl::core::secrets::EnvVarSecret;
-//! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
-//! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .build()
-//! #     .await?;
-//! #
-//! # let client_auth: ClientSecret = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
-//! #
-//! # let grant: ClientCredentialsGrant = ClientCredentialsGrant::builder()
-//! #     .token_endpoint("https://my-server/token".parse()?)
-//! #     .client_id("client_id")
-//! #     .http_client(client)
-//! #     .client_auth(client_auth)
-//! #     .build();
-//!
-//! let params = ClientCredentialsGrantParameters::builder().scopes(vec!["read", "write"]).build();
-//! let response = grant.exchange(params).await?;
-//! let token: &AccessToken = response.access_token();
-//!
-//! # Ok(())
-//! # }
-//! ```
+//! See the [client credentials how-to
+//! guide](crate::_docs::guide::client_credentials) for step-by-step setup.
 
 use std::sync::Arc;
 

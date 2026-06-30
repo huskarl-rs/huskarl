@@ -16,6 +16,18 @@
 //! binding) and returns a [`ValidatedRequest`]
 //! carrying its claims — from which your application makes the second decision.
 //!
+//! ## The huskarl ecosystem
+//!
+//! This crate is one of three that fit together. Each carries its own how-to
+//! guides and explanation in a `_docs` module:
+//!
+//! - [`huskarl`](https://docs.rs/huskarl) — `OAuth2` **clients**: grants, token
+//!   caching, and the request authorizer.
+//! - **`huskarl-resource-server`** (this crate) — **resource servers**:
+//!   access-token validation and request authorization.
+//! - [`huskarl-core`](https://docs.rs/huskarl-core) — the shared **foundation**
+//!   the other two build on.
+//!
 //! ## Example with RFC 9068 token validation:
 //!
 //! ```
@@ -36,6 +48,16 @@
 //!     .build();
 //! # }
 //! ```
+//!
+//! ## Guides and explanation
+//!
+//! The API items here are the reference docs. For task-oriented how-to guides
+//! (validating RFC 9068, custom, introspection, and multi-issuer tokens) and
+//! design explanation (choosing a validator, how multi-issuer routing stays
+//! safe), see the [`_docs`] module.
+
+#[cfg(any(doc, docsrs))]
+pub mod _docs;
 
 pub mod error;
 pub mod introspection;

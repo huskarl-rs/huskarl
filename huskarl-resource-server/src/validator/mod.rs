@@ -6,6 +6,8 @@
 //! [`rfc9068::Rfc9068Validator`] for self-contained RFC 9068 JWT access tokens,
 //! [`introspection::IntrospectionValidator`] for RFC 7662 introspection, or
 //! [`custom::CustomValidator`] for an authorization server that follows neither.
+//! See [choosing a validator](crate::_docs::explanation::choosing_a_validator)
+//! for the trade-offs, and [`multi_issuer`] to accept more than one issuer.
 
 mod binding;
 mod common;

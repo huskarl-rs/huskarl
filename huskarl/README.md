@@ -7,7 +7,7 @@
 
     This region was generated from Rust documentation comments by `cargo-reedme` using this command:
 
-        cargo +nightly reedme
+        cargo +nightly reedme --manifest-path huskarl/Cargo.toml
 
     for more info: https://github.com/nik-rev/cargo-reedme
 
@@ -20,6 +20,30 @@ parameters that define how the grant/workflow should progress.
 
 The library also provides a caching layer for token responses; and a HTTP authorizer
 that can be used to make authenticated requests to resource servers.
+
+## The huskarl ecosystem
+
+This crate is one of three that fit together. Each carries its own how-to guides
+and explanation in a `_docs` module:
+
+- **`huskarl`** (this crate) — `OAuth2` **clients**: grants, token caching, and
+  the request authorizer.
+- [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) —
+  **resource servers**: access-token validation and request authorization.
+- [`huskarl-core`](https://docs.rs/huskarl-core) — the shared **foundation** the
+  other two build on.
+
+## Conformance and interoperability
+
+Huskarl’s client is verified against the official [`OpenID` conformance
+suite](https://openid.net/certification/). It passes the `OpenID Connect` Core
+*Basic client* certification plan, plus the **FAPI 2.0 Security Profile** and
+**Message Signing** client plans — these adding `private_key_jwt` client
+authentication, `DPoP` sender-constrained tokens, and signed authorization
+requests (JAR). The grants are additionally run end-to-end against real
+authorization servers — Keycloak, Dex, `node-oidc-provider`, and Okta — in CI.
+See the [repository](https://github.com/huskarl-rs/huskarl) for the full provider
+matrix and conformance plans.
 
 ## Setup
 
@@ -57,6 +81,10 @@ or more calls to the token endpoint.
 Further grants — CIBA, JWT authorization, provider-specific flows — can be implemented in this
 crate or by external crates.
 
+Beyond grants, the [`registration`](https://docs.rs/huskarl/latest/huskarl/registration/) module implements OAuth 2.0 Dynamic Client Registration
+(RFC 7591), letting a client register itself with an authorization server and obtain the
+`client_id`/`client_secret` that drive the grants above.
+
 ## Examples
 
 ### Client Credentials Grant
@@ -90,85 +118,19 @@ println!(
 );
 ```
 
-### Application state and error handling
+## Guides and explanation
 
-Grants belong to the login path. For the request path, wrap a grant in a
-token cache and an [`HttpAuthorizer`](https://docs.rs/huskarl/latest/huskarl/authorizer/struct.HttpAuthorizer.html) — workflow
-types carry no type parameters, so they store directly in your application
-state, and every operation returns the one concrete
-[`Error`](https://docs.rs/huskarl_core/latest/huskarl_core/error/struct.Error.html) type, which embeds in your own error enum (hand-rolled
-as below, or with `thiserror`’s `#[from]`).
+The API items in this crate are the **reference** documentation. For
+task-oriented how-to guides — setting up each grant, caching tokens, and
+making authenticated requests — and design explanation (error handling,
+sharing a refresh token store, refresh timing), see the [`_docs`](https://docs.rs/huskarl/latest/huskarl/_docs/) module.
 
-Errors carry three stable signals, checked in this order:
-[`is_retryable`](https://docs.rs/huskarl/latest/huskarl/core/struct.Error.html#method.is_retryable) means the failure is transient
-and the same call may succeed later — back off and retry, do **not** re-run
-the interactive flow; [`ReauthRequired`](https://docs.rs/huskarl/latest/huskarl/core/enum.ErrorKind.html#variant.ReauthRequired)
-means no token can be obtained automatically and the interactive flow must
-run again; everything else is a genuine failure to log and surface.
-
-```rust
-use huskarl::{
-    authorizer::HttpAuthorizer,
-    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
-    core::ErrorKind,
-};
-
-/// Plain types, no parameters: this struct names cleanly in app state.
-struct App {
-    authorizer: HttpAuthorizer,
-}
-
-enum AppError {
-    /// Transient failure — retry the request later.
-    RetryLater(huskarl::core::Error),
-    /// The user must log in again.
-    LoginRequired,
-    /// Any other authorization failure.
-    Auth(huskarl::core::Error),
-}
-
-impl From<huskarl::core::Error> for AppError {
-    fn from(err: huskarl::core::Error) -> Self {
-        if err.is_retryable() {
-            AppError::RetryLater(err)
-        } else if err.kind() == ErrorKind::ReauthRequired {
-            AppError::LoginRequired
-        } else {
-            AppError::Auth(err)
-        }
-    }
-}
-
-// `grant` is any grant, built as in the example above.
-let source = GrantTokenSource::builder()
-    .grant(grant)
-    .grant_parameters(ClientCredentialsGrantParameters::builder().build())
-    .refresh_store(InMemoryRefreshTokenStore::default())
-    .build();
-let cache = InMemoryTokenCache::builder().source(source).build();
-
-let app = App {
-    authorizer: HttpAuthorizer::builder().cache(cache).build(),
-};
-
-// Exchanges or refreshes as needed through the grant's own HTTP client;
-// `?` lands in the app's error enum, with re-login distinguished.
-let uri: http::Uri = "https://api.example.com/v1".parse().unwrap();
-let headers = app
-    .authorizer
-    .get_headers(&http::Method::GET, &uri)
-    .await?;
-
-// Send the request with your HTTP client, then feed the response headers
-// back so DPoP nonce rotation and rejected tokens are tracked — see the
-// authorizer module docs for the full request loop.
-app.authorizer.process_response(&uri, &response_headers);
-```
-
-To survive restarts, persist only the refresh token by handing the cache a
-custom [`RefreshTokenStore`](https://docs.rs/huskarl/latest/huskarl/cache/trait.RefreshTokenStore.html) (keychain- or
-disk-backed); on startup the cache refreshes into a fresh access token. For
-handing a freshly-obtained token from the login path to a running source, use
-[`GrantTokenSource::prime`](https://docs.rs/huskarl/latest/huskarl/cache/grant_token_source/struct.GrantTokenSource.html#method.prime).
+Most applications wrap a grant in an
+[`InMemoryTokenCache`](https://docs.rs/huskarl/latest/huskarl/cache/in_memory/struct.InMemoryTokenCache.html) and an
+[`HttpAuthorizer`](https://docs.rs/huskarl/latest/huskarl/authorizer/struct.HttpAuthorizer.html) for the request path; every
+operation returns the one concrete [`Error`](https://docs.rs/huskarl_core/latest/huskarl_core/error/struct.Error.html) type, which embeds
+in your own error enum. See [caching tokens and wiring an
+authorizer](https://docs.rs/huskarl/latest/huskarl/_docs/guide/caching/) and [error
+handling](https://docs.rs/huskarl/latest/huskarl/_docs/explanation/error_handling/).
 
 <!-- cargo-reedme: end -->

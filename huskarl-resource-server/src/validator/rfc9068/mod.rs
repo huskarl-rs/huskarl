@@ -1,116 +1,12 @@
 //! RFC 9068 JWT profile for OAuth 2.0 access tokens.
 //!
-//! Validates RFC 9068 JWT access tokens using the authorization server's public keys.
-//! For authorization servers that do not issue RFC 9068-compliant tokens, see
-//! [`crate::validator::custom`] instead.
+//! [`Rfc9068Validator`] verifies RFC 9068 JWT access tokens locally against the
+//! authorization server's published signing keys. For authorization servers
+//! that do not issue RFC 9068-compliant tokens, see [`crate::validator::custom`].
 //!
-//! # Usage
-//!
-//! ## 1. Set up your HTTP client
-//!
-//! A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
-//!
-//! ```rust
-//! use huskarl_reqwest::ReqwestClient;
-//!
-//! # async fn setup_client() -> Result<(), Box<dyn std::error::Error>> {
-//! let client: ReqwestClient = ReqwestClient::builder().build().await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 2a. Build the validator from authorization server metadata
-//!
-//! ```rust
-//! use std::sync::Arc;
-//!
-//! use huskarl_resource_server::{
-//!     core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata},
-//!     validator::rfc9068::Rfc9068Validator,
-//! };
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
-//!
-//! let metadata = AuthorizationServerMetadata::fetch()
-//!     .http_client(&http_client)
-//!     .issuer("https://my-issuer")
-//!     .call()
-//!     .await?;
-//!
-//! let validator = Rfc9068Validator::builder_from_metadata(&metadata)
-//!     .audience("api://my-resource")
-//!     .jws_verifier_factory(Arc::new(
-//!         JwksSource::builder()
-//!             .http_client(http_client.clone())
-//!             .build(),
-//!     ))
-//!     .build()
-//!     .await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 2b. Alternative: Build without authorization server metadata
-//!
-//! ```rust
-//! use std::sync::Arc;
-//!
-//! use huskarl_resource_server::{core::jwk::JwksSource, validator::rfc9068::Rfc9068Validator};
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
-//!
-//! let validator = Rfc9068Validator::builder()
-//!     .issuer("https://my-issuer")
-//!     .audience("api://my-resource")
-//!     .jwks_uri("https://my-issuer/.well-known/jwks.json".parse()?)
-//!     .jws_verifier_factory(Arc::new(
-//!         JwksSource::builder()
-//!             .http_client(http_client.clone())
-//!             .build(),
-//!     ))
-//!     .build()
-//!     .await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 3. Validate a request
-//!
-//! Call [`Rfc9068Validator::validate_request`] with the HTTP request headers, method, and URI.
-//! The [`outcome`][crate::validator::ValidationResult::outcome] field of the result is:
-//! - `Ok(None)` — no authentication header was present
-//! - `Ok(Some(_))` — a valid token was found; the request is authenticated
-//! - `Err(_)` — a token was present but invalid
-//!
-//! ```rust
-//! # use std::sync::Arc;
-//! # use huskarl_resource_server::core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata};
-//! # use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
-//! # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-//! # let validator = Rfc9068Validator::builder_from_metadata(&metadata).audience("api://my-resource").jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
-//! use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
-//!
-//! let mut headers = http::HeaderMap::new();
-//! headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer mF_9.B5f-4.1JqM"));
-//! let method = Method::GET;
-//! let uri = Uri::from_static("https://api.example.com/resource");
-//!
-//! let result = validator.validate_request(&headers, &method, &uri, None).await;
-//!
-//! match result.outcome {
-//!     Ok(Some(validated)) => println!(
-//!         "Authenticated: subject={:?}, scope={:?}",
-//!         validated.subject,
-//!         validated.claims.scope,
-//!     ),
-//!     Ok(None) => println!("No authentication provided"),
-//!     Err(e) => println!("Validation failed: {e}"),
-//! }
-//! # Ok(())
-//! # }
-//! ```
+//! For a step-by-step setup walkthrough see the [RFC 9068
+//! guide](crate::_docs::guide::rfc9068); for picking between the validators see
+//! [choosing a validator](crate::_docs::explanation::choosing_a_validator).
 
 use std::{marker::PhantomData, sync::Arc, time::Duration};
 
@@ -143,9 +39,11 @@ use crate::{
 
 /// A validator for RFC 9068 JWT access tokens.
 ///
-/// Enforces all RFC 9068 §2.2 requirements: `typ`, `iss`, `exp`, `aud`,
-/// `sub`, `iat`, `jti`, and `client_id` (via deserialization into
-/// [`Rfc9068AccessTokenClaims`]). The `Claims` type parameter captures any
+/// Enforces the RFC 9068 §2.2 requirements: `typ`, `iss`, `exp`, `aud`, `sub`,
+/// `iat`, and `client_id` (the last via deserialization into
+/// [`Rfc9068AccessTokenClaims`]). Presence of `jti` is enforced only when a
+/// `jti_checker` is configured (for replay protection); without one, a token
+/// missing `jti` still validates. The `Claims` type parameter captures any
 /// additional claims your authorization server includes beyond the standard set.
 ///
 /// For authorization servers that do not issue RFC 9068-compliant tokens, use
@@ -388,27 +286,19 @@ impl<ExtraClaims: for<'de> Deserialize<'de> + Clone + 'static> ProvideValidatorM
     }
 }
 
-/// Claims for an RFC 9068 JWT access token.
+/// Claims for an RFC 9068 JWT access token (RFC 9068 §2.2).
 ///
-/// RFC 9068 §2.2 requires the following claims to be present in the token:
-/// `iss`, `exp`, `aud`, `sub`, `iat`, `jti`, and `client_id`. If your
-/// authorization server does not include all of these — in particular `client_id`
-/// — it is not issuing RFC 9068-compliant tokens. In that case, use
-/// [`crate::validator::custom::CustomValidator`] with a claims type suited to your AS.
-///
-/// `ExtraClaims` captures any additional claims beyond the RFC 9068 standard set.
-/// RFC 9068 §2.2.3.1 describes `groups`, `roles`, and `entitlements` claims and
-/// recommends a specific encoding for them, but does not make it mandatory.
-/// Therefore, you should use the `ExtraClaims` type parameter to capture these claims
-/// in whatever shape your authorization server emits.
+/// `ExtraClaims` captures any claims beyond the standard set — including
+/// `groups`/`roles`/`entitlements` (§2.2.3.1) — in whatever shape your
+/// authorization server emits. If a server omits required claims such as
+/// `client_id`, it is not RFC 9068-compliant; use
+/// [`crate::validator::custom::CustomValidator`] instead.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound(deserialize = "ExtraClaims: for<'d> Deserialize<'d>"))]
 pub struct Rfc9068AccessTokenClaims<ExtraClaims = ()> {
-    /// The client identifier for the OAuth 2.0 client that requested this token.
-    ///
-    /// Required by RFC 9068 §2.2. Deserialization of this claims type will fail
-    /// if this field is absent — this is intentional, as its absence indicates
-    /// the token was not issued by an RFC 9068-compliant authorization server.
+    /// The client that requested this token. Required by RFC 9068 §2.2;
+    /// deserialization fails if absent, since its absence means the token is not
+    /// RFC 9068-compliant.
     pub client_id: String,
     /// Time of the end-user authentication, as a Unix timestamp (RFC 9068 §2.2.1).
     pub auth_time: Option<u64>,
@@ -419,11 +309,8 @@ pub struct Rfc9068AccessTokenClaims<ExtraClaims = ()> {
     pub amr: Vec<String>,
     /// Space-separated list of scopes associated with the token (RFC 9068 §2.2.3).
     pub scope: Option<String>,
-    /// Additional claims beyond the RFC 9068 standard set.
-    ///
-    /// Non-RFC-9068 claims — including the RFC 9396 `authorization_details` a
-    /// deployment may add per §9.1 — are captured here via the `ExtraClaims`
-    /// type a caller supplies; this struct models only the RFC 9068 claim set.
+    /// Claims beyond the RFC 9068 standard set (e.g. RFC 9396
+    /// `authorization_details`), captured via the caller-supplied `ExtraClaims`.
     #[serde(flatten)]
     pub extra_claims: ExtraClaims,
 }

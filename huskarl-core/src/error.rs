@@ -6,38 +6,9 @@
 //! surfacing the RFC 6749 error code — goes through [`ErrorKind`] and the
 //! accessors on [`Error`]; they are the stable contract.
 //!
-//! # Handling errors
-//!
-//! Applications consuming tokens (through a token cache or authorizer) need
-//! a small set of signals, checked in this order:
-//!
-//! 1. **Retry**: [`Error::is_retryable`] — the failure is transient and the
-//!    same call may succeed if re-attempted (with backoff). No user
-//!    involvement is needed; in particular this is *not* a reason to re-run
-//!    the interactive flow.
-//! 2. **Back off, then retry**: [`ErrorKind::Backoff`] — no token right now,
-//!    but the source expects to recover on its own, so a later automatic call
-//!    may succeed. Like retry, no user involvement is needed; unlike retry, an
-//!    *immediate* re-attempt will not help — wait for the cooldown first. This
-//!    is *not* a reason to re-run the interactive flow.
-//! 3. **Adjust the request**: [`ErrorKind::RequestRejected`] — the credential
-//!    is intact but the request was wrong (e.g. an over-broad scope or a bad
-//!    resource indicator). Narrow the request and retry with the *same*
-//!    credential; re-authentication will not help.
-//! 4. **Re-authenticate**: [`ErrorKind::ReauthRequired`] — no token can be
-//!    obtained automatically; the interactive flow must run again.
-//! 5. **Fail**: everything else is a genuine failure — log it and surface
-//!    it. The remaining kinds classify *what* failed (configuration,
-//!    protocol, crypto, ...) for diagnostics and error reports, not what to
-//!    do next.
-//!
-//! # Source chains and downcasting
-//!
-//! [`Error::source`](std::error::Error::source) chains preserve the concrete
-//! underlying error (for example a transport crate's error type) for
-//! diagnostics, logging, and error-report rendering. Downcasting a source to
-//! a concrete type is **not** supported API surface: the type behind
-//! `source()` may change in any release. Match on [`ErrorKind`] instead.
+//! For the signal model applications follow (retry / back off / adjust /
+//! re-authenticate / fail) and notes on source chains and downcasting, see
+//! [the error model](crate::_docs::explanation::error_handling).
 
 use std::fmt;
 
@@ -73,8 +44,9 @@ pub struct Error {
 /// coarse deliberately — additions are non-breaking, removals are not.
 ///
 /// Most application code does not need to match individual variants: the
-/// three signals described under [Handling errors](self#handling-errors)
-/// (retry / re-authenticate / fail) are the intended consumption pattern.
+/// three signals described in [the error
+/// model](crate::_docs::explanation::error_handling) (retry / re-authenticate /
+/// fail) are the intended consumption pattern.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
@@ -196,8 +168,8 @@ impl Error {
     /// re-attempted (with backoff). No user involvement is needed; in
     /// particular this is not a reason to re-run the interactive flow.
     ///
-    /// See [Handling errors](self#handling-errors) for how this composes
-    /// with [`ErrorKind::ReauthRequired`].
+    /// See [the error model](crate::_docs::explanation::error_handling) for how
+    /// this composes with [`ErrorKind::ReauthRequired`].
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self.kind, ErrorKind::Transport { retryable: true })

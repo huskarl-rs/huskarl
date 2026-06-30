@@ -113,8 +113,8 @@ use breaker::Breaker;
 /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired) **only when no
 /// automatic recovery path remains** — a retryable transport failure, a retained
 /// refresh token, a request-shape rejection, or a still-live dynamic source each
-/// keeps its own classification instead (see [Handling
-/// errors](crate::core::error#handling-errors)). The cause is always a
+/// keeps its own classification instead (see [the error
+/// model](crate::core::error)). The cause is always a
 /// [`GetTokenError`] variant identifying which paths were exhausted.
 ///
 /// # Backoff

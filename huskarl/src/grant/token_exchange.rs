@@ -1,114 +1,12 @@
 //! Token exchange grant (RFC 8693).
 //!
 //! Used to issue a new security token by exchanging an existing token, supporting
-//! impersonation and delegation without requiring user re-authentication.
+//! impersonation and delegation without requiring user re-authentication. The
+//! existing token is the grant's authorization, so client authentication is
+//! optional.
 //!
-//! # Usage
-//!
-//! ## 1. Set up your HTTP client
-//!
-//! The examples below use the `huskarl_reqwest` crate; see [Setting up an HTTP
-//! client](crate::grant#setting-up-an-http-client) for the shared setup the rest
-//! of this page assumes.
-//!
-//! ## 2. Set up client authentication (optional)
-//!
-//! The grant presents an existing token as its authorization, so authenticating
-//! the client is optional and independent — do it only if your authorization
-//! server requires it, otherwise present none at all. See [Setting up client
-//! authentication](crate::grant#setting-up-client-authentication).
-//!
-//! ## 3a. Set up the grant with authorization server metadata
-//!
-//! ```rust
-//! use huskarl::{
-//!     core::{client_auth::ClientSecret, server_metadata::AuthorizationServerMetadata},
-//!     grant::token_exchange::TokenExchangeGrant,
-//! };
-//! # use huskarl::core::http::HttpClient;
-//! # use huskarl::core::secrets::EnvVarSecret;
-//! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
-//! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .build()
-//! #     .await?;
-//! #
-//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
-//!
-//! let metadata = AuthorizationServerMetadata::fetch()
-//!     .http_client(&client)
-//!     .issuer("https://my-issuer")
-//!     .call()
-//!     .await?;
-//!
-//! let grant: TokenExchangeGrant = TokenExchangeGrant::builder_from_metadata(&metadata)
-//!     .client_id("client_id")
-//!     .http_client(client)
-//!     .client_auth(client_auth)
-//!     .build();
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 3b. Alternative: Set up the grant without metadata
-//!
-//! ```rust
-//! use huskarl::{core::client_auth::ClientSecret, grant::token_exchange::TokenExchangeGrant};
-//! # use huskarl::core::http::HttpClient;
-//! # use huskarl::core::secrets::EnvVarSecret;
-//! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
-//! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .build()
-//! #     .await?;
-//! #
-//! # let env_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
-//! # let client_auth: ClientSecret = ClientSecret::new(env_secret);
-//!
-//! let grant: TokenExchangeGrant = TokenExchangeGrant::builder()
-//!     .token_endpoint("https://my-server/token".parse()?)
-//!     .client_id("client_id")
-//!     .http_client(client)
-//!     .client_auth(client_auth)
-//!     .build();
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## 4. Get an access token.
-//!
-//! ```rust
-//! use huskarl::prelude::*; // Imports OAuth2ExchangeGrant which defines the exchange call.
-//! use huskarl::grant::token_exchange::{SecurityToken, SecurityTokenType, TokenExchangeGrantParameters};
-//! use huskarl::token::AccessToken;
-//! # use huskarl::grant::token_exchange::TokenExchangeGrant;
-//! use huskarl::core::client_auth::ClientSecret;
-//! # use huskarl::core::http::HttpClient;
-//! # use huskarl::core::secrets::EnvVarSecret;
-//! # use huskarl::core::secrets::encodings::StringEncoding;
-//! # async fn setup_grant() -> Result<(), Box<dyn std::error::Error>> {
-//! # let client = huskarl_reqwest::ReqwestClient::builder()
-//! #     .build()
-//! #     .await?;
-//! #
-//! # let client_auth: ClientSecret = ClientSecret::new(EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?);
-//! #
-//! # let grant: TokenExchangeGrant = TokenExchangeGrant::builder()
-//! #     .token_endpoint("https://my-server/token".parse()?)
-//! #     .client_id("client_id")
-//! #     .http_client(client)
-//! #     .client_auth(client_auth)
-//! #     .build();
-//!
-//! let subject = SecurityToken::builder().token("eyToken").token_type(SecurityTokenType::AccessToken).build();
-//! let params = TokenExchangeGrantParameters::builder().subject(subject).build();
-//! let response = grant.exchange(params).await?;
-//! let token: &AccessToken = response.access_token();
-//!
-//! # Ok(())
-//! # }
-//! ```
+//! See the [token exchange how-to guide](crate::_docs::guide::token_exchange) for
+//! step-by-step setup.
 
 use std::sync::Arc;
 
