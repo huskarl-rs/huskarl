@@ -566,15 +566,15 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + MaybeSendSync + 'static> Access
     type Claims = Claims;
     type Error = IntrospectionValidateError;
 
-    async fn validate_request(
-        &self,
-        headers: &http::HeaderMap,
-        method: &http::Method,
-        uri: &http::Uri,
-        client_cert_der: Option<&[u8]>,
-    ) -> ValidationResult<Self::Claims, Self::Error> {
-        self.validate_request(headers, method, uri, client_cert_der)
-            .await
+    fn validate_request<'a>(
+        &'a self,
+        headers: &'a http::HeaderMap,
+        method: &'a http::Method,
+        uri: &'a http::Uri,
+        client_cert_der: Option<&'a [u8]>,
+    ) -> crate::core::platform::MaybeSendBoxFuture<'a, ValidationResult<Self::Claims, Self::Error>>
+    {
+        Box::pin(self.validate_request(headers, method, uri, client_cert_der))
     }
 }
 
