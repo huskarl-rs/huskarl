@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
  - Add MultiIssuerValidator which can route validator by iss value.
  - Add `non_exhaustive` to various error types.
  - Breaking: Add Debug bound to ToRfc6750Error.
+ - Strip control chars from www-authenticate parameters.
  
 ## [0.8.0] - 2026-06-15
 
