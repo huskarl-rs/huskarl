@@ -217,6 +217,7 @@ mod tests {
     };
 
     /// A configurable [`ToRfc6750Error`] test double.
+    #[derive(Debug)]
     struct TestError {
         scheme: Option<TokenType>,
         token_error: TokenValidationError,

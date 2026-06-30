@@ -16,13 +16,14 @@ pub mod error;
 pub mod extract;
 pub mod introspection;
 pub mod metadata;
+pub mod multi_issuer;
 pub mod observe;
 pub mod rfc9068;
 
 use crate::{
     core::{
         jwt::{ConfirmationClaim, validator::ValidatedJwt},
-        platform::{MaybeSend, MaybeSendSync, SystemTime},
+        platform::{MaybeSendBoxFuture, MaybeSendSync, SystemTime},
     },
     error::ToRfc6750Error,
 };
@@ -42,13 +43,18 @@ pub trait AccessTokenValidator: MaybeSendSync {
     type Error: ToRfc6750Error;
 
     /// Validates an access token from the given HTTP request headers.
-    fn validate_request(
-        &self,
-        headers: &http::HeaderMap,
-        method: &http::Method,
-        uri: &http::Uri,
-        client_cert_der: Option<&[u8]>,
-    ) -> impl Future<Output = ValidationResult<Self::Claims, Self::Error>> + MaybeSend;
+    ///
+    /// Returns a boxed future so the trait is object-safe: heterogeneous
+    /// validators can be stored as `Box<dyn AccessTokenValidator<…>>` (see
+    /// [`multi_issuer`]). Concrete validators also expose an inherent `validate_request`
+    /// that returns an unboxed future for zero-cost direct use.
+    fn validate_request<'a>(
+        &'a self,
+        headers: &'a http::HeaderMap,
+        method: &'a http::Method,
+        uri: &'a http::Uri,
+        client_cert_der: Option<&'a [u8]>,
+    ) -> MaybeSendBoxFuture<'a, ValidationResult<Self::Claims, Self::Error>>;
 }
 
 /// The result of an [`AccessTokenValidator::validate_request`] call.

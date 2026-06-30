@@ -108,3 +108,109 @@ impl ToRfc6750Error for TokenExtractError {
         self.get_message().map(str::to_string)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use http::{HeaderValue, header::AUTHORIZATION};
+    use rstest::rstest;
+
+    use super::*;
+
+    /// Builds a `HeaderMap` carrying `value` under the `Authorization` header.
+    fn auth_headers(value: &'static str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static(value));
+        headers
+    }
+
+    /// Runs `extract_token` against the default `Authorization` header.
+    fn extract(
+        value: &'static str,
+    ) -> Result<Option<(TokenType, SecretString)>, TokenExtractError> {
+        extract_token(&auth_headers(value), &AUTHORIZATION)
+    }
+
+    #[rstest]
+    #[case::bearer("Bearer mF_9.B5f-4.1JqM", TokenType::Bearer, "mF_9.B5f-4.1JqM")]
+    #[case::dpop("DPoP mF_9.B5f-4.1JqM", TokenType::DPoP, "mF_9.B5f-4.1JqM")]
+    // Scheme matching is case-insensitive (RFC 7235 §2.1).
+    #[case::lower_bearer("bearer tok", TokenType::Bearer, "tok")]
+    #[case::upper_bearer("BEARER tok", TokenType::Bearer, "tok")]
+    #[case::lower_dpop("dpop tok", TokenType::DPoP, "tok")]
+    #[case::upper_dpop("DPOP tok", TokenType::DPoP, "tok")]
+    // Leading/trailing whitespace and collapsed separators still leave exactly
+    // two fields: the scheme and the token.
+    #[case::whitespace("  Bearer   the-token  ", TokenType::Bearer, "the-token")]
+    fn valid_token_is_extracted(
+        #[case] header: &'static str,
+        #[case] expected_type: TokenType,
+        #[case] expected_token: &str,
+    ) {
+        let (token_type, token) = extract(header).unwrap().unwrap();
+        assert_eq!(token_type, expected_type);
+        assert_eq!(token.expose_secret(), expected_token);
+    }
+
+    #[rstest]
+    #[case::scheme_only("Bearer")]
+    #[case::empty("   ")]
+    // A token value must not contain whitespace; a third field is rejected
+    // rather than silently truncated.
+    #[case::three_fields("Bearer tok extra")]
+    fn invalid_format_is_rejected(#[case] header: &'static str) {
+        assert!(
+            matches!(
+                extract(header),
+                Err(TokenExtractError::InvalidTokenHeaderFormat)
+            ),
+            "expected InvalidTokenHeaderFormat for {header:?}"
+        );
+    }
+
+    #[test]
+    fn absent_header_is_none() {
+        let headers = HeaderMap::new();
+        assert!(matches!(extract_token(&headers, &AUTHORIZATION), Ok(None)));
+    }
+
+    #[test]
+    fn unsupported_scheme_is_rejected() {
+        let err = extract("Basic dXNlcjpwYXNz").unwrap_err();
+        assert!(
+            matches!(err, TokenExtractError::UnsupportedTokenType { ref token_type } if token_type == "Basic"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn non_utf8_header_value_is_rejected() {
+        let mut headers = HeaderMap::new();
+        // 0xFF is never valid UTF-8, so `to_str` fails before any parsing.
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_bytes(b"Bearer \xff").unwrap(),
+        );
+        assert!(matches!(
+            extract_token(&headers, &AUTHORIZATION),
+            Err(TokenExtractError::TokenNotString { .. })
+        ));
+    }
+
+    #[test]
+    fn token_is_read_from_the_configured_header() {
+        let header = HeaderName::from_static("x-access-token");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            &header,
+            HeaderValue::from_static("Bearer custom-header-token"),
+        );
+
+        // The configured header is used...
+        let (token_type, token) = extract_token(&headers, &header).unwrap().unwrap();
+        assert_eq!(token_type, TokenType::Bearer);
+        assert_eq!(token.expose_secret(), "custom-header-token");
+
+        // ...and the default `Authorization` header is not consulted.
+        assert!(matches!(extract_token(&headers, &AUTHORIZATION), Ok(None)));
+    }
+}

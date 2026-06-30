@@ -195,7 +195,7 @@ impl ToRfc6750Error for InsufficientUserAuthentication {
 }
 
 /// A trait for errors that can be classified into an RFC 6750-style error response.
-pub trait ToRfc6750Error: MaybeSendSync {
+pub trait ToRfc6750Error: std::fmt::Debug + MaybeSendSync {
     /// Returns the attempted authentication scheme, if known.
     fn attempted_scheme(&self) -> Option<TokenType>;
 
