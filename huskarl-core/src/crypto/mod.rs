@@ -7,6 +7,11 @@
 //! This module holds the signing ([`signer`]), verification ([`verifier`]), and
 //! encryption ([`cipher`]) traits, plus the shared key-matching types
 //! ([`KeyMatchStrength`]). Concrete implementations live in platform crates.
+//!
+//! Each base trait comes with a family of composable wrappers (multi-key,
+//! refreshable, scheduled-refresh, retrying) that decorate it without changing
+//! its interface. See [composing crypto
+//! strategies](crate::_docs::explanation::crypto_strategies) for how they stack.
 
 pub mod cipher;
 pub(crate) mod refreshable;

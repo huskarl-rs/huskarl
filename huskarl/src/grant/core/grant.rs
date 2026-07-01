@@ -48,7 +48,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns the configured client auth, or `None` when the client does not
     /// authenticate to the token endpoint — the grant then carries its own
     /// authorization (an assertion or an existing token). See [Setting up client
-    /// authentication](crate::grant#setting-up-client-authentication).
+    /// authentication](crate::_docs::guide::setup).
     fn client_auth(&self) -> Option<&dyn ClientAuthentication>;
 
     /// Returns the bound `DPoP` thumbprint for the session.

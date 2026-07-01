@@ -102,27 +102,56 @@ to a granular one.
 
 ## Core Libraries
 
-- `huskarl-core` implements the functionality needed by higher layers. Here, you can find the
+- [`huskarl-core`](https://docs.rs/huskarl-core) implements the functionality needed by higher layers. Here, you can find the
   core traits, JWT/JWK handling, authorization server metadata handling, encoding/decoding
   support. One way to look at it is: if both an `OAuth2` resource server, and an `OAuth2`
   client (or relying party) might need the functionality, it should go here.
-- `huskarl` implements functionality required by an `OAuth2` client (OIDC relying party).
-- `huskarl-resource-server` implements functionality required by an `OAuth2` resource server.
+- [`huskarl`](https://docs.rs/huskarl) implements functionality required by an `OAuth2` client (OIDC relying party).
+- [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) implements functionality required by an `OAuth2` resource server.
   This includes access token validation and introspection.
+
+Each crate's how-to guides and explanation live in its own `_docs` module:
+[huskarl](https://docs.rs/huskarl/latest/huskarl/_docs/),
+[huskarl-resource-server](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/),
+and [huskarl-core](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/).
 
 ## Support Libraries
 
-- `huskarl-crypto-native` implements core cryptography operations in rust code. The library
+- [`huskarl-crypto-native`](https://docs.rs/huskarl-crypto-native) implements core cryptography operations in rust code. The library
   relies heavily on the `rustcrypto` suite of crates.
-- `huskarl-crypto-webcrypto` implements core cryptography operations in `WebCrypto`. This
+- [`huskarl-crypto-webcrypto`](https://docs.rs/huskarl-crypto-webcrypto) implements core cryptography operations in `WebCrypto`. This
   utilizes `wasm-bindgen` and `web-sys` for binding to the `WebCrypto` operations in the
   current WASM environment.
-- `huskarl-reqwest` implements support for the `reqwest` HTTP client (allowing it to be
+- [`huskarl-reqwest`](https://docs.rs/huskarl-reqwest) implements support for the `reqwest` HTTP client (allowing it to be
   used for operations by the huskarl crates).
 
 ## Platform Support
 
 Huskarl supports most `std` platforms, including WASM.
+
+## Conformance & Interoperability Testing
+
+Huskarl is verified two ways, both mirrored in CI:
+
+- **Provider matrix** — the grants run end-to-end against real authorization
+  servers. Keycloak exercises the full flow set (client credentials including
+  `DPoP` and private-key-JWT, refresh, introspection, mTLS, and authorization
+  code with PAR/JAR); the authorization-code flow also runs against Dex,
+  node-oidc-provider, and Okta (the latter two with PAR and JAR too).
+  `mise run matrix` prints the coverage report and `mise run providers:test`
+  runs the suite.
+- **OpenID conformance suite** — the huskarl client passes the official
+  certification test plans: **OpenID Connect Core** (Basic client), and the
+  **FAPI 2.0 Security Profile** and **FAPI 2.0 Message Signing** client plans
+  (the FAPI plans add private-key-JWT authentication, `DPoP` sender-constrained
+  tokens, and signed/JAR authorization requests). `mise run conformance:test:oidc`
+  and `mise run conformance:test:fapi2` run them against the
+  [OpenID Conformance Suite](https://gitlab.com/openid/conformance-suite).
+
+See [`integration/README.md`](integration/README.md) for the full provider
+matrix, and
+[`integration/huskarl-conformance/README.md`](integration/huskarl-conformance/README.md)
+for the conformance setup.
 
 # Supported RFCs
 

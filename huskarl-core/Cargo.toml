@@ -12,6 +12,12 @@ keywords = ["oauth2", "security", "authentication"]
 categories = ["authentication"]
 readme = "README.md"
 
+[package.metadata.docs.rs]
+# Render the `_docs` module (gated on `cfg(docsrs)`) and enable `doc_cfg`.
+# `cargo docs-rs` reads this block too.
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
 [features]
 default = ["url"]
 

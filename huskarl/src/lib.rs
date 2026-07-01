@@ -7,6 +7,30 @@ parameters that define how the grant/workflow should progress.
 The library also provides a caching layer for token responses; and a HTTP authorizer
 that can be used to make authenticated requests to resource servers.
 
+## The huskarl ecosystem
+
+This crate is one of three that fit together. Each carries its own how-to guides
+and explanation in a `_docs` module:
+
+- **`huskarl`** (this crate) — `OAuth2` **clients**: grants, token caching, and
+  the request authorizer.
+- [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) —
+  **resource servers**: access-token validation and request authorization.
+- [`huskarl-core`](https://docs.rs/huskarl-core) — the shared **foundation** the
+  other two build on.
+
+## Conformance and interoperability
+
+Huskarl's client is verified against the official [`OpenID` conformance
+suite](https://openid.net/certification/). It passes the `OpenID Connect` Core
+*Basic client* certification plan, plus the **FAPI 2.0 Security Profile** and
+**Message Signing** client plans — these adding `private_key_jwt` client
+authentication, `DPoP` sender-constrained tokens, and signed authorization
+requests (JAR). The grants are additionally run end-to-end against real
+authorization servers — Keycloak, Dex, `node-oidc-provider`, and Okta — in CI.
+See the [repository](https://github.com/huskarl-rs/huskarl) for the full provider
+matrix and conformance plans.
+
 ## Setup
 
 1. Create a HTTP client instance (e.g. with `huskarl-reqwest`).
@@ -93,100 +117,20 @@ println!(
 # }
 ```
 
-### Application state and error handling
+## Guides and explanation
 
-Grants belong to the login path. For the request path, wrap a grant in a
-token cache and an [`HttpAuthorizer`](authorizer::HttpAuthorizer) — workflow
-types carry no type parameters, so they store directly in your application
-state, and every operation returns the one concrete
-[`Error`](core::Error) type, which embeds in your own error enum (hand-rolled
-as below, or with `thiserror`'s `#[from]`).
+The API items in this crate are the **reference** documentation. For
+task-oriented how-to guides — setting up each grant, caching tokens, and
+making authenticated requests — and design explanation (error handling,
+sharing a refresh token store, refresh timing), see the [`_docs`] module.
 
-Errors carry three stable signals, checked in this order:
-[`is_retryable`](core::Error::is_retryable) means the failure is transient
-and the same call may succeed later — back off and retry, do **not** re-run
-the interactive flow; [`ReauthRequired`](core::ErrorKind::ReauthRequired)
-means no token can be obtained automatically and the interactive flow must
-run again; everything else is a genuine failure to log and surface.
-
-```rust
-# use huskarl::core::client_auth::NoAuth;
-# use huskarl::core::http::HttpClient;
-# use huskarl::grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters};
-use huskarl::{
-    authorizer::HttpAuthorizer,
-    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
-    core::ErrorKind,
-};
-
-/// Plain types, no parameters: this struct names cleanly in app state.
-struct App {
-    authorizer: HttpAuthorizer,
-}
-
-enum AppError {
-    /// Transient failure — retry the request later.
-    RetryLater(huskarl::core::Error),
-    /// The user must log in again.
-    LoginRequired,
-    /// Any other authorization failure.
-    Auth(huskarl::core::Error),
-}
-
-impl From<huskarl::core::Error> for AppError {
-    fn from(err: huskarl::core::Error) -> Self {
-        if err.is_retryable() {
-            AppError::RetryLater(err)
-        } else if err.kind() == ErrorKind::ReauthRequired {
-            AppError::LoginRequired
-        } else {
-            AppError::Auth(err)
-        }
-    }
-}
-
-# async fn example(http_client: impl HttpClient + 'static) -> Result<(), AppError> {
-# let grant = ClientCredentialsGrant::builder()
-#     .client_id("client-id")
-#     .client_auth(NoAuth)
-#     .token_endpoint("https://as.example.com/token".parse()?)
-#     .http_client(http_client)
-#     .build();
-// `grant` is any grant, built as in the example above.
-let source = GrantTokenSource::builder()
-    .grant(grant)
-    .grant_parameters(ClientCredentialsGrantParameters::builder().build())
-    .refresh_store(InMemoryRefreshTokenStore::default())
-    .build();
-let cache = InMemoryTokenCache::builder().source(source).build();
-
-let app = App {
-    authorizer: HttpAuthorizer::builder().cache(cache).build(),
-};
-
-// Exchanges or refreshes as needed through the grant's own HTTP client;
-// `?` lands in the app's error enum, with re-login distinguished.
-let uri: http::Uri = "https://api.example.com/v1".parse().unwrap();
-let headers = app
-    .authorizer
-    .get_headers(&http::Method::GET, &uri)
-    .await?;
-
-// Send the request with your HTTP client, then feed the response headers
-// back so DPoP nonce rotation and rejected tokens are tracked — see the
-// authorizer module docs for the full request loop.
-# let response_headers = http::HeaderMap::new();
-app.authorizer.process_response(&uri, &response_headers);
-# drop(headers);
-# Ok(())
-# }
-```
-
-To survive restarts, persist only the refresh token by handing the cache a
-custom [`RefreshTokenStore`](cache::RefreshTokenStore) (keychain- or
-disk-backed); on startup the cache refreshes into a fresh access token. For
-handing a freshly-obtained token from the login path to a running source, use
-[`GrantTokenSource::prime`](cache::GrantTokenSource::prime).
+Most applications wrap a grant in an
+[`InMemoryTokenCache`](cache::InMemoryTokenCache) and an
+[`HttpAuthorizer`](authorizer::HttpAuthorizer) for the request path; every
+operation returns the one concrete [`Error`](core::Error) type, which embeds
+in your own error enum. See [caching tokens and wiring an
+authorizer](_docs::guide::caching) and [error
+handling](_docs::explanation::error_handling).
 */
 
 #![forbid(unsafe_code)]
@@ -202,6 +146,9 @@ handing a freshly-obtained token from the login path to a running source, use
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod serde_utils;
+
+#[cfg(any(doc, docsrs))]
+pub mod _docs;
 
 pub mod authorizer;
 pub mod cache;

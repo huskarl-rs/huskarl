@@ -3,12 +3,56 @@ The foundational traits and types for the huskarl `OAuth2` ecosystem.
 
 Most applications depend on the higher-level `huskarl` crate (grants, token
 cache, authorizer) rather than this crate directly. `huskarl-core` is the shared
-base they build on: the one concrete [`Error`]/[`ErrorKind`], the
-[`HttpClient`](http::HttpClient) abstraction, client authentication
-([`client_auth`]), `DPoP` ([`dpop`]), the JOSE primitives ([`jwt`], [`jwk`],
-[`crypto`]), secret handling ([`secrets`]), and authorization-server metadata
-([`server_metadata`]). Implement its traits to plug in a transport, crypto
-backend, or secret source.
+base they build on — the utilities below are also useful on their own, whether
+you are writing OAuth tooling or implementing a backend for the rest of the
+ecosystem.
+
+## The huskarl ecosystem
+
+This crate is one of three that fit together. Each carries its own how-to guides
+and explanation in a `_docs` module:
+
+- [`huskarl`](https://docs.rs/huskarl) — `OAuth2` **clients**: grants, token
+  caching, and the request authorizer.
+- [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) —
+  **resource servers**: access-token validation and request authorization.
+- **`huskarl-core`** (this crate) — the shared **foundation** the other two
+  build on.
+
+## What's here
+
+- **JOSE primitives** — [`jwt`] builds, signs, and validates JWTs; [`jwk`]
+  parses and produces JWK/JWKS wire types; [`crypto`] holds the signing,
+  verification, and encryption traits plus a set of composable wrappers
+  (multi-key, refreshable, retrying).
+- **Secret handling** — [`secrets`] retrieves credentials from environment
+  variables, files, or your own provider, behind redacted wrappers that keep
+  them out of logs, with optional decoding and caching.
+- **Client authentication** — [`client_auth`] carries the ways a client
+  authenticates to an authorization server (client secret, private-key JWT, or
+  none).
+- **`DPoP`** — [`dpop`] provides proof-of-possession binding for the
+  authorization-server and resource-server flows.
+- **HTTP** — [`http`] defines the [`HttpClient`](http::HttpClient) seam that
+  decouples the ecosystem from any specific HTTP implementation.
+- **Authorization-server metadata** — [`server_metadata`] models RFC 8414 /
+  OIDC discovery documents.
+- **Wire encoding** — [`oauth_form`] serializes OAuth messages as
+  `application/x-www-form-urlencoded`, including structured RFC 9396 values.
+- **Errors** — every operation returns the one concrete [`Error`]/[`ErrorKind`],
+  which embeds cleanly in your own error type.
+
+## Guides and explanation
+
+The API items here are the **reference** documentation. For task-oriented how-to
+guides — [building](_docs::guide::signing_a_jwt) and
+[validating](_docs::guide::validating_a_jwt) JWTs,
+[providing secrets](_docs::guide::providing_secrets), and
+[implementing a backend](_docs::guide::implementing_a_backend) — and design
+explanation — [the error model](_docs::explanation::error_handling),
+[handling untrusted keys](_docs::explanation::untrusted_keys), and
+[composing crypto strategies](_docs::explanation::crypto_strategies) — see the
+[`_docs`] module.
 */
 
 #![forbid(unsafe_code)]
@@ -27,6 +71,9 @@ backend, or secret source.
 
 mod endpoint_url;
 mod uuid;
+
+#[cfg(any(doc, docsrs))]
+pub mod _docs;
 
 pub mod authorization_details;
 pub mod client_auth;

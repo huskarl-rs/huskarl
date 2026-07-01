@@ -5,31 +5,10 @@
 //! Some values here are sourced from the above RFCs, also with reference to
 //! <https://www.iana.org/assignments/jose/jose.xhtml>.
 //!
-//! ## X.509 certificate parameters (`x5c`, `x5t`, `x5t#S256`, `x5u`)
-//!
-//! RFC 7517 §4.6–4.9 defines four X.509-related JWK parameters. This library
-//! handles them as follows:
-//!
-//! - **`x5u`** (X.509 URL): Captured and **rejected** when present in JWKs from
-//!   untrusted sources such as `DPoP` proof headers (RFC 9449 §4.2). Like `jku` in
-//!   JWS headers, `x5u` triggers a remote fetch which introduces SSRF risk and
-//!   allows an attacker to substitute their own key material. Per RFC 7517 §4.6,
-//!   the referenced resource must be secured, but this cannot be verified at parse
-//!   time; rejection is the safe default.
-//!
-//! - **`x5c`** (X.509 certificate chain): Silently ignored. Certificate chain
-//!   validation against trust anchors is not implemented; the key material (`n`,
-//!   `e`, `x`, `y`, etc.) is used directly. Some providers (e.g. Microsoft Entra)
-//!   include `x5c` in their JWKS — this is harmless since the signing key material
-//!   is present regardless.
-//!
-//! - **`x5t`** (X.509 SHA-1 thumbprint): Silently ignored. SHA-1 is deprecated
-//!   for cryptographic use (RFC 6151) and this field provides no additional
-//!   security without certificate chain validation.
-//!
-//! - **`x5t#S256`** (X.509 SHA-256 thumbprint): Silently ignored at the JWK
-//!   level. Note that `cnf.x5t#S256` in JWT access tokens is a distinct concept
-//!   (RFC 8705 §4) handled separately by the resource server validator.
+//! The X.509 parameters (`x5c`, `x5t`, `x5t#S256`, `x5u`) are handled
+//! conservatively: `x5u` is **rejected** when it arrives from an untrusted
+//! source, and the others are ignored. See [handling untrusted
+//! keys](crate::_docs::explanation::untrusted_keys) for the rationale.
 
 mod serde_utils;
 mod source;
