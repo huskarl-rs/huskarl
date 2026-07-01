@@ -42,13 +42,15 @@ impl DecryptError {
 /// Used as the source of [`ErrorKind::Crypto`](crate::error::ErrorKind::Crypto)
 /// errors — cipher implementations construct these to describe *why* an
 /// unseal failed without expanding the kind-level vocabulary.
+///
+/// This covers only failures the framing layer itself detects. An
+/// authentication-tag mismatch is raised by the inner
+/// [`AeadDecryptor`](super::AeadDecryptor) and flows through as
+/// [`DecryptError::Other`], not as an `UnsealError`.
 #[non_exhaustive]
 #[derive(Debug, Snafu)]
 pub enum UnsealError {
     /// The bundle is malformed or uses an unsupported version.
     #[snafu(display("invalid bundle"))]
     InvalidBundle,
-    /// The authentication tag did not match — the data may have been tampered with.
-    #[snafu(display("authentication failed"))]
-    AuthenticationFailed,
 }
