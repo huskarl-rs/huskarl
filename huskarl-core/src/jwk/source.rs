@@ -12,24 +12,30 @@ use crate::{
     error::{Error, ErrorKind},
     http::HttpClient,
     jwk::{Jwks, PublicJwks},
-    platform::MaybeSendBoxFuture,
+    platform::{Duration, MaybeSendBoxFuture},
 };
 
 /// Factory for building a JWKS-backed [`JwsVerifier`] with automatic periodic refresh and retry.
 ///
 /// This is an opinionated default stack: a [`MultiKeyVerifier`] wrapped in a
 /// [`ScheduledRefreshVerifier`] and a [`RetryingVerifier`] — keys are fetched from the JWKS
-/// endpoint on first use, refreshed automatically after the TTL expires, and a single retry
-/// is attempted when a key lookup misses after a successful refresh.
+/// endpoint on first use, reloaded on the read path once older than the `ttl`,
+/// and a single retry is attempted when a key lookup misses after a successful refresh.
 ///
-/// If you need a custom stack — for example to mix a JWKS source with KMS or enclave keys —
-/// compose the lower-level types directly and apply [`RetryingVerifier`] once at the top.
+/// If you need to tune beyond the TTL (failure backoff, refresh rate limiting) or
+/// mix a JWKS source with KMS or enclave keys, compose the lower-level types
+/// directly and apply [`RetryingVerifier`] once at the top.
+///
+/// See [configuring JWT verification](crate::_docs::guide::configuring_jwt_verification)
+/// for wiring this into a validator and for swapping the stack.
 #[derive(Clone)]
 pub struct JwksSource {
     /// The HTTP client used to fetch the JWKS.
     http_client: Arc<dyn HttpClient>,
     /// Maximum number of keys accepted from a fetched JWKS document.
     max_keys: usize,
+    /// How long a fetched keyset is served before it is reloaded on the read path.
+    ttl: Duration,
 }
 
 #[bon]
@@ -42,10 +48,16 @@ impl JwksSource {
         /// the fetch is rejected.
         #[builder(default = 100)]
         max_keys: usize,
+        /// How long a fetched keyset is served before it is reloaded — your
+        /// revocation-propagation window (a revoked key stays trusted at most this
+        /// long). Defaults to one hour.
+        #[builder(default = Duration::from_hours(1))]
+        ttl: Duration,
     ) -> Self {
         Self {
             http_client: Arc::new(http_client),
             max_keys,
+            ttl,
         }
     }
 }
@@ -64,6 +76,7 @@ impl JwsVerifierFactory for JwksSource {
     ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
         let client = self.http_client.clone();
         let max_keys = self.max_keys;
+        let ttl = self.ttl;
         let Some(uri) = jwks_uri.cloned() else {
             return Box::pin(async {
                 Err(Error::new(
@@ -75,6 +88,7 @@ impl JwsVerifierFactory for JwksSource {
 
         Box::pin(async move {
             let refreshing = ScheduledRefreshVerifier::builder()
+                .ttl(ttl)
                 .factory(move || {
                     let client = client.clone();
                     let uri = uri.clone();
