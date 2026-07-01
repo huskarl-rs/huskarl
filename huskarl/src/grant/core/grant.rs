@@ -130,9 +130,10 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         params: Self::Parameters,
     ) -> impl Future<Output = Result<TokenResponse, Error>> + MaybeSend {
         async move {
-            let dpop_jkt = Self::bound_dpop_jkt(&params)
-                .map(ToString::to_string)
-                .or_else(|| self.dpop().get_current_thumbprint());
+            let dpop_jkt = match Self::bound_dpop_jkt(&params).map(ToString::to_string) {
+                Some(jkt) => Some(jkt),
+                None => self.dpop().get_current_thumbprint().await,
+            };
 
             let http_client = self.http_client();
             let endpoint = self.effective_token_endpoint();

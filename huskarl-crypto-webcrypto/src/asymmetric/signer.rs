@@ -305,25 +305,25 @@ impl From<SignError> for Error {
 }
 
 impl JwsSignerSelector for PrivateKey {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
-        Arc::new(self.clone())
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+        let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
+        Box::pin(async move { signer })
     }
 }
 
 impl AsymmetricJwsSignerSelector for PrivateKey {
-    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
-        Arc::new(self.clone())
+    fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
+        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
+        Box::pin(async move { signer })
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
-        if self.inner.public_jwk.thumbprint() == thumbprint {
-            Some(Arc::new(self.clone()))
-        } else {
-            None
-        }
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
+        let matches = self.inner.public_jwk.thumbprint() == thumbprint;
+        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
+        Box::pin(async move { matches.then_some(signer) })
     }
 }
 

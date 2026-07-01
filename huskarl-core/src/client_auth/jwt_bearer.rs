@@ -190,7 +190,7 @@ impl ClientAuthentication for JwtBearer {
                 .build();
 
             let assertion = jwt
-                .to_jws_compact(&*self.signer.select_signer())
+                .to_jws_compact(&*self.signer.select_signer().await)
                 .await
                 .map_err(|err| err.with_context("signing client assertion JWT"))?;
 
@@ -235,8 +235,9 @@ mod tests {
     }
 
     impl JwsSignerSelector for MockJwsSigner {
-        fn select_signer(&self) -> Arc<dyn JwsSigner> {
-            Arc::new(self.clone())
+        fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+            let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
+            Box::pin(async move { signer })
         }
     }
 

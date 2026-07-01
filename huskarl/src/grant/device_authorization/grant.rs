@@ -135,7 +135,7 @@ impl DeviceAuthorizationGrant {
 
         let device_auth_endpoint = &self.effective_device_authorization_endpoint;
 
-        let dpop_jkt = self.dpop().get_current_thumbprint();
+        let dpop_jkt = self.dpop().get_current_thumbprint().await;
 
         let response: DeviceAuthorizationResponse = with_dpop_nonce_retry!({
             // The assertion is sent to the device authorization endpoint, not

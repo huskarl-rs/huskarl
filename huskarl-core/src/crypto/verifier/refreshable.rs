@@ -89,7 +89,10 @@ impl<V: JwsVerifier + 'static> JwsVerifier for RefreshableVerifier<V> {
     }
 
     fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
-        Box::pin(async move { self.refresh().await.unwrap_or(false) })
+        // `is_ok`, not `unwrap_or(false)`: `refresh` returns `Ok(false)` when
+        // another task refreshed concurrently — the key material *is* fresh, so
+        // the contract ("true if loaded or concurrently loaded") requires `true`.
+        Box::pin(async move { self.refresh().await.is_ok() })
     }
 }
 

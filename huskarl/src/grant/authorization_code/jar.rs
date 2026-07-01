@@ -59,7 +59,7 @@ impl<S: JwsSignerSelector> Jar for S {
                 .issued_now_not_before_now_expires_after(Duration::from_mins(1))
                 .claims(authorization_payload)
                 .build()
-                .to_jws_compact(self.select_signer().as_ref())
+                .to_jws_compact(self.select_signer().await.as_ref())
                 .await
                 .map(Some)
         })

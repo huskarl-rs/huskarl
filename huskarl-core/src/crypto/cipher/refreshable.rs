@@ -4,7 +4,8 @@ use crate::{
     crypto::{
         KeyMatchStrength,
         cipher::{
-            AeadCipherSelector, AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch, DecryptError,
+            AeadCipherSelector, AeadDecryptor, AeadEncryptor, AeadOutput, AeadSealer,
+            AeadSealerSelector, AeadUnsealer, AeadV1Cipher, CipherMatch, DecryptError,
         },
         refreshable::Refreshable,
     },
@@ -26,6 +27,15 @@ use crate::{
 ///
 /// This allows runtime rotation of encryption keys (e.g. from a KMS or secret
 /// manager) without restarting the application.
+///
+/// For emitting, go through the selector API
+/// ([`select_cipher`](AeadCipherSelector::select_cipher) /
+/// [`select_sealer`](AeadSealerSelector::select_sealer)), which hands back a frozen
+/// snapshot. Using the type directly as an [`AeadEncryptor`] takes a fresh snapshot
+/// per call, so reading metadata and then encrypting can straddle a rotation — the
+/// hazard the selector exists to prevent (see [composing crypto
+/// strategies](crate::_docs::explanation::crypto_strategies)); the bare impl exists
+/// only for composition and erasure.
 ///
 /// All clones share the same underlying state, so a refresh performed through
 /// any clone is visible to all others — a single `RefreshableCipher` can be
@@ -127,15 +137,45 @@ impl<C: AeadDecryptor + 'static> AeadDecryptor for RefreshableCipher<C> {
     }
 
     fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
-        Box::pin(async move { self.refresh().await.unwrap_or(false) })
+        // `is_ok`, not `unwrap_or(false)`: `refresh` returns `Ok(false)` when
+        // another task refreshed concurrently — the key material *is* fresh, so
+        // the contract ("true if loaded or concurrently loaded") requires `true`.
+        Box::pin(async move { self.refresh().await.is_ok() })
     }
 }
 
-impl<C: AeadCipherSelector + std::fmt::Debug + 'static> AeadCipherSelector
-    for RefreshableCipher<C>
-{
-    fn select_cipher(&self) -> Arc<dyn AeadEncryptor> {
-        self.inner.load().select_cipher()
+impl<C: AeadEncryptor + 'static> AeadCipherSelector for RefreshableCipher<C> {
+    fn select_cipher(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        // Hand back the current key as one frozen snapshot: reading its metadata
+        // and encrypting against it then describe and use the same key, even if a
+        // rotation lands afterwards.
+        let encryptor: Arc<dyn AeadEncryptor> = self.inner.load_full();
+        Box::pin(async move { encryptor })
+    }
+}
+
+impl<C: AeadEncryptor + 'static> AeadSealerSelector for RefreshableCipher<C> {
+    fn select_sealer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadSealer>> {
+        // Frame the frozen snapshot as a v1 sealer. Because it is one fixed key,
+        // `key_id`/`enc_algorithm` and `seal` on the returned sealer agree even
+        // across a concurrent rotation.
+        let sealer: Arc<dyn AeadSealer> = Arc::new(AeadV1Cipher::new(self.inner.load_full()));
+        Box::pin(async move { sealer })
+    }
+}
+
+impl<C: AeadDecryptor + 'static> AeadUnsealer for RefreshableCipher<C> {
+    fn unseal<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        bundle: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+        Box::pin(async move {
+            AeadV1Cipher::new(self.inner.load_full())
+                .unseal(cipher_match, bundle, aad)
+                .await
+        })
     }
 }
 

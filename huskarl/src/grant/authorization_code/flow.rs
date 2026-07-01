@@ -148,7 +148,7 @@ impl AuthorizationCodeGrant {
             Some(Pkce::generate_s256_pair())
         };
 
-        let dpop_jkt = self.dpop.get_current_thumbprint();
+        let dpop_jkt = self.dpop.get_current_thumbprint().await;
 
         let payload =
             build_authorization_payload(self, &start_input, pkce.as_ref(), dpop_jkt.clone());
@@ -221,7 +221,7 @@ impl AuthorizationCodeGrant {
             None => par::ParBody::Expanded(Box::new(payload.clone())),
         };
 
-        let dpop_jkt = self.dpop.get_current_thumbprint();
+        let dpop_jkt = self.dpop.get_current_thumbprint().await;
 
         let par_response = with_dpop_nonce_retry!({
             let mut auth_params = self

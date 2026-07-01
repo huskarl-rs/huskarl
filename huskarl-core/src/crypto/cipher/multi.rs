@@ -249,7 +249,15 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::{crypto::KeyMatchStrength::*, error::ErrorKind};
+    use crate::{
+        crypto::{
+            KeyMatchStrength::*,
+            cipher::{
+                AeadSealer, AeadSealerSelector, AeadUnsealer, AeadV1Cipher, StaticAeadCipher,
+            },
+        },
+        error::ErrorKind,
+    };
 
     /// What a fake decryptor's `decrypt` returns.
     #[derive(Clone, Copy, Debug)]
@@ -506,5 +514,130 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(recovered, b"plaintext");
+    }
+
+    // ── Rotated cookie keys (seal/unseal roundtrip) ───────────────────────
+
+    /// A keyed AEAD cipher for the rotated-cookie-keys scenario: it stamps its
+    /// `kid` into the authentication tag on the way out, and only opens a bundle
+    /// whose tag is its own `kid`. So which key sealed a cookie is observable, and
+    /// a cookie can only be unsealed by the key that sealed it.
+    #[derive(Debug)]
+    struct KeyedCookieCipher {
+        kid: &'static str,
+    }
+
+    impl KeyedCookieCipher {
+        fn new(kid: &'static str) -> Self {
+            Self { kid }
+        }
+    }
+
+    impl AeadEncryptor for KeyedCookieCipher {
+        fn enc_algorithm(&self) -> Cow<'_, str> {
+            "A256GCM".into()
+        }
+        fn key_id(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.kid))
+        }
+        fn encrypt<'a>(
+            &'a self,
+            plaintext: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+            let ciphertext = plaintext.to_vec();
+            let tag = self.kid.as_bytes().to_vec();
+            Box::pin(async move {
+                Ok(AeadOutput {
+                    nonce: Vec::new(),
+                    ciphertext,
+                    tag,
+                })
+            })
+        }
+    }
+
+    impl AeadDecryptor for KeyedCookieCipher {
+        fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+            m.strength_for("A256GCM", Some(self.kid))
+        }
+        fn decrypt<'a>(
+            &'a self,
+            _cipher_match: Option<&'a CipherMatch<'a>>,
+            _nonce: &'a [u8],
+            ciphertext: &'a [u8],
+            tag: &'a [u8],
+            _aad: &'a [u8],
+        ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+            let opens = tag == self.kid.as_bytes();
+            let plaintext = ciphertext.to_vec();
+            Box::pin(async move {
+                if opens {
+                    Ok(plaintext)
+                } else {
+                    Err(Error::from(ErrorKind::Crypto).into())
+                }
+            })
+        }
+    }
+
+    /// The rotated-cookie-keys shape: one `StaticAeadCipher<MultiKeyCipher>` seals
+    /// every new cookie with the current primary key while still unsealing cookies
+    /// sealed by any key left in the decryptor set — and a key dropped from the set
+    /// can no longer open its old cookies. This is the composition the sealing docs
+    /// name; it exercises `select_sealer` (encrypt with one) and `unseal` (decrypt
+    /// against many) on the same value.
+    #[tokio::test]
+    async fn rotated_cookie_keys_seal_new_and_unseal_old() {
+        // A cookie minted with v1 before the rotation, and one minted with a
+        // since-retired key v0 that is no longer carried.
+        let old_v1 = AeadV1Cipher::new(KeyedCookieCipher::new("v1"))
+            .seal(b"session", b"aad")
+            .await
+            .unwrap();
+        let retired_v0 = AeadV1Cipher::new(KeyedCookieCipher::new("v0"))
+            .seal(b"session", b"aad")
+            .await
+            .unwrap();
+
+        // After rotation: seal with v2, still decrypt v2 and v1 (v0 dropped).
+        let cookies = StaticAeadCipher::new(MultiKeyCipher::new(
+            KeyedCookieCipher::new("v2"),
+            MultiKeyDecryptor::new(vec![
+                Arc::new(KeyedCookieCipher::new("v2")) as Arc<dyn AeadDecryptor>,
+                Arc::new(KeyedCookieCipher::new("v1")) as Arc<dyn AeadDecryptor>,
+            ]),
+        ));
+
+        // New cookies are sealed with the current primary (v2)...
+        let new_cookie = cookies
+            .select_sealer()
+            .await
+            .seal(b"session", b"aad")
+            .await
+            .unwrap();
+        assert_eq!(
+            &new_cookie[new_cookie.len() - 2..],
+            b"v2",
+            "new cookies are sealed with the primary key"
+        );
+
+        // ...and every key still in the set opens the cookies it sealed, with no
+        // out-of-band kid — the bundle carries none, so the decryptor tries keys
+        // in turn until one authenticates.
+        assert_eq!(
+            cookies.unseal(None, &new_cookie, b"aad").await.unwrap(),
+            b"session"
+        );
+        assert_eq!(
+            cookies.unseal(None, &old_v1, b"aad").await.unwrap(),
+            b"session"
+        );
+
+        // The retired key's cookie no longer opens once its key leaves the set.
+        cookies
+            .unseal(None, &retired_v0, b"aad")
+            .await
+            .expect_err("a key dropped from the set can no longer unseal");
     }
 }

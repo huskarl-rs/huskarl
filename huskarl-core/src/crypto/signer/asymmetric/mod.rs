@@ -3,6 +3,7 @@ use std::{borrow::Cow, sync::Arc};
 use crate::{
     crypto::signer::{JwsSigner, JwsSignerSelector},
     jwk::PublicJwk,
+    platform::MaybeSendBoxFuture,
 };
 
 /// A selector for an asymmetric JWS signer.
@@ -17,14 +18,19 @@ use crate::{
 /// required (for example as the signer of
 /// [`JwtBearer`](crate::client_auth::JwtBearer)). Implement the supertrait's
 /// [`select_signer`](JwsSignerSelector::select_signer) by delegating:
-/// `self.select_asymmetric_signer()` (the `Arc` upcasts).
+/// `Box::pin(async move { self.select_asymmetric_signer().await })` (the `Arc`
+/// upcasts).
 pub trait AsymmetricJwsSignerSelector: JwsSignerSelector {
-    /// Selects the current asymmetric JWS signer to use for signing.
-    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner>;
+    /// Selects the current asymmetric JWS signer to use for signing, refreshing
+    /// stale key material first where the implementation supports it.
+    fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>>;
 
-    /// Selects the asymmetric JWS signer to use for signing by its thumbprint.
-    fn select_signer_by_thumbprint(&self, thumbprint: &str)
-    -> Option<Arc<dyn AsymmetricJwsSigner>>;
+    /// Selects the asymmetric JWS signer to use for signing by its thumbprint,
+    /// refreshing stale key material first where the implementation supports it.
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>>;
 }
 
 /// Trait for asymmetric signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
@@ -34,40 +40,40 @@ pub trait AsymmetricJwsSigner: JwsSigner {
 }
 
 impl<T: AsymmetricJwsSignerSelector + ?Sized> AsymmetricJwsSignerSelector for &T {
-    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
+    fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
         (**self).select_asymmetric_signer()
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
         (**self).select_signer_by_thumbprint(thumbprint)
     }
 }
 
 impl<T: AsymmetricJwsSignerSelector + ?Sized> AsymmetricJwsSignerSelector for Box<T> {
-    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
+    fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
         (**self).select_asymmetric_signer()
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
         (**self).select_signer_by_thumbprint(thumbprint)
     }
 }
 
 impl<T: AsymmetricJwsSignerSelector + ?Sized> AsymmetricJwsSignerSelector for Arc<T> {
-    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
+    fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
         (**self).select_asymmetric_signer()
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
         (**self).select_signer_by_thumbprint(thumbprint)
     }
 }

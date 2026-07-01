@@ -147,11 +147,15 @@ pub trait AeadDecryptor: std::fmt::Debug + MaybeSendSync {
         aad: &'a [u8],
     ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>>;
 
-    /// Attempts to refresh the decryptor's key material if warranted.
-    ///
-    /// This can be called manually to force a key reload (e.g. after a
-    /// rotation event), analogous to
+    /// Requests a best-effort refresh of the decryptor's key material — the cipher
+    /// analogue of
     /// [`JwsVerifier::try_refresh`](crate::crypto::verifier::JwsVerifier::try_refresh).
+    ///
+    /// Called automatically by [`RetryingDecryptor`] when no key
+    /// matches, and may also be called manually. A wrapping policy layer may
+    /// rate-limit or decline the request, so it can return `false` without
+    /// reloading; for a guaranteed reload, use a refreshable wrapper's inherent
+    /// `refresh`.
     ///
     /// Returns `true` if new key material was loaded (or was concurrently loaded by another
     /// task). Returns `false` if no refresh was needed, attempted, or successful. The default
@@ -172,18 +176,28 @@ impl<T: AeadEncryptor + AeadDecryptor + ?Sized> AeadCipher for T {}
 
 /// A selector for an AEAD encryptor.
 ///
-/// Returns an encryptor with fixed identity and key material. The resulting
-/// encryptor should be held for a short period of time, as longer periods
-/// would work against system policies like key rotation.
+/// Returns an encryptor that is a frozen snapshot of the current key; hold it
+/// briefly (for one encryption) and drop it. Selection is **async** so a
+/// refreshing implementation (e.g. `ScheduledRefreshCipher`) can reload a stale
+/// key before handing it back. See [composing crypto
+/// strategies](crate::_docs::explanation::crypto_strategies) for why outbound
+/// operations select rather than hot-swap.
 ///
 /// This trait is dyn-capable: consumers store it as
 /// `Arc<dyn AeadCipherSelector>`.
-pub trait AeadCipherSelector: MaybeSendSync {
-    /// Selects the current encryptor to use for encryption.
-    fn select_cipher(&self) -> Arc<dyn AeadEncryptor>;
+pub trait AeadCipherSelector: std::fmt::Debug + MaybeSendSync {
+    /// Selects the current encryptor to use for encryption, refreshing stale key
+    /// material first where the implementation supports it.
+    fn select_cipher(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>>;
 }
 
-/// An encryptor that produces self-contained bundles with a prepended version byte and IV.
+/// An encryptor that produces self-contained, versioned bundles.
+///
+/// Where [`AeadEncryptor::encrypt`] returns the nonce, ciphertext, and tag as
+/// separate fields, a sealer packs them into one opaque byte string so the value
+/// can travel on its own — an encrypted cookie, a stateless token — and be
+/// re-opened later ([`AeadUnsealer`]) with just the bundle and the key.
+/// [`AeadV1Cipher`] is the standard implementation; see it for a worked example.
 pub trait AeadSealer: AeadEncryptor {
     /// Encrypts `plaintext` and returns a versioned bundle:
     /// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
@@ -224,6 +238,46 @@ pub trait AeadUnsealer: AeadDecryptor {
 pub trait SealedAeadCipher: AeadSealer + AeadUnsealer {}
 
 impl<T: AeadSealer + AeadUnsealer + ?Sized> SealedAeadCipher for T {}
+
+/// A selector for an [`AeadSealer`] — the bundle-level analogue of
+/// [`AeadCipherSelector`].
+///
+/// [`select_sealer`](Self::select_sealer) hands back an [`AeadSealer`] that is a
+/// **frozen snapshot** of the current key, so reading its
+/// [`key_id`](AeadEncryptor::key_id)/[`enc_algorithm`](AeadEncryptor::enc_algorithm)
+/// and then [`seal`](AeadSealer::seal)ing against it describe and use the *same*
+/// key even if a rotation lands between the two calls. That is what lets a caller
+/// emit a `kid` alongside a bundle for a later [`unseal`](AeadUnsealer::unseal) to
+/// select on. Selection is **async** so a refreshing implementation (e.g.
+/// [`ScheduledRefreshCipher`]) reloads a stale key first; hold the returned sealer
+/// briefly (for one seal) and drop it. See [the sealing section of composing
+/// crypto strategies](crate::_docs::explanation::crypto_strategies) for the
+/// rotation hazard this prevents.
+///
+/// This trait is dyn-capable: consumers store it as
+/// `Arc<dyn AeadSealerSelector>`.
+pub trait AeadSealerSelector: std::fmt::Debug + MaybeSendSync {
+    /// Selects the current sealer — a frozen key snapshot — refreshing stale key
+    /// material first where the implementation supports it.
+    fn select_sealer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadSealer>>;
+}
+
+/// Combined trait for a sealed-bundle cipher driven through the selector API: it
+/// selects a frozen [`AeadSealer`] on the outbound side and
+/// [`unseal`](AeadUnsealer::unseal)s on the inbound one.
+///
+/// The selector-side analogue of [`SealedAeadCipher`] — where that is one object
+/// that both seals and unseals a fixed key, this selects a *fresh* sealer each
+/// time (so rotation stays safe) while still unsealing directly. Implemented by
+/// the composed refresh stack ([`ScheduledRefreshCipher`], [`RefreshableCipher`])
+/// and by the fixed [`StaticAeadCipher`] base case.
+///
+/// Automatically implemented for any type with both capabilities. Store as
+/// `Arc<dyn SealedAeadCipherSelector>` to erase the concrete key source while
+/// keeping a single value that covers both directions.
+pub trait SealedAeadCipherSelector: AeadSealerSelector + AeadUnsealer {}
+
+impl<T: AeadSealerSelector + AeadUnsealer + ?Sized> SealedAeadCipherSelector for T {}
 
 macro_rules! forward_aead_encryptor {
     ($wrapper:ty) => {
@@ -283,7 +337,7 @@ forward_aead_decryptor!(Arc<T>);
 macro_rules! forward_aead_cipher_selector {
     ($wrapper:ty) => {
         impl<T: AeadCipherSelector + ?Sized> AeadCipherSelector for $wrapper {
-            fn select_cipher(&self) -> Arc<dyn AeadEncryptor> {
+            fn select_cipher(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
                 (**self).select_cipher()
             }
         }
@@ -331,6 +385,20 @@ forward_aead_unsealer!(&T);
 forward_aead_unsealer!(Box<T>);
 forward_aead_unsealer!(Arc<T>);
 
+macro_rules! forward_aead_sealer_selector {
+    ($wrapper:ty) => {
+        impl<T: AeadSealerSelector + ?Sized> AeadSealerSelector for $wrapper {
+            fn select_sealer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadSealer>> {
+                (**self).select_sealer()
+            }
+        }
+    };
+}
+
+forward_aead_sealer_selector!(&T);
+forward_aead_sealer_selector!(Box<T>);
+forward_aead_sealer_selector!(Arc<T>);
+
 /// A bundle wrapper over an AEAD cipher using the v1 format:
 /// `[0x01 || nonce_len:u8 || tag_len:u8 || nonce || ciphertext || tag]`.
 ///
@@ -340,6 +408,52 @@ forward_aead_unsealer!(Arc<T>);
 /// [`SealedAeadCipher`]; wrapping an encrypt-only [`AeadEncryptor`] yields
 /// only an [`AeadSealer`], and a decrypt-only [`AeadDecryptor`] (e.g. a
 /// retired rotation key) only an [`AeadUnsealer`].
+///
+/// # Example
+///
+/// ```
+/// # use std::borrow::Cow;
+/// # use huskarl_core::crypto::KeyMatchStrength;
+/// # use huskarl_core::crypto::cipher::{
+/// #     AeadDecryptor, AeadEncryptor, AeadOutput, AeadSealer, AeadUnsealer, AeadV1Cipher,
+/// #     CipherMatch, DecryptError,
+/// # };
+/// # use huskarl_core::error::Error;
+/// # use huskarl_core::platform::MaybeSendBoxFuture;
+/// # // Stand-in for the AEAD cipher a crypto backend (native / WebCrypto) provides.
+/// # #[derive(Debug)]
+/// # struct BackendCipher;
+/// # impl AeadEncryptor for BackendCipher {
+/// #     fn enc_algorithm(&self) -> Cow<'_, str> { "A256GCM".into() }
+/// #     fn key_id(&self) -> Option<Cow<'_, str>> { None }
+/// #     fn encrypt<'a>(&'a self, plaintext: &'a [u8], _aad: &'a [u8])
+/// #         -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+/// #         let ciphertext = plaintext.to_vec();
+/// #         Box::pin(async move { Ok(AeadOutput { nonce: vec![7], ciphertext, tag: vec![9] }) })
+/// #     }
+/// # }
+/// # impl AeadDecryptor for BackendCipher {
+/// #     fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+/// #         Some(KeyMatchStrength::ByAlgorithm)
+/// #     }
+/// #     fn decrypt<'a>(&'a self, _cm: Option<&'a CipherMatch<'a>>, _nonce: &'a [u8],
+/// #         ciphertext: &'a [u8], _tag: &'a [u8], _aad: &'a [u8])
+/// #         -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+/// #         let plaintext = ciphertext.to_vec();
+/// #         Box::pin(async move { Ok(plaintext) })
+/// #     }
+/// # }
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let cipher = AeadV1Cipher::new(BackendCipher);
+///
+/// // `seal` packs the version byte, nonce, tag and ciphertext into one bundle...
+/// let bundle = cipher.seal(b"session-state", b"aad").await?;
+/// // ...that `unseal` re-opens with only the bundle and the same aad.
+/// let recovered = cipher.unseal(None, &bundle, b"aad").await?;
+/// assert_eq!(recovered, b"session-state");
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct AeadV1Cipher<C>(C);
 
@@ -449,6 +563,87 @@ impl<C: AeadDecryptor> AeadUnsealer for AeadV1Cipher<C> {
             let ciphertext = &bundle[3 + nonce_len..bundle.len() - tag_len];
 
             self.decrypt(cipher_match, nonce, ciphertext, tag, aad)
+                .await
+        })
+    }
+}
+
+/// A fixed AEAD cipher presented through the selection API.
+///
+/// The non-rotating base case for the outbound selector traits: it holds one key
+/// and hands that same key back from
+/// [`select_cipher`](AeadCipherSelector::select_cipher) and
+/// [`select_sealer`](AeadSealerSelector::select_sealer). Reach for it where a
+/// consumer wants a selector (for example a resource server's sealed
+/// `DPoP`-nonce checker, which takes an [`AeadSealerSelector`]) but the key never
+/// rotates — the cipher analogue of a
+/// signing key that is its own
+/// [`JwsSignerSelector`](crate::crypto::signer::JwsSignerSelector). For a rotating
+/// key, use [`RefreshableCipher`]/[`ScheduledRefreshCipher`] instead; they
+/// implement the same traits.
+///
+/// It also implements [`AeadDecryptor`] and [`AeadUnsealer`] by delegating to the
+/// held key, so one value covers both directions of a sealed round-trip.
+#[derive(Debug)]
+pub struct StaticAeadCipher<C> {
+    cipher: Arc<C>,
+}
+
+impl<C> StaticAeadCipher<C> {
+    /// Wraps a fixed AEAD cipher so it can be used through the selector API.
+    pub fn new(cipher: C) -> Self {
+        Self {
+            cipher: Arc::new(cipher),
+        }
+    }
+}
+
+impl<C: AeadEncryptor + 'static> AeadCipherSelector for StaticAeadCipher<C> {
+    fn select_cipher(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        let encryptor: Arc<dyn AeadEncryptor> = self.cipher.clone();
+        Box::pin(async move { encryptor })
+    }
+}
+
+impl<C: AeadEncryptor + 'static> AeadSealerSelector for StaticAeadCipher<C> {
+    fn select_sealer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadSealer>> {
+        let sealer: Arc<dyn AeadSealer> = Arc::new(AeadV1Cipher::new(Arc::clone(&self.cipher)));
+        Box::pin(async move { sealer })
+    }
+}
+
+impl<C: AeadDecryptor + 'static> AeadDecryptor for StaticAeadCipher<C> {
+    fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+        self.cipher.cipher_match(m)
+    }
+
+    fn decrypt<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+        self.cipher
+            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+    }
+
+    fn try_refresh(&self) -> MaybeSendBoxFuture<'_, bool> {
+        self.cipher.try_refresh()
+    }
+}
+
+impl<C: AeadDecryptor + 'static> AeadUnsealer for StaticAeadCipher<C> {
+    fn unseal<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        bundle: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+        Box::pin(async move {
+            AeadV1Cipher::new(Arc::clone(&self.cipher))
+                .unseal(cipher_match, bundle, aad)
                 .await
         })
     }

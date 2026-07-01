@@ -24,8 +24,8 @@ pub struct DPoPNotConfigured;
 impl AuthorizationServerDPoP for NoDPoP {
     fn update_nonce(&self, _nonce: String) {}
 
-    fn get_current_thumbprint(&self) -> Option<String> {
-        None
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
+        Box::pin(async { None })
     }
 
     fn proof<'a>(

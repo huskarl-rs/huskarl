@@ -51,13 +51,11 @@ impl AuthorizationServerDPoP for DPoP {
             .insert(Arc::new(nonce));
     }
 
-    fn get_current_thumbprint(&self) -> Option<String> {
-        Some(
-            self.signer
-                .select_asymmetric_signer()
-                .public_key_jwk()
-                .thumbprint(),
-        )
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
+        Box::pin(async move {
+            let signer = self.signer.select_asymmetric_signer().await;
+            Some(signer.public_key_jwk().thumbprint())
+        })
     }
 
     fn proof<'a>(
@@ -81,6 +79,7 @@ impl AuthorizationServerDPoP for DPoP {
             let signer = self
                 .signer
                 .select_signer_by_thumbprint(dpop_jkt)
+                .await
                 .ok_or_else(no_matching_key_error)?;
 
             sign_proof(&*signer, method, uri, None, nonce).await
@@ -140,6 +139,7 @@ impl ResourceServerDPoP for ResourceDPoP {
             let signer = self
                 .signer
                 .select_signer_by_thumbprint(dpop_jkt)
+                .await
                 .ok_or_else(no_matching_key_error)?;
 
             sign_proof(
@@ -289,25 +289,25 @@ mod tests {
     }
 
     impl JwsSignerSelector for MockAsymmetricJwsSigner {
-        fn select_signer(&self) -> Arc<dyn JwsSigner> {
-            self.select_asymmetric_signer()
+        fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+            let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
+            Box::pin(async move { signer })
         }
     }
 
     impl AsymmetricJwsSignerSelector for MockAsymmetricJwsSigner {
-        fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
-            Arc::new(self.clone())
+        fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
+            let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
+            Box::pin(async move { signer })
         }
 
-        fn select_signer_by_thumbprint(
-            &self,
-            thumbprint: &str,
-        ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
-            if thumbprint == self.jwk.thumbprint() {
-                Some(Arc::new(self.clone()))
-            } else {
-                None
-            }
+        fn select_signer_by_thumbprint<'a>(
+            &'a self,
+            thumbprint: &'a str,
+        ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
+            let matches = thumbprint == self.jwk.thumbprint();
+            let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
+            Box::pin(async move { matches.then_some(signer) })
         }
     }
 
