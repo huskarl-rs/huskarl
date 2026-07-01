@@ -265,7 +265,7 @@ pub struct ClientMetadata {
 
 /// Deserializes the `jwks` member through [`Jwks`](crate::core::jwk::Jwks)
 /// (the only deserializable JWK Set type) and reduces it to a
-/// [`PublicJwks`](crate::core::jwk::PublicJwks), so a server that echoes private
+/// [`PublicJwks`], so a server that echoes private
 /// or symmetric material never lands in the public field.
 mod jwks_serde {
     use serde::{Deserialize, Deserializer};

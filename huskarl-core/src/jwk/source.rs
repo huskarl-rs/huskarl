@@ -48,9 +48,9 @@ impl JwksSource {
         /// the fetch is rejected.
         #[builder(default = 100)]
         max_keys: usize,
-        /// How long a fetched keyset is served before it is reloaded — your
-        /// revocation-propagation window (a revoked key stays trusted at most this
-        /// long). Defaults to one hour.
+        /// How long a fetched keyset is served before it is reloaded. Bounds how
+        /// long a key removed from the JWKS keeps being trusted. Defaults to one
+        /// hour.
         #[builder(default = Duration::from_hours(1))]
         ttl: Duration,
     ) -> Self {

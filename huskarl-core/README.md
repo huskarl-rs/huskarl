@@ -7,7 +7,7 @@
 
     This region was generated from Rust documentation comments by `cargo-reedme` using this command:
 
-        cargo +nightly reedme --manifest-path huskarl-core/Cargo.toml
+        cargo +nightly reedme
 
     for more info: https://github.com/nik-rev/cargo-reedme
 

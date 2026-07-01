@@ -35,7 +35,7 @@ const MARGIN_LIFETIME_FRACTION: f64 = 0.5;
 /// — lives in the [`TokenSource`]; this type is solely the cache, so there is
 /// exactly one way tokens enter it.
 ///
-/// The usual source is [`GrantTokenSource`](crate::cache::GrantTokenSource); see
+/// The usual source is [`GrantTokenSource`]; see
 /// it for the refresh/exchange resolution order, the rejection handling, and the
 /// error contract. To prime or inspect that source after it is in the cache,
 /// hold it in an `Arc` and reach it via [`source`](Self::source) (or your own
@@ -111,7 +111,7 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
     /// Returns a reference to the underlying token source.
     ///
     /// Use this to [`prime`](crate::cache::GrantTokenSource::prime) or inspect a
-    /// [`GrantTokenSource`](crate::cache::GrantTokenSource) after it is in the
+    /// [`GrantTokenSource`] after it is in the
     /// cache. When the source is wrapped in an `Arc`, keep a clone to reach it
     /// from elsewhere (e.g. a login handler) on a live instance.
     pub fn source(&self) -> &Src {

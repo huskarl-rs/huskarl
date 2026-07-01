@@ -8,6 +8,11 @@ for `iss`/`sub`/`aud`/`typ`. On success it returns a
 [`ValidatedJwt`](crate::jwt::validator::ValidatedJwt) carrying the claims,
 deserialized into a type of your choosing.
 
+This guide covers the claim policy; for where the
+[`JwsVerifier`](crate::crypto::verifier::JwsVerifier) itself comes from — wiring
+the default JWKS-backed stack or swapping it — see [configuring JWT
+verification](crate::_docs::guide::configuring_jwt_verification).
+
 Build a validator with the [builder](crate::jwt::validator::JwtValidator::builder),
 then call [`validate`](crate::jwt::validator::JwtValidator::validate):
 

@@ -14,16 +14,17 @@ use crate::{
 };
 
 /// An AEAD cipher that bounds the age of its keys to a TTL by reloading on the
-/// read path — so a decryption key *removed* upstream is retired within the TTL
-/// even though it never fails to decrypt (you still hold it). The TTL is the
-/// revocation-propagation bound; key *additions* are handled by the miss-triggered
+/// read path — so a decryption key *removed* upstream is dropped within the TTL
+/// even though it never fails to decrypt (you still hold it). The TTL bounds how
+/// long a removed key lingers; key *additions* are handled by the miss-triggered
 /// [`RetryingDecryptor`](super::RetryingDecryptor) layered on top.
 ///
 /// On each [`decrypt`](AeadDecryptor::decrypt)/[`unseal`](AeadUnsealer::unseal),
 /// and inside each [`select_cipher`](AeadCipherSelector::select_cipher)/[`select_sealer`](AeadSealerSelector::select_sealer),
 /// the first caller past the TTL reloads single-flight (non-blocking for others),
 /// then proceeds against a frozen snapshot; for the outbound selectors the TTL
-/// bounds an availability window rather than revocation. Using the type directly as
+/// bounds how quickly a rotated-in key is discovered rather than how quickly a removed
+/// one is dropped. Using the type directly as
 /// an [`AeadEncryptor`] serves the current snapshot *without* a reload — go through
 /// the selector for the freshness guarantee. The pure swap mechanism without policy
 /// is [`RefreshableCipher`](super::RefreshableCipher).

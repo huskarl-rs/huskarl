@@ -11,9 +11,9 @@ use crate::{
 };
 
 /// A [`JwsVerifier`] that bounds the age of its keyset to a TTL by reloading on
-/// the read path — so a key *removed* upstream is retired within the TTL even
-/// though it never fails to verify (you still hold it). The TTL is the
-/// revocation-propagation bound; key *additions* are handled by the miss-triggered
+/// the read path — so a key *removed* upstream is dropped within the TTL even
+/// though it never fails to verify (you still hold it). The TTL bounds how long a
+/// removed key lingers; key *additions* are handled by the miss-triggered
 /// [`RetryingVerifier`](super::RetryingVerifier) layered on top.
 ///
 /// On each [`verify`](JwsVerifier::verify) past the TTL (and if the
