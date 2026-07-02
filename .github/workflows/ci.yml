@@ -90,18 +90,19 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo test --workspace --exclude huskarl-crypto-webcrypto
 
-  minimal-versions:
-    name: Minimal versions
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - run: rustup toolchain install nightly --no-self-update --profile minimal
-      - run: rustup update stable --no-self-update
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - run: cargo +nightly update -Z minimal-versions
-      - run: cargo build --workspace --exclude huskarl-crypto-webcrypto --no-default-features
+  # Disable until rustcrypto reaches stable
+  #minimal-versions:
+  #  name: Minimal versions
+  #  runs-on: ubuntu-latest
+  #  steps:
+  #    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+  #      with:
+  #        persist-credentials: false
+  #    - run: rustup toolchain install nightly --no-self-update --profile minimal
+  #    - run: rustup update stable --no-self-update
+  #    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+  #    - run: cargo +nightly update -Z minimal-versions
+  #    - run: cargo build --workspace --exclude huskarl-crypto-webcrypto --no-default-features
 
   wasm:
     name: WASM
