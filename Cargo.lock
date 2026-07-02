@@ -1160,7 +1160,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.9.0-pre.0"
+version = "0.8.0"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-reqwest"
-version = "0.7.1"
+version = "0.7.0"
 dependencies = [
  "bon",
  "bytes",
@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.9.0-pre.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "bon",

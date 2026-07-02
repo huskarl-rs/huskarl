@@ -31,7 +31,7 @@ default-members = [
 exclude = ["huskarl-core/fuzz"]
 
 [workspace.dependencies]
-huskarl = { version = "0.9.0-pre.0", path = "./huskarl" }
+huskarl = { version = "0.8", path = "./huskarl" }
 huskarl-core = { version = "0.7", path = "./huskarl-core" }
 huskarl-macros = { version = "0.3", path = "./huskarl-macros" }
 huskarl-reqwest = { version = "0.7", path = "./huskarl-reqwest" }
