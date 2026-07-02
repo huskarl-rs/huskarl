@@ -11,7 +11,7 @@ use super::{
     response::ClientInformationResponse,
 };
 use crate::core::{
-    EndpointUrl, Error,
+    EndpointUrl, Error, ErrorKind,
     http::{HttpClient, Idempotency},
     secrets::SecretString,
 };
@@ -160,9 +160,22 @@ struct ErrorBody {
 
 /// Maps a non-success registration response to an [`Error`].
 ///
-/// A well-formed RFC 7591 §3.2.2 error body maps to the matching typed variant
-/// (preserving the raw error code); anything else becomes a `BadStatus`.
+/// Any 5xx is a retryable transport failure regardless of body — a gateway's
+/// error JSON must not masquerade as an RFC 7591 rejection (which callers
+/// treat as "fix the metadata", not "retry"). Otherwise a well-formed RFC 7591
+/// §3.2.2 error body maps to the matching typed variant (preserving the raw
+/// error code); anything else becomes a `BadStatus`.
 fn map_error_response(status: StatusCode, body: &[u8]) -> Error {
+    if status.is_server_error() {
+        return Error::new(
+            ErrorKind::Transport { retryable: true },
+            RegistrationError::BadStatus {
+                status,
+                body: body.to_vec(),
+            },
+        );
+    }
+
     let Ok(ErrorBody {
         error,
         error_description: description,
@@ -477,7 +490,7 @@ mod tests {
     #[tokio::test]
     async fn non_json_error_body_is_a_protocol_error() {
         let mut response = HttpResponse {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
+            status: StatusCode::BAD_REQUEST,
             headers: HeaderMap::new(),
             body: Bytes::from_static(b"<html>boom</html>"),
         };
@@ -492,6 +505,31 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Protocol);
         assert_eq!(err.oauth_error_code(), None);
+    }
+
+    /// Regression: a 5xx is a retryable transport failure even when its body
+    /// parses as an RFC 7591 error shape — a transient outage must not be
+    /// classified as "adjust the metadata and retry".
+    #[rstest]
+    #[case::gateway_json(serde_json::json!({"error": "server_error"}).to_string())]
+    #[case::temporarily_unavailable(
+        serde_json::json!({"error": "temporarily_unavailable"}).to_string()
+    )]
+    #[case::html("<html>boom</html>".to_string())]
+    #[tokio::test]
+    async fn server_5xx_is_a_retryable_transport_error(#[case] body: String) {
+        let client = RecordingClient::new(HttpResponse {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            headers: HeaderMap::new(),
+            body: Bytes::from(body),
+        });
+
+        let err = registration(None)
+            .register(&client, &desired_metadata())
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Transport { retryable: true });
+        assert!(err.is_retryable());
     }
 
     #[tokio::test]
