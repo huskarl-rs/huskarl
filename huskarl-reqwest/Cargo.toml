@@ -18,7 +18,7 @@ native-tls = ["reqwest/native-tls"]
 bon = { version = "3", default-features = false }
 bytes = { version = "1", default-features = false }
 http = { version = "1", default-features = false }
-huskarl-core = { version = "0.7.0-pre.0", path = "../huskarl-core", default-features = false }
+huskarl-core = { workspace = true }
 reqwest = { version = "0.13", default-features = false }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
