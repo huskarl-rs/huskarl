@@ -653,6 +653,7 @@ mod tests {
     /// Regression: a connection torn down with RST mid-read (a browser
     /// preconnect, a port scanner) must not abort the wait — the real
     /// callback afterwards still completes the flow.
+    #[allow(deprecated)]
     #[tokio::test]
     async fn test_reset_connection_does_not_abort_flow() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

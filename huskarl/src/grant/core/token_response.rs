@@ -325,7 +325,7 @@ mod test {
         );
     }
 
-    /// N_A outside a token-exchange response (no `issued_token_type`) stays
+    /// `N_A` outside a token-exchange response (no `issued_token_type`) stays
     /// invalid — plain grants must not accept it.
     #[test]
     fn test_na_without_issued_token_type_is_invalid() {
