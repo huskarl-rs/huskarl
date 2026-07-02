@@ -77,16 +77,51 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     /// Returns `Ok(true)` if a new value was fetched by this call, or `Ok(false)`
     /// if another task already refreshed concurrently.
     pub(crate) async fn refresh(&self) -> Result<bool, Error> {
+        match self.refresh_gated(|| true, |_| {}).await? {
+            GatedRefresh::Refreshed => Ok(true),
+            GatedRefresh::Adopted | GatedRefresh::Blocked => Ok(false),
+        }
+    }
+
+    /// [`refresh`](Self::refresh), but with a `gate` evaluated **after** the
+    /// single-flight lock is acquired (and after the adopt-concurrent check):
+    /// the factory only runs if the gate returns `true`. The factory's outcome
+    /// is reported to `record` **while the lock is still held**, so whatever
+    /// state the gate consults is already up to date when the next queued
+    /// waiter's gate runs.
+    ///
+    /// This matters when the fetch can fail: a failed fetch stores nothing, so
+    /// the pointer-swap dedup does not fire for it, and every waiter queued on
+    /// the lock would otherwise re-invoke the factory in turn. A gate that
+    /// consults (and claims) attempt state under the lock — kept current by
+    /// `record` — lets the first waiter's failed attempt block the rest of the
+    /// queue.
+    pub(crate) async fn refresh_gated(
+        &self,
+        gate: impl FnOnce() -> bool,
+        record: impl FnOnce(bool),
+    ) -> Result<GatedRefresh, Error> {
         let cur = self.value.load_full();
         let _lock = self.refresh_lock.lock().await;
         if !Arc::ptr_eq(&self.value.load_full(), &cur) {
             // Another task already refreshed while we were waiting for the lock.
-            return Ok(false);
+            return Ok(GatedRefresh::Adopted);
+        }
+        if !gate() {
+            return Ok(GatedRefresh::Blocked);
         }
 
-        let new_value = self.factory.call().await?;
-        self.value.store(Arc::new(new_value));
-        Ok(true)
+        match self.factory.call().await {
+            Ok(new_value) => {
+                self.value.store(Arc::new(new_value));
+                record(true);
+                Ok(GatedRefresh::Refreshed)
+            }
+            Err(e) => {
+                record(false);
+                Err(e)
+            }
+        }
     }
 
     /// Non-blocking, single-flight refresh: if no refresh is in flight, fetch a
@@ -121,6 +156,18 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     pub(crate) fn load_full(&self) -> Arc<V> {
         self.value.load_full()
     }
+}
+
+/// Outcome of a [`Refreshable::refresh_gated`] call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GatedRefresh {
+    /// This call invoked the factory and swapped in a new value.
+    Refreshed,
+    /// Another task refreshed while this one waited for the lock; its value
+    /// was adopted without a redundant fetch.
+    Adopted,
+    /// The gate declined the attempt once the lock was held.
+    Blocked,
 }
 
 #[allow(clippy::struct_field_names)]
@@ -282,13 +329,12 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// which is deliberately **not** TTL-gated. Returns `true` if this call
     /// refreshed successfully, `false` if the policy blocked it or it failed.
     pub(crate) async fn refresh_if_stale(&self) -> bool {
+        // Cheap pre-check so clearly-blocked callers don't queue on the lock.
         if !self.should_refresh_stale() {
             return false;
         }
 
-        let success = self.inner.refresh().await.is_ok();
-        self.record_refresh(success);
-        success
+        self.refresh_with_policy(true).await
     }
 
     /// Miss-triggered refresh (blocking): a held-key *miss* asks for a reload.
@@ -301,13 +347,62 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// no-op until the TTL happens to expire. Returns `true` if this call
     /// refreshed successfully, `false` if the policy blocked it or it failed.
     pub(crate) async fn try_refresh_on_miss(&self) -> bool {
+        // Cheap pre-check so clearly-blocked callers don't queue on the lock.
         if !self.policy_permits_miss_refresh() {
             return false;
         }
 
-        let success = self.inner.refresh().await.is_ok();
-        self.record_refresh(success);
-        success
+        self.refresh_with_policy(false).await
+    }
+
+    /// Runs a blocking refresh whose policy gate is evaluated **under** the
+    /// single-flight lock, claiming `last_refresh_attempt` before the factory
+    /// runs. A failed fetch stores nothing — the pointer-swap dedup cannot
+    /// de-duplicate it — so without the under-lock claim, every waiter queued
+    /// behind a failing fetch would pass the pre-lock policy check and then
+    /// re-invoke the factory in turn, bypassing `min_refresh_interval` and
+    /// `failure_backoff` exactly when the upstream is struggling.
+    ///
+    /// The outcome is likewise recorded while the lock is still held, so a
+    /// failure's `failure_backoff` blocks the queued waiters even when
+    /// `min_refresh_interval` is zero (where the claimed attempt is inert).
+    ///
+    /// `ttl_gated` re-checks staleness under the lock too (the stale path);
+    /// the miss path passes `false` — a miss is its own trigger.
+    async fn refresh_with_policy(&self, ttl_gated: bool) -> bool {
+        let gate = || {
+            let now = Instant::now();
+            let mut ts = self
+                .timestamps
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            if ttl_gated
+                && now
+                    .checked_duration_since(ts.last_refreshed)
+                    .is_some_and(|elapsed| elapsed < self.ttl)
+            {
+                return false;
+            }
+            if !self.policy_permits_attempt(now, &ts) {
+                return false;
+            }
+            // Claim the attempt while still under the refresh lock so queued
+            // waiters observe it the moment they acquire the lock.
+            ts.last_refresh_attempt = Some(now);
+            true
+        };
+
+        match self
+            .inner
+            .refresh_gated(gate, |success| self.record_refresh(success))
+            .await
+        {
+            // Adopted: another task's refresh landed while we waited; it
+            // records its own outcome.
+            Ok(GatedRefresh::Refreshed | GatedRefresh::Adopted) => true,
+            Ok(GatedRefresh::Blocked) | Err(_) => false,
+        }
     }
 
     /// Policy-gated, non-blocking, single-flight refresh-ahead for the read path.
@@ -339,9 +434,16 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
 
     /// Forces a refresh bypassing the scheduling policy, but still records the outcome.
     pub(crate) async fn refresh(&self) -> Result<bool, Error> {
-        let result = self.inner.refresh().await;
-        self.record_refresh(result.is_ok());
-        result
+        match self
+            .inner
+            .refresh_gated(|| true, |success| self.record_refresh(success))
+            .await?
+        {
+            GatedRefresh::Refreshed => Ok(true),
+            // Adopted: the concurrent refresher recorded its own outcome.
+            // Blocked is unreachable with an always-true gate.
+            GatedRefresh::Adopted | GatedRefresh::Blocked => Ok(false),
+        }
     }
 
     /// Returns a cheap guard reference to the current value.
@@ -471,6 +573,123 @@ mod tests {
             "refresh_if_stale fires when stale"
         );
         assert_eq!(stale_calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// A factory whose first call (the initial build) succeeds and every later
+    /// call fails after yielding — the yield lets concurrent refreshers queue
+    /// on the single-flight lock while a failing fetch is in flight.
+    fn failing_after_first(
+        calls: Arc<AtomicUsize>,
+    ) -> impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<usize, Error>>>>
+    + MaybeSendSync
+    + 'static {
+        move || {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                let n = calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Ok(n)
+                } else {
+                    tokio::task::yield_now().await;
+                    Err(Error::new(
+                        crate::error::ErrorKind::Transport { retryable: true },
+                        "upstream down",
+                    ))
+                }
+            })
+        }
+    }
+
+    /// Regression: a burst of concurrent misses against a *failing* upstream
+    /// must not re-invoke the factory once per waiter. A failed fetch stores
+    /// nothing, so the pointer-swap dedup can't fire; the policy gate claimed
+    /// under the single-flight lock is what blocks the queue.
+    #[tokio::test]
+    async fn queued_misses_do_not_hammer_failing_upstream() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(failing_after_first(calls.clone()))
+            .ttl(Duration::from_hours(1))
+            .min_refresh_interval(Duration::from_hours(1))
+            .failure_backoff(Duration::from_hours(1))
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "initial build");
+
+        let outcomes = tokio::join!(
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+        );
+        let outcomes = <[bool; 5]>::from(outcomes);
+        assert!(
+            !outcomes.into_iter().any(|refreshed| refreshed),
+            "no miss succeeds: the upstream is down"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "only one waiter reaches the failing upstream; the rest are \
+             blocked by the attempt claimed under the lock"
+        );
+    }
+
+    /// The under-lock gate itself, not just the cheap pre-lock check, blocks
+    /// queued waiters. With `min_refresh_interval` zero the claimed attempt is
+    /// inert, so every waiter passes the pre-check and queues on the
+    /// single-flight lock; only the failure recorded — while the lock is still
+    /// held — by the first waiter's fetch stands between the queue and the
+    /// failing upstream via `failure_backoff`.
+    #[tokio::test]
+    async fn queued_waiters_blocked_by_failure_backoff_under_lock() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(failing_after_first(calls.clone()))
+            .ttl(Duration::from_hours(1))
+            .min_refresh_interval(Duration::ZERO)
+            .failure_backoff(Duration::from_hours(1))
+            .build()
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "initial build");
+
+        let outcomes = tokio::join!(
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+            sr.try_refresh_on_miss(),
+        );
+        let outcomes = <[bool; 5]>::from(outcomes);
+        assert!(
+            !outcomes.into_iter().any(|refreshed| refreshed),
+            "no miss succeeds: the upstream is down"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the failure recorded under the lock blocks every queued waiter \
+             via failure_backoff"
+        );
+    }
+
+    /// The gate of [`Refreshable::refresh_gated`] runs under the lock and a
+    /// `false` verdict skips the factory entirely.
+    #[tokio::test]
+    async fn refresh_gated_blocked_skips_factory() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let refreshable = Refreshable::builder()
+            .factory(counting_factory(calls.clone()))
+            .build()
+            .await
+            .unwrap();
+
+        let outcome = refreshable.refresh_gated(|| false, |_| {}).await.unwrap();
+        assert_eq!(outcome, GatedRefresh::Blocked);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "factory not re-invoked");
     }
 
     /// The read path stays TTL-gated: a within-TTL value is not reloaded ahead.
