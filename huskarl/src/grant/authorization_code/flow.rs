@@ -406,7 +406,7 @@ fn build_authorization_payload<'a>(
             },
             display: start_input.display.as_ref(),
             prompt: start_input.prompt.as_ref(),
-            max_age: start_input.max_age.as_ref(),
+            max_age: start_input.max_age.map(|d| d.as_secs()),
             ui_locales: start_input.ui_locales.as_ref().map(|l| l.join(" ")),
             id_token_hint: start_input.id_token_hint.as_ref(),
             login_hint: start_input.login_hint.as_deref(),

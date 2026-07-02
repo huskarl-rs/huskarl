@@ -30,8 +30,10 @@ pub struct AuthorizationPayload<'a> {
     pub(super) display: Option<&'a Display>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) prompt: Option<&'a Prompt>,
+    /// Whole seconds — the wire shape OIDC Core §3.1.2.1 requires (serde's
+    /// default `Duration` representation is a `{secs, nanos}` struct).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) max_age: Option<&'a Duration>,
+    pub(super) max_age: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) ui_locales: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -219,6 +221,35 @@ pub(super) fn generate_random_value() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn max_age_serializes_as_seconds() {
+        let payload = AuthorizationPayload {
+            response_type: "code",
+            redirect_uri: "http://127.0.0.1/cb",
+            scope: Some("openid"),
+            state: "state",
+            code_challenge: None,
+            code_challenge_method: None,
+            dpop_jkt: None,
+            nonce: None,
+            display: None,
+            prompt: None,
+            max_age: Some(300),
+            ui_locales: None,
+            id_token_hint: None,
+            login_hint: None,
+            acr_values: None,
+            resource: None,
+            authorization_details: None,
+        };
+
+        let form = crate::core::oauth_form::to_string(&payload).unwrap();
+        assert!(
+            form.contains("max_age=300"),
+            "max_age must be a number of seconds (OIDC Core §3.1.2.1), got: {form}"
+        );
+    }
 
     #[test]
     fn pending_state_debug_redacts_secrets() {
