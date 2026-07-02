@@ -859,32 +859,57 @@ impl JwsSigner for PrivateKey {
     }
 
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+        // The panicking `Signer::sign` wrappers are off limits here: the load
+        // paths accept keys that `generate` would refuse (e.g. an undersized
+        // legacy RSA modulus the PSS/PKCS#1 encoding doesn't fit), so signing
+        // can genuinely fail and must surface as an `Err`.
+        fn crypto_error(e: impl std::error::Error + Send + Sync + 'static) -> Error {
+            Error::new(ErrorKind::Crypto, e).with_context("signing JWS input")
+        }
+
         Box::pin(async move {
             match &self.inner.signing_key {
                 Key::Es256(signing_key) => {
-                    let signature: p256::ecdsa::Signature = signing_key.sign(input);
+                    let signature: p256::ecdsa::Signature =
+                        signing_key.try_sign(input).map_err(crypto_error)?;
                     Ok(signature.to_vec())
                 }
                 Key::Es384(signing_key) => {
-                    let signature: p384::ecdsa::Signature = signing_key.sign(input);
+                    let signature: p384::ecdsa::Signature =
+                        signing_key.try_sign(input).map_err(crypto_error)?;
                     Ok(signature.to_vec())
                 }
-                Key::Rs256(signing_key) => Ok(signing_key.sign(input).to_vec()),
-                Key::Rs384(signing_key) => Ok(signing_key.sign(input).to_vec()),
-                Key::Rs512(signing_key) => Ok(signing_key.sign(input).to_vec()),
+                Key::Rs256(signing_key) => {
+                    Ok(signing_key.try_sign(input).map_err(crypto_error)?.to_vec())
+                }
+                Key::Rs384(signing_key) => {
+                    Ok(signing_key.try_sign(input).map_err(crypto_error)?.to_vec())
+                }
+                Key::Rs512(signing_key) => {
+                    Ok(signing_key.try_sign(input).map_err(crypto_error)?.to_vec())
+                }
                 Key::Ps256(signing_key) => {
                     use rsa::signature::RandomizedSigner;
-                    Ok(signing_key.sign_with_rng(&mut rand::rng(), input).to_vec())
+                    Ok(signing_key
+                        .try_sign_with_rng(&mut rand::rng(), input)
+                        .map_err(crypto_error)?
+                        .to_vec())
                 }
                 Key::Ps384(signing_key) => {
                     use rsa::signature::RandomizedSigner;
-                    Ok(signing_key.sign_with_rng(&mut rand::rng(), input).to_vec())
+                    Ok(signing_key
+                        .try_sign_with_rng(&mut rand::rng(), input)
+                        .map_err(crypto_error)?
+                        .to_vec())
                 }
                 Key::Ps512(signing_key) => {
                     use rsa::signature::RandomizedSigner;
-                    Ok(signing_key.sign_with_rng(&mut rand::rng(), input).to_vec())
+                    Ok(signing_key
+                        .try_sign_with_rng(&mut rand::rng(), input)
+                        .map_err(crypto_error)?
+                        .to_vec())
                 }
-                Key::Ed25519 { key, .. } => Ok(key.sign(input).to_vec()),
+                Key::Ed25519 { key, .. } => Ok(key.try_sign(input).map_err(crypto_error)?.to_vec()),
             }
         })
     }
@@ -904,6 +929,28 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Config);
+    }
+
+    #[tokio::test]
+    async fn sign_with_undersized_rsa_key_errors_instead_of_panicking() {
+        // The load paths (unlike `generate`) accept legacy RSA keys below
+        // 2048 bits, and PS512's PSS encoding (two 64-byte digests + 2) does
+        // not fit a 1024-bit modulus — signing must fail as an error.
+        let rsa_key = rsa::RsaPrivateKey::new(&mut rand::rng(), 1024).unwrap();
+        let signing_key = Key::Ps512(rsa::pss::SigningKey::new(rsa_key));
+        let jwk = signing_key.as_public_jwk(None);
+        let thumbprint = jwk.thumbprint();
+        let key = PrivateKey {
+            inner: Arc::new(PrivateKeyInner {
+                signing_key,
+                jwk,
+                thumbprint,
+                kid: None,
+            }),
+        };
+
+        let error = key.sign(b"payload").await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Crypto);
     }
 
     #[test]
