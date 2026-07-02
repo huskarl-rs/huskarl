@@ -270,9 +270,13 @@ async fn complete_on_loopback_oidc_with_timeouts(
 
     let result = loop {
         let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
-        let path = read_request_path(&mut stream, read_timeout)
-            .await
-            .context(ReadRequestSnafu)?;
+        // A failed read on one connection — a browser's speculative
+        // preconnect torn down with RST, a port scanner, a mid-read timeout —
+        // must not abort the whole login: the real callback may still arrive
+        // on the next accept.
+        let Ok(path) = read_request_path(&mut stream, read_timeout).await else {
+            continue;
+        };
 
         let Some(path) = path else {
             let _ = send_error_response(&mut stream, 400, "Bad Request").await;
@@ -644,6 +648,41 @@ mod tests {
             "test-token"
         );
         assert!(id_token.is_none());
+    }
+
+    /// Regression: a connection torn down with RST mid-read (a browser
+    /// preconnect, a port scanner) must not abort the wait — the real
+    /// callback afterwards still completes the flow.
+    #[tokio::test]
+    async fn test_reset_connection_does_not_abort_flow() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc(
+                &listener,
+                "http://127.0.0.1/callback",
+                None,
+                async |_input| Ok(ok_token_response()),
+            )
+            .await
+        });
+
+        // A connection that RSTs after a partial write: SO_LINGER(0) turns
+        // the close into a reset, so the server's read fails mid-request.
+        let stream = TcpStream::connect(addr).await.unwrap();
+        stream.set_linger(Some(std::time::Duration::ZERO)).unwrap();
+        drop(stream);
+
+        // The real callback still completes the login.
+        send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
+        send_http_request(addr, "GET /success HTTP/1.1").await;
+
+        let (token_response, _) = handle.await.unwrap().unwrap();
+        assert_eq!(
+            token_response.access_token().token().expose_secret(),
+            "test-token"
+        );
     }
 
     #[tokio::test]
