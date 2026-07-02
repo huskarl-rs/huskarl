@@ -169,6 +169,10 @@ impl AuthorizationCodeGrant {
             self.deliver_direct(&payload, request_object.as_ref())?
         };
 
+        // Persist the nonce exactly when the parameter went out: the
+        // completion side skips the nonce check when none was sent.
+        let nonce_sent = payload.rest.nonce.is_some();
+
         Ok(StartOutput {
             authorization_url,
             expires_in,
@@ -176,7 +180,7 @@ impl AuthorizationCodeGrant {
                 redirect_uri: self.redirect_uri.clone(),
                 pkce_verifier: pkce.map(|p| p.verifier),
                 state: start_input.state,
-                nonce: start_input.nonce,
+                nonce: nonce_sent.then_some(start_input.nonce),
                 dpop_jkt,
             },
         })
@@ -361,7 +365,7 @@ impl AuthorizationCodeGrant {
                 .build();
 
             let verified_token = validator
-                .validate(id_token, Some(pending_state.nonce.as_str()))
+                .validate(id_token, pending_state.nonce.as_deref())
                 .await
                 .map_err(|e| {
                     Error::new(ErrorKind::Protocol, e).with_context("validating ID token")
@@ -493,6 +497,35 @@ mod tests {
         let url = start_url(&grant).await;
         assert!(url.contains("code_challenge_method=S256"), "{url}");
         assert!(url.contains("code_challenge="), "{url}");
+    }
+
+    /// The persisted nonce must track whether the parameter was actually
+    /// sent: completion skips the check when it wasn't, so an ID token
+    /// legitimately issued without a nonce claim validates.
+    #[tokio::test]
+    async fn nonce_persisted_only_when_sent() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let openid = grant.start(StartInput::scopes(["openid"])).await.unwrap();
+        assert!(
+            openid.pending_state.nonce.is_some(),
+            "openid scope sends the nonce, so it must be persisted"
+        );
+
+        let plain = grant.start(StartInput::scopes(["profile"])).await.unwrap();
+        assert!(
+            plain.pending_state.nonce.is_none(),
+            "no openid scope: nonce not sent, so none persisted for completion"
+        );
     }
 
     #[tokio::test]

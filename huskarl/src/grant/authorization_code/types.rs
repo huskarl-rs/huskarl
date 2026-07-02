@@ -181,8 +181,10 @@ pub struct PendingState {
     /// against the value returned to the callback (CSRF protection).
     pub state: String,
     /// The `nonce` sent to the authorization endpoint, checked against the
-    /// `nonce` claim in any returned ID token.
-    pub nonce: String,
+    /// `nonce` claim in any returned ID token. `None` when no nonce parameter
+    /// was sent (non-`openid` scope, or `send_oidc_nonce` forced off) — the
+    /// completion side then skips the nonce check.
+    pub nonce: Option<String>,
     /// The thumbprint of the `DPoP` key bound to the request.
     pub dpop_jkt: Option<String>,
 }
@@ -200,7 +202,7 @@ impl std::fmt::Debug for PendingState {
                 &self.pkce_verifier.as_ref().map(|_| "[REDACTED]"),
             )
             .field("state", &"[REDACTED]")
-            .field("nonce", &"[REDACTED]")
+            .field("nonce", &self.nonce.as_ref().map(|_| "[REDACTED]"))
             .field("dpop_jkt", &self.dpop_jkt)
             .finish()
     }
@@ -251,13 +253,28 @@ mod tests {
         );
     }
 
+    /// State persisted by versions where `nonce` was a plain string must
+    /// still deserialize (in-flight flows across an upgrade).
+    #[test]
+    fn pending_state_old_format_deserializes() {
+        let old = r#"{
+            "redirect_uri": "http://127.0.0.1/cb",
+            "pkce_verifier": "v",
+            "state": "s",
+            "nonce": "n",
+            "dpop_jkt": null
+        }"#;
+        let state: PendingState = serde_json::from_str(old).unwrap();
+        assert_eq!(state.nonce.as_deref(), Some("n"));
+    }
+
     #[test]
     fn pending_state_debug_redacts_secrets() {
         let state = PendingState {
             redirect_uri: "http://127.0.0.1/cb".to_owned(),
             pkce_verifier: Some("super-secret-verifier".to_owned()),
             state: "csrf-state-value".to_owned(),
-            nonce: "id-token-nonce".to_owned(),
+            nonce: Some("id-token-nonce".to_owned()),
             dpop_jkt: Some("jkt-thumbprint".to_owned()),
         };
 
