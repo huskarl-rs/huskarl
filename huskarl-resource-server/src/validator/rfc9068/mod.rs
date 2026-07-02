@@ -219,6 +219,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         ValidatorMetadata {
             realm: None,
             authorization_servers: Some(vec![self.issuer.clone()]),
+            dpop_supported: Some(true),
             dpop_signing_alg_values_supported: self
                 .inner
                 .dpop_binding_checker

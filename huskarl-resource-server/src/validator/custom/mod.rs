@@ -277,6 +277,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         ValidatorMetadata {
             realm: None,
             authorization_servers: self.authorization_server.as_ref().map(|s| vec![s.clone()]),
+            dpop_supported: Some(true),
             dpop_signing_alg_values_supported: self
                 .inner
                 .dpop_binding_checker
