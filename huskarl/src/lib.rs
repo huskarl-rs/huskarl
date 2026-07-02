@@ -63,8 +63,11 @@ or more calls to the token endpoint.
 - [`TokenExchange`](grant::token_exchange::TokenExchangeGrant)
   Allows the client to exchange an existing token for a new security token, supporting
   impersonation and delegation use cases.
+- [`JwtBearer`](grant::jwt_bearer::JwtBearerGrant)
+  Allows a client to present a caller-supplied signed JWT assertion (RFC 7523) in exchange for
+  an access token; the assertion vouches for the principal the token is issued for.
 
-Further grants — CIBA, JWT authorization, provider-specific flows — can be implemented in this
+Further grants — CIBA, provider-specific flows — can be implemented in this
 crate or by external crates.
 
 Beyond grants, the [`registration`] module implements OAuth 2.0 Dynamic Client Registration

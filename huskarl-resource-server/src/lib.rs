@@ -38,14 +38,19 @@
 //!     validator::rfc9068::Rfc9068Validator,
 //! };
 //!
-//! # fn setup_resource_server(http_client: impl HttpClient + Clone + 'static) {
+//! # async fn setup_resource_server(
+//! #     http_client: impl HttpClient + Clone + 'static,
+//! # ) -> Result<(), huskarl_resource_server::core::Error> {
 //! let validator = Rfc9068Validator::builder()
 //!     .issuer("https://issuer")
 //!     .audience("audience")
 //!     .jws_verifier_factory(Arc::new(
 //!         JwksSource::builder().http_client(http_client).build(),
 //!     ))
-//!     .build();
+//!     .build()
+//!     .await?;
+//! # let _ = validator;
+//! # Ok(())
 //! # }
 //! ```
 //!
