@@ -487,6 +487,40 @@ mod tests {
             .await
     }
 
+    /// Regression: a proof whose `iat` is a couple of seconds ahead of the RS
+    /// clock (routine NTP drift on the client) must validate — the default
+    /// clock leeway absorbs it, per RFC 9449 §11.1.
+    #[tokio::test]
+    async fn proof_with_slightly_future_iat_is_accepted() {
+        let signer = es256();
+        let now = crate::core::platform::SystemTime::now();
+        let proof = Jwt::builder()
+            .typ("dpop+jwt")
+            .issued_at(now + Duration::from_secs(2))
+            .expiration(now + Duration::from_mins(1))
+            .jwk(signer.public_key_jwk().into_owned())
+            .claims(valid_claims())
+            .build()
+            .to_jws_compact(&signer)
+            .await
+            .unwrap();
+
+        let confirmation = cnf(Some(matching_jkt(&signer)));
+        let result = checker(None, false)
+            .check(
+                Some(&confirmation),
+                &SecretString::new(ACCESS_TOKEN),
+                proof.expose_secret(),
+                &http::Method::POST,
+                &req_uri(),
+            )
+            .await;
+        assert!(
+            matches!(result, Ok(None)),
+            "2s future iat within default leeway must validate, got {result:?}"
+        );
+    }
+
     #[tokio::test]
     async fn valid_proof_and_binding_is_accepted() {
         let signer = es256();

@@ -74,6 +74,10 @@ pub struct DpopProofValidator {
     /// Maximum allowed proof age based on `iat`. Default: 1 minute.
     #[builder(default = Duration::from_mins(1))]
     max_proof_age: Duration,
+    /// Clock-skew leeway for the proof's temporal checks (RFC 9449 §11.1).
+    /// Default: [`DEFAULT_CLOCK_LEEWAY`](super::DEFAULT_CLOCK_LEEWAY).
+    #[builder(default = super::DEFAULT_CLOCK_LEEWAY)]
+    clock_leeway: Duration,
     /// Allowed signing algorithms. `None` permits any asymmetric algorithm.
     allowed_signing_algorithms: Option<Vec<String>>,
     /// Optional JTI uniqueness checker for replay protection.
@@ -123,6 +127,7 @@ impl DpopProofValidator {
             .typ(ClaimCheck::required_value("dpop+jwt"))
             .maybe_allowed_algorithms(self.allowed_signing_algorithms.clone())
             .max_token_age(self.max_proof_age)
+            .clock_leeway(self.clock_leeway)
             .require_jti(self.jti_checker.is_some())
             .maybe_jti_checker(self.jti_checker.clone())
             .build();
