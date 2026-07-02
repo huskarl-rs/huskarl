@@ -120,6 +120,14 @@ impl HttpAuthorizer {
                         })?,
                 );
             }
+            AccessToken::NotAccessToken(_) => {
+                // RFC 8693 §2.2.1: an N_A issuance is not an access token and
+                // must never be presented as an Authorization credential.
+                return Err(Error::from(ErrorKind::Config).with_context(
+                    "the cached grant issued a non-access token (token_type N_A); \
+                     it cannot authorize resource-server requests",
+                ));
+            }
         }
 
         Ok(headers)

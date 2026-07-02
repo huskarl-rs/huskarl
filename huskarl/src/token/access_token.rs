@@ -41,6 +41,12 @@ pub enum AccessToken {
     Dpop(DpopAccessToken),
     /// A `Bearer` token.
     Bearer(BearerAccessToken),
+    /// Not an access token (RFC 8693 `token_type` `N_A`): the security token
+    /// issued by a token exchange whose `requested_token_type` was something
+    /// other than an access token (an ID token, SAML assertion, or JWT). It
+    /// cannot authorize resource-server requests — read it via
+    /// [`token`](Self::token) and use it in its own protocol context.
+    NotAccessToken(NonAccessToken),
 }
 
 impl AccessToken {
@@ -50,6 +56,7 @@ impl AccessToken {
         match self {
             AccessToken::Dpop(token) => &token.token,
             AccessToken::Bearer(token) => &token.token,
+            AccessToken::NotAccessToken(token) => &token.token,
         }
     }
 
@@ -57,11 +64,18 @@ impl AccessToken {
     ///
     /// # Errors
     ///
-    /// Returns an [`InvalidHeaderValue`] if the token cannot be represented as a valid header value.
+    /// Returns an [`InvalidHeaderValue`] if the token cannot be represented as
+    /// a valid header value — always, for a
+    /// [`NotAccessToken`](Self::NotAccessToken), which must never be presented
+    /// as an `Authorization` credential (RFC 8693 §2.2.1).
     pub fn expose_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
         match self {
             AccessToken::Dpop(dpop_access_token) => dpop_access_token.expose_header_value(),
             AccessToken::Bearer(bearer_access_token) => bearer_access_token.expose_header_value(),
+            // Deterministically manufacture an InvalidHeaderValue (the type
+            // has no public constructor): an N_A token has no header form.
+            AccessToken::NotAccessToken(_) => Err(HeaderValue::from_str("\n")
+                .expect_err("a control character is never a valid header value")),
         }
     }
 
@@ -70,16 +84,17 @@ impl AccessToken {
     pub fn dpop_jkt(&self) -> Option<&str> {
         match self {
             AccessToken::Dpop(token) => Some(token.jkt.as_str()),
-            AccessToken::Bearer(_) => None,
+            AccessToken::Bearer(_) | AccessToken::NotAccessToken(_) => None,
         }
     }
 
-    /// Returns the token type, either `"DPoP"` or `"Bearer"`.
+    /// Returns the token type: `"DPoP"`, `"Bearer"`, or `"N_A"`.
     #[must_use]
     pub fn token_type(&self) -> &str {
         match self {
             AccessToken::Dpop(_) => "DPoP",
             AccessToken::Bearer(_) => "Bearer",
+            AccessToken::NotAccessToken(_) => "N_A",
         }
     }
 
@@ -104,6 +119,9 @@ impl AccessToken {
             AccessToken::Bearer(bearer_access_token) => {
                 bearer_access_token.effective_expiry(default_expires_in, expires_margin)
             }
+            AccessToken::NotAccessToken(token) => {
+                token.effective_expiry(default_expires_in, expires_margin)
+            }
         }
     }
 
@@ -125,7 +143,66 @@ impl AccessToken {
             AccessToken::Bearer(bearer_access_token) => {
                 bearer_access_token.effective_lifetime(default_expires_in)
             }
+            AccessToken::NotAccessToken(token) => token.effective_lifetime(default_expires_in),
         }
+    }
+}
+
+/// The security token from an RFC 8693 token-exchange response with
+/// `token_type` `N_A` — issued in the `access_token` field but *not* an access
+/// token (an ID token, SAML assertion, or JWT, per the response's
+/// `issued_token_type`). Deliberately has no `Authorization`-header form.
+#[derive(Debug, Clone)]
+pub struct NonAccessToken {
+    /// The issued security token.
+    token: SecretString,
+    /// The time at which the token was received.
+    received_at: SystemTime,
+    /// The duration for which the token is valid.
+    expires_in: Option<Duration>,
+}
+
+impl NonAccessToken {
+    /// Creates a new [`NonAccessToken`] with the given token, received time,
+    /// and expiration duration.
+    #[must_use]
+    pub fn new(token: SecretString, received_at: SystemTime, expires_in: Option<Duration>) -> Self {
+        Self {
+            token,
+            received_at,
+            expires_in,
+        }
+    }
+
+    /// Exposes the token as a [`str`].
+    #[must_use]
+    pub fn expose_token(&self) -> &str {
+        self.token.expose_secret()
+    }
+
+    /// The token's effective expiry; see
+    /// [`AccessToken::effective_expiry`] for the parameter semantics.
+    #[must_use]
+    pub fn effective_expiry(
+        &self,
+        default_expires_in: Duration,
+        expires_margin: Duration,
+    ) -> SystemTime {
+        let expires_in = self.expires_in.unwrap_or(default_expires_in);
+        effective_expiry(self.received_at, expires_in, expires_margin)
+    }
+
+    /// Returns `true` if the underlying token has expired.
+    #[must_use]
+    pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
+        SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
+    }
+
+    /// The token's effective lifetime; see
+    /// [`AccessToken::effective_lifetime`].
+    #[must_use]
+    pub fn effective_lifetime(&self, default_expires_in: Duration) -> Duration {
+        self.expires_in.unwrap_or(default_expires_in)
     }
 }
 
