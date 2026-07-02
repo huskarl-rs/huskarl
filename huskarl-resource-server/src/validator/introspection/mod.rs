@@ -279,6 +279,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         ValidatorMetadata {
             realm: None,
             authorization_servers: self.issuer.as_ref().map(|s| vec![s.clone()]),
+            dpop_supported: Some(true),
             dpop_signing_alg_values_supported: self
                 .dpop_binding_checker
                 .proof_validator

@@ -191,9 +191,11 @@ fn union_metadata<C>(
     let mut authorization_servers = Vec::new();
     let mut dpop_algs: Vec<String> = Vec::new();
     let mut all_require_dpop = !sources.is_empty();
+    let mut any_dpop_supported = false;
 
     for (_issuer, validator) in sources {
         let m = validator.validator_metadata(resource);
+        any_dpop_supported |= m.supports_dpop();
         if let Some(servers) = m.authorization_servers {
             authorization_servers.extend(servers);
         }
@@ -210,6 +212,7 @@ fn union_metadata<C>(
     ValidatorMetadata {
         realm: None,
         authorization_servers: (!authorization_servers.is_empty()).then_some(authorization_servers),
+        dpop_supported: Some(any_dpop_supported),
         dpop_signing_alg_values_supported: (!dpop_algs.is_empty()).then_some(dpop_algs),
         dpop_bound_access_tokens_required: Some(all_require_dpop),
         resource: resource.map(str::to_owned),

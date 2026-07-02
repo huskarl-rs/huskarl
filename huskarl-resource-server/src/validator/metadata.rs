@@ -6,7 +6,11 @@ use serde::Serialize;
 ///
 /// Returned by [`ProvideValidatorMetadata::validator_metadata`]. Intended as
 /// input to a Protected Resource Metadata document (RFC 9728).
-#[derive(Debug, Clone, Serialize)]
+///
+/// Construct one with [`builder`](Self::builder).
+#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[builder(on(String, into))]
+#[non_exhaustive]
 pub struct ValidatorMetadata {
     /// The realm identifying the protection space (RFC 6750 §3).
     ///
@@ -18,6 +22,16 @@ pub struct ValidatorMetadata {
     /// `None` if not known or if the authorization server does not have an issuer URI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_servers: Option<Vec<String>>,
+    /// Whether this validator accepts `DPoP`-bound tokens.
+    ///
+    /// Drives whether a `DPoP` challenge is included in `WWW-Authenticate`
+    /// responses (RFC 9449 §7); it is not part of the RFC 9728 document, so it
+    /// is skipped during serialization. The built-in validators always accept
+    /// `DPoP` presentation and set `Some(true)`. When `None`, support is
+    /// inferred from the other fields: an advertised alg allowlist, or
+    /// `DPoP`-bound tokens being required.
+    #[serde(skip)]
+    pub dpop_supported: Option<bool>,
     /// `DPoP` proof signing algorithms accepted by this validator.
     ///
     /// `None` if unrestricted (the validator accepts any algorithm its verifier supports).
@@ -74,14 +88,12 @@ impl ValidatorMetadata {
     ///
     /// ```
     /// # use huskarl_resource_server::validator::metadata::ValidatorMetadata;
-    /// let metadata = ValidatorMetadata {
-    ///     realm: Some("example".to_string()),
-    ///     authorization_servers: None,
-    ///     dpop_signing_alg_values_supported: Some(vec!["ES256".to_string()]),
-    ///     dpop_bound_access_tokens_required: Some(false),
-    ///     resource: None,
-    ///     bearer_methods_supported: None,
-    /// };
+    /// let metadata = ValidatorMetadata::builder()
+    ///     .realm("example")
+    ///     .dpop_supported(true)
+    ///     .dpop_signing_alg_values_supported(vec!["ES256".to_string()])
+    ///     .dpop_bound_access_tokens_required(false)
+    ///     .build();
     /// let challenges = metadata.challenges(None, Some("read write"), None);
     /// assert_eq!(challenges.len(), 2);
     /// assert_eq!(
@@ -104,8 +116,7 @@ impl ValidatorMetadata {
         let attempted_scheme =
             error.and_then(super::super::error::ToRfc6750Error::attempted_scheme);
 
-        let dpop_supported = self.dpop_signing_alg_values_supported.is_some()
-            || self.dpop_bound_access_tokens_required == Some(true);
+        let dpop_supported = self.supports_dpop();
         let bearer_allowed = !self.dpop_bound_access_tokens_required.unwrap_or(false);
 
         // For server errors (5xx), omit WWW-Authenticate entirely — including it would
@@ -143,6 +154,16 @@ impl ValidatorMetadata {
         }
 
         challenges
+    }
+
+    /// Resolves whether `DPoP`-bound tokens are accepted: the explicit
+    /// [`dpop_supported`](Self::dpop_supported) flag when set, otherwise
+    /// inferred from an advertised alg allowlist or `DPoP` being required.
+    pub(crate) fn supports_dpop(&self) -> bool {
+        self.dpop_supported.unwrap_or_else(|| {
+            self.dpop_signing_alg_values_supported.is_some()
+                || self.dpop_bound_access_tokens_required == Some(true)
+        })
     }
 
     /// Builds a single `WWW-Authenticate` challenge string for the given scheme.
@@ -282,6 +303,7 @@ mod tests {
         ValidatorMetadata {
             realm: None,
             authorization_servers: None,
+            dpop_supported: None,
             dpop_signing_alg_values_supported: None,
             dpop_bound_access_tokens_required: None,
             resource: None,
@@ -322,7 +344,46 @@ mod tests {
     fn dpop_required_false_keeps_bearer_only() {
         let mut m = meta();
         m.dpop_bound_access_tokens_required = Some(false);
-        // Explicitly-not-required and no algs → DPoP is not advertised at all.
+        // Hand-built metadata without the explicit flag: not-required and no
+        // algs infers no DPoP support, so DPoP is not advertised.
+        assert_eq!(m.unauthenticated_challenges(None), vec!["Bearer"]);
+    }
+
+    #[test]
+    fn dpop_supported_advertises_dpop_without_algs() {
+        let mut m = meta();
+        m.dpop_supported = Some(true);
+        m.dpop_bound_access_tokens_required = Some(false);
+        // The validators' default shape: DPoP accepted, optional, unrestricted
+        // algs. Both challenges must be advertised (RFC 9449 §7.1).
+        assert_eq!(m.unauthenticated_challenges(None), vec!["Bearer", "DPoP"]);
+    }
+
+    #[test]
+    fn dpop_supported_carries_nonce_error_without_algs() {
+        let mut m = meta();
+        m.dpop_supported = Some(true);
+        m.dpop_bound_access_tokens_required = Some(false);
+        let err = TestError::client(TokenErrorCode::UseDPoPNonce).scheme(TokenType::DPoP);
+
+        // Regression: a stale-nonce 401 from an unrestricted validator must
+        // carry the DPoP challenge with error="use_dpop_nonce" (RFC 9449 §8.2)
+        // — clients key their nonce retry on it.
+        assert_eq!(
+            m.challenges(Some(&err), None, None),
+            vec![
+                "Bearer".to_string(),
+                r#"DPoP error="use_dpop_nonce""#.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn dpop_supported_false_overrides_inference() {
+        let mut m = meta();
+        m.dpop_supported = Some(false);
+        m.dpop_signing_alg_values_supported = Some(vec!["ES256".to_string()]);
+        // The explicit flag wins over the alg-allowlist inference.
         assert_eq!(m.unauthenticated_challenges(None), vec!["Bearer"]);
     }
 
