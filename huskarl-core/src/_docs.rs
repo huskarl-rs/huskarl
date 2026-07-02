@@ -24,6 +24,9 @@ pub mod guide {
     #[doc = include_str!("../docs/guide/validating_a_jwt.md")]
     pub mod validating_a_jwt {}
 
+    #[doc = include_str!("../docs/guide/configuring_jwt_verification.md")]
+    pub mod configuring_jwt_verification {}
+
     #[doc = include_str!("../docs/guide/providing_secrets.md")]
     pub mod providing_secrets {}
 
@@ -40,5 +43,13 @@ pub mod explanation {
     pub mod untrusted_keys {}
 
     #[doc = include_str!("../docs/explanation/crypto_strategies.md")]
+    // The metrics wrappers only exist behind the `metrics` feature, so their
+    // intra-doc links would break a no-feature `cargo doc` (the crate denies
+    // broken links). Append that section only when the feature is on; docs.rs
+    // builds `all-features`, so the published docs still carry it.
+    #[cfg_attr(
+        feature = "metrics",
+        doc = include_str!("../docs/explanation/crypto_strategies_metrics.md")
+    )]
     pub mod crypto_strategies {}
 }

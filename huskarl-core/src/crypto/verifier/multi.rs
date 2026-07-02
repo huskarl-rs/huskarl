@@ -22,6 +22,10 @@ use crate::{
 ///   [`try_all_on_ambiguous_match`](Self::try_all_on_ambiguous_match) is set, in which case
 ///   each candidate is tried in order.
 /// - A single `ByAlgorithm` match is used directly.
+///
+/// For a JWKS-backed verifier with automatic refresh and retry wrapped around
+/// this type, use [`JwksSource`](crate::jwk::JwksSource); construct
+/// `MultiKeyVerifier` directly only for a custom stack.
 #[derive(Debug)]
 pub struct MultiKeyVerifier {
     verifiers: Vec<Arc<dyn JwsVerifier>>,

@@ -34,7 +34,7 @@ pub(crate) fn registration_error(source: RegistrationError) -> Error {
 ///
 /// Carried as the source of errors returned by
 /// [`ClientRegistration::register`](super::ClientRegistration::register) —
-/// match on the [`ErrorKind`](crate::core::ErrorKind) rather than downcasting
+/// match on the [`ErrorKind`] rather than downcasting
 /// to this type. Server-supplied error codes are also preserved verbatim on the
 /// [`Error`] via [`oauth_error_code`](crate::core::Error::oauth_error_code).
 #[derive(Debug, Snafu)]

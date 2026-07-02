@@ -10,25 +10,28 @@ use crate::{
 /// [`NoMatchingKey`](DecryptError::NoMatchingKey) error by calling
 /// [`try_refresh`](AeadDecryptor::try_refresh) on the inner decryptor.
 ///
-/// This covers cross-server key propagation during rotation: one server seals
-/// with a freshly rotated key while another has not loaded it yet — the miss
-/// triggers a refresh and one retry. It is the cipher analogue of
-/// [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier); wrap the
-/// root decryptor with this type so that any composition underneath — a
+/// It covers cross-server key propagation during rotation (one server seals with a
+/// freshly rotated key another has not loaded yet) and is the cipher analogue of
+/// [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier). Wrap the root
+/// decryptor with it so any composition underneath — a
 /// [`ScheduledRefreshCipher`](super::ScheduledRefreshCipher), a
-/// [`MultiKeyDecryptor`](super::MultiKeyDecryptor), or arbitrary nesting —
-/// gets one retry attempt without any component needing to implement it.
+/// [`MultiKeyDecryptor`](super::MultiKeyDecryptor), or arbitrary nesting — gets one
+/// retry without implementing it. The retry's refresh is gated by the inner layer's
+/// policy, so a burst of unknown-`kid` bundles cannot force a burst of upstream
+/// fetches.
 ///
-/// The retry fires only on `NoMatchingKey` — a miss requires key selection
-/// criteria, so callers must pass a [`CipherMatch`] with a `kid`, and kids
-/// must be registered on **all** keys in the set. A key without a registered
-/// kid can never be ruled out: it falls back to a
-/// [`ByAlgorithm`](crate::crypto::KeyMatchStrength::ByAlgorithm) match, gets
-/// attempted, and its authentication failure masks the miss — the caller sees
-/// [`Other`](DecryptError::Other) instead of `NoMatchingKey`, and no retry
-/// fires. Likewise, with no `CipherMatch` at all, a stale key set surfaces as
-/// an authentication failure from try-all dispatch, which is
-/// indistinguishable from tampering and is deliberately not retried.
+/// The retry fires only on `NoMatchingKey`, so callers must pass a [`CipherMatch`]
+/// with a `kid` **and** register kids on all keys in the set. A key with no
+/// registered kid can never be ruled out: it falls back to a
+/// [`ByAlgorithm`](crate::crypto::KeyMatchStrength::ByAlgorithm) match, is
+/// attempted, and its authentication failure masks the miss as
+/// [`Other`](DecryptError::Other) — no retry fires. Likewise, with no
+/// [`CipherMatch`] at all, a stale key set surfaces as an authentication failure
+/// from try-all dispatch, indistinguishable from tampering and deliberately not
+/// retried.
+///
+/// See [composing crypto strategies](crate::_docs::explanation::crypto_strategies)
+/// for how this layer (additions) pairs with the scheduled layer (removals).
 #[derive(Debug, Clone)]
 pub struct RetryingDecryptor<D> {
     inner: D,

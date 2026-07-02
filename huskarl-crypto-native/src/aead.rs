@@ -81,6 +81,24 @@ impl AesGcmKey {
     ///
     /// Fails if the secret cannot be fetched, or the key material is not 16, 24,
     /// or 32 bytes.
+    ///
+    /// # Examples
+    ///
+    /// Load the key from a [`Secret`] source rather than embedding it — here an
+    /// environment variable holding base64 key material:
+    ///
+    /// ```
+    /// use huskarl_core::secrets::{EnvVarSecret, encodings::Base64Encoding};
+    /// use huskarl_crypto_native::aead::AesGcmKey;
+    ///
+    /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// // 32 decoded bytes select AES-256-GCM (16 → AES-128, 24 → AES-192). The
+    /// // closure derives an optional `kid` from the secret's identity.
+    /// let key_source = EnvVarSecret::new("AEAD_KEY", &Base64Encoding)?;
+    /// let cipher = AesGcmKey::from_secret(key_source, |_id| None).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn from_secret<S: Secret<Output = SecretBytes>>(
         secret: S,
         kid_from_identity: impl Fn(Option<&str>) -> Option<String>,
