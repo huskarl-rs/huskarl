@@ -7,7 +7,7 @@ use snafu::Snafu;
 
 use crate::{
     core::{AuthorizationDetail, platform::Duration, secrets::SecretString},
-    token::{AccessToken, BearerAccessToken, DpopAccessToken, IdToken, RefreshToken},
+    token::{AccessToken, BearerAccessToken, DpopAccessToken, IdToken, NonAccessToken, RefreshToken},
 };
 
 /// The response from the token endpoint (RFC 6749 §5.1), as received.
@@ -114,6 +114,8 @@ impl TokenResponse {
 enum ResolvedTokenType {
     DPoP { jkt: String },
     Bearer,
+    /// RFC 8693 `N_A`: the issued token is not an access token.
+    NotApplicable,
 }
 
 impl RawTokenResponse {
@@ -162,6 +164,11 @@ impl RawTokenResponse {
                 .ok_or_else(|| NoDpopThumbprintSnafu.build())
         } else if self.token_type.eq_ignore_ascii_case("bearer") {
             Ok(ResolvedTokenType::Bearer)
+        } else if self.token_type.eq_ignore_ascii_case("N_A") && self.issued_token_type.is_some() {
+            // RFC 8693 §2.2.1: N_A is mandated when the issued token is not
+            // an access token. Only exchange responses carry
+            // issued_token_type, so plain grants still reject N_A.
+            Ok(ResolvedTokenType::NotApplicable)
         } else {
             InvalidTokenTypeSnafu {
                 token_type: self.token_type.clone(),
@@ -187,6 +194,13 @@ impl RawTokenResponse {
                 received_at,
                 self.expires_in.map(Duration::from_secs),
             )),
+            ResolvedTokenType::NotApplicable => {
+                AccessToken::NotAccessToken(NonAccessToken::new(
+                    self.access_token.clone(),
+                    received_at,
+                    self.expires_in.map(Duration::from_secs),
+                ))
+            }
         }
     }
 
@@ -195,7 +209,9 @@ impl RawTokenResponse {
 
         let result = match token_type {
             ResolvedTokenType::DPoP { jkt } => RefreshToken::new(refresh_token.clone(), Some(jkt)),
-            ResolvedTokenType::Bearer => RefreshToken::new(refresh_token.clone(), None),
+            ResolvedTokenType::Bearer | ResolvedTokenType::NotApplicable => {
+                RefreshToken::new(refresh_token.clone(), None)
+            }
         };
 
         Some(result)
@@ -307,13 +323,69 @@ mod test {
         );
     }
 
+    /// N_A outside a token-exchange response (no `issued_token_type`) stays
+    /// invalid — plain grants must not accept it.
     #[test]
-    fn test_invalid_token() {
-        let token_type = "N_A".to_string();
-
+    fn test_na_without_issued_token_type_is_invalid() {
         let raw_token_response = RawTokenResponse::builder()
             .access_token(SecretString::new("2YotnFZFEjr1zCsicMWpAA"))
-            .token_type(&token_type)
+            .token_type("N_A")
+            .build();
+
+        let token_response = raw_token_response.into_token_response(
+            None,
+            SystemTime::UNIX_EPOCH
+                .checked_add(Duration::from_hours(1_000_000))
+                .unwrap(),
+        );
+
+        let err_token_response = token_response.expect_err("Token response is invalid");
+
+        assert!(matches!(
+            err_token_response,
+            InvalidTokenResponse::InvalidTokenType { token_type: _ }
+        ));
+    }
+
+    /// RFC 8693 §2.2.1: a token-exchange response for a non-access-token
+    /// `requested_token_type` carries `token_type: "N_A"` and must complete.
+    #[test]
+    fn test_na_exchange_response_resolves_to_non_access_token() {
+        let raw_token_response = RawTokenResponse::builder()
+            .access_token(SecretString::new("eyJhbGciOi...an-id-token"))
+            .token_type("N_A")
+            .issued_token_type("urn:ietf:params:oauth:token-type:id_token".to_string())
+            .expires_in(300)
+            .build();
+
+        let token_response = raw_token_response
+            .into_token_response(
+                None,
+                SystemTime::UNIX_EPOCH
+                    .checked_add(Duration::from_hours(1_000_000))
+                    .unwrap(),
+            )
+            .expect("a spec-valid N_A exchange response must complete");
+
+        let token = token_response.access_token();
+        assert!(matches!(
+            token,
+            crate::token::AccessToken::NotAccessToken(_)
+        ));
+        assert_eq!(token.token_type(), "N_A");
+        assert_eq!(token.dpop_jkt(), None);
+        assert!(
+            token.expose_header_value().is_err(),
+            "an N_A token must have no Authorization-header form"
+        );
+        assert_eq!(token.token().expose_secret(), "eyJhbGciOi...an-id-token");
+    }
+
+    #[test]
+    fn test_invalid_token() {
+        let raw_token_response = RawTokenResponse::builder()
+            .access_token(SecretString::new("2YotnFZFEjr1zCsicMWpAA"))
+            .token_type("mac")
             .build();
 
         let token_response = raw_token_response.into_token_response(
