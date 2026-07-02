@@ -476,6 +476,56 @@ async fn max_token_age_missing_iat() {
     ));
 }
 
+/// Regression: an `iat` slightly in the future (AS clock ahead, within the
+/// configured leeway) must not be rejected by the `max_token_age` check — it
+/// used to fail as `TokenTooOld` before the leeway-aware `IssuedInFuture`
+/// check could run.
+#[tokio::test]
+async fn max_token_age_allows_future_iat_within_leeway() {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let validator = JwtValidator::builder()
+        .verifier(MockVerifier)
+        .max_token_age(Duration::from_mins(5))
+        .clock_leeway(Duration::from_mins(1))
+        .build();
+    let parsed = make_parsed_jws(
+        serde_json::json!({"alg": "RS256"}),
+        serde_json::json!({"iat": now + 2}),
+    );
+    let result = validator
+        .validate_parsed_jws::<serde_json::Value>(parsed)
+        .await;
+    assert!(result.is_ok(), "fresh token with 2s skew: {result:?}");
+}
+
+/// An `iat` beyond the leeway still fails — as `IssuedInFuture`, the check
+/// that owns future timestamps, not as a bogus `TokenTooOld`.
+#[tokio::test]
+async fn max_token_age_far_future_iat_is_issued_in_future() {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let validator = JwtValidator::builder()
+        .verifier(MockVerifier)
+        .max_token_age(Duration::from_mins(5))
+        .build();
+    let parsed = make_parsed_jws(
+        serde_json::json!({"alg": "RS256"}),
+        serde_json::json!({"iat": now + 999_999}),
+    );
+    let result = validator
+        .validate_parsed_jws::<serde_json::Value>(parsed)
+        .await;
+    assert!(matches!(
+        result,
+        Err(JwtValidationError::IssuedInFuture { .. })
+    ));
+}
+
 // --- Panic resistance on attacker-controlled input ---
 
 #[test]

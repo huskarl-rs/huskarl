@@ -189,9 +189,12 @@ impl JwtValidator {
                 .iat
                 .ok_or_else(|| RequiredClaimMissingSnafu { claim: "iat" }.build())?;
 
+            // A future `iat` (AS clock ahead) is age zero here, not a
+            // rejection: `check_temporal`'s IssuedInFuture check below is the
+            // sole authority on future timestamps and applies the leeway.
+            let age = now.duration_since(issued_at).unwrap_or(Duration::ZERO);
             ensure!(
-                now.duration_since(issued_at)
-                    .is_ok_and(|d| d <= max_token_age.saturating_add(self.clock_leeway)),
+                age <= max_token_age.saturating_add(self.clock_leeway),
                 TokenTooOldSnafu {
                     issued_at,
                     max_token_age
