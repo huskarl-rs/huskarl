@@ -381,6 +381,13 @@ impl JwsVerifier for AsymmetricPublicKey {
         key_match: &'a KeyMatch<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
         Box::pin(async move {
+            // Same gate as the native backend: a kid mismatch is
+            // NoMatchingKey (letting RetryingVerifier refresh on rotation),
+            // never an attempted verification.
+            if self.key_match(key_match).is_none() {
+                return Err(VerifyError::NoMatchingKey);
+            }
+
             let crypto = get_crypto().context(NoCryptoSnafu).map_err(Error::from)?;
 
             let Some((sign_alg, crypto_key)) =
@@ -451,6 +458,32 @@ mod tests {
         assert!(
             AsymmetricPublicKey::from_jwk(jwk).await.is_some(),
             "the unmodified exported public JWK must import as a verifier",
+        );
+    }
+
+    /// Regression: a kid-mismatched token must be rejected with
+    /// `NoMatchingKey` *before* verification is attempted — matching the
+    /// native backend, and letting `RetryingVerifier` refresh on rotation —
+    /// even when the signature would verify under this key.
+    #[wasm_bindgen_test]
+    async fn kid_mismatch_is_no_matching_key() {
+        let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None)
+            .await
+            .unwrap();
+        let mut jwk = verification_jwk(&signer, Some("ES256"));
+        jwk.kid = Some("key-a".to_string());
+        let verifier = AsymmetricPublicKey::from_jwk(jwk)
+            .await
+            .expect("from_jwk should import the generated key");
+
+        let input = b"kid mismatch input";
+        let signature = signer.sign(input).await.unwrap();
+        let key_match = KeyMatch::builder().alg("ES256").kid("key-b").build();
+
+        let outcome = verifier.verify(input, &signature, &key_match).await;
+        assert!(
+            matches!(outcome, Err(VerifyError::NoMatchingKey)),
+            "kid mismatch must be NoMatchingKey, got {outcome:?}"
         );
     }
 
