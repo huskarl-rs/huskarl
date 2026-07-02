@@ -269,9 +269,11 @@ impl IdTokenValidator {
             if let Some(auth_time) = validated_jwt.claims.auth_time {
                 let auth_at = SystemTime::UNIX_EPOCH + Duration::from_secs(auth_time);
                 let now = SystemTime::now();
+                // A future auth_time (AS clock ahead) is age zero, not a
+                // rejection — mirrors core's max_token_age handling of iat.
+                let age = now.duration_since(auth_at).unwrap_or(Duration::ZERO);
                 ensure!(
-                    now.duration_since(auth_at)
-                        .is_ok_and(|d| d <= max_age + self.clock_leeway),
+                    age <= max_age.saturating_add(self.clock_leeway),
                     AuthTimeTooOldSnafu {
                         auth_time,
                         max_age_secs: max_age.as_secs(),
@@ -531,6 +533,30 @@ mod tests {
             matches!(err, IdTokenValidationError::AuthTimeMissing),
             "got {err:?}"
         );
+    }
+
+    /// Regression: an `auth_time` slightly ahead of the client clock (routine
+    /// AS skew on a fresh interactive login) must validate — it used to fail
+    /// `duration_since` and be rejected as `AuthTimeTooOld`.
+    #[tokio::test]
+    async fn auth_time_slightly_in_future_is_accepted() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(now + 2),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        validator(verifier, Some(Duration::from_mins(1)), None, None)
+            .validate(&token, None)
+            .await
+            .expect("fresh login with 2s AS clock skew should validate");
     }
 
     #[tokio::test]
