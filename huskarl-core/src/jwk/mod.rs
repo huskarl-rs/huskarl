@@ -185,7 +185,27 @@ impl From<PrivateJwk> for PublicJwk {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub struct Jwks {
     /// List of keys.
+    ///
+    /// Deserialization is lenient per entry: an entry that is not a valid JWK
+    /// is skipped rather than failing the whole set — one malformed key in an
+    /// `IdP`'s JWKS must not take down verification for its good keys. Unknown
+    /// `kty` values are absorbed as [`Key::Unknown`]; this extends the same
+    /// policy to malformed known-`kty` entries.
+    #[serde(deserialize_with = "deserialize_keys_lenient")]
     pub keys: Vec<Jwk>,
+}
+
+/// Deserializes each `keys` entry independently, skipping invalid ones. A
+/// non-array `keys` value still fails the parse.
+fn deserialize_keys_lenient<'de, D>(deserializer: D) -> Result<Vec<Jwk>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect())
 }
 
 impl Jwks {

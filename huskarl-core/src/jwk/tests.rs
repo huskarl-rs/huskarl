@@ -70,6 +70,29 @@ fn test_jwks_with_unknown_kty_parses() {
     assert_eq!(public.keys[0].kid.as_deref(), Some("1"));
 }
 
+// A key with a *known* kty but malformed contents (padded base64 modulus, a
+// real-world AS non-compliance) must not fail the whole set either — the
+// well-formed keys must remain usable.
+#[test]
+fn test_jwks_with_malformed_known_kty_key_parses() {
+    let jwks_json = r#"{"keys":[
+            {"kty":"RSA","n":"abc+/=","e":"AQAB","kid":"bad-b64"},
+            {"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","kid":"missing-y"},
+            {"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","use":"sig","kid":"good"}
+        ]}"#;
+
+    let jwks: Jwks = serde_json::from_str(jwks_json).unwrap();
+    assert_eq!(jwks.keys.len(), 1, "malformed entries are skipped");
+    assert_eq!(jwks.keys[0].kid.as_deref(), Some("good"));
+}
+
+// A `keys` value that is not an array is still a hard parse error — leniency
+// applies per entry, not to the document shape.
+#[test]
+fn test_jwks_non_array_keys_still_fails() {
+    assert!(serde_json::from_str::<Jwks>(r#"{"keys":"nope"}"#).is_err());
+}
+
 #[test]
 fn test_unknown_key_use_parses() {
     let jwk_json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","use":"attest"}"#;
