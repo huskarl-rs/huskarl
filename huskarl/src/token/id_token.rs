@@ -201,8 +201,10 @@ pub struct IdTokenValidator {
     verifier: Arc<dyn JwsVerifier>,
     /// The issuer to validate against.
     issuer: String,
-    /// The audience to validate against.
-    audience: Option<String>,
+    /// The audience to validate against — the client ID this token must be
+    /// issued to. Required: OIDC Core §3.1.3.7 step 3 makes the `aud` check
+    /// mandatory for ID tokens.
+    audience: String,
     /// The maximum age of the token.
     max_age: Option<Duration>,
     /// The clock leeway to use when validating the token.
@@ -236,7 +238,7 @@ impl IdTokenValidator {
         let jwt_validator = JwtValidator::builder()
             .verifier(self.verifier.clone())
             .iss(ClaimCheck::required_value(self.issuer.clone()))
-            .maybe_aud(self.audience.as_deref().map(ClaimCheck::required_value))
+            .aud(ClaimCheck::required_value(self.audience.clone()))
             .typ(ClaimCheck::if_present("JWT"))
             .require_exp(true)
             .require_iat(true)
@@ -290,15 +292,13 @@ impl IdTokenValidator {
                 .azp
                 .as_deref()
                 .ok_or_else(|| AzpMissingSnafu.build())?;
-            if let Some(expected) = self.audience.as_deref() {
-                ensure!(
-                    azp == expected,
-                    AzpMismatchSnafu {
-                        expected: expected.to_string(),
-                        actual: azp.to_string(),
-                    }
-                );
-            }
+            ensure!(
+                azp == self.audience,
+                AzpMismatchSnafu {
+                    expected: self.audience.clone(),
+                    actual: azp.to_string(),
+                }
+            );
         }
 
         // OIDC Core §3.1.3.7 step 5: if azp is present, it MUST contain our client_id.
@@ -519,6 +519,26 @@ mod tests {
             .validate(&token, Some("the-nonce"))
             .await
             .expect("matching nonce should validate");
+    }
+
+    /// The aud check is mandatory (OIDC Core §3.1.3.7 step 3): a valid token
+    /// the OP issued to a *different* client must be rejected.
+    #[tokio::test]
+    async fn token_for_other_client_is_rejected() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint(
+            &signer,
+            ISS,
+            vec!["other-client".to_string()],
+            Some(SUB),
+            IdTokenClaims::default(),
+        )
+        .await;
+        let err = validator(verifier, None, None, None)
+            .validate(&token, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, IdTokenValidationError::Jwt { .. }), "{err:?}");
     }
 
     #[tokio::test]
