@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.8.0...huskarl-v0.9.0) - 2026-07-02
+
+### Added
+
+- [**breaking**] Make key selection async and split refresh into miss/TTL paths ([#130](https://github.com/huskarl-rs/huskarl/pull/130))
+
+### Fixed
+
+- *(client)* Serialize authorization-request max_age as seconds ([#133](https://github.com/huskarl-rs/huskarl/pull/133))
+
+### Other
+
+- Document crypto strategies, JWT verification config, and revocation TTL ([#131](https://github.com/huskarl-rs/huskarl/pull/131))
+- Reduce version numbers to init release-plz without publishing.
+- Update docs ([#124](https://github.com/huskarl-rs/huskarl/pull/124))
+- Update integration tests to support keycloak/dex/node-oidc-provider/Okta. ([#119](https://github.com/huskarl-rs/huskarl/pull/119))
+- Prefer form over basic client credentials auth (aligning with OAuth 2.1). ([#117](https://github.com/huskarl-rs/huskarl/pull/117))
+- Add DCR fields from OIDC DCR. ([#116](https://github.com/huskarl-rs/huskarl/pull/116))
+- Add Dynamic Client Registration (RFC 7591) ([#115](https://github.com/huskarl-rs/huskarl/pull/115))
+- Tighten documentation across grants, cache, and authorizer ([#113](https://github.com/huskarl-rs/huskarl/pull/113))
+- Add cache state reporting, refresh jitter, and shared-store-safe refresh. ([#112](https://github.com/huskarl-rs/huskarl/pull/112))
+- Implement PartialEq/Eq for RefreshToken ([#111](https://github.com/huskarl-rs/huskarl/pull/111))
+- Include client_id in the PAR request body (RFC 9126) ([#110](https://github.com/huskarl-rs/huskarl/pull/110))
+- Some API visibility updates ([#109](https://github.com/huskarl-rs/huskarl/pull/109))
+- Add non_exhaustive to more enums ([#107](https://github.com/huskarl-rs/huskarl/pull/107))
+- Add TokenResponse::get_extra for non-standard token fields ([#106](https://github.com/huskarl-rs/huskarl/pull/106))
+- Gate the OIDC nonce parameter on the openid scope ([#105](https://github.com/huskarl-rs/huskarl/pull/105))
+- Read allowed ID token signing algorithms from AS metadata. ([#104](https://github.com/huskarl-rs/huskarl/pull/104))
+- Read granted authorization_details from the token response ([#102](https://github.com/huskarl-rs/huskarl/pull/102))
+- Add RFC 9396 Rich Authorization Requests on the request side ([#101](https://github.com/huskarl-rs/huskarl/pull/101))
+- Replace serde_html_form with oauth_form across the client ([#99](https://github.com/huskarl-rs/huskarl/pull/99))
+- Remove raw data from some debug implementations. ([#96](https://github.com/huskarl-rs/huskarl/pull/96))
+- Harden www-authenticate parsing. ([#95](https://github.com/huskarl-rs/huskarl/pull/95))
+- Add ability to refresh token cache ahead of expiry. ([#94](https://github.com/huskarl-rs/huskarl/pull/94))
+- Split up some large files ([#93](https://github.com/huskarl-rs/huskarl/pull/93))
+- Docs update ([#92](https://github.com/huskarl-rs/huskarl/pull/92))
+- New HttpAuthorizer approach - adds GrantTokenSource. ([#91](https://github.com/huskarl-rs/huskarl/pull/91))
+- Simplify some code
+
 ### Changes
 
  - Breaking: Update HttpAuthorizer to accept a GrantTokenSource which is capable

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.8.0...huskarl-resource-server-v0.9.0) - 2026-07-02
+
+### Added
+
+- [**breaking**] Make key selection async and split refresh into miss/TTL paths ([#130](https://github.com/huskarl-rs/huskarl/pull/130))
+
+### Other
+
+- Document crypto strategies, JWT verification config, and revocation TTL ([#131](https://github.com/huskarl-rs/huskarl/pull/131))
+- Reduce version numbers to init release-plz without publishing.
+- Update docs ([#124](https://github.com/huskarl-rs/huskarl/pull/124))
+- Strip control chars from www-authenticate parameters ([#122](https://github.com/huskarl-rs/huskarl/pull/122))
+- Add MultiIssuerValidator, box futures in AccessTokenValidator to make them dyn compatible. ([#121](https://github.com/huskarl-rs/huskarl/pull/121))
+- Add non_exhaustive to more enums ([#107](https://github.com/huskarl-rs/huskarl/pull/107))
+- Read allowed ID token signing algorithms from AS metadata. ([#104](https://github.com/huskarl-rs/huskarl/pull/104))
+- Build the RFC 7662 introspection request via oauth_form ([#100](https://github.com/huskarl-rs/huskarl/pull/100))
+- Add ability to refresh token cache ahead of expiry. ([#94](https://github.com/huskarl-rs/huskarl/pull/94))
+- Split up some large files ([#93](https://github.com/huskarl-rs/huskarl/pull/93))
+- Docs update ([#92](https://github.com/huskarl-rs/huskarl/pull/92))
+- Simplify some code
+
  - Breaking: Make AccessTokenValidator dyn-compatible (with boxed futures).
  - Add MultiIssuerValidator which can route validator by iss value.
  - Add `non_exhaustive` to various error types.

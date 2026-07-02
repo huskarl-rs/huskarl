@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-native-v0.8.5...huskarl-crypto-native-v0.9.0) - 2026-07-02
+
+### Added
+
+- [**breaking**] Make key selection async and split refresh into miss/TTL paths ([#130](https://github.com/huskarl-rs/huskarl/pull/130))
+
+### Other
+
+- Document crypto strategies, JWT verification config, and revocation TTL ([#131](https://github.com/huskarl-rs/huskarl/pull/131))
+
 ## [0.8.5] - 2026-06-30
 
 ### Changes

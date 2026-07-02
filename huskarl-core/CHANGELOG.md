@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.7.1...huskarl-core-v0.8.0) - 2026-07-02
+
+### Added
+
+- [**breaking**] Make key selection async and split refresh into miss/TTL paths ([#130](https://github.com/huskarl-rs/huskarl/pull/130))
+- *(core)* Add configurable TTL to JwksSource ([#129](https://github.com/huskarl-rs/huskarl/pull/129))
+
+### Fixed
+
+- *(core)* Remove fuzz Cargo.lock
+- *(core)* Bound metrics alg label to registered JWS algorithms ([#125](https://github.com/huskarl-rs/huskarl/pull/125))
+
+### Other
+
+- Document crypto strategies, JWT verification config, and revocation TTL ([#131](https://github.com/huskarl-rs/huskarl/pull/131))
+- *(core)* [**breaking**] Remove dead UnsealError::AuthenticationFailed variant ([#128](https://github.com/huskarl-rs/huskarl/pull/128))
+- Update docs ([#124](https://github.com/huskarl-rs/huskarl/pull/124))
+- Limit body size of responses (default 1Mb) ([#123](https://github.com/huskarl-rs/huskarl/pull/123))
+
 ## [0.7.1] - 2026-06-29
 
 ### Changes

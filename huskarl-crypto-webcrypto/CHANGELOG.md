@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-webcrypto-v0.8.0...huskarl-crypto-webcrypto-v0.9.0) - 2026-07-02
+
+### Added
+
+- [**breaking**] Make key selection async and split refresh into miss/TTL paths ([#130](https://github.com/huskarl-rs/huskarl/pull/130))
+
+### Other
+
+- Document crypto strategies, JWT verification config, and revocation TTL ([#131](https://github.com/huskarl-rs/huskarl/pull/131))
+- Require RSA keys to be 2024 bits or more for webcrypto. ([#120](https://github.com/huskarl-rs/huskarl/pull/120))
+- Docs update ([#92](https://github.com/huskarl-rs/huskarl/pull/92))
+
  - Require RSA keys to be at least 2048 bits.
 
 ## [0.8.0] - 2026-06-15
