@@ -9,18 +9,19 @@ use crate::{
 
 /// A selector for a JWS signer.
 ///
-/// This returns a signer which has a fixed identity and metadata. The resulting
-/// signer can be used to create signatures without worrying that the metadata
-/// will be invalidated between use and signing.
-///
-/// The signer returned by [`Self::select_signer`] should be held for a short period
-/// of time, as longer periods would work against system policies like key rotation.
+/// Returns a signer with fixed identity and metadata, so the whole
+/// read-header-then-sign sequence runs against one key; hold it briefly (for one
+/// signing) and drop it. Selection is **async** so a refreshing implementation
+/// (e.g. `ScheduledRefreshSigner`) can reload a stale key before handing it back.
+/// See [composing crypto strategies](crate::_docs::explanation::crypto_strategies)
+/// for why outbound operations select rather than hot-swap.
 ///
 /// This trait is dyn-capable: consumers store it as
 /// `Arc<dyn JwsSignerSelector>`.
 pub trait JwsSignerSelector: std::fmt::Debug + MaybeSendSync {
-    /// Selects the current JWS signer to use for signing.
-    fn select_signer(&self) -> Arc<dyn JwsSigner>;
+    /// Selects the current JWS signer to use for signing, refreshing stale key
+    /// material first where the implementation supports it.
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>>;
 }
 
 /// Trait for signers that produce RFC 7515 (JWS) / RFC 7518 (JWA) compatible signatures.
@@ -58,19 +59,19 @@ pub trait JwsSigner: std::fmt::Debug + MaybeSendSync {
 }
 
 impl<T: JwsSignerSelector + ?Sized> JwsSignerSelector for &T {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
         (**self).select_signer()
     }
 }
 
 impl<T: JwsSignerSelector + ?Sized> JwsSignerSelector for Box<T> {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
         (**self).select_signer()
     }
 }
 
 impl<T: JwsSignerSelector + ?Sized> JwsSignerSelector for Arc<T> {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
         (**self).select_signer()
     }
 }

@@ -175,6 +175,24 @@ impl SymmetricKey {
     ///
     /// The JWK is not an `oct` key, is missing an algorithm, has an
     /// unsupported algorithm, or the key is too short for the algorithm.
+    ///
+    /// # Examples
+    ///
+    /// When the key comes from a secret store, prefer
+    /// [`load_jwk`](Self::load_jwk), which fetches and parses in one step. Use
+    /// `from_jwk` when you already hold a parsed [`Jwk`](jwk::Jwk) — for example
+    /// one selected from a JWKS — rather than hard-coding key material:
+    ///
+    /// ```
+    /// use huskarl_core::jwk::Jwk;
+    /// use huskarl_crypto_native::symmetric::SymmetricKey;
+    ///
+    /// # fn example(jwk: Jwk) -> Result<(), Box<dyn std::error::Error>> {
+    /// // `jwk` was parsed from a trusted source, not baked into the binary.
+    /// let key = SymmetricKey::from_jwk(jwk)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn from_jwk(jwk: jwk::Jwk) -> Result<Self, JwkError> {
         let jwk::Key::Oct(oct) = jwk.key else {
             return jwk_error::NotOctKeySnafu.fail();
@@ -258,8 +276,9 @@ impl SymmetricKey {
 }
 
 impl JwsSignerSelector for SymmetricKey {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
-        Arc::new(self.clone())
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+        let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
+        Box::pin(async move { signer })
     }
 }
 
@@ -326,10 +345,7 @@ mod tests {
         let data = b"hello world";
         let signature = key.sign(data).await.unwrap();
 
-        let key_match = KeyMatch {
-            alg: algorithm,
-            kid: Some("sym-key-1"),
-        };
+        let key_match = KeyMatch::builder().alg(algorithm).kid("sym-key-1").build();
         key.verify(data, &signature, &key_match).await.unwrap();
     }
 
@@ -421,10 +437,7 @@ mod tests {
 
         assert_eq!(key.sign(input).await.unwrap(), expected);
 
-        let key_match = KeyMatch {
-            alg: "HS256",
-            kid: None,
-        };
+        let key_match = KeyMatch::builder().alg("HS256").build();
         key.verify(input, &expected, &key_match).await.unwrap();
     }
 

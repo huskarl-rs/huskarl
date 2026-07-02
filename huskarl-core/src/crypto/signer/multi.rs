@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use crate::crypto::signer::{
-    AsymmetricJwsSigner, AsymmetricJwsSignerSelector, JwsSigner, JwsSignerSelector,
+use crate::{
+    crypto::signer::{
+        AsymmetricJwsSigner, AsymmetricJwsSignerSelector, JwsSigner, JwsSignerSelector,
+    },
+    platform::MaybeSendBoxFuture,
 };
 
 /// A multi-key asymmetric signer selector that supports key selection by JWK thumbprint.
@@ -33,27 +36,31 @@ impl MultiKeySigner {
 }
 
 impl JwsSignerSelector for MultiKeySigner {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
-        self.default.clone()
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+        let signer: Arc<dyn JwsSigner> = self.default.clone();
+        Box::pin(async move { signer })
     }
 }
 
 impl AsymmetricJwsSignerSelector for MultiKeySigner {
-    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
-        self.default.clone()
+    fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
+        let signer = self.default.clone();
+        Box::pin(async move { signer })
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
-        let all = std::iter::once(&self.default).chain(self.additional.iter());
-        for signer in all {
-            if signer.public_key_jwk().thumbprint() == thumbprint {
-                return Some(signer.clone());
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
+        Box::pin(async move {
+            let all = std::iter::once(&self.default).chain(self.additional.iter());
+            for signer in all {
+                if signer.public_key_jwk().thumbprint() == thumbprint {
+                    return Some(signer.clone());
+                }
             }
-        }
-        None
+            None
+        })
     }
 }
 
@@ -109,8 +116,8 @@ mod tests {
         fake(tag).public_key_jwk().thumbprint()
     }
 
-    #[test]
-    fn select_returns_the_default_signer() {
+    #[tokio::test]
+    async fn select_returns_the_default_signer() {
         let multi = MultiKeySigner::new(
             fake(1),
             vec![Arc::new(fake(2)) as Arc<dyn AsymmetricJwsSigner>],
@@ -118,14 +125,15 @@ mod tests {
         assert_eq!(
             multi
                 .select_asymmetric_signer()
+                .await
                 .public_key_jwk()
                 .thumbprint(),
             thumbprint(1)
         );
     }
 
-    #[test]
-    fn select_by_thumbprint_searches_default_then_additional() {
+    #[tokio::test]
+    async fn select_by_thumbprint_searches_default_then_additional() {
         let multi = MultiKeySigner::new(
             fake(1),
             vec![
@@ -136,7 +144,7 @@ mod tests {
 
         // The default and every additional key are all reachable by thumbprint.
         for tag in [1u8, 2, 3] {
-            let found = multi.select_signer_by_thumbprint(&thumbprint(tag));
+            let found = multi.select_signer_by_thumbprint(&thumbprint(tag)).await;
             assert!(found.is_some(), "key {tag} not found");
             assert_eq!(
                 found.unwrap().public_key_jwk().thumbprint(),
@@ -145,8 +153,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn select_by_thumbprint_returns_none_for_unknown_key() {
+    #[tokio::test]
+    async fn select_by_thumbprint_returns_none_for_unknown_key() {
         let multi = MultiKeySigner::new(
             fake(1),
             vec![Arc::new(fake(2)) as Arc<dyn AsymmetricJwsSigner>],
@@ -154,6 +162,7 @@ mod tests {
         assert!(
             multi
                 .select_signer_by_thumbprint("not-a-real-thumbprint")
+                .await
                 .is_none()
         );
     }

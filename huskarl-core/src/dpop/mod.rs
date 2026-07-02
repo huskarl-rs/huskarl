@@ -32,10 +32,12 @@ pub trait AuthorizationServerDPoP: sealed::Sealed + MaybeSendSync {
     /// Set the current `DPoP` nonce value.
     fn update_nonce(&self, nonce: String);
 
-    /// Returns a signer to use with the [`Self::proof`] call.
+    /// Returns the thumbprint of the current signing key, to bind to the session.
     ///
-    /// If a thumbprint has already been bound to the session, pass it here.
-    fn get_current_thumbprint(&self) -> Option<String>;
+    /// This is **async**: for a refreshing signer it selects (and so may reload)
+    /// the current key, keeping the bound thumbprint consistent with the key that
+    /// will later sign proofs.
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>>;
 
     /// Create a `DPoP` proof for the token endpoint.
     fn proof<'a>(
@@ -72,7 +74,7 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for &T {
         (**self).update_nonce(nonce);
     }
 
-    fn get_current_thumbprint(&self) -> Option<String> {
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
         (**self).get_current_thumbprint()
     }
 
@@ -95,7 +97,7 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Box<T> {
         (**self).update_nonce(nonce);
     }
 
-    fn get_current_thumbprint(&self) -> Option<String> {
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
         (**self).get_current_thumbprint()
     }
 
@@ -118,7 +120,7 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Arc<T> {
         (**self).update_nonce(nonce);
     }
 
-    fn get_current_thumbprint(&self) -> Option<String> {
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
         (**self).get_current_thumbprint()
     }
 

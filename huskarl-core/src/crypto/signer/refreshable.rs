@@ -6,14 +6,17 @@ use crate::{
         signer::{JwsSigner, JwsSignerSelector},
     },
     error::Error,
-    platform::{MaybeSendFuture, MaybeSendSync},
+    platform::{MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
 };
 
 /// A [`JwsSignerSelector`] that holds a hot-swappable signer selector behind an
 /// [`ArcSwap`](arc_swap::ArcSwap).
 ///
 /// This allows runtime rotation of signing keys (e.g. from a KMS or secret
-/// manager) without restarting the application.
+/// manager) without restarting the application. It is the pure hot-swap variant
+/// of [`ScheduledRefreshSigner`](super::ScheduledRefreshSigner), which adds a TTL
+/// policy and reloads during selection — see that type for a construction
+/// example; here you drive [`refresh`](Self::refresh) yourself.
 ///
 /// All clones share the same underlying state, so a refresh performed through
 /// any clone is visible to all others.
@@ -74,8 +77,9 @@ impl<S> JwsSignerSelector for RefreshableSigner<S>
 where
     S: JwsSignerSelector + 'static,
 {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
-        self.inner.load().select_signer()
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+        let selector = self.inner.load_full();
+        Box::pin(async move { selector.select_signer().await })
     }
 }
 
@@ -83,15 +87,19 @@ impl<S> super::AsymmetricJwsSignerSelector for RefreshableSigner<S>
 where
     S: super::AsymmetricJwsSignerSelector + 'static,
 {
-    fn select_asymmetric_signer(&self) -> Arc<dyn super::AsymmetricJwsSigner> {
-        self.inner.load().select_asymmetric_signer()
+    fn select_asymmetric_signer(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Arc<dyn super::AsymmetricJwsSigner>> {
+        let selector = self.inner.load_full();
+        Box::pin(async move { selector.select_asymmetric_signer().await })
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn super::AsymmetricJwsSigner>> {
-        self.inner.load().select_signer_by_thumbprint(thumbprint)
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn super::AsymmetricJwsSigner>>> {
+        let selector = self.inner.load_full();
+        Box::pin(async move { selector.select_signer_by_thumbprint(thumbprint).await })
     }
 }
 
@@ -130,10 +138,11 @@ mod tests {
     }
 
     impl JwsSignerSelector for GenSelector {
-        fn select_signer(&self) -> Arc<dyn JwsSigner> {
-            Arc::new(TaggedSigner {
+        fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+            let signer: Arc<dyn JwsSigner> = Arc::new(TaggedSigner {
                 kid: self.kid.clone(),
-            })
+            });
+            Box::pin(async move { signer })
         }
     }
 
@@ -155,9 +164,10 @@ mod tests {
             .unwrap()
     }
 
-    fn current_kid(signer: &RefreshableSigner<GenSelector>) -> Option<String> {
+    async fn current_kid(signer: &RefreshableSigner<GenSelector>) -> Option<String> {
         signer
             .select_signer()
+            .await
             .key_id()
             .map(std::borrow::Cow::into_owned)
     }
@@ -165,19 +175,19 @@ mod tests {
     #[tokio::test]
     async fn factory_runs_immediately_for_initial_value() {
         let signer = generational_signer().await;
-        assert_eq!(current_kid(&signer).as_deref(), Some("gen-0"));
+        assert_eq!(current_kid(&signer).await.as_deref(), Some("gen-0"));
     }
 
     #[tokio::test]
     async fn refresh_swaps_in_the_next_generation() {
         let signer = generational_signer().await;
-        assert_eq!(current_kid(&signer).as_deref(), Some("gen-0"));
+        assert_eq!(current_kid(&signer).await.as_deref(), Some("gen-0"));
 
         assert!(
             signer.refresh().await.unwrap(),
             "refresh fetched new material"
         );
-        assert_eq!(current_kid(&signer).as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&signer).await.as_deref(), Some("gen-1"));
     }
 
     #[tokio::test]
@@ -187,7 +197,7 @@ mod tests {
 
         // A refresh through the clone is visible through the original.
         clone.refresh().await.unwrap();
-        assert_eq!(current_kid(&signer).as_deref(), Some("gen-1"));
-        assert_eq!(current_kid(&clone).as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&signer).await.as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&clone).await.as_deref(), Some("gen-1"));
     }
 }

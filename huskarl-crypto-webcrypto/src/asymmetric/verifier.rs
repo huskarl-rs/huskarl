@@ -464,10 +464,7 @@ mod tests {
 
         let input = b"webcrypto asymmetric roundtrip input";
         let signature = signer.sign(input).await.unwrap();
-        let key_match = KeyMatch {
-            alg: jws_alg,
-            kid: None,
-        };
+        let key_match = KeyMatch::builder().alg(jws_alg).build();
 
         let outcome = verifier.verify(input, &signature, &key_match).await;
         assert!(
@@ -581,7 +578,9 @@ mod tests {
 
         for alg in ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"] {
             assert!(
-                verifier.key_match(&KeyMatch { alg, kid: None }).is_some(),
+                verifier
+                    .key_match(&KeyMatch::builder().alg(alg).build())
+                    .is_some(),
                 "alg-less RSA key should match {alg}"
             );
         }
@@ -590,14 +589,7 @@ mod tests {
         let input = b"alg-less rsa input";
         let signature = signer.sign(input).await.unwrap();
         verifier
-            .verify(
-                input,
-                &signature,
-                &KeyMatch {
-                    alg: "RS256",
-                    kid: None,
-                },
-            )
+            .verify(input, &signature, &KeyMatch::builder().alg("RS256").build())
             .await
             .unwrap();
     }
@@ -672,14 +664,7 @@ mod tests {
         let signature = signer.sign(input).await.unwrap();
         assert!(matches!(
             verifier
-                .verify(
-                    input,
-                    &signature,
-                    &KeyMatch {
-                        alg: "ES384",
-                        kid: None,
-                    },
-                )
+                .verify(input, &signature, &KeyMatch::builder().alg("ES384").build(),)
                 .await,
             Err(VerifyError::NoMatchingKey)
         ));
@@ -698,16 +683,15 @@ mod tests {
         let verifier = rfc8037_verifier().await;
         for alg in ["EdDSA", "Ed25519"] {
             assert!(
-                verifier.key_match(&KeyMatch { alg, kid: None }).is_some(),
+                verifier
+                    .key_match(&KeyMatch::builder().alg(alg).build())
+                    .is_some(),
                 "expected key_match for alg {alg}"
             );
         }
         assert!(
             verifier
-                .key_match(&KeyMatch {
-                    alg: "RS256",
-                    kid: None
-                })
+                .key_match(&KeyMatch::builder().alg("RS256").build())
                 .is_none()
         );
     }
@@ -726,7 +710,7 @@ mod tests {
         // `verify` path dispatches on `alg`, not just `key_match`.
         for alg in ["EdDSA", "Ed25519"] {
             let outcome = verifier
-                .verify(input, &signature, &KeyMatch { alg, kid: None })
+                .verify(input, &signature, &KeyMatch::builder().alg(alg).build())
                 .await;
             assert!(
                 outcome.is_ok(),
@@ -742,10 +726,7 @@ mod tests {
                 .verify(
                     &tampered,
                     &signature,
-                    &KeyMatch {
-                        alg: "EdDSA",
-                        kid: None
-                    }
+                    &KeyMatch::builder().alg("EdDSA").build()
                 )
                 .await,
             Err(VerifyError::SignatureMismatch)
@@ -755,14 +736,7 @@ mod tests {
         // (the `None` arm of `matching_key_and_alg`) rather than mis-verifying.
         assert!(matches!(
             verifier
-                .verify(
-                    input,
-                    &signature,
-                    &KeyMatch {
-                        alg: "ES256",
-                        kid: None
-                    }
-                )
+                .verify(input, &signature, &KeyMatch::builder().alg("ES256").build())
                 .await,
             Err(VerifyError::NoMatchingKey)
         ));

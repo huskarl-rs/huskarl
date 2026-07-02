@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use bon::Builder;
+
 use crate::{
     EndpointUrl,
     crypto::{
@@ -14,7 +16,8 @@ use crate::{
 };
 
 /// The set of JWS header parameters used to select a verification key.
-#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Builder)]
 pub struct KeyMatch<'a> {
     /// The algorithm (`alg`) from the JWS header.
     pub alg: &'a str,
@@ -81,11 +84,14 @@ pub trait JwsVerifier: std::fmt::Debug + MaybeSendSync {
         key_match: &'a KeyMatch<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>>;
 
-    /// Attempts to refresh the verifier's key material if warranted.
+    /// Requests a best-effort refresh of the verifier's key material.
     ///
-    /// This can be called manually to force a key reload, or automatically by
+    /// Called automatically by
     /// [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier) when no key
-    /// matches an incoming token.
+    /// matches an incoming token, and may also be called manually. A wrapping
+    /// policy layer may rate-limit or decline the request, so it can return
+    /// `false` without reloading; for a guaranteed reload, use a refreshable
+    /// wrapper's inherent `refresh`.
     ///
     /// Returns `true` if new key material was loaded (or was concurrently loaded by another
     /// task). Returns `false` if no refresh was needed, attempted, or successful. The default

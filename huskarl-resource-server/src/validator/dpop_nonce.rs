@@ -12,7 +12,7 @@ use bon::Builder;
 
 use crate::core::{
     Error,
-    crypto::cipher::{AeadSealer, AeadUnsealer},
+    crypto::cipher::{AeadSealer, AeadSealerSelector, AeadUnsealer},
     platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime},
 };
 
@@ -80,14 +80,19 @@ impl<T: DpopNonceChecker + ?Sized> DpopNonceChecker for Arc<T> {
 /// then base64url-encoding the result (without padding). This allows stateless verification of nonce age
 /// without a database, as long as the encryption key is stable across requests.
 #[derive(Debug, Builder)]
-pub struct SealedTimestampNonce<S: AeadSealer + AeadUnsealer> {
-    /// The AEAD sealer/unsealer used to encrypt and decrypt nonce timestamps.
+pub struct SealedTimestampNonce<S: AeadSealerSelector + AeadUnsealer> {
+    /// The AEAD sealer-selector/unsealer used to encrypt and decrypt nonce
+    /// timestamps.
     ///
-    /// Both directions must come from one object — typically
-    /// [`AeadV1Cipher`](crate::core::crypto::cipher::AeadV1Cipher) over an
-    /// [`AeadCipher`](crate::core::crypto::cipher::AeadCipher) (a symmetric
-    /// key, or a KMS-backed cipher), or an erased
-    /// `Arc<dyn SealedAeadCipher>`.
+    /// Both directions come from one object that selects a sealer on the way out
+    /// and unseals on the way in. For a fixed key, wrap an
+    /// [`AeadCipher`](crate::core::crypto::cipher::AeadCipher) (a symmetric key,
+    /// or a KMS-backed cipher) in
+    /// [`StaticAeadCipher`](crate::core::crypto::cipher::StaticAeadCipher); for a
+    /// rotating key, use
+    /// [`ScheduledRefreshCipher`](crate::core::crypto::cipher::ScheduledRefreshCipher).
+    /// Either can be erased to `Arc<dyn SealedAeadCipherSelector>`. Selecting the
+    /// sealer per nonce keeps the emitted key consistent across a rotation.
     sealer: S,
     /// The maximum age of a valid nonce. Defaults to 1 hour.
     #[builder(into, default = Duration::from_hours(1))]
@@ -103,7 +108,7 @@ pub struct SealedTimestampNonce<S: AeadSealer + AeadUnsealer> {
     aad: Vec<u8>,
 }
 
-impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
+impl<S: AeadSealerSelector + AeadUnsealer> SealedTimestampNonce<S> {
     async fn generate_nonce(&self) -> Result<String, Error> {
         use base64::prelude::*;
         let current_time = SystemTime::now()
@@ -111,7 +116,10 @@ impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
             .map_err(|e| Error::new(crate::core::ErrorKind::Dpop, e))?
             .as_secs()
             .to_be_bytes();
-        let sealed_bytes = self.sealer.seal(&current_time, &self.aad).await?;
+        // Select a frozen sealer for this nonce: whatever key seals it is the key
+        // named by any metadata read off the same snapshot, even under rotation.
+        let sealer = self.sealer.select_sealer().await;
+        let sealed_bytes = sealer.seal(&current_time, &self.aad).await?;
         Ok(BASE64_URL_SAFE_NO_PAD.encode(sealed_bytes))
     }
 
@@ -133,7 +141,7 @@ impl<S: AeadSealer + AeadUnsealer> SealedTimestampNonce<S> {
     }
 }
 
-impl<S: AeadSealer + AeadUnsealer> DpopNonceChecker for SealedTimestampNonce<S> {
+impl<S: AeadSealerSelector + AeadUnsealer> DpopNonceChecker for SealedTimestampNonce<S> {
     fn check_nonce<'a>(
         &'a self,
         nonce: Option<&'a str>,
@@ -165,7 +173,9 @@ mod tests {
     use super::*;
     use crate::core::crypto::{
         KeyMatchStrength,
-        cipher::{AeadOutput, AeadV1Cipher, CipherMatch, DecryptError, SealedAeadCipher},
+        cipher::{
+            AeadOutput, CipherMatch, DecryptError, SealedAeadCipherSelector, StaticAeadCipher,
+        },
     };
 
     /// XOR "cipher" with both capabilities on one object — the shape a
@@ -214,15 +224,15 @@ mod tests {
         }
     }
 
-    fn checker() -> SealedTimestampNonce<AeadV1Cipher<MockCipher>> {
+    fn checker() -> SealedTimestampNonce<StaticAeadCipher<MockCipher>> {
         SealedTimestampNonce::builder()
-            .sealer(AeadV1Cipher::new(MockCipher))
+            .sealer(StaticAeadCipher::new(MockCipher))
             .build()
     }
 
     /// Forge a nonce whose sealed timestamp lies `age_secs` in the past.
     async fn nonce_with_age(
-        checker: &SealedTimestampNonce<AeadV1Cipher<MockCipher>>,
+        checker: &SealedTimestampNonce<StaticAeadCipher<MockCipher>>,
         age_secs: u64,
     ) -> String {
         let issued_at = SystemTime::now()
@@ -232,6 +242,8 @@ mod tests {
             - age_secs;
         let sealed = checker
             .sealer
+            .select_sealer()
+            .await
             .seal(&issued_at.to_be_bytes(), &checker.aad)
             .await
             .unwrap();
@@ -282,7 +294,7 @@ mod tests {
     /// The erased one-object form also satisfies the bound.
     #[tokio::test]
     async fn erased_sealed_cipher_constructs() {
-        let cipher: Arc<dyn SealedAeadCipher> = Arc::new(AeadV1Cipher::new(MockCipher));
+        let cipher: Arc<dyn SealedAeadCipherSelector> = Arc::new(StaticAeadCipher::new(MockCipher));
         let checker = SealedTimestampNonce::builder().sealer(cipher).build();
         assert!(matches!(
             checker.check_nonce(None).await.unwrap(),

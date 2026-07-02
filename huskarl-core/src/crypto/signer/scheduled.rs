@@ -6,12 +6,61 @@ use crate::{
         signer::{JwsSigner, JwsSignerSelector},
     },
     error::Error,
-    platform::{Duration, MaybeSendFuture, MaybeSendSync},
+    platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
 };
 
-/// A [`JwsSignerSelector`] that holds a hot-swappable signer behind a
-/// `ScheduledRefreshable`, gating refresh attempts with TTL and
-/// failure-backoff policy.
+/// A [`JwsSignerSelector`] that bounds the age of its signing key to a TTL by
+/// reloading *during selection* — the outbound analogue of
+/// [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier)'s
+/// read-path reload.
+///
+/// Each selection ([`select_signer`](JwsSignerSelector::select_signer) and the
+/// asymmetric variants) reloads the key if it has outlived its TTL (single-flight,
+/// non-blocking for concurrent callers), then hands back a frozen snapshot — so a
+/// current key comes for free, with no `refresh_if_stale`-before-sign step to forget.
+/// [`refresh`](Self::refresh) forces an immediate reload on an explicit rotation.
+///
+/// All clones share the same underlying state, so a refresh performed through
+/// any clone is visible to all others.
+///
+/// # Example
+///
+/// ```
+/// # use std::borrow::Cow;
+/// # use std::sync::Arc;
+/// # use huskarl_core::crypto::signer::{JwsSigner, JwsSignerSelector, ScheduledRefreshSigner};
+/// # use huskarl_core::error::Error;
+/// # use huskarl_core::platform::{Duration, MaybeSendBoxFuture};
+/// # // Stand-ins for the signer + selector a crypto backend / KMS provides.
+/// # #[derive(Debug)] struct BackendSigner;
+/// # impl JwsSigner for BackendSigner {
+/// #     fn jws_algorithm(&self) -> Cow<'_, str> { "ES256".into() }
+/// #     fn key_id(&self) -> Option<Cow<'_, str>> { None }
+/// #     fn sign<'a>(&'a self, _input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+/// #         Box::pin(async { Ok(vec![]) })
+/// #     }
+/// # }
+/// # #[derive(Debug)] struct BackendSelector;
+/// # impl JwsSignerSelector for BackendSelector {
+/// #     fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+/// #         Box::pin(async { Arc::new(BackendSigner) as Arc<dyn JwsSigner> })
+/// #     }
+/// # }
+/// # async fn example() -> Result<(), Error> {
+/// // The factory re-fetches the key material (e.g. from a KMS) on each reload.
+/// let signer = ScheduledRefreshSigner::builder()
+///     .ttl(Duration::from_secs(5 * 60))
+///     .factory(|| Box::pin(async { Ok(BackendSelector) }))
+///     .build()
+///     .await?;
+///
+/// // Selecting reloads the key if it has outlived the TTL, then hands back a
+/// // frozen snapshot to sign with — no "refresh before you sign" step to forget.
+/// let current = signer.select_signer().await;
+/// # let _ = current;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct ScheduledRefreshSigner<S> {
     inner: Arc<ScheduledRefreshable<S>>,
@@ -62,10 +111,19 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshSigner<S> {
         })
     }
 
-    /// Attempts a policy-gated refresh. Returns `true` if a refresh was performed
-    /// and succeeded, `false` if the policy blocked the attempt or the refresh failed.
-    pub async fn try_refresh(&self) -> bool {
-        self.inner.try_refresh().await
+    /// Reloads the signing key if it has outlived its TTL and the
+    /// rate-limit/backoff policy permits; a within-TTL key is left in place.
+    /// Blocking.
+    ///
+    /// A manual staleness poll:
+    /// [`select_signer`](JwsSignerSelector::select_signer) already reloads a stale
+    /// key during selection, so this only pre-warms the key ahead of a
+    /// latency-sensitive sign. [`refresh`](Self::refresh) reloads unconditionally.
+    ///
+    /// Returns `true` if this call refreshed successfully, `false` if the policy
+    /// blocked it or the refresh failed.
+    pub async fn refresh_if_stale(&self) -> bool {
+        self.inner.refresh_if_stale().await
     }
 
     /// Forces a refresh bypassing the scheduling policy, but still records the outcome.
@@ -85,8 +143,12 @@ impl<S> JwsSignerSelector for ScheduledRefreshSigner<S>
 where
     S: JwsSignerSelector + 'static,
 {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
-        self.inner.load().select_signer()
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+        Box::pin(async move {
+            self.inner.poll_refresh_ahead().await;
+            let selector = self.inner.load_full();
+            selector.select_signer().await
+        })
     }
 }
 
@@ -94,15 +156,25 @@ impl<S> super::AsymmetricJwsSignerSelector for ScheduledRefreshSigner<S>
 where
     S: super::AsymmetricJwsSignerSelector + 'static,
 {
-    fn select_asymmetric_signer(&self) -> Arc<dyn super::AsymmetricJwsSigner> {
-        self.inner.load().select_asymmetric_signer()
+    fn select_asymmetric_signer(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Arc<dyn super::AsymmetricJwsSigner>> {
+        Box::pin(async move {
+            self.inner.poll_refresh_ahead().await;
+            let selector = self.inner.load_full();
+            selector.select_asymmetric_signer().await
+        })
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn super::AsymmetricJwsSigner>> {
-        self.inner.load().select_signer_by_thumbprint(thumbprint)
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn super::AsymmetricJwsSigner>>> {
+        Box::pin(async move {
+            self.inner.poll_refresh_ahead().await;
+            let selector = self.inner.load_full();
+            selector.select_signer_by_thumbprint(thumbprint).await
+        })
     }
 }
 
@@ -143,10 +215,11 @@ mod tests {
     }
 
     impl JwsSignerSelector for GenSelector {
-        fn select_signer(&self) -> Arc<dyn JwsSigner> {
-            Arc::new(TaggedSigner {
+        fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+            let signer: Arc<dyn JwsSigner> = Arc::new(TaggedSigner {
                 kid: self.kid.clone(),
-            })
+            });
+            Box::pin(async move { signer })
         }
     }
 
@@ -172,9 +245,15 @@ mod tests {
             .unwrap()
     }
 
-    fn current_kid(signer: &ScheduledRefreshSigner<GenSelector>) -> Option<String> {
+    /// Reads the currently-held generation *without* triggering a refresh, so
+    /// tests can observe policy behaviour in isolation (a plain `select_signer`
+    /// would itself reload when stale).
+    async fn current_kid(signer: &ScheduledRefreshSigner<GenSelector>) -> Option<String> {
         signer
+            .inner
+            .load_full()
             .select_signer()
+            .await
             .key_id()
             .map(std::borrow::Cow::into_owned)
     }
@@ -183,25 +262,25 @@ mod tests {
     async fn forced_refresh_bypasses_policy() {
         // A long TTL would block a policy-gated refresh, but `refresh` is forced.
         let signer = generational_signer(Duration::from_hours(1), Duration::from_mins(1)).await;
-        assert_eq!(current_kid(&signer).as_deref(), Some("gen-0"));
+        assert_eq!(current_kid(&signer).await.as_deref(), Some("gen-0"));
 
         assert!(signer.refresh().await.unwrap());
-        assert_eq!(current_kid(&signer).as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&signer).await.as_deref(), Some("gen-1"));
     }
 
-    /// `try_refresh` is gated by the TTL: a fresh value is left in place, a
+    /// `refresh_if_stale` is gated by the TTL: a fresh value is left in place, a
     /// stale one (zero TTL) is swapped for the next generation.
     #[rstest]
     #[case::blocked_while_fresh(Duration::from_hours(1), false, "gen-0")]
     #[case::allowed_when_stale(Duration::from_secs(0), true, "gen-1")]
     #[tokio::test]
-    async fn try_refresh_respects_ttl_policy(
+    async fn refresh_if_stale_respects_ttl_policy(
         #[case] ttl: Duration,
         #[case] expected_refreshed: bool,
         #[case] expected_kid: &str,
     ) {
         let signer = generational_signer(ttl, Duration::from_secs(0)).await;
-        assert_eq!(signer.try_refresh().await, expected_refreshed);
-        assert_eq!(current_kid(&signer).as_deref(), Some(expected_kid));
+        assert_eq!(signer.refresh_if_stale().await, expected_refreshed);
+        assert_eq!(current_kid(&signer).await.as_deref(), Some(expected_kid));
     }
 }

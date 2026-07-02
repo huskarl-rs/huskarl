@@ -150,6 +150,25 @@ impl AsymmetricPublicKey {
     /// not `sig`, its `key_ops` excludes `verify`, the algorithm is unsupported,
     /// the key material fails to parse, or — for RSA — the modulus is under 2048
     /// bits (RFC 7518 §6.3).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use huskarl_crypto_native::asymmetric::{
+    ///     signer::{GenerateAlgorithm, PrivateKey},
+    ///     verifier::AsymmetricPublicKey,
+    /// };
+    ///
+    /// // In practice the JWK arrives from a JWKS endpoint; here we derive one
+    /// // from a freshly generated key.
+    /// let public_jwk = PrivateKey::generate(GenerateAlgorithm::Ed25519, Some("key-1".to_string()))?
+    ///     .as_private_jwk(Some("key-1"))
+    ///     .public_jwk();
+    ///
+    /// let verifier = AsymmetricPublicKey::from_jwk(public_jwk)
+    ///     .expect("a freshly generated public JWK is verifiable");
+    /// # Ok::<(), huskarl_core::error::Error>(())
+    /// ```
     #[must_use]
     pub fn from_jwk(key: jwk::PublicJwk) -> Option<Self> {
         let kid = key.kid;
@@ -356,7 +375,7 @@ mod tests {
         }
 
         let signing_key = PrivateKey::generate(GenerateAlgorithm::EdDsa, None).unwrap();
-        let selected_key = signing_key.select_asymmetric_signer();
+        let selected_key = signing_key.select_asymmetric_signer().await;
 
         let jwt = Jwt::builder()
             .issuer("https://as.example.com")
@@ -500,7 +519,7 @@ mod tests {
             identity: None,
         };
         let restored = PrivateKey::load_jwk(secret).await.unwrap();
-        let selected = restored.select_asymmetric_signer();
+        let selected = restored.select_asymmetric_signer().await;
 
         // Sign with restored key
         let jwt = Jwt::builder()
@@ -517,6 +536,7 @@ mod tests {
         let public_key = AsymmetricPublicKey::from_jwk(
             original
                 .select_asymmetric_signer()
+                .await
                 .public_key_jwk()
                 .into_owned(),
         )
@@ -668,13 +688,14 @@ mod tests {
             })
             .build();
         let token = jwt
-            .to_jws_compact(&jwk_key.select_asymmetric_signer())
+            .to_jws_compact(&jwk_key.select_asymmetric_signer().await)
             .await
             .unwrap();
 
         let public_key = AsymmetricPublicKey::from_jwk(
             pkcs8_key
                 .select_asymmetric_signer()
+                .await
                 .public_key_jwk()
                 .into_owned(),
         )
@@ -735,7 +756,7 @@ mod tests {
     // -- Helpers --
 
     async fn sign_and_verify(key: &PrivateKey) {
-        let selected = key.select_asymmetric_signer();
+        let selected = key.select_asymmetric_signer().await;
 
         let jwt = Jwt::builder()
             .issuer("https://test.example.com")
@@ -768,7 +789,7 @@ mod tests {
 
         // Round-trip through from_jwk
         let restored = PrivateKey::from_jwk(private_jwk).unwrap();
-        let selected = restored.select_asymmetric_signer();
+        let selected = restored.select_asymmetric_signer().await;
 
         // Sign with restored key
         let jwt = Jwt::builder()
@@ -785,6 +806,7 @@ mod tests {
         let public_key = AsymmetricPublicKey::from_jwk(
             original
                 .select_asymmetric_signer()
+                .await
                 .public_key_jwk()
                 .into_owned(),
         )
@@ -824,19 +846,13 @@ mod tests {
         // no matching key and the RSA modulus is never treated as an HMAC secret.
         assert!(
             verifier
-                .key_match(&KeyMatch {
-                    alg: "HS256",
-                    kid: None,
-                })
+                .key_match(&KeyMatch::builder().alg("HS256").build())
                 .is_none()
         );
         // The same key still matches its genuine algorithm.
         assert!(
             verifier
-                .key_match(&KeyMatch {
-                    alg: "RS256",
-                    kid: None,
-                })
+                .key_match(&KeyMatch::builder().alg("RS256").build())
                 .is_some()
         );
     }

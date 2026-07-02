@@ -512,6 +512,20 @@ impl PrivateKey {
     ///
     /// Returns [`ErrorKind::Config`] if an RSA modulus length below 2048 bits
     /// is requested, and [`ErrorKind::Crypto`] if key generation itself fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+    ///
+    /// // Ed25519 takes no parameters; EC and RSA variants are also available
+    /// // (RSA carries a modulus length — see `GenerateAlgorithm`).
+    /// let signer = PrivateKey::generate(GenerateAlgorithm::Ed25519, Some("key-1".to_string()))?;
+    ///
+    /// // Publish the public half in a JWKS; the private half stays local and signs.
+    /// let public_jwk = signer.as_private_jwk(Some("key-1")).public_jwk();
+    /// # Ok::<(), huskarl_core::error::Error>(())
+    /// ```
     pub fn generate(key_type: GenerateAlgorithm, kid: Option<String>) -> Result<Self, Error> {
         fn rsa_key(modulus_length: u32) -> Result<rsa::RsaPrivateKey, Error> {
             if modulus_length < RSA_MODULUS_2048 {
@@ -807,25 +821,25 @@ impl PrivateKey {
 }
 
 impl JwsSignerSelector for PrivateKey {
-    fn select_signer(&self) -> Arc<dyn JwsSigner> {
-        Arc::new(self.clone())
+    fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
+        let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
+        Box::pin(async move { signer })
     }
 }
 
 impl AsymmetricJwsSignerSelector for PrivateKey {
-    fn select_asymmetric_signer(&self) -> Arc<dyn AsymmetricJwsSigner> {
-        Arc::new(self.clone())
+    fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
+        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
+        Box::pin(async move { signer })
     }
 
-    fn select_signer_by_thumbprint(
-        &self,
-        thumbprint: &str,
-    ) -> Option<Arc<dyn AsymmetricJwsSigner>> {
-        if self.inner.thumbprint == thumbprint {
-            Some(Arc::new(self.clone()))
-        } else {
-            None
-        }
+    fn select_signer_by_thumbprint<'a>(
+        &'a self,
+        thumbprint: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
+        let matches = self.inner.thumbprint == thumbprint;
+        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
+        Box::pin(async move { matches.then_some(signer) })
     }
 }
 
