@@ -73,9 +73,10 @@ impl AccessToken {
             AccessToken::Dpop(dpop_access_token) => dpop_access_token.expose_header_value(),
             AccessToken::Bearer(bearer_access_token) => bearer_access_token.expose_header_value(),
             // Deterministically manufacture an InvalidHeaderValue (the type
-            // has no public constructor): an N_A token has no header form.
-            AccessToken::NotAccessToken(_) => Err(HeaderValue::from_str("\n")
-                .expect_err("a control character is never a valid header value")),
+            // has no public constructor): an N_A token has no header form,
+            // and a control character is never a valid header value.
+            AccessToken::NotAccessToken(_) => HeaderValue::from_str("\n")
+                .map(|_| unreachable!("a control character is never a valid header value")),
         }
     }
 

@@ -7,7 +7,9 @@ use snafu::Snafu;
 
 use crate::{
     core::{AuthorizationDetail, platform::Duration, secrets::SecretString},
-    token::{AccessToken, BearerAccessToken, DpopAccessToken, IdToken, NonAccessToken, RefreshToken},
+    token::{
+        AccessToken, BearerAccessToken, DpopAccessToken, IdToken, NonAccessToken, RefreshToken,
+    },
 };
 
 /// The response from the token endpoint (RFC 6749 §5.1), as received.
@@ -112,7 +114,9 @@ impl TokenResponse {
 
 #[derive(Debug, Clone)]
 enum ResolvedTokenType {
-    DPoP { jkt: String },
+    DPoP {
+        jkt: String,
+    },
     Bearer,
     /// RFC 8693 `N_A`: the issued token is not an access token.
     NotApplicable,
@@ -194,13 +198,11 @@ impl RawTokenResponse {
                 received_at,
                 self.expires_in.map(Duration::from_secs),
             )),
-            ResolvedTokenType::NotApplicable => {
-                AccessToken::NotAccessToken(NonAccessToken::new(
-                    self.access_token.clone(),
-                    received_at,
-                    self.expires_in.map(Duration::from_secs),
-                ))
-            }
+            ResolvedTokenType::NotApplicable => AccessToken::NotAccessToken(NonAccessToken::new(
+                self.access_token.clone(),
+                received_at,
+                self.expires_in.map(Duration::from_secs),
+            )),
         }
     }
 
