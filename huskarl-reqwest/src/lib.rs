@@ -54,6 +54,10 @@ pub struct ReqwestClient {
     identity: Option<reqwest::Identity>,
 }
 
+/// Wraps a pre-built client with default limits and `uses_mtls: false`. If the
+/// client presents a TLS client certificate, assert it with
+/// [`ReqwestClient::with_uses_mtls`] so the RFC 8705 `mtls_endpoint_aliases`
+/// are used.
 impl From<reqwest::Client> for ReqwestClient {
     fn from(client: reqwest::Client) -> Self {
         Self {
@@ -189,6 +193,22 @@ impl ReqwestClient {
 }
 
 impl ReqwestClient {
+    /// Asserts whether the underlying transport presents a TLS client
+    /// certificate, overriding what the builder inferred.
+    ///
+    /// Use this when mTLS was configured outside the huskarl builder options —
+    /// a pre-built client converted via `From<reqwest::Client>`, or an
+    /// identity installed through the `configure_builder` escape hatch — both
+    /// of which otherwise report `false`. The flag routes requests to the
+    /// RFC 8705 §5 `mtls_endpoint_aliases` instead of the canonical
+    /// endpoints, so a wrong value means `tls_client_auth` failures or tokens
+    /// that are silently not certificate-bound.
+    #[must_use]
+    pub fn with_uses_mtls(mut self, uses_mtls: bool) -> Self {
+        self.uses_mtls = uses_mtls;
+        self
+    }
+
     /// Returns the mTLS identity used when building this client, if any.
     ///
     /// Clone the returned identity to pass it to a new [`ReqwestClient`] builder,
@@ -355,6 +375,18 @@ mod tests {
     };
 
     use super::{DEFAULT_MAX_RESPONSE_BYTES, ReqwestClient, transport_error};
+
+    /// A pre-built client reports no mTLS by default; `with_uses_mtls` lets
+    /// the caller assert an externally configured client certificate so the
+    /// RFC 8705 `mtls_endpoint_aliases` are used.
+    #[test]
+    fn with_uses_mtls_overrides_the_from_default() {
+        use huskarl_core::http::HttpClient as _;
+
+        let client = ReqwestClient::from(reqwest::Client::new());
+        assert!(!client.uses_mtls(), "From defaults to no mTLS");
+        assert!(client.with_uses_mtls(true).uses_mtls());
+    }
 
     /// Serves one HTTP/1.1 response on a fresh loopback port, in a background
     /// thread. When `content_length` is false the body is delimited by
