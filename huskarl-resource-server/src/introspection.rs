@@ -93,6 +93,11 @@ impl TokenIntrospection {
         #[cfg(feature = "default-jws-verifier-platform")]
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
+        /// Clock-skew leeway for the RFC 9701 response JWT's temporal checks.
+        /// Defaults to
+        /// [`DEFAULT_CLOCK_LEEWAY`](crate::validator::DEFAULT_CLOCK_LEEWAY).
+        #[builder(default = crate::validator::DEFAULT_CLOCK_LEEWAY)]
+        clock_leeway: crate::core::platform::Duration,
     ) -> Result<Self, Error> {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
@@ -118,6 +123,7 @@ impl TokenIntrospection {
                     .require_exp(true)
                     .aud(aud_check)
                     .iss(iss_check)
+                    .clock_leeway(clock_leeway)
                     .build(),
             )
         } else {

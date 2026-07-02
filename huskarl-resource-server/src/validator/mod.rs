@@ -25,10 +25,18 @@ pub mod rfc9068;
 use crate::{
     core::{
         jwt::{ConfirmationClaim, validator::ValidatedJwt},
-        platform::{MaybeSendBoxFuture, MaybeSendSync, SystemTime},
+        platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime},
     },
     error::ToRfc6750Error,
 };
+
+/// Default clock-skew leeway applied to the temporal checks (`exp`, `nbf`,
+/// `iat`, `DPoP` proof freshness). RFC 9449 §11.1 tells servers to accept
+/// proofs in a reasonable window around the current time; the same reasoning
+/// applies to access-token validation. Ten seconds absorbs real-world NTP
+/// drift without meaningfully weakening proof freshness — override it with
+/// the `clock_leeway` builder option on each validator.
+pub const DEFAULT_CLOCK_LEEWAY: Duration = Duration::from_secs(10);
 
 /// A trait for validators that authenticate and validate access tokens from HTTP requests.
 ///

@@ -136,6 +136,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// Maximum accepted age of a `DPoP` proof. Defaults to 1 minute.
         #[builder(default = Duration::from_mins(1))]
         max_dpop_proof_age: Duration,
+        /// Clock-skew leeway for the temporal checks on `DPoP` proofs and the
+        /// RFC 9701 introspection-response JWT (RFC 9449 §11.1). Defaults to
+        /// [`DEFAULT_CLOCK_LEEWAY`](super::DEFAULT_CLOCK_LEEWAY).
+        #[builder(default = super::DEFAULT_CLOCK_LEEWAY)]
+        clock_leeway: Duration,
         /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
         ///
         /// Advertised as `dpop_bound_access_tokens_required` in RFC 9728 metadata.
@@ -196,6 +201,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             .maybe_jwks_uri(jwks_uri)
             .jws_verifier_factory(jws_verifier_factory)
             .jws_verifier_platform(jws_verifier_platform.clone())
+            .clock_leeway(clock_leeway)
             .build()
             .await?;
 
@@ -207,6 +213,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
                 proof_validator: DpopProofValidator::builder()
                     .jws_verifier_platform(jws_verifier_platform)
                     .max_proof_age(max_dpop_proof_age)
+                    .clock_leeway(clock_leeway)
                     .maybe_allowed_signing_algorithms(allowed_dpop_signing_algorithms)
                     .maybe_jti_checker(dpop_jti_checker)
                     .build(),
