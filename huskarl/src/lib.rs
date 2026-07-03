@@ -123,9 +123,11 @@ println!(
 ## Guides and explanation
 
 The API items in this crate are the **reference** documentation. For
-task-oriented how-to guides — setting up each grant, caching tokens, and
-making authenticated requests — and design explanation (error handling,
-sharing a refresh token store, refresh timing), see the [`_docs`] module.
+task-oriented how-to guides — setting up each grant, choosing [client
+authentication](_docs::guide::client_authentication), sender-constraining
+tokens with [`DPoP`](_docs::guide::dpop), caching tokens, and making
+authenticated requests — and design explanation (error handling, sharing a
+refresh token store, refresh timing), see the [`_docs`] module.
 
 Most applications wrap a grant in an
 [`InMemoryTokenCache`](cache::InMemoryTokenCache) and an

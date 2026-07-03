@@ -57,6 +57,7 @@ metrics = { workspace = true }
 wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+huskarl-crypto-native = { workspace = true }
 huskarl-reqwest = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 httpmock = "0.8.3"

@@ -21,6 +21,10 @@ let client: ReqwestClient = ReqwestClient::builder().build().await?;
 ## Setting up client authentication
 
 Grants take a [`ClientAuthentication`](crate::core::client_auth) implementation.
+This page shows the two simplest; for the full map — `private_key_jwt`,
+`client_secret_jwt`, mTLS, and how to choose — see [choosing client
+authentication](crate::_docs::guide::client_authentication).
+
 A confidential client authenticates with its credentials — for example a
 client secret (any `ClientAuthentication` implementation works):
 
