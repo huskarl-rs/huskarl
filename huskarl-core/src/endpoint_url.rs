@@ -21,10 +21,16 @@ use crate::error::{Error, ErrorKind};
 /// converts back to a [`Uri`] via [`as_uri`](Self::as_uri) / [`AsRef`] /
 /// [`From`].
 ///
-/// Construction validates that the URL is **absolute** — it has both a scheme
-/// and an authority. A relative reference such as `/token` cannot be requested,
-/// so it is rejected with [`ErrorKind::Config`]. (Scheme is not constrained to
-/// `https`: loopback and test servers use `http`.)
+/// Construction validates that the URL is a plausible endpoint, rejecting
+/// anything else with [`ErrorKind::Config`]:
+///
+/// - it must be **absolute** — have both a scheme and an authority; a relative
+///   reference such as `/token` cannot be requested;
+/// - the scheme must be **`http` or `https`** (`http` is allowed because
+///   loopback and test servers use it);
+/// - it must not carry a **fragment** (RFC 6749 §3.1, §3.2) — `http::Uri`
+///   would silently drop it — nor **userinfo** credentials in the authority
+///   (RFC 9110 §4.2.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EndpointUrl(Uri);
 
@@ -42,17 +48,36 @@ impl<'de> Deserialize<'de> for EndpointUrl {
 }
 
 impl EndpointUrl {
-    /// Wraps a [`Uri`] after checking it is absolute.
+    /// Wraps a [`Uri`] after checking it is a plausible endpoint.
     ///
-    /// An endpoint URL must have both a scheme and an authority — a relative
-    /// reference such as `/token` cannot be requested. This is the single
+    /// An endpoint URL must be absolute (have both a scheme and an authority —
+    /// a relative reference such as `/token` cannot be requested), the scheme
+    /// must be `http` or `https` (anything else fails later, deep in the HTTP
+    /// client, with a far less pointed error), and the authority must not
+    /// carry userinfo (RFC 9110 §4.2.4 forbids generating it in http(s) URIs;
+    /// credentials embedded in an endpoint URL are a misconfiguration that
+    /// would otherwise leak into requests and logs). This is the single
     /// validation point every conversion funnels through.
     fn from_uri(uri: Uri) -> Result<Self, Error> {
-        if uri.scheme().is_none() || uri.authority().is_none() {
+        let (Some(scheme), Some(authority)) = (uri.scheme(), uri.authority()) else {
             return Err(Error::from(ErrorKind::Config).with_context(format!(
                 "endpoint URL must be absolute (have a scheme and authority): {uri}"
             )));
+        };
+
+        if scheme != &http::uri::Scheme::HTTP && scheme != &http::uri::Scheme::HTTPS {
+            return Err(Error::from(ErrorKind::Config)
+                .with_context(format!("endpoint URL scheme must be http or https: {uri}")));
         }
+
+        // '@' in an authority is always the userinfo delimiter (RFC 3986
+        // §3.2); it must be percent-encoded anywhere else.
+        if authority.as_str().contains('@') {
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "endpoint URL must not contain userinfo (credentials) in its authority: {uri}"
+            )));
+        }
+
         Ok(Self(uri))
     }
 
@@ -181,6 +206,38 @@ mod tests {
     fn rejects_invalid_endpoint(#[case] input: &str) {
         let err = EndpointUrl::try_from(input).unwrap_err();
         assert!(matches!(err.kind(), ErrorKind::Config));
+    }
+
+    // Only http and https endpoints can actually be requested; any other
+    // scheme would fail much later, inside the HTTP client, with a far less
+    // pointed error than a Config error naming the URL.
+    #[rstest]
+    #[case::ftp("ftp://as.example.com/token")]
+    #[case::websocket("wss://as.example.com/token")]
+    #[case::custom_scheme("custom-app://as.example.com/token")]
+    fn rejects_non_http_scheme(#[case] input: &str) {
+        let err = EndpointUrl::try_from(input).unwrap_err();
+        assert!(matches!(err.kind(), ErrorKind::Config));
+        assert!(err.to_string().contains("http or https"), "{err}");
+    }
+
+    // RFC 9110 §4.2.4: a sender MUST NOT generate the userinfo subcomponent in
+    // an http(s) URI. Credentials embedded in an endpoint URL are a
+    // misconfiguration that would otherwise flow into requests and logs.
+    #[rstest]
+    #[case::credentials("https://user:pass@as.example.com/token")]
+    #[case::bare_user("https://user@as.example.com/token")]
+    fn rejects_userinfo(#[case] input: &str) {
+        let err = EndpointUrl::try_from(input).unwrap_err();
+        assert!(matches!(err.kind(), ErrorKind::Config));
+        assert!(err.to_string().contains("userinfo"), "{err}");
+    }
+
+    // The userinfo check guards the `Uri` funnel too, not just string parsing.
+    #[test]
+    fn rejects_userinfo_via_uri_conversion() {
+        let uri: Uri = "https://user:pass@as.example.com/token".parse().unwrap();
+        assert!(EndpointUrl::try_from(uri).is_err());
     }
 
     // OAuth endpoint URLs MUST NOT carry a fragment (RFC 6749 §3.1, §3.2).
