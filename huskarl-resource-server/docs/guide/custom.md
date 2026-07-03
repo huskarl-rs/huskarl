@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use huskarl_resource_server::{
     core::{
-        jwk::JwksSource, jwt::validator::ClaimCheck,
+        jwk::JwksSource,
         server_metadata::AuthorizationServerMetadata,
     },
     validator::custom::CustomValidator,
@@ -44,7 +44,7 @@ let metadata = AuthorizationServerMetadata::fetch()
     .await?;
 
 let validator = CustomValidator::builder_from_metadata(&metadata)
-    .audience(ClaimCheck::required_value("api://my-resource"))
+    .audience("api://my-resource")
     .jws_verifier_factory(Arc::new(
         JwksSource::builder()
             .http_client(http_client.clone())
@@ -62,7 +62,7 @@ let validator = CustomValidator::builder_from_metadata(&metadata)
 use std::sync::Arc;
 
 use huskarl_resource_server::{
-    core::{jwk::JwksSource, jwt::validator::ClaimCheck},
+    core::jwk::JwksSource,
     validator::custom::CustomValidator,
 };
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -70,7 +70,7 @@ use huskarl_resource_server::{
 
 let validator = CustomValidator::builder()
     .authorization_server("https://my-issuer")
-    .audience(ClaimCheck::required_value("api://my-resource"))
+    .audience("api://my-resource")
     .jwks_uri("https://my-issuer/.well-known/jwks.json".parse()?)
     .jws_verifier_factory(Arc::new(
         JwksSource::builder()
@@ -106,14 +106,13 @@ non-absolute URI fails every DPoP validation with an integration error.
 # use std::sync::Arc;
 # use huskarl_resource_server::core::{
 #     jwk::JwksSource,
-#     jwt::validator::ClaimCheck,
 #     server_metadata::AuthorizationServerMetadata,
 # };
 # use huskarl_resource_server::validator::custom::CustomValidator;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-# let validator = CustomValidator::builder_from_metadata(&metadata).audience(ClaimCheck::required_value("api://my-resource")).jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
+# let validator = CustomValidator::builder_from_metadata(&metadata).audience("api://my-resource").jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
 use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 
 let mut headers = http::HeaderMap::new();

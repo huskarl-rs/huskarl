@@ -121,16 +121,9 @@ async fn build(
     let google_validator = CustomValidator::builder()
         .with_claims::<GoogleIdClaims>()
         .authorization_server(google.issuer.clone())
-        .issuer(
-            huskarl_resource_server::core::jwt::validator::ClaimCheck::required_value(
-                &google.issuer,
-            ),
-        )
-        .audience(
-            huskarl_resource_server::core::jwt::validator::ClaimCheck::required_value(
-                GOOGLE_AUDIENCE,
-            ),
-        )
+        // Plain strings are `ClaimCheck::RequiredValue`.
+        .issuer(google.issuer.as_str())
+        .audience(GOOGLE_AUDIENCE)
         .require_jti(false)
         .realm("api")
         .jwks_uri(google.jwks_uri())
@@ -144,14 +137,8 @@ async fn build(
     let okta_validator = CustomValidator::builder()
         .with_claims::<OktaClaims>()
         .authorization_server(okta.issuer.clone())
-        .issuer(
-            huskarl_resource_server::core::jwt::validator::ClaimCheck::required_value(&okta.issuer),
-        )
-        .audience(
-            huskarl_resource_server::core::jwt::validator::ClaimCheck::required_value(
-                OKTA_AUDIENCE,
-            ),
-        )
+        .issuer(okta.issuer.as_str())
+        .audience(OKTA_AUDIENCE)
         .require_jti(false)
         .realm("api")
         .jwks_uri(okta.jwks_uri())

@@ -29,10 +29,18 @@ pub use validated_jwt::{ValidatedJwt, ValidatedJwtBuilder};
 ///
 /// # Warning
 ///
-/// By default `exp` is **not** required: a validly-signed token with no expiry
-/// is accepted. Set `require_exp(true)` on the [builder](Self::builder) unless
-/// non-expiring tokens are intentional. The bundled profiles (RFC 9068 access
-/// tokens, OIDC ID tokens) already enable it.
+/// The defaults check **nothing beyond the signature and temporal claims**:
+///
+/// - `aud` and `iss` default to [`ClaimCheck::NoCheck`], so a bare
+///   `JwtValidator::builder().verifier(v).build()` accepts a validly-signed
+///   token minted for **any audience by any trusted-key issuer** — the classic
+///   audience-confusion vulnerability. Set `.aud("your-audience")` and
+///   `.iss("https://issuer")` unless cross-audience acceptance is intentional.
+/// - `exp` is **not** required: a token with no expiry is accepted. Set
+///   `require_exp(true)` unless non-expiring tokens are intentional.
+///
+/// The bundled profiles (RFC 9068 access tokens, OIDC ID tokens) already
+/// require the audience, issuer, and expiry.
 #[allow(clippy::struct_excessive_bools)]
 #[allow(clippy::should_implement_trait)] // `sub` is the JWT claim name, not arithmetic subtraction
 #[derive(Debug, Builder)]
@@ -40,17 +48,19 @@ pub struct JwtValidator {
     /// JWS verifier to use for token validation.
     #[builder(with = |verifier: impl JwsVerifier + 'static| Arc::new(verifier) as Arc<dyn JwsVerifier>)]
     verifier: Arc<dyn JwsVerifier>,
-    /// Check on the `iss` claim.
-    #[builder(default)]
+    /// Check on the `iss` claim. Defaults to [`ClaimCheck::NoCheck`] — see the
+    /// [Warning](Self#warning). A plain string means "present and equal".
+    #[builder(default, into)]
     iss: ClaimCheck,
-    /// Check on the `sub` claim.
-    #[builder(default)]
+    /// Check on the `sub` claim. A plain string means "present and equal".
+    #[builder(default, into)]
     sub: ClaimCheck,
-    /// Check on the `aud` claim.
-    #[builder(default)]
+    /// Check on the `aud` claim. Defaults to [`ClaimCheck::NoCheck`] — see the
+    /// [Warning](Self#warning). A plain string means "present and equal".
+    #[builder(default, into)]
     aud: ClaimCheck,
-    /// Type to validate against.
-    #[builder(default)]
+    /// Type to validate against. A plain string means "present and equal".
+    #[builder(default, into)]
     typ: ClaimCheck,
     /// The `exp` claim is required.
     #[builder(default)]

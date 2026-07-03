@@ -112,11 +112,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// RFC 7662 §4 directs resource servers to verify that an introspected
         /// token was intended for them: when one authorization server serves
         /// multiple resources, a token minted for another resource still
-        /// introspects as `active`. Use [`ClaimCheck::required_value`] with
-        /// this resource's identifier (or [`ClaimCheck::require_any`] for
-        /// several), or opt out explicitly with [`ClaimCheck::NoCheck`] when
-        /// the authorization server scopes tokens to a single resource or
-        /// omits `aud` from its introspection responses.
+        /// introspects as `active`. Pass this resource's identifier as a
+        /// plain string (equivalent to [`ClaimCheck::required_value`]; use
+        /// [`ClaimCheck::require_any`] for several), or opt out explicitly
+        /// with [`ClaimCheck::NoCheck`] when the authorization server scopes
+        /// tokens to a single resource or omits `aud` from its introspection
+        /// responses.
+        #[builder(into)]
         audience: ClaimCheck,
         /// The client authentication strategy.
         #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]

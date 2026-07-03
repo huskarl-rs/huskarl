@@ -50,7 +50,6 @@ an introspection endpoint.
 use huskarl_resource_server::{
     core::{
         client_auth::ClientSecret,
-        jwt::validator::ClaimCheck,
         secrets::{EnvVarSecret, encodings::StringEncoding},
         server_metadata::AuthorizationServerMetadata,
     },
@@ -69,7 +68,7 @@ let metadata = AuthorizationServerMetadata::fetch()
 let validator = IntrospectionValidator::builder_from_metadata(&metadata)
     .expect("authorization server does not support token introspection")
     .client_id("my-resource-server")
-    .audience(ClaimCheck::required_value("api://my-resource"))
+    .audience("api://my-resource")
     .client_auth(ClientSecret::new(client_secret))
     .http_client(http_client.clone())
     .build()
@@ -84,7 +83,6 @@ let validator = IntrospectionValidator::builder_from_metadata(&metadata)
 use huskarl_resource_server::{
     core::{
         client_auth::ClientSecret,
-        jwt::validator::ClaimCheck,
         secrets::{EnvVarSecret, encodings::StringEncoding},
     },
     validator::introspection::IntrospectionValidator,
@@ -97,7 +95,7 @@ let validator = IntrospectionValidator::builder()
     .client_id("my-resource-server")
     .issuer("https://my-issuer")
     .introspection_endpoint("https://my-issuer/oauth/introspect".parse()?)
-    .audience(ClaimCheck::required_value("api://my-resource"))
+    .audience("api://my-resource")
     .client_auth(ClientSecret::new(client_secret))
     .http_client(http_client.clone())
     .build()
@@ -136,7 +134,7 @@ non-absolute URI fails every DPoP validation with an integration error.
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-# let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").audience(huskarl_resource_server::core::jwt::validator::ClaimCheck::required_value("api://my-resource")).client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
+# let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").audience("api://my-resource").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
 use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 
 let mut headers = http::HeaderMap::new();
