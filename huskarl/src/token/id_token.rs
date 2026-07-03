@@ -11,7 +11,7 @@ use snafu::{ensure, prelude::*};
 
 use crate::core::{
     crypto::verifier::JwsVerifier,
-    jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt},
+    jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt, within_max_age},
     platform::{Duration, SystemTime},
 };
 
@@ -270,12 +270,8 @@ impl IdTokenValidator {
 
             if let Some(auth_time) = validated_jwt.claims.auth_time {
                 let auth_at = SystemTime::UNIX_EPOCH + Duration::from_secs(auth_time);
-                let now = SystemTime::now();
-                // A future auth_time (AS clock ahead) is age zero, not a
-                // rejection — mirrors core's max_token_age handling of iat.
-                let age = now.duration_since(auth_at).unwrap_or(Duration::ZERO);
                 ensure!(
-                    age <= max_age.saturating_add(self.clock_leeway),
+                    within_max_age(SystemTime::now(), auth_at, max_age, self.clock_leeway),
                     AuthTimeTooOldSnafu {
                         auth_time,
                         max_age_secs: max_age.as_secs(),
