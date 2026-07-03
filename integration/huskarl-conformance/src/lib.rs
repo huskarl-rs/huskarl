@@ -8,7 +8,7 @@ use bytes::Bytes;
 use http::{Method, StatusCode, Uri};
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
+    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache, NoSource},
     core::{
         client_auth::ClientAuthentication,
         dpop::AuthorizationServerDPoP,
@@ -232,6 +232,7 @@ pub async fn run_auth_code_flow_with_listener<
     let source = Arc::new(
         GrantTokenSource::builder()
             .grant(grant.to_refresh_grant())
+            .grant_parameters(NoSource)
             .refresh_store(InMemoryRefreshTokenStore::default())
             .build(),
     );

@@ -6,7 +6,7 @@ use std::sync::{
 use bon::Builder;
 
 use crate::{
-    cache::{GetTokenError, GrantParametersSource, NoSource, RefreshTokenStore, TokenSource},
+    cache::{GetTokenError, GrantParametersSource, RefreshTokenStore, TokenSource},
     core::{
         Error, ErrorKind,
         dpop::ResourceServerDPoP,
@@ -82,7 +82,7 @@ use breaker::Breaker;
 ///    parameters (e.g. re-signing a [`from_fn`](crate::cache::from_fn)
 ///    assertion).
 ///
-/// A source built with no parameter source ([`NoSource`], the default) only
+/// A source built with an explicit [`NoSource`](crate::cache::NoSource) parameter source only
 /// performs steps 1–2, refreshing a [`prime`](Self::prime)d token.
 ///
 /// # Credential lifecycle
@@ -154,14 +154,23 @@ pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     /// Source of parameters for obtaining a token directly from the grant when
     /// no primed or refreshable token is usable.
     ///
-    /// Defaults to [`NoSource`] (refresh/prime only). Build by passing a
-    /// reusable parameter value directly, or with
-    /// [`single_use`](crate::cache::single_use) (an authorization or device
-    /// code, consumed once and never replayed) or
-    /// [`from_fn`](crate::cache::from_fn) (a dynamic source minting a fresh
-    /// value per exchange — e.g. a JWT-bearer assertion re-signed with a
-    /// current `exp`).
-    #[builder(default = Box::new(NoSource) as Box<dyn GrantParametersSource<G::Parameters>>, with = |source: impl GrantParametersSource<G::Parameters> + 'static|
+    /// **Required** — state where tokens come from, one of:
+    ///
+    /// - a reusable parameter value passed directly (a fresh exchange runs
+    ///   whenever needed), or [`single_use`](crate::cache::single_use) (an
+    ///   authorization or device code, consumed once and never replayed) or
+    ///   [`from_fn`](crate::cache::from_fn) (a dynamic source minting a fresh
+    ///   value per exchange — e.g. a JWT-bearer assertion re-signed with a
+    ///   current `exp`);
+    /// - [`NoSource`](crate::cache::NoSource) — this source only refreshes: hand it the token response
+    ///   from an interactive flow via [`prime`](Self::prime), or point
+    ///   [`refresh_store`](Self::builder) at a store another component
+    ///   populates.
+    ///
+    /// There is deliberately no default: a source with [`NoSource`](crate::cache::NoSource) that is
+    /// never [`prime`](Self::prime)d (and whose store stays empty) can never
+    /// produce a token, so that configuration must be chosen, not inherited.
+    #[builder(with = |source: impl GrantParametersSource<G::Parameters> + 'static|
         Box::new(source) as Box<dyn GrantParametersSource<G::Parameters>>)]
     grant_parameters: Box<dyn GrantParametersSource<G::Parameters>>,
     /// Set once a fixed parameter source's value is rejected by the server
@@ -459,7 +468,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
     /// For single-use parameter sources (an authorization or device code), this
     /// becomes `false` once the parameters have been consumed by an exchange
     /// attempt; for a fixed source it also becomes `false` once the parameters
-    /// have been definitively rejected by the server. A [`NoSource`] source
+    /// have been definitively rejected by the server. A [`NoSource`](crate::cache::NoSource) source
     /// (none configured) always reports `false`.
     pub fn has_grant_parameters(&self) -> bool {
         !self.params_spent.load(Ordering::Relaxed) && self.grant_parameters.available()

@@ -5,7 +5,7 @@ use http::{HeaderMap, HeaderValue, StatusCode};
 
 use super::*;
 use crate::{
-    cache::{InMemoryRefreshTokenStore, TokenSource, from_fn, single_use},
+    cache::{InMemoryRefreshTokenStore, NoSource, TokenSource, from_fn, single_use},
     core::{
         client_auth::NoAuth,
         http::{HttpClient, HttpResponse, Idempotency},
@@ -196,6 +196,7 @@ async fn primed_source(
 ) -> GrantTokenSource<ClientCredentialsGrant, SharedRefreshStore> {
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(http))
+        .grant_parameters(NoSource)
         .refresh_store(store)
         .build();
     source.prime(valid_response("rt-original")).await.unwrap();
@@ -260,6 +261,7 @@ async fn prime_serves_token_then_refreshes() {
     let http = MockHttpClient::default();
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(NoSource)
         .refresh_store(store.clone())
         .build();
 
@@ -382,6 +384,7 @@ async fn invalid_grant_with_rotated_token_retries_without_clearing() {
     let http = MockHttpClient::default();
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(NoSource)
         .refresh_store(store.clone())
         .build();
 
@@ -414,6 +417,7 @@ async fn can_restore_reflects_credentials() {
     // Nothing usable: no params, no refresh token, no pending token.
     let empty = GrantTokenSource::builder()
         .grant(client_credentials_grant(http))
+        .grant_parameters(NoSource)
         .refresh_store(SharedRefreshStore::default())
         .build();
     assert!(!empty.can_restore(Some(Duration::ZERO)).await.unwrap());
@@ -425,6 +429,7 @@ async fn can_restore_trusts_cached_view_within_staleness() {
     let http = MockHttpClient::default();
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(http))
+        .grant_parameters(NoSource)
         .refresh_store(store.clone())
         .build();
 
@@ -449,6 +454,7 @@ async fn cache_state_reports_active_restorable_unauthenticated() {
     // Active: a primed token is ready to serve.
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(MockHttpClient::default()))
+        .grant_parameters(NoSource)
         .refresh_store(SharedRefreshStore::default())
         .build();
     source.prime(valid_response("rt")).await.unwrap();
@@ -459,6 +465,7 @@ async fn cache_state_reports_active_restorable_unauthenticated() {
     // get a new one without interactive login.
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(MockHttpClient::default()))
+        .grant_parameters(NoSource)
         .refresh_store(SharedRefreshStore::default())
         .build();
     source
@@ -475,6 +482,7 @@ async fn cache_state_reports_active_restorable_unauthenticated() {
     // Unauthenticated: nothing cached, no credential, no parameter source.
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(MockHttpClient::default()))
+        .grant_parameters(NoSource)
         .refresh_store(SharedRefreshStore::default())
         .build();
     let empty = InMemoryTokenCache::builder().source(source).build();
