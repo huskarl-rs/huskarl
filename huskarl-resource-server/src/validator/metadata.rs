@@ -19,6 +19,7 @@ pub struct ValidatorMetadata {
     /// The realm identifying the protection space (RFC 6750 §3).
     ///
     /// Included as `realm="..."` in `WWW-Authenticate` challenges when set.
+    /// The built-in validators fill this from their `realm` builder option.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub realm: Option<String>,
     /// The authorization server(s) this validator trusts, by issuer URI.

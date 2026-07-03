@@ -49,6 +49,7 @@ use crate::{
 pub struct CustomValidator<Claims = ()> {
     inner: ValidatorInner,
     authorization_server: Option<String>,
+    realm: Option<String>,
     on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
@@ -125,6 +126,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// Defaults to `Authorization`.
         #[builder(default = http::header::AUTHORIZATION)]
         token_header: HeaderName,
+        /// The realm identifying the protection space (RFC 6750 §3).
+        ///
+        /// Included as `realm="..."` in the `WWW-Authenticate` challenges built
+        /// from this validator's [metadata](Self::validator_metadata).
+        realm: Option<String>,
         /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
         ///
         /// Use this to record metrics, emit log events, or trigger alerts.
@@ -166,6 +172,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
                 require_mtls,
             },
             authorization_server,
+            realm,
             on_validate,
             _phantom: PhantomData,
         })
@@ -282,7 +289,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
     /// See [`ProvideValidatorMetadata`] for use in generic contexts.
     pub fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         ValidatorMetadata {
-            realm: None,
+            realm: self.realm.clone(),
             authorization_servers: self.authorization_server.as_ref().map(|s| vec![s.clone()]),
             dpop_supported: Some(true),
             dpop_signing_alg_values_supported: self

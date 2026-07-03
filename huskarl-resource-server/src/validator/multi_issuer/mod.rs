@@ -181,9 +181,11 @@ fn peek_issuer(token: &str) -> Option<String> {
 }
 
 /// Builds the union of the registered validators' [`ValidatorMetadata`]:
-/// concatenated `authorization_servers`, unioned `DPoP` signing algorithms, and
+/// concatenated `authorization_servers`, unioned `DPoP` signing algorithms,
 /// `dpop_bound_access_tokens_required` only if *every* source requires it (so a
-/// token may still be presented as Bearer if any source accepts Bearer).
+/// token may still be presented as Bearer if any source accepts Bearer), and
+/// the `realm` only when every source reports the same one (it names the
+/// protection space of the whole deployment, so disagreement means none).
 fn union_metadata<C>(
     sources: &[(String, Box<dyn SourceValidator<C>>)],
     resource: Option<&str>,
@@ -192,9 +194,15 @@ fn union_metadata<C>(
     let mut dpop_algs: Vec<String> = Vec::new();
     let mut all_require_dpop = !sources.is_empty();
     let mut any_dpop_supported = false;
+    let mut realm: Option<Option<String>> = None;
 
     for (_issuer, validator) in sources {
         let m = validator.validator_metadata(resource);
+        realm = match realm {
+            None => Some(m.realm.clone()),
+            Some(r) if r == m.realm => Some(r),
+            Some(_) => Some(None),
+        };
         any_dpop_supported |= m.supports_dpop();
         if let Some(servers) = m.authorization_servers {
             authorization_servers.extend(servers);
@@ -210,7 +218,7 @@ fn union_metadata<C>(
     }
 
     ValidatorMetadata {
-        realm: None,
+        realm: realm.flatten(),
         authorization_servers: (!authorization_servers.is_empty()).then_some(authorization_servers),
         dpop_supported: Some(any_dpop_supported),
         dpop_signing_alg_values_supported: (!dpop_algs.is_empty()).then_some(dpop_algs),
@@ -278,5 +286,68 @@ mod tests {
     #[case::non_string_iss(seg(r#"{"iss":42}"#))]
     fn malformed_payload_is_rejected(#[case] payload_b64: String) {
         assert_eq!(peek_issuer(&token_with_payload(&payload_b64)), None);
+    }
+
+    /// A [`SourceValidator`] double that only carries metadata.
+    struct StubSource {
+        realm: Option<&'static str>,
+    }
+
+    impl AccessTokenValidator for StubSource {
+        type Claims = ();
+        type Error = MultiIssuerError;
+
+        fn validate_request<'a>(
+            &'a self,
+            _headers: &'a http::HeaderMap,
+            _method: &'a http::Method,
+            _uri: &'a http::Uri,
+            _client_cert_der: Option<&'a [u8]>,
+        ) -> MaybeSendBoxFuture<'a, ValidationResult<(), MultiIssuerError>> {
+            Box::pin(async {
+                ValidationResult {
+                    outcome: Ok(None),
+                    dpop_nonce: None,
+                }
+            })
+        }
+    }
+
+    impl ProvideValidatorMetadata for StubSource {
+        fn validator_metadata(&self, _resource: Option<&str>) -> ValidatorMetadata {
+            ValidatorMetadata::builder()
+                .maybe_realm(self.realm.map(str::to_owned))
+                .build()
+        }
+    }
+
+    fn stub_sources(
+        realms: &[Option<&'static str>],
+    ) -> Vec<(String, Box<dyn SourceValidator<()>>)> {
+        realms
+            .iter()
+            .enumerate()
+            .map(|(i, realm)| {
+                (
+                    format!("https://issuer-{i}.example"),
+                    Box::new(StubSource { realm: *realm }) as Box<dyn SourceValidator<()>>,
+                )
+            })
+            .collect()
+    }
+
+    #[rstest]
+    // The realm names the whole deployment's protection space, so it unions
+    // only when every source reports the same one.
+    #[case::all_agree(&[Some("api"), Some("api")], Some("api"))]
+    #[case::disagreement(&[Some("api"), Some("other")], None)]
+    #[case::partial(&[Some("api"), None], None)]
+    #[case::none_set(&[None, None], None)]
+    fn union_realm_requires_agreement(
+        #[case] realms: &[Option<&'static str>],
+        #[case] expected: Option<&str>,
+    ) {
+        let meta = union_metadata(&stub_sources(realms), None);
+        assert_eq!(meta.realm.as_deref(), expected);
     }
 }

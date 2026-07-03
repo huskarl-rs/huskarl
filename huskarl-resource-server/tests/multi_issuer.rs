@@ -132,6 +132,7 @@ async fn build(
             ),
         )
         .require_jti(false)
+        .realm("api")
         .jwks_uri(google.jwks_uri())
         .jws_verifier_factory(Arc::new(
             JwksSource::builder().http_client(http.clone()).build(),
@@ -152,6 +153,7 @@ async fn build(
             ),
         )
         .require_jti(false)
+        .realm("api")
         .jwks_uri(okta.jwks_uri())
         .jws_verifier_factory(Arc::new(
             JwksSource::builder().http_client(http.clone()).build(),
@@ -317,6 +319,8 @@ async fn metadata_unions_authorization_servers() {
     assert!(servers.contains(&google.issuer));
     assert!(servers.contains(&okta.issuer));
     assert_eq!(meta.resource.as_deref(), Some("https://api.example.com"));
+    // Both sources carry the same realm, so the union surfaces it.
+    assert_eq!(meta.realm.as_deref(), Some("api"));
 }
 
 /// Small helper to read the RFC 6750 error code off a classification.
