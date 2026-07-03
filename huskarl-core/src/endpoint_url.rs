@@ -36,7 +36,7 @@ pub struct EndpointUrl(Uri);
 
 impl Serialize for EndpointUrl {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.0.to_string())
+        serializer.collect_str(&self.0)
     }
 }
 
@@ -274,6 +274,15 @@ mod tests {
         let e: EndpointUrl = "https://as.example.com/authorize?foo=bar".parse().unwrap();
         assert_eq!(e.to_string(), "https://as.example.com/authorize?foo=bar");
         assert_eq!(format!("{e}"), e.as_uri().to_string());
+    }
+
+    #[test]
+    fn serde_round_trips_as_a_string() {
+        let e: EndpointUrl = "https://as.example.com/authorize?foo=bar".parse().unwrap();
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(json, r#""https://as.example.com/authorize?foo=bar""#);
+        let back: EndpointUrl = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, e);
     }
 
     #[test]
