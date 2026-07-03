@@ -50,6 +50,18 @@ pub struct ValidatorMetadata {
     /// `dpop_bound_access_tokens_required` in RFC 9728 metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dpop_bound_access_tokens_required: Option<bool>,
+    /// Whether mutual-TLS certificate-bound access tokens (RFC 8705) are
+    /// supported.
+    ///
+    /// Maps to `tls_client_certificate_bound_access_tokens` in RFC 9728
+    /// metadata. The built-in validators check a token's `cnf.x5t#S256`
+    /// binding whenever the deployment supplies the client certificate, but
+    /// cannot know whether TLS termination actually presents one — they set
+    /// `Some(true)` only when the binding is required (`require_mtls`) and
+    /// leave `None` otherwise. Deployments that accept optionally-bound
+    /// tokens should set this themselves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tls_client_certificate_bound_access_tokens: Option<bool>,
     /// The resource server's identifier URI.
     ///
     /// Provided by the caller to identify this specific resource instance. Maps to `resource` in
@@ -328,6 +340,7 @@ mod tests {
             dpop_supported: None,
             dpop_signing_alg_values_supported: None,
             dpop_bound_access_tokens_required: None,
+            tls_client_certificate_bound_access_tokens: None,
             resource: None,
             bearer_methods_supported: None,
         }
@@ -513,6 +526,26 @@ mod tests {
         let challenges = meta().challenges(Some(&err), Some("read"), None);
         assert!(challenges[0].contains(r#"scope="admin""#), "{challenges:?}");
         assert!(!challenges[0].contains(r#"scope="read""#), "{challenges:?}");
+    }
+
+    #[test]
+    fn serializes_document_fields_only() {
+        let mut m = meta();
+        m.dpop_supported = Some(true);
+        m.dpop_bound_access_tokens_required = Some(false);
+        m.tls_client_certificate_bound_access_tokens = Some(true);
+        m.resource = Some("https://api.example".to_string());
+
+        // `dpop_supported` is not an RFC 9728 document field; the rest
+        // serialize under their RFC names.
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!({
+                "dpop_bound_access_tokens_required": false,
+                "tls_client_certificate_bound_access_tokens": true,
+                "resource": "https://api.example",
+            })
+        );
     }
 
     #[test]

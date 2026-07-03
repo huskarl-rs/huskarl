@@ -183,9 +183,11 @@ fn peek_issuer(token: &str) -> Option<String> {
 /// Builds the union of the registered validators' [`ValidatorMetadata`]:
 /// concatenated `authorization_servers`, unioned `DPoP` signing algorithms,
 /// `dpop_bound_access_tokens_required` only if *every* source requires it (so a
-/// token may still be presented as Bearer if any source accepts Bearer), and
-/// the `realm` only when every source reports the same one (it names the
-/// protection space of the whole deployment, so disagreement means none).
+/// token may still be presented as Bearer if any source accepts Bearer),
+/// mTLS-bound token support if *any* source reports it (the deployment handles
+/// the binding regardless of which issuer minted the token), and the `realm`
+/// only when every source reports the same one (it names the protection space
+/// of the whole deployment, so disagreement means none).
 fn union_metadata<C>(
     sources: &[(String, Box<dyn SourceValidator<C>>)],
     resource: Option<&str>,
@@ -194,6 +196,7 @@ fn union_metadata<C>(
     let mut dpop_algs: Vec<String> = Vec::new();
     let mut all_require_dpop = !sources.is_empty();
     let mut any_dpop_supported = false;
+    let mut any_mtls_bound_supported = false;
     let mut realm: Option<Option<String>> = None;
 
     for (_issuer, validator) in sources {
@@ -204,6 +207,7 @@ fn union_metadata<C>(
             Some(_) => Some(None),
         };
         any_dpop_supported |= m.supports_dpop();
+        any_mtls_bound_supported |= m.tls_client_certificate_bound_access_tokens == Some(true);
         if let Some(servers) = m.authorization_servers {
             authorization_servers.extend(servers);
         }
@@ -223,6 +227,7 @@ fn union_metadata<C>(
         dpop_supported: Some(any_dpop_supported),
         dpop_signing_alg_values_supported: (!dpop_algs.is_empty()).then_some(dpop_algs),
         dpop_bound_access_tokens_required: Some(all_require_dpop),
+        tls_client_certificate_bound_access_tokens: any_mtls_bound_supported.then_some(true),
         resource: resource.map(str::to_owned),
         bearer_methods_supported: Some(vec!["header"]),
     }
@@ -289,8 +294,10 @@ mod tests {
     }
 
     /// A [`SourceValidator`] double that only carries metadata.
+    #[derive(Default)]
     struct StubSource {
         realm: Option<&'static str>,
+        mtls_bound_supported: Option<bool>,
     }
 
     impl AccessTokenValidator for StubSource {
@@ -317,23 +324,33 @@ mod tests {
         fn validator_metadata(&self, _resource: Option<&str>) -> ValidatorMetadata {
             ValidatorMetadata::builder()
                 .maybe_realm(self.realm.map(str::to_owned))
+                .maybe_tls_client_certificate_bound_access_tokens(self.mtls_bound_supported)
                 .build()
         }
+    }
+
+    fn boxed_sources(
+        stubs: impl IntoIterator<Item = StubSource>,
+    ) -> Vec<(String, Box<dyn SourceValidator<()>>)> {
+        stubs
+            .into_iter()
+            .enumerate()
+            .map(|(i, stub)| {
+                (
+                    format!("https://issuer-{i}.example"),
+                    Box::new(stub) as Box<dyn SourceValidator<()>>,
+                )
+            })
+            .collect()
     }
 
     fn stub_sources(
         realms: &[Option<&'static str>],
     ) -> Vec<(String, Box<dyn SourceValidator<()>>)> {
-        realms
-            .iter()
-            .enumerate()
-            .map(|(i, realm)| {
-                (
-                    format!("https://issuer-{i}.example"),
-                    Box::new(StubSource { realm: *realm }) as Box<dyn SourceValidator<()>>,
-                )
-            })
-            .collect()
+        boxed_sources(realms.iter().map(|realm| StubSource {
+            realm: *realm,
+            ..StubSource::default()
+        }))
     }
 
     #[rstest]
@@ -349,5 +366,24 @@ mod tests {
     ) {
         let meta = union_metadata(&stub_sources(realms), None);
         assert_eq!(meta.realm.as_deref(), expected);
+    }
+
+    #[rstest]
+    // mTLS-bound token support is a deployment capability, so any source
+    // asserting it makes the union assert it.
+    #[case::any_true(&[None, Some(true)], Some(true))]
+    #[case::none_assert(&[None, Some(false)], None)]
+    fn union_mtls_bound_support_is_any(
+        #[case] flags: &[Option<bool>],
+        #[case] expected: Option<bool>,
+    ) {
+        let sources = boxed_sources(flags.iter().map(|flag| StubSource {
+            mtls_bound_supported: *flag,
+            ..StubSource::default()
+        }));
+        assert_eq!(
+            union_metadata(&sources, None).tls_client_certificate_bound_access_tokens,
+            expected
+        );
     }
 }
