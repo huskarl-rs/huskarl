@@ -59,5 +59,22 @@ pub async fn main() {
         .validate_request(&headers, &http_method, &http_uri, None)
         .await;
 
+    // An unauthenticated or invalid request becomes a response with the right
+    // status code, WWW-Authenticate challenges, and DPoP-Nonce header.
+    let validator_metadata = validator.validator_metadata(Some("https://example.com"));
+    if let Some(rejection) = result.rejection(&validator_metadata, None) {
+        let response = rejection
+            .apply(http::Response::builder())
+            .body(String::new())
+            .unwrap();
+        println!("Rejected: {response:?}");
+        return;
+    }
+
+    // Authenticated. A rotated DPoP nonce can arrive on success too — echo it
+    // in the response's DPoP-Nonce header.
+    if let Some(nonce) = &result.dpop_nonce {
+        println!("DPoP-Nonce to echo: {nonce}");
+    }
     println!("{result:?}")
 }

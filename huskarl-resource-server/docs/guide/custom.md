@@ -131,3 +131,8 @@ match result.outcome {
 # Ok(())
 # }
 ```
+
+To turn a failed or unauthenticated result into the HTTP response — status
+code, `WWW-Authenticate` challenges, and `DPoP-Nonce` header — see [rejecting
+a request](crate::_docs::guide::rfc9068#4-reject-a-request) and the
+[`rejection`](crate::rejection) module.

@@ -113,9 +113,18 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Failed to get authorization headers")?;
 
-    let validation_response = resource_server_validator
+    let validation_result = resource_server_validator
         .validate_request(&headers, &Method::GET, &resource_server_url, None)
-        .await
+        .await;
+
+    // A resource server must echo this nonce in the response's `DPoP-Nonce`
+    // header — on success (nonce rotation) as well as on rejections. On the
+    // rejection path, `ValidationResult::rejection` carries it automatically.
+    if let Some(nonce) = &validation_result.dpop_nonce {
+        println!("DPoP-Nonce to echo in the response: {nonce}");
+    }
+
+    let validation_response = validation_result
         .outcome
         .whatever_context("Token failed to validate")?;
 

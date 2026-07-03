@@ -15,6 +15,8 @@
 //! (signature/introspection, expiry, audience, and any sender-constraint
 //! binding) and returns a [`ValidatedRequest`]
 //! carrying its claims — from which your application makes the second decision.
+//! When validation fails, [`rejection`] turns the failure into the matching
+//! response: status code, `WWW-Authenticate` challenges, and `DPoP-Nonce`.
 //!
 //! ## The huskarl ecosystem
 //!
@@ -66,6 +68,7 @@ pub mod _docs;
 
 pub mod error;
 pub mod introspection;
+pub mod rejection;
 pub mod validator;
 
 use std::sync::Arc;
