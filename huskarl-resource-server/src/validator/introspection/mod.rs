@@ -69,6 +69,7 @@ pub struct IntrospectionValidator<Claims = ()> {
     on_validate: Option<Arc<dyn OnValidate>>,
     issuer: Option<String>,
     realm: Option<String>,
+    resource_metadata: Option<String>,
     audience: ClaimCheck,
     require_mtls: bool,
     _phantom: PhantomData<Claims>,
@@ -193,6 +194,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// Included as `realm="..."` in the `WWW-Authenticate` challenges built
         /// from this validator's [metadata](Self::validator_metadata).
         realm: Option<String>,
+        /// URL of this resource's Protected Resource Metadata document (RFC 9728).
+        ///
+        /// Included as `resource_metadata="..."` in the `WWW-Authenticate`
+        /// challenges built from this validator's
+        /// [metadata](Self::validator_metadata), so clients can discover the
+        /// document (RFC 9728 §5.1).
+        resource_metadata: Option<String>,
         /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
         ///
         /// Use this to record metrics, emit log events, or trigger alerts.
@@ -230,6 +238,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             on_validate,
             issuer,
             realm,
+            resource_metadata,
             audience,
             require_mtls,
             _phantom: PhantomData,
@@ -306,6 +315,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             tls_client_certificate_bound_access_tokens: self.require_mtls.then_some(true),
             resource: resource.map(std::borrow::ToOwned::to_owned),
             bearer_methods_supported: Some(vec!["header"]),
+            resource_metadata: self.resource_metadata.clone(),
         }
     }
 

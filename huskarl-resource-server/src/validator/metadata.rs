@@ -75,6 +75,14 @@ pub struct ValidatorMetadata {
     /// `None` means unspecified. Maps to `bearer_methods_supported` in RFC 9728 metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bearer_methods_supported: Option<Vec<&'static str>>,
+    /// URL of this resource's Protected Resource Metadata document (RFC 9728).
+    ///
+    /// Included as `resource_metadata="..."` in `WWW-Authenticate` challenges
+    /// (RFC 9728 §5.1) so clients can discover the document. It locates the
+    /// document rather than appearing inside it, so it is skipped during
+    /// serialization.
+    #[serde(skip)]
+    pub resource_metadata: Option<String>,
 }
 
 use crate::{
@@ -233,6 +241,10 @@ impl ValidatorMetadata {
             parts.extend(e.extra_params().into_iter().map(|p| p.format()));
         }
 
+        if let Some(url) = self.resource_metadata.as_deref() {
+            parts.push(format!(r#"resource_metadata="{}""#, escape_quoted(url)));
+        }
+
         if scheme == "DPoP"
             && let Some(algs) = &self.dpop_signing_alg_values_supported
         {
@@ -343,6 +355,7 @@ mod tests {
             tls_client_certificate_bound_access_tokens: None,
             resource: None,
             bearer_methods_supported: None,
+            resource_metadata: None,
         }
     }
 
@@ -529,15 +542,52 @@ mod tests {
     }
 
     #[test]
+    fn resource_metadata_in_all_challenges() {
+        let mut m = meta();
+        m.dpop_supported = Some(true);
+        m.resource_metadata =
+            Some("https://api.example/.well-known/oauth-protected-resource".to_string());
+
+        // RFC 9728 §5.1: the challenge points clients at the metadata document,
+        // on every supported scheme.
+        assert_eq!(
+            m.unauthenticated_challenges(None),
+            vec![
+                r#"Bearer resource_metadata="https://api.example/.well-known/oauth-protected-resource""#,
+                r#"DPoP resource_metadata="https://api.example/.well-known/oauth-protected-resource""#,
+            ]
+        );
+    }
+
+    #[test]
+    fn resource_metadata_follows_error_params() {
+        let mut m = meta();
+        m.realm = Some("api".to_string());
+        m.resource_metadata =
+            Some("https://api.example/.well-known/oauth-protected-resource".to_string());
+        let err = TestError::client(TokenErrorCode::InvalidToken).description("bad token");
+
+        // Part order: realm, scope, error params, resource_metadata.
+        assert_eq!(
+            m.challenges(Some(&err), Some("read"), None),
+            vec![
+                r#"Bearer realm="api", scope="read", error="invalid_token", error_description="bad token", resource_metadata="https://api.example/.well-known/oauth-protected-resource""#
+            ]
+        );
+    }
+
+    #[test]
     fn serializes_document_fields_only() {
         let mut m = meta();
         m.dpop_supported = Some(true);
         m.dpop_bound_access_tokens_required = Some(false);
         m.tls_client_certificate_bound_access_tokens = Some(true);
         m.resource = Some("https://api.example".to_string());
+        m.resource_metadata =
+            Some("https://api.example/.well-known/oauth-protected-resource".to_string());
 
-        // `dpop_supported` is not an RFC 9728 document field; the rest
-        // serialize under their RFC names.
+        // `dpop_supported` and `resource_metadata` are not RFC 9728 document
+        // fields; the rest serialize under their RFC names.
         assert_eq!(
             serde_json::to_value(&m).unwrap(),
             serde_json::json!({

@@ -186,8 +186,9 @@ fn peek_issuer(token: &str) -> Option<String> {
 /// token may still be presented as Bearer if any source accepts Bearer),
 /// mTLS-bound token support if *any* source reports it (the deployment handles
 /// the binding regardless of which issuer minted the token), and the `realm`
-/// only when every source reports the same one (it names the protection space
-/// of the whole deployment, so disagreement means none).
+/// and `resource_metadata` only when every source reports the same one (each
+/// names something deployment-wide — the protection space and this resource's
+/// metadata document — so disagreement means none).
 fn union_metadata<C>(
     sources: &[(String, Box<dyn SourceValidator<C>>)],
     resource: Option<&str>,
@@ -198,12 +199,18 @@ fn union_metadata<C>(
     let mut any_dpop_supported = false;
     let mut any_mtls_bound_supported = false;
     let mut realm: Option<Option<String>> = None;
+    let mut resource_metadata: Option<Option<String>> = None;
 
     for (_issuer, validator) in sources {
         let m = validator.validator_metadata(resource);
         realm = match realm {
             None => Some(m.realm.clone()),
             Some(r) if r == m.realm => Some(r),
+            Some(_) => Some(None),
+        };
+        resource_metadata = match resource_metadata {
+            None => Some(m.resource_metadata.clone()),
+            Some(r) if r == m.resource_metadata => Some(r),
             Some(_) => Some(None),
         };
         any_dpop_supported |= m.supports_dpop();
@@ -230,6 +237,7 @@ fn union_metadata<C>(
         tls_client_certificate_bound_access_tokens: any_mtls_bound_supported.then_some(true),
         resource: resource.map(str::to_owned),
         bearer_methods_supported: Some(vec!["header"]),
+        resource_metadata: resource_metadata.flatten(),
     }
 }
 
@@ -297,6 +305,7 @@ mod tests {
     #[derive(Default)]
     struct StubSource {
         realm: Option<&'static str>,
+        resource_metadata: Option<&'static str>,
         mtls_bound_supported: Option<bool>,
     }
 
@@ -324,6 +333,7 @@ mod tests {
         fn validator_metadata(&self, _resource: Option<&str>) -> ValidatorMetadata {
             ValidatorMetadata::builder()
                 .maybe_realm(self.realm.map(str::to_owned))
+                .maybe_resource_metadata(self.resource_metadata.map(str::to_owned))
                 .maybe_tls_client_certificate_bound_access_tokens(self.mtls_bound_supported)
                 .build()
         }
@@ -366,6 +376,26 @@ mod tests {
     ) {
         let meta = union_metadata(&stub_sources(realms), None);
         assert_eq!(meta.realm.as_deref(), expected);
+    }
+
+    #[rstest]
+    // The metadata URL locates this resource's one document, so like the
+    // realm it unions only when every source reports the same one.
+    #[case::all_agree(&[Some("https://api.example/prm"), Some("https://api.example/prm")], Some("https://api.example/prm"))]
+    #[case::disagreement(&[Some("https://api.example/prm"), Some("https://other.example/prm")], None)]
+    #[case::partial(&[Some("https://api.example/prm"), None], None)]
+    fn union_resource_metadata_requires_agreement(
+        #[case] urls: &[Option<&'static str>],
+        #[case] expected: Option<&str>,
+    ) {
+        let sources = boxed_sources(urls.iter().map(|url| StubSource {
+            resource_metadata: *url,
+            ..StubSource::default()
+        }));
+        assert_eq!(
+            union_metadata(&sources, None).resource_metadata.as_deref(),
+            expected
+        );
     }
 
     #[rstest]
