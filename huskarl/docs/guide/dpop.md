@@ -101,15 +101,11 @@ for the full flow:
 # use http::Method;
 # use huskarl::core::dpop::{AuthorizationServerDPoP as _, DPoP, ResourceServerDPoP as _};
 # use huskarl::token::DpopAccessToken;
-# async fn example(dpop: DPoP, token: DpopAccessToken) -> Result<(), huskarl::core::Error> {
+# async fn example(dpop: DPoP, token: DpopAccessToken) -> Result<(), Box<dyn std::error::Error>> {
+let uri: http::Uri = "https://api.example.com/v1/widgets".parse()?;
 let resource_dpop = dpop.to_resource_server_dpop();
 let proof = resource_dpop
-    .proof(
-        &Method::GET,
-        &"https://api.example.com/v1/widgets".parse().unwrap(),
-        token.token(),
-        token.jkt(),
-    )
+    .proof(&Method::GET, &uri, token.token(), token.jkt())
     .await?;
 # let _ = proof;
 # Ok(())

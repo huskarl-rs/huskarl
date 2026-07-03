@@ -41,11 +41,11 @@ use breaker::Breaker;
 ///     authorizer::HttpAuthorizer,
 ///     cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
 /// };
-/// # async fn example(http_client: impl HttpClient + 'static) {
+/// # async fn example(http_client: impl HttpClient + 'static) -> Result<(), Box<dyn std::error::Error>> {
 /// # let grant = ClientCredentialsGrant::builder()
 /// #     .client_id("client-id")
 /// #     .client_auth(NoAuth)
-/// #     .token_endpoint("https://as.example.com/token".parse().unwrap())
+/// #     .token_endpoint("https://as.example.com/token".parse()?)
 /// #     .http_client(http_client)
 /// #     .build();
 /// // `grant` is any grant, built as shown in the crate-level examples.
@@ -59,6 +59,7 @@ use breaker::Breaker;
 ///     .cache(InMemoryTokenCache::builder().source(source).build())
 ///     .build();
 /// # let _ = authorizer;
+/// # Ok(())
 /// # }
 /// ```
 ///
