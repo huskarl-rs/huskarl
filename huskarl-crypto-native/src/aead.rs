@@ -4,7 +4,8 @@
 //! [`AeadEncryptor`] and
 //! [`AeadDecryptor`]. Build one with
 //! [`AesGcmKey::from_secret`], which infers AES-128/192/256 from the key length
-//! (16/24/32 bytes) — e.g. to back the `DPoP` nonce store.
+//! (16/24/32 bytes) — e.g. to back the `DPoP` nonce store. Note the per-key
+//! encryption bound in [`AesGcmKey`]'s docs when sizing key rotation.
 
 use std::{array::TryFromSliceError, borrow::Cow, fmt};
 
@@ -47,6 +48,22 @@ impl NativeKey {
 /// AES-128/192/256 from the key length. Implements huskarl-core's
 /// [`AeadEncryptor`] and
 /// [`AeadDecryptor`].
+///
+/// # Usage bound (NIST SP 800-38D §8.3)
+///
+/// Each [`encrypt`](AeadEncryptor::encrypt) call draws a fresh random 96-bit
+/// nonce, so a single key must perform at most **2^32 encryptions**. The
+/// limit keeps the probability of ever repeating a nonce below 2^-32 — a
+/// deliberately negligible budget, because even one repeat under GCM is
+/// catastrophic (keystream reuse and recovery of the authentication subkey,
+/// enabling forgeries on later messages). The bound is cumulative per
+/// key material, across restarts and every process sharing the key, so
+/// enforce it with a rotation schedule rather than a counter — at a sustained
+/// 1,000 encryptions per second, 2^32 is reached in about 50 days. Decryption
+/// is not bounded. Rotate by introducing a new key and keeping old ones
+/// decrypt-only via
+/// [`MultiKeyCipher`](huskarl_core::crypto::cipher::MultiKeyCipher) /
+/// [`MultiKeyDecryptor`](huskarl_core::crypto::cipher::MultiKeyDecryptor).
 pub struct AesGcmKey {
     inner: NativeKey,
     kid: Option<String>,
