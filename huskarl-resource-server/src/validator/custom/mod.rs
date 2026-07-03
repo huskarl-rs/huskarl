@@ -50,6 +50,7 @@ pub struct CustomValidator<Claims = ()> {
     inner: ValidatorInner,
     authorization_server: Option<String>,
     realm: Option<String>,
+    resource_metadata: Option<String>,
     on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
@@ -132,6 +133,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// Included as `realm="..."` in the `WWW-Authenticate` challenges built
         /// from this validator's [metadata](Self::validator_metadata).
         realm: Option<String>,
+        /// URL of this resource's Protected Resource Metadata document (RFC 9728).
+        ///
+        /// Included as `resource_metadata="..."` in the `WWW-Authenticate`
+        /// challenges built from this validator's
+        /// [metadata](Self::validator_metadata), so clients can discover the
+        /// document (RFC 9728 §5.1).
+        resource_metadata: Option<String>,
         /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
         ///
         /// Use this to record metrics, emit log events, or trigger alerts.
@@ -174,6 +182,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
             },
             authorization_server,
             realm,
+            resource_metadata,
             on_validate,
             _phantom: PhantomData,
         })
@@ -305,6 +314,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
             tls_client_certificate_bound_access_tokens: self.inner.require_mtls.then_some(true),
             resource: resource.map(std::borrow::ToOwned::to_owned),
             bearer_methods_supported: Some(vec!["header"]),
+            resource_metadata: self.resource_metadata.clone(),
         }
     }
 

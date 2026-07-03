@@ -44,6 +44,7 @@ async fn test_rfc9068_validator() {
         .issuer(issuer.clone())
         .audience("api://resource")
         .realm("api")
+        .resource_metadata("https://api.example/.well-known/oauth-protected-resource")
         .jwks_uri(jwks_uri)
         .jws_verifier_factory(Arc::new(
             JwksSource::builder()
@@ -54,10 +55,15 @@ async fn test_rfc9068_validator() {
         .await
         .unwrap();
 
-    // The builder's realm surfaces in the challenge-shaping metadata; mTLS
-    // binding is not required, so support is not asserted.
+    // The builder's realm and resource_metadata surface in the
+    // challenge-shaping metadata; mTLS binding is not required, so support
+    // is not asserted.
     let metadata = validator.validator_metadata(None);
     assert_eq!(metadata.realm.as_deref(), Some("api"));
+    assert_eq!(
+        metadata.resource_metadata.as_deref(),
+        Some("https://api.example/.well-known/oauth-protected-resource")
+    );
     assert_eq!(metadata.tls_client_certificate_bound_access_tokens, None);
 
     // 4. Create a valid RFC 9068 JWT
