@@ -37,20 +37,42 @@ mod util;
 /// extraction, the generated function gates on it and returns
 /// `Option<Builder<…>>`. At most one gating field per struct is supported.
 ///
-/// ```ignore
-/// #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
-/// #[derive(bon::Builder)]
-/// #[builder(state_mod(name = "builder"))]
-/// pub struct Foo {
-///     #[from_metadata(path = "issuer")]
-///     issuer: Option<String>,
+/// The macro is generic over the metadata type — `metadata = …` names any
+/// type, and the generated `builder_from_metadata(&Meta)` pre-fills the
+/// tagged fields from it. The huskarl crates use it with
+/// `AuthorizationServerMetadata`; here over a local struct:
 ///
-///     #[from_metadata(path = "token_endpoint")]
-///     token_endpoint: crate::core::EndpointUrl,
+/// ```rust
+/// use bon::Builder;
 ///
-///     #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
-///     mtls_token_endpoint: Option<crate::core::EndpointUrl>,
+/// struct Meta {
+///     issuer: String,
+///     endpoints: Option<Endpoints>,
 /// }
+///
+/// struct Endpoints {
+///     token: Option<String>,
+/// }
+///
+/// #[huskarl_macros::from_metadata(metadata = Meta)]
+/// #[derive(Builder)]
+/// #[builder(state_mod(name = "builder"))]
+/// struct Client {
+///     #[from_metadata(path = "issuer")]
+///     issuer: String,
+///
+///     // Each `?` marks an `Option` hop in the source.
+///     #[from_metadata(path = "endpoints?.token?")]
+///     token_endpoint: Option<String>,
+/// }
+///
+/// let meta = Meta {
+///     issuer: "https://as.example.com".into(),
+///     endpoints: None,
+/// };
+/// let client = Client::builder_from_metadata(&meta).build();
+/// assert_eq!(client.issuer, "https://as.example.com");
+/// assert_eq!(client.token_endpoint, None);
 /// ```
 #[proc_macro_attribute]
 pub fn from_metadata(args: TokenStream, input: TokenStream) -> TokenStream {

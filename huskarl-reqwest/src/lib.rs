@@ -224,16 +224,6 @@ impl ReqwestClient {
     }
 }
 
-/// Classifies a `reqwest::Error` as a transport failure.
-///
-/// Connection-establishment failures are always retryable: the request
-/// provably never reached the server, so a retry is safe even for requests
-/// of unknown idempotency (authorization-code exchange, refresh-token
-/// rotation). Timeouts and interrupted response bodies are retryable only
-/// for requests known to be idempotent — the first attempt may have been
-/// processed and only the response lost.
-///
-/// On `wasm32`, fetch errors are opaque, so nothing is marked retryable.
 /// Builds the error returned when a response body exceeds the configured limit.
 ///
 /// Classified as [`ErrorKind::Protocol`] rather than a transport failure: the
@@ -302,6 +292,16 @@ async fn read_body(
     }
 }
 
+/// Classifies a `reqwest::Error` as a transport failure.
+///
+/// Connection-establishment failures are always retryable: the request
+/// provably never reached the server, so a retry is safe even for requests
+/// of unknown idempotency (authorization-code exchange, refresh-token
+/// rotation). Timeouts and interrupted response bodies are retryable only
+/// for requests known to be idempotent — the first attempt may have been
+/// processed and only the response lost.
+///
+/// On `wasm32`, fetch errors are opaque, so nothing is marked retryable.
 fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
     #[cfg(not(target_arch = "wasm32"))]
     let retryable = source.is_connect()

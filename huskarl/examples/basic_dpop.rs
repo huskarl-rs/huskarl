@@ -34,15 +34,15 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Failed to get authorization server metadata")?;
 
+    // The tokens obtained through this grant are bound to this key.
+    let dpop_key = PrivateKey::generate(GenerateAlgorithm::Ed25519, None)
+        .whatever_context("Failed to generate DPoP key")?;
+
     let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
         .client_id(client_id)
         .http_client(http_client.clone())
         .client_auth(ClientSecret::new(client_secret))
-        .dpop(
-            DPoP::builder()
-                .signer(PrivateKey::generate(GenerateAlgorithm::Ed25519, None).unwrap())
-                .build(),
-        )
+        .dpop(DPoP::builder().signer(dpop_key).build())
         .build();
 
     let token_response = grant
@@ -65,10 +65,13 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         return Ok(());
     };
 
+    let resource_uri: http::Uri = "https://api.example.com/resource"
+        .parse()
+        .whatever_context("Invalid resource URI")?;
     let dpop_proof = resource_server_dpop
         .proof(
             &Method::GET,
-            &"https://blah/".parse().unwrap(),
+            &resource_uri,
             dpop_token.token(),
             dpop_token.jkt(),
         )
