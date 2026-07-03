@@ -82,6 +82,7 @@ impl Jwk {
             algorithm: self.algorithm.clone(),
             kid: self.kid.clone(),
             x5u: self.x5u.clone(),
+            has_private_parameters: false,
         })
     }
 
@@ -148,6 +149,7 @@ impl PrivateJwk {
             algorithm: self.algorithm.clone(),
             kid: self.kid.clone(),
             x5u: self.x5u.clone(),
+            has_private_parameters: false,
         }
     }
 

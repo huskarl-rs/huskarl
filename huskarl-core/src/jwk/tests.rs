@@ -247,6 +247,22 @@ fn test_public_jwk_strips_private_material() {
 }
 
 #[test]
+fn test_public_jwk_records_private_parameter_presence() {
+    let ec_public = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#;
+    let jwk: PublicJwk = serde_json::from_str(ec_public).unwrap();
+    assert!(!jwk.has_private_parameters);
+
+    let ec_private = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}"#;
+    let jwk: PublicJwk = serde_json::from_str(ec_private).unwrap();
+    assert!(jwk.has_private_parameters);
+
+    // Only presence is recorded: the private value must not survive parsing
+    // into serialized or Debug output.
+    assert!(!serde_json::to_string(&jwk).unwrap().contains("870MB6"));
+    assert!(!format!("{jwk:?}").contains("870MB6"));
+}
+
+#[test]
 fn test_public_jwk_none_for_oct() {
     let oct_json = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg","alg":"A128KW"}"#;
     let jwk: Jwk = serde_json::from_str(oct_json).unwrap();
