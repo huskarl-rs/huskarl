@@ -383,7 +383,7 @@ pub struct StartOutput {
 }
 
 /// The pending state information (to be passed to the `poll` function).
-#[derive(Debug, Builder, Serialize, Deserialize)]
+#[derive(Builder, Serialize, Deserialize)]
 #[builder(on(String, into))]
 #[non_exhaustive]
 pub struct PendingState {
@@ -391,6 +391,18 @@ pub struct PendingState {
     pub device_code: String,
     /// The minimum amount of time in seconds the client should wait between polling requests.
     pub interval_secs: u32,
+}
+
+// `PendingState` is designed to be persisted between polls and is therefore
+// likely to end up in logs. The `device_code` is the bearer credential for
+// the token exchange (RFC 8628 §5.2), so it may not appear in `Debug` output.
+impl core::fmt::Debug for PendingState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PendingState")
+            .field("device_code", &"[REDACTED]")
+            .field("interval_secs", &self.interval_secs)
+            .finish()
+    }
 }
 
 /// Errors that may occur during polling for a token.
@@ -497,6 +509,14 @@ mod tests {
             device_code: "dev-code".to_string(),
             interval_secs: 5,
         }
+    }
+
+    #[test]
+    fn pending_state_debug_redacts_the_device_code() {
+        let rendered = format!("{:?}", pending());
+        assert!(rendered.contains("[REDACTED]"), "got {rendered}");
+        assert!(!rendered.contains("dev-code"), "got {rendered}");
+        assert!(rendered.contains("interval_secs: 5"), "got {rendered}");
     }
 
     #[test]
