@@ -380,6 +380,37 @@ mod tests {
         assert_eq!(key.key_id().as_deref(), Some("cookie-key-2026"));
     }
 
+    /// Mirror of the webcrypto backend's `kid_drives_cipher_match`: both
+    /// backends must wire their own alg/kid into the shared
+    /// `CipherMatch::strength_for` contract identically — the kid is what
+    /// lets a `MultiKeyDecryptor` route, and a refresh-on-miss distinguish
+    /// "wrong key" from "tampered".
+    #[tokio::test]
+    async fn kid_drives_cipher_match() {
+        use huskarl_core::crypto::KeyMatchStrength;
+
+        let key = key_from(vec![1u8; 32], Some("v1")).await;
+
+        assert!(matches!(
+            key.cipher_match(&CipherMatch::builder().kid("v1").build()),
+            Some(KeyMatchStrength::ByKeyId),
+        ));
+        assert!(
+            key.cipher_match(&CipherMatch::builder().kid("v2").build())
+                .is_none(),
+            "a kid mismatch must return None, not ByAlgorithm",
+        );
+        assert!(matches!(
+            key.cipher_match(&CipherMatch::builder().build()),
+            Some(KeyMatchStrength::ByAlgorithm),
+        ));
+        assert!(
+            key.cipher_match(&CipherMatch::builder().enc("A128GCM").build())
+                .is_none(),
+            "an enc-algorithm mismatch must not match (key is A256GCM)",
+        );
+    }
+
     #[tokio::test]
     async fn wrong_aad_fails_to_open() {
         let key = key_from(vec![5u8; 32], None).await;

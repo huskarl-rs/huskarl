@@ -16,6 +16,7 @@ mod checks;
 mod claim_check;
 mod validated_jwt;
 
+pub use checks::within_max_age;
 use checks::{check_aud, check_str_claim, check_temporal, check_typ};
 pub use claim_check::ClaimCheck;
 pub use validated_jwt::{ValidatedJwt, ValidatedJwtBuilder};
@@ -189,12 +190,8 @@ impl JwtValidator {
                 .iat
                 .ok_or_else(|| RequiredClaimMissingSnafu { claim: "iat" }.build())?;
 
-            // A future `iat` (AS clock ahead) is age zero here, not a
-            // rejection: `check_temporal`'s IssuedInFuture check below is the
-            // sole authority on future timestamps and applies the leeway.
-            let age = now.duration_since(issued_at).unwrap_or(Duration::ZERO);
             ensure!(
-                age <= max_token_age.saturating_add(self.clock_leeway),
+                within_max_age(now, issued_at, max_token_age, self.clock_leeway),
                 TokenTooOldSnafu {
                     issued_at,
                     max_token_age
