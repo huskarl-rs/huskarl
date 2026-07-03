@@ -4,8 +4,12 @@ use serde::Serialize;
 
 /// Metadata about how an access token validator is configured.
 ///
-/// Returned by [`ProvideValidatorMetadata::validator_metadata`]. Intended as
-/// input to a Protected Resource Metadata document (RFC 9728).
+/// Returned by [`ProvideValidatorMetadata::validator_metadata`]. Serves two
+/// purposes: as input to a Protected Resource Metadata document (RFC 9728),
+/// and as the configuration that shapes `WWW-Authenticate` challenges — via
+/// [`challenges`](Self::challenges) and the assembled
+/// [`rejection`](Self::rejection) (see the [`rejection`](crate::rejection)
+/// module).
 ///
 /// Construct one with [`builder`](Self::builder).
 #[derive(Debug, Clone, Serialize, bon::Builder)]
@@ -83,6 +87,11 @@ impl ValidatorMetadata {
     /// recommended by RFC 9449 §7.1. Per RFC 7235, the challenges may be sent as
     /// separate `WWW-Authenticate` headers or joined with `, ` on a single header —
     /// both forms are equivalent.
+    ///
+    /// For the fully assembled response ingredients — status code, challenges,
+    /// and `DPoP-Nonce` together — use [`rejection`](Self::rejection) or
+    /// [`ValidationResult::rejection`](crate::validator::ValidationResult::rejection)
+    /// instead.
     ///
     /// # Example
     ///

@@ -79,11 +79,22 @@ pub trait AccessTokenValidator: MaybeSendSync {
 }
 
 /// The result of an [`AccessTokenValidator::validate_request`] call.
+///
+/// To turn an unauthenticated or failed result into the matching HTTP
+/// response (status code, `WWW-Authenticate` challenges, `DPoP-Nonce`
+/// header), use [`rejection`](Self::rejection) — see the
+/// [`rejection`](crate::rejection) module.
 #[derive(Debug)]
 pub struct ValidationResult<C, E> {
     /// The outcome of the validation.
     pub outcome: Result<Option<ValidatedRequest<C>>, E>,
     /// A `DPoP` nonce to include in the response `DPoP-Nonce` header, if any.
+    ///
+    /// Set on failures that demand a nonce (`use_dpop_nonce`) **and on
+    /// successful validations** whose nonce is approaching expiry — echo it
+    /// in both cases, or clients lose nonce freshness and pay a retry.
+    /// [`rejection`](Self::rejection) carries it through automatically on
+    /// the error path; on success it remains yours to send.
     pub dpop_nonce: Option<String>,
 }
 
