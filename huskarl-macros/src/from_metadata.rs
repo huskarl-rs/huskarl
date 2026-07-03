@@ -5,7 +5,8 @@
 //! - `#[from_metadata(path = "a.b.c")]` — dotted path; mark any segment with a
 //!   trailing `?` to navigate through `Option` (e.g. `"mtls_aliases?.token_endpoint?"`).
 //!   The macro emits `metadata.a.as_ref().and_then(|a| …)` for `?` non-leaves and
-//!   `.map` when the rest of the path is non-Option.
+//!   `.map` when the rest of the path is non-Option. Segments must be plain
+//!   (non-keyword, non-raw) Rust identifiers.
 //! - `#[from_metadata(with = |m| <expr>)]` — escape hatch; the closure body
 //!   becomes the extraction expression. By default the macro treats the
 //!   closure as yielding `T` (bon's non-`maybe_` setter is called). Add the
@@ -507,6 +508,22 @@ fn parse_path_segments(path: &str, span: proc_macro2::Span) -> Result<Vec<MetaPa
             return Err(syn::Error::new(
                 span,
                 format!("segment {name:?} is not a valid Rust identifier"),
+            ));
+        }
+        // Shape-valid but not parseable as an identifier: a Rust keyword
+        // (`type`, `self`, …) or the reserved `_`. `Ident::new` accepts
+        // keywords, so without this check the generated `metadata.type`
+        // field access would fail to compile with a diagnostic pointing at
+        // generated code (and `_` would panic the macro). Like the
+        // field-name side (`deny_raw_ident`), keyword-named (raw-identifier)
+        // metadata fields are not supported.
+        if syn::parse_str::<Ident>(name).is_err() {
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "segment {name:?} is a Rust keyword; #[from_metadata] does not support \
+                     keyword-named (raw-identifier) metadata fields"
+                ),
             ));
         }
         segs.push(MetaPathSegment {

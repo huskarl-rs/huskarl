@@ -1,0 +1,11 @@
+error: segment "type" is a Rust keyword; #[from_metadata] does not support keyword-named (raw-identifier) metadata fields
+  --> tests/ui/fail_from_metadata_keyword_segment.rs:15:28
+   |
+15 |     #[from_metadata(path = "type")]
+   |                            ^^^^^^
+
+error: segment "self" is a Rust keyword; #[from_metadata] does not support keyword-named (raw-identifier) metadata fields
+  --> tests/ui/fail_from_metadata_keyword_segment.rs:23:28
+   |
+23 |     #[from_metadata(path = "outer?.self")]
+   |                            ^^^^^^^^^^^^^
