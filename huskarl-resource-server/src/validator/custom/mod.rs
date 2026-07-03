@@ -96,7 +96,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         require_dpop: bool,
         /// If `true`, tokens without a `cnf.x5t#S256` certificate binding are rejected.
         ///
-        /// Advertised as `tls_client_certificate_bound_access_tokens` in RFC 9728 metadata.
+        /// When `true`, advertised as `tls_client_certificate_bound_access_tokens`
+        /// in RFC 9728 metadata.
         #[builder(default)]
         require_mtls: bool,
         /// The issuer URI of the authorization server, for RFC 9728 metadata.
@@ -299,6 +300,9 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
                 .allowed_signing_algorithms()
                 .map(<[_]>::to_vec),
             dpop_bound_access_tokens_required: Some(self.inner.dpop_binding_checker.required),
+            // Only a hard mTLS requirement proves support: whether TLS
+            // termination presents client certificates is deployment knowledge.
+            tls_client_certificate_bound_access_tokens: self.inner.require_mtls.then_some(true),
             resource: resource.map(std::borrow::ToOwned::to_owned),
             bearer_methods_supported: Some(vec!["header"]),
         }

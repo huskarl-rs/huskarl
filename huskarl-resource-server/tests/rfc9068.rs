@@ -54,11 +54,11 @@ async fn test_rfc9068_validator() {
         .await
         .unwrap();
 
-    // The builder's realm surfaces in the challenge-shaping metadata.
-    assert_eq!(
-        validator.validator_metadata(None).realm.as_deref(),
-        Some("api")
-    );
+    // The builder's realm surfaces in the challenge-shaping metadata; mTLS
+    // binding is not required, so support is not asserted.
+    let metadata = validator.validator_metadata(None);
+    assert_eq!(metadata.realm.as_deref(), Some("api"));
+    assert_eq!(metadata.tls_client_certificate_bound_access_tokens, None);
 
     // 4. Create a valid RFC 9068 JWT
     // RFC 9068 §2.2 requires: iss, exp, aud, sub, iat, jti, client_id
