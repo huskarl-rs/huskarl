@@ -39,7 +39,21 @@ pub async fn main() {
         HeaderValue::from_static("Bearer mF_9.B5f-4.1JqM"),
     );
     let http_method = Method::GET;
-    let http_uri = http::Uri::from_static("https://example.com/resource");
+
+    // The URI must be the absolute external target URI the client addressed
+    // (it is checked against the `htu` claim of any DPoP proof). A framework
+    // request object carries only the origin-form path (`/resource`), and
+    // behind a TLS-terminating or rewriting proxy only the deployment knows
+    // the external URI — rebuild it from a configured public base URL (or
+    // from forwarded headers you trust).
+    let public_base = http::Uri::from_static("https://example.com");
+    let request_path = "/resource"; // e.g. axum's `req.uri().path()`
+    let http_uri = http::Uri::builder()
+        .scheme(public_base.scheme_str().unwrap())
+        .authority(public_base.authority().unwrap().as_str())
+        .path_and_query(request_path)
+        .build()
+        .unwrap();
 
     let result = validator
         .validate_request(&headers, &http_method, &http_uri, None)

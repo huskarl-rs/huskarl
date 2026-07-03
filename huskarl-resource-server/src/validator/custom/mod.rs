@@ -302,6 +302,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
     /// token, `Ok(None)` when no authentication was presented, or `Err(_)` when a
     /// token was present but invalid. Any configured `on_validate` callback fires
     /// before returning.
+    ///
+    /// `http_uri` must be the absolute external target URI the client
+    /// addressed, not a framework request object's origin-form path — see
+    /// [`AccessTokenValidator::validate_request`]
+    /// for the `DPoP` `htu` contract.
     pub async fn validate_request(
         &self,
         headers: &http::HeaderMap,

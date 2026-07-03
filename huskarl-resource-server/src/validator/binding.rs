@@ -170,6 +170,18 @@ impl DPoPBindingChecker {
         method: &http::Method,
         uri: &http::Uri,
     ) -> Result<Option<String>, DPoPBindingError> {
+        // The `htu` comparison below needs the absolute external target URI
+        // (RFC 9449 §4.3), which only the deployment knows once proxies are
+        // involved. A framework request object usually carries only the
+        // origin-form path, which can never match a compliant proof — fail
+        // with an integration error instead of a per-request `htu` mismatch.
+        ensure!(
+            uri.scheme().is_some() && uri.authority().is_some(),
+            RequestUriNotAbsoluteSnafu {
+                uri: uri.to_string()
+            }
+        );
+
         let validated_proof = self
             .proof_validator
             .validate(dpop_proof)
@@ -259,6 +271,23 @@ pub enum DPoPBindingError {
     /// The HTTP URI in the proof could not be normalized.
     #[snafu(display("Malformed HTTP URL in DPoP proof"))]
     MalformedUrl { source: http::Error },
+    /// The request URI supplied to the validator is not absolute (e.g. an
+    /// origin-form `/path` taken straight from a framework request object).
+    ///
+    /// The `htu` check compares against the absolute external target URI as
+    /// the client addressed it (RFC 9449 §4.3), which only the deployment
+    /// knows once TLS-terminating or rewriting proxies are involved.
+    /// Reconstruct it from a configured public base URL or trusted forwarded
+    /// headers before calling the validator. This is an integration error on
+    /// the resource server, not a client fault.
+    #[snafu(display(
+        "Request URI '{uri}' is not absolute; reconstruct the external target URI \
+         (scheme + authority + path) before calling the validator"
+    ))]
+    RequestUriNotAbsolute {
+        /// The URI as supplied to the validator.
+        uri: String,
+    },
     /// The nonce checker returned an error (server-side failure).
     #[snafu(display("DPoP nonce check failed"))]
     NonceCheckFailed { source: Error },
@@ -291,7 +320,10 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
     fn token_error(&self) -> crate::error::TokenValidationError {
         use crate::error::{TokenErrorCode, TokenValidationError};
         match self {
-            Self::NonceCheckFailed { .. } => {
+            // NonceCheckFailed is a checker malfunction; RequestUriNotAbsolute
+            // is an integration bug (the deployment passed a non-absolute
+            // request URI). Neither is a client error.
+            Self::NonceCheckFailed { .. } | Self::RequestUriNotAbsolute { .. } => {
                 TokenValidationError::Server(StatusCode::INTERNAL_SERVER_ERROR)
             }
             Self::ProofValidation {
@@ -325,7 +357,8 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
             Self::MalformedUrl { .. } => {
                 Some("The DPoP proof has a malformed HTTP URL".to_string())
             }
-            Self::NonceCheckFailed { .. } => None,
+            // Server-side details; nothing actionable for the client.
+            Self::RequestUriNotAbsolute { .. } | Self::NonceCheckFailed { .. } => None,
             Self::NonceRequired { .. } => Some("A DPoP nonce is required".to_string()),
             Self::MissingProofClaim { claim } => Some(format!(
                 "The DPoP proof is missing the required '{claim}' claim"
@@ -518,6 +551,29 @@ mod tests {
         assert!(
             matches!(result, Ok(None)),
             "2s future iat within default leeway must validate, got {result:?}"
+        );
+    }
+
+    /// An origin-form request URI (what a framework request object carries)
+    /// can never match a compliant proof's absolute `htu` — it must be
+    /// reported as an integration error, not as an `htu` mismatch.
+    #[tokio::test]
+    async fn origin_form_request_uri_is_an_integration_error() {
+        let signer = es256();
+        let proof = sign_proof(&signer, valid_claims()).await;
+        let confirmation = cnf(Some(matching_jkt(&signer)));
+        let result = checker(None, false)
+            .check(
+                Some(&confirmation),
+                &SecretString::new(ACCESS_TOKEN),
+                proof.expose_secret(),
+                &http::Method::POST,
+                &"/resource".parse::<http::Uri>().unwrap(),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(DPoPBindingError::RequestUriNotAbsolute { .. })),
+            "expected RequestUriNotAbsolute, got {result:?}"
         );
     }
 

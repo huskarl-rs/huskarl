@@ -303,6 +303,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
     /// Returns `Ok(None)` if no token was present in the request headers,
     /// `Ok(Some(_))` if the token was successfully validated, or `Err(_)` if
     /// a token was present but invalid.
+    ///
+    /// `http_uri` must be the absolute external target URI the client
+    /// addressed, not a framework request object's origin-form path — see
+    /// [`AccessTokenValidator::validate_request`]
+    /// for the `DPoP` `htu` contract.
     pub async fn validate_request(
         &self,
         headers: &http::HeaderMap,
