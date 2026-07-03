@@ -499,6 +499,45 @@ mod tests {
         assert!(url.contains("code_challenge="), "{url}");
     }
 
+    /// Requiring PAR without a PAR endpoint must fail at build time: the only
+    /// way to proceed would be silently downgrading to a plain authorization
+    /// request (RFC 9126 §5).
+    #[tokio::test]
+    async fn required_par_without_endpoint_fails_the_build() {
+        let result = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .require_pushed_authorization_requests(true)
+            .build()
+            .await;
+
+        let err = result
+            .err()
+            .expect("build must fail without a PAR endpoint");
+        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
+    }
+
+    /// Control: the same requirement with an endpoint configured builds fine.
+    #[tokio::test]
+    async fn required_par_with_endpoint_builds() {
+        AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .pushed_authorization_request_endpoint("https://as.example.com/par".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .require_pushed_authorization_requests(true)
+            .build()
+            .await
+            .unwrap();
+    }
+
     /// The persisted nonce must track whether the parameter was actually
     /// sent: completion skips the check when it wasn't, so an ID token
     /// legitimately issued without a nonce claim validates.

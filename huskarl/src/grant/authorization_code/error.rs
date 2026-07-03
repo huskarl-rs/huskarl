@@ -55,4 +55,12 @@ pub enum BuildError {
          `.jws_verifier_platform(...)` on the builder"
     ))]
     MissingJwsVerifierPlatform,
+    /// PAR is required but no PAR endpoint is configured.
+    #[snafu(display(
+        "require_pushed_authorization_requests is set but no \
+         pushed_authorization_request_endpoint is configured; supply the endpoint \
+         or unset the requirement — proceeding would silently downgrade required \
+         PAR (RFC 9126 §5) to a plain authorization request"
+    ))]
+    RequiredParEndpointMissing,
 }
