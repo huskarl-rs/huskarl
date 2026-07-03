@@ -68,6 +68,7 @@ pub struct IntrospectionValidator<Claims = ()> {
     token_header: HeaderName,
     on_validate: Option<Arc<dyn OnValidate>>,
     issuer: Option<String>,
+    realm: Option<String>,
     audience: ClaimCheck,
     require_mtls: bool,
     _phantom: PhantomData<Claims>,
@@ -186,6 +187,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// Defaults to `Authorization`.
         #[builder(default = http::header::AUTHORIZATION)]
         token_header: HeaderName,
+        /// The realm identifying the protection space (RFC 6750 §3).
+        ///
+        /// Included as `realm="..."` in the `WWW-Authenticate` challenges built
+        /// from this validator's [metadata](Self::validator_metadata).
+        realm: Option<String>,
         /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
         ///
         /// Use this to record metrics, emit log events, or trigger alerts.
@@ -222,6 +228,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             token_header,
             on_validate,
             issuer,
+            realm,
             audience,
             require_mtls,
             _phantom: PhantomData,
@@ -284,7 +291,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
     /// See [`ProvideValidatorMetadata`] for use in generic contexts.
     pub fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
         ValidatorMetadata {
-            realm: None,
+            realm: self.realm.clone(),
             authorization_servers: self.issuer.as_ref().map(|s| vec![s.clone()]),
             dpop_supported: Some(true),
             dpop_signing_alg_values_supported: self

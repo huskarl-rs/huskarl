@@ -43,6 +43,7 @@ async fn test_rfc9068_validator() {
     let validator = Rfc9068Validator::builder()
         .issuer(issuer.clone())
         .audience("api://resource")
+        .realm("api")
         .jwks_uri(jwks_uri)
         .jws_verifier_factory(Arc::new(
             JwksSource::builder()
@@ -52,6 +53,12 @@ async fn test_rfc9068_validator() {
         .build()
         .await
         .unwrap();
+
+    // The builder's realm surfaces in the challenge-shaping metadata.
+    assert_eq!(
+        validator.validator_metadata(None).realm.as_deref(),
+        Some("api")
+    );
 
     // 4. Create a valid RFC 9068 JWT
     // RFC 9068 §2.2 requires: iss, exp, aud, sub, iat, jti, client_id
