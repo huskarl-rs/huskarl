@@ -91,6 +91,11 @@ pub trait AeadEncryptor: std::fmt::Debug + MaybeSendSync {
 
     /// Asynchronously encrypts the given plaintext with the associated data.
     ///
+    /// Implementations that draw a random nonce per call (e.g. AES-GCM with
+    /// its 96-bit nonce) carry a per-key encryption bound — NIST SP 800-38D
+    /// §8.3 caps random-nonce GCM at 2^32 invocations per key. See the
+    /// implementation's documentation, and size key rotation accordingly.
+    ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::Crypto`] if the encryption operation fails.

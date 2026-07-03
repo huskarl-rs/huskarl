@@ -60,6 +60,12 @@ struct Inner {
 /// is drawn from the platform CSPRNG (`crypto.getRandomValues`), so this type
 /// itself pulls in no `getrandom` backend. (The wider crate graph may still
 /// need one for other `rand` uses — e.g. OAuth PKCE/state generation.)
+///
+/// The random 96-bit nonce carries NIST SP 800-38D §8.3's usage bound: at
+/// most **2^32 encryptions** per key, cumulative across every process and
+/// restart sharing the key material — enforce it with a rotation schedule
+/// (via the wrappers above), not a counter. A repeated nonce under GCM is
+/// catastrophic: keystream reuse and forgeable authentication tags.
 #[derive(Clone)]
 pub struct AesGcmKey {
     inner: Arc<Inner>,
