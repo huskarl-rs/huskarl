@@ -168,10 +168,31 @@ impl TokenErrorCode {
 /// An application-level error for tokens that lack the required scope.
 ///
 /// Implements [`ToRfc6750Error`] so it can be passed to
-/// [`crate::validator::metadata::ValidatorMetadata::challenges`] when building
-/// a `WWW-Authenticate` response for an insufficient-scope rejection.
+/// [`crate::validator::metadata::ValidatorMetadata::challenges`] (or the
+/// assembled [`rejection`](crate::validator::metadata::ValidatorMetadata::rejection))
+/// when building a `WWW-Authenticate` response for an insufficient-scope
+/// rejection.
+///
+/// Construct with [`new`](Self::new) so the challenge tells the client which
+/// scope it was missing (RFC 6750 §3 `scope` attribute); use
+/// [`InsufficientScope::default()`] only when the required scope should not
+/// be disclosed.
 #[derive(Debug, Clone, Default)]
-pub struct InsufficientScope;
+pub struct InsufficientScope {
+    /// The scope required to access the resource, as a space-separated list
+    /// (RFC 6750 §3). Emitted as the challenge `scope` attribute.
+    pub scope: Option<String>,
+}
+
+impl InsufficientScope {
+    /// An insufficient-scope rejection naming the `scope` the resource requires.
+    #[must_use]
+    pub fn new(scope: impl Into<String>) -> Self {
+        Self {
+            scope: Some(scope.into()),
+        }
+    }
+}
 
 impl ToRfc6750Error for InsufficientScope {
     fn attempted_scheme(&self) -> Option<TokenType> {
@@ -184,6 +205,10 @@ impl ToRfc6750Error for InsufficientScope {
 
     fn error_description(&self) -> Option<String> {
         Some("The access token has insufficient scope for the requested resource".to_string())
+    }
+
+    fn required_scope(&self) -> Option<String> {
+        self.scope.clone()
     }
 }
 
@@ -248,6 +273,17 @@ pub trait ToRfc6750Error: std::fmt::Debug + MaybeSendSync {
     /// unquoted values such as integers.
     fn extra_params(&self) -> Vec<ChallengeParam> {
         Vec::new()
+    }
+
+    /// Returns the scope the resource requires, as a space-separated list, for
+    /// the challenge `scope` attribute (RFC 6750 §3).
+    ///
+    /// When `Some`, it takes precedence over the `scope` argument to
+    /// [`crate::validator::metadata::ValidatorMetadata::challenges`] — the
+    /// error names the specific unmet requirement. Defaults to `None`; see
+    /// [`InsufficientScope`] for the standard carrier.
+    fn required_scope(&self) -> Option<String> {
+        None
     }
 }
 
