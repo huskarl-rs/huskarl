@@ -39,3 +39,39 @@ impl ClaimCheck {
         Self::Present
     }
 }
+
+/// A plain string is the common, strict intent: the claim must be present and
+/// equal this value ([`ClaimCheck::RequiredValue`]). This is what lets builder
+/// fields accept `.aud("https://api")` directly.
+impl From<&str> for ClaimCheck {
+    fn from(value: &str) -> Self {
+        Self::RequiredValue(value.to_owned())
+    }
+}
+
+/// The claim must be present and equal this value
+/// ([`ClaimCheck::RequiredValue`]); see the `From<&str>` impl.
+impl From<String> for ClaimCheck {
+    fn from(value: String) -> Self {
+        Self::RequiredValue(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_strings_convert_to_required_value() {
+        // The conversion must be the strict variant — anything laxer would
+        // silently weaken validators built with bare strings.
+        assert!(matches!(
+            ClaimCheck::from("api://resource"),
+            ClaimCheck::RequiredValue(v) if v == "api://resource"
+        ));
+        assert!(matches!(
+            ClaimCheck::from(String::from("api://resource")),
+            ClaimCheck::RequiredValue(v) if v == "api://resource"
+        ));
+    }
+}

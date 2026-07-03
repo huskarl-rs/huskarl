@@ -233,20 +233,20 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_bu
     }
 
     /// Check the `typ` header. Defaults to no check.
-    pub fn token_type(mut self, typ: ClaimCheck) -> Self {
-        self.rules.typ = typ;
+    pub fn token_type(mut self, typ: impl Into<ClaimCheck>) -> Self {
+        self.rules.typ = typ.into();
         self
     }
 
     /// Check on the `iss` claim. Defaults to requiring presence.
-    pub fn issuer(mut self, iss: ClaimCheck) -> Self {
-        self.rules.iss = iss;
+    pub fn issuer(mut self, iss: impl Into<ClaimCheck>) -> Self {
+        self.rules.iss = iss.into();
         self
     }
 
     /// Check on the `aud` claim. Defaults to no check.
-    pub fn audience(mut self, aud: ClaimCheck) -> Self {
-        self.rules.aud = aud;
+    pub fn audience(mut self, aud: impl Into<ClaimCheck>) -> Self {
+        self.rules.aud = aud.into();
         self
     }
 
@@ -263,8 +263,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_bu
     }
 
     /// Check on the `sub` claim. Defaults to requiring presence.
-    pub fn subject(mut self, sub: ClaimCheck) -> Self {
-        self.rules.sub = sub;
+    pub fn subject(mut self, sub: impl Into<ClaimCheck>) -> Self {
+        self.rules.sub = sub.into();
         self
     }
 
