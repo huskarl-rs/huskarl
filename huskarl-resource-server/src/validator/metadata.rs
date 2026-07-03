@@ -80,7 +80,8 @@ pub struct ValidatorMetadata {
     /// Included as `resource_metadata="..."` in `WWW-Authenticate` challenges
     /// (RFC 9728 §5.1) so clients can discover the document. It locates the
     /// document rather than appearing inside it, so it is skipped during
-    /// serialization.
+    /// serialization. Derive it from the resource identifier with
+    /// [`resource_metadata::well_known_url`](crate::core::resource_metadata::well_known_url).
     #[serde(skip)]
     pub resource_metadata: Option<String>,
 }

@@ -254,17 +254,12 @@ fn add_issuer_to_known_path(
     uri_suffix: &str,
     use_legacy_transformation: bool,
 ) -> Result<Uri, http::Error> {
-    let issuer_as_uri = Uri::try_from(issuer)?;
-    let path = issuer_as_uri.path();
-    let cleaned_path = path.strip_suffix('/').unwrap_or(path);
-    let new_path = if use_legacy_transformation {
-        format!("{cleaned_path}{uri_suffix}")
+    let issuer_url = Uri::try_from(issuer)?;
+    if use_legacy_transformation {
+        crate::well_known::append_well_known_path(issuer_url, uri_suffix)
     } else {
-        format!("{uri_suffix}{cleaned_path}")
-    };
-    let mut parts = issuer_as_uri.into_parts();
-    parts.path_and_query = Some(new_path.try_into()?);
-    Ok(Uri::from_parts(parts)?)
+        crate::well_known::insert_well_known_path(issuer_url, uri_suffix)
+    }
 }
 
 #[cfg(test)]

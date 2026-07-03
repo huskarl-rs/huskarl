@@ -71,6 +71,7 @@ explanation — [the error model](_docs::explanation::error_handling),
 
 mod endpoint_url;
 mod uuid;
+mod well_known;
 
 #[cfg(any(doc, docsrs))]
 pub mod _docs;
@@ -86,6 +87,7 @@ pub mod jwt;
 pub mod oauth_form;
 pub mod platform;
 pub mod prelude;
+pub mod resource_metadata;
 pub mod secrets;
 pub mod serde_utils;
 pub mod server_metadata;
