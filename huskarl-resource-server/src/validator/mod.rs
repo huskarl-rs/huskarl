@@ -54,6 +54,17 @@ pub trait AccessTokenValidator: MaybeSendSync {
 
     /// Validates an access token from the given HTTP request headers.
     ///
+    /// `uri` must be the **absolute external target URI** the client
+    /// addressed — scheme, authority, and path — because it is compared
+    /// against the `htu` claim of any `DPoP` proof (RFC 9449 §4.3).
+    /// Framework request objects usually carry only the origin-form path
+    /// (`/resource`), and once TLS-terminating or rewriting proxies are
+    /// involved only the deployment knows the external URI: reconstruct it
+    /// from a configured public base URL, or from forwarded headers you
+    /// trust. Passing a non-absolute URI fails `DPoP` validation with a
+    /// server-side integration error (it could never match a compliant
+    /// proof); deployments that never accept `DPoP` tokens do not use `uri`.
+    ///
     /// Returns a boxed future so the trait is object-safe: heterogeneous
     /// validators can be stored as `Box<dyn AccessTokenValidator<…>>` (see
     /// [`multi_issuer`]). Concrete validators also expose an inherent `validate_request`

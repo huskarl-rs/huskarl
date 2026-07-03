@@ -241,6 +241,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
 
     /// Validates the request headers, returning a [`super::ValidatedRequest`] if a valid token is found,
     /// or `None` if no authentication was provided.
+    ///
+    /// `http_uri` must be the absolute external target URI the client
+    /// addressed, not a framework request object's origin-form path — see
+    /// [`AccessTokenValidator::validate_request`]
+    /// for the `DPoP` `htu` contract.
     pub async fn validate_request(
         &self,
         headers: &http::HeaderMap,
