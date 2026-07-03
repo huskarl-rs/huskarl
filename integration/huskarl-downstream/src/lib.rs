@@ -102,7 +102,7 @@ mod tests {
 
     use bytes::Bytes;
     use huskarl::{
-        cache::{GrantTokenSource, InMemoryTokenCache},
+        cache::{GrantTokenSource, InMemoryTokenCache, NoSource},
         core::{
             client_auth::NoAuth,
             http::{HttpClient, HttpResponse, Idempotency},
@@ -216,6 +216,7 @@ mod tests {
     async fn no_token_source_maps_to_login_required() {
         let source = GrantTokenSource::builder()
             .grant(grant(MockHttp::default())) // no responses queued: must not be called
+            .grant_parameters(NoSource)
             .refresh_store(KeychainStore::default())
             .build();
         let cache = InMemoryTokenCache::builder().source(source).build();
@@ -246,6 +247,7 @@ mod tests {
         store.lock();
         let source = GrantTokenSource::builder()
             .grant(grant(MockHttp::default()))
+            .grant_parameters(NoSource)
             .refresh_store(store)
             .build();
 
@@ -275,6 +277,7 @@ mod tests {
         let store = Arc::new(KeychainStore::default());
         let source = GrantTokenSource::builder()
             .grant(grant(http))
+            .grant_parameters(NoSource)
             .refresh_store(store.clone())
             .build();
 

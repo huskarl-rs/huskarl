@@ -62,6 +62,36 @@ disk-backed); on startup the cache refreshes into a fresh access token. For
 handing a freshly-obtained token from the login path to a running source, use
 [`GrantTokenSource::prime`](crate::cache::GrantTokenSource::prime).
 
+The `grant_parameters` choice is required, and interactive flows are exactly
+the case where it is [`NoSource`](crate::cache::NoSource): the source cannot
+run the authorization-code exchange itself, so it lives off refresh tokens
+and what you [`prime`](crate::cache::GrantTokenSource::prime) into it.
+Remember that a `NoSource` source that is never primed (over an empty store)
+cannot produce a token — after [running the authorization code
+flow](crate::_docs::guide::authorization_code), hand its token response over
+(the crate's `authorization_code` example shows the full wiring):
+
+```rust
+# use huskarl::core::http::HttpClient;
+# use huskarl::grant::authorization_code::AuthorizationCodeGrant;
+# use huskarl::grant::core::TokenResponse;
+use huskarl::cache::{GrantTokenSource, InMemoryRefreshTokenStore, NoSource};
+
+# async fn example(
+#     grant: AuthorizationCodeGrant,
+#     token_response: TokenResponse,
+# ) -> Result<(), Box<dyn std::error::Error>> {
+let source = GrantTokenSource::builder()
+    .grant(grant)
+    .grant_parameters(NoSource) // refresh/prime only — stated, not defaulted
+    .refresh_store(InMemoryRefreshTokenStore::default())
+    .build();
+source.prime(token_response).await?;
+# let _ = source;
+# Ok(())
+# }
+```
+
 ## Implementing your own
 
 Reach for a custom implementation when a built-in's *storage* or *production*

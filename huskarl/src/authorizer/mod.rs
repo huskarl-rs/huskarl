@@ -62,6 +62,13 @@ impl HttpAuthorizer {
     /// Acquires or refreshes the token as needed, using the HTTP client held
     /// by the underlying grant.
     ///
+    /// Pair **every** response with
+    /// [`process_response`](Self::process_response) — success or failure.
+    /// Skipping it silently breaks `DPoP` nonce rotation (the next proof
+    /// carries a stale nonce, stranding the client in retry loops) and the
+    /// automatic invalidation of tokens the server rejects. See the [module
+    /// docs](self) for the full request loop.
+    ///
     /// # Errors
     ///
     /// Errors follow the crate's three-signal contract — see

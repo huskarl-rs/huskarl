@@ -3,7 +3,7 @@ use std::sync::Arc;
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
+    cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache, NoSource},
     core::{
         client_auth::NoAuth, dpop::DPoP, jwk::JwksSource,
         server_metadata::AuthorizationServerMetadata,
@@ -81,6 +81,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     // generation is handled by the authorizer.
     let source = GrantTokenSource::builder()
         .grant(grant)
+        .grant_parameters(NoSource)
         .refresh_store(InMemoryRefreshTokenStore::default())
         .build();
     source

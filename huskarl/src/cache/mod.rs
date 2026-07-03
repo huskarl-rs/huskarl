@@ -121,9 +121,14 @@ pub enum GetTokenError {
         /// The underlying exchange error.
         source: Error,
     },
-    /// No refresh token is stored and no grant parameters were provided —
-    /// there is no way to obtain a token.
-    #[snafu(display("no refresh token is stored and no grant parameters were provided"))]
+    /// No refresh token is stored and the source has no grant parameters
+    /// ([`NoSource`]) — there is no way to obtain a token until one is
+    /// supplied.
+    #[snafu(display(
+        "no refresh token is stored and the source has no grant parameters — hand an \
+         interactive flow's token response to `GrantTokenSource::prime()`, or configure \
+         `grant_parameters` on the source"
+    ))]
     NoTokenSource,
     /// The token source is backing off after repeated non-recoverable
     /// from-scratch failures. Reported under
