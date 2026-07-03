@@ -5,6 +5,12 @@ Every grant needs two things before it can run: an
 (usually) a [`ClientAuthentication`](crate::core::client_auth) implementation.
 The per-grant guides all assume the setup on this page.
 
+A note on imports: `use huskarl::prelude::*` brings in the crate's extension
+traits (so methods like `.exchange(…)` resolve) and deliberately nothing
+else — types are imported explicitly. The [`prelude`](crate::prelude) docs
+explain the principle and carry a copy-pasteable import block for a typical
+application.
+
 ## Setting up an HTTP client
 
 The examples throughout these guides use the `huskarl_reqwest` crate:

@@ -68,6 +68,7 @@ pub mod _docs;
 
 pub mod error;
 pub mod introspection;
+pub mod prelude;
 pub mod rejection;
 pub mod validator;
 
