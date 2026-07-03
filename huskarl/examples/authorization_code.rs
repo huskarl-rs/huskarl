@@ -37,17 +37,17 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .await
         .whatever_context("Failed to bind to localhost")?;
 
+    // The tokens obtained through this grant are bound to this key.
+    let dpop_key = PrivateKey::generate(GenerateAlgorithm::Es256, None)
+        .whatever_context("Failed to generate DPoP key")?;
+
     let grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
         .whatever_context("Authorization server metadata didn't include authorization URL")?
         .client_id(client_id)
         .http_client(http_client.clone())
         .client_auth(NoAuth)
         .redirect_uri("http://localhost:8080/login/callback")
-        .dpop(
-            DPoP::builder()
-                .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
-                .build(),
-        )
+        .dpop(DPoP::builder().signer(dpop_key).build())
         .jws_verifier_factory(Arc::new(
             JwksSource::builder()
                 .http_client(http_client.clone())

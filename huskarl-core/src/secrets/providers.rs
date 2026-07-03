@@ -9,6 +9,14 @@ use crate::{
 };
 
 /// Retrieves secrets from environment variables with a configurable mapping.
+///
+/// **Reads the variable once, at construction** — the decoded value is
+/// snapshotted, and later changes to the environment are never observed. That
+/// is the honest model for process environments (they are fixed at spawn for
+/// practical purposes), and it means construction fails loudly on a missing
+/// or malformed value instead of every token request failing later. Contrast
+/// `FileSecret` (behind the `fs` feature), which re-reads its file on
+/// **every fetch** and so picks up rotations.
 #[derive(Debug, Clone)]
 pub struct EnvVarSecret<Output = SecretString> {
     /// The name of the value read from the environment.
@@ -153,9 +161,12 @@ mod file_secret {
     /// A secret read from a file on each access, mapped through `M`.
     ///
     /// A pre-composed [`FileBytes`] + [`MappedSecret`]: it reads the file on
-    /// each access and maps the bytes with the configured [`SecretMap`]
-    /// (defaulting to UTF-8 text via [`StringEncoding`]). Equivalent to
-    /// `FileBytes::new(path).mapped(map)`.
+    /// **every fetch** and maps the bytes with the configured [`SecretMap`]
+    /// (defaulting to UTF-8 text via [`StringEncoding`]) — so a rotated file
+    /// (e.g. a Kubernetes projected secret) is picked up on the next use, and
+    /// construction is infallible because nothing is read yet. Contrast
+    /// [`EnvVarSecret`](super::EnvVarSecret), which snapshots eagerly at
+    /// construction.
     ///
     /// Wrap in [`CachedSecret`](crate::secrets::CachedSecret) to add TTL-based
     /// caching or to read the file only once.

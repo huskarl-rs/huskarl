@@ -39,8 +39,13 @@ and explanation in a `_docs` module:
   OIDC discovery documents.
 - **Wire encoding** — [`oauth_form`] serializes OAuth messages as
   `application/x-www-form-urlencoded`, including structured RFC 9396 values.
-- **Errors** — every operation returns the one concrete [`Error`]/[`ErrorKind`],
-  which embeds cleanly in your own error type.
+- **Errors** — the flows return the one concrete [`Error`]/[`ErrorKind`],
+  which embeds cleanly in your own error type. A few subsystems return their
+  own typed errors where the variants *are* the API — JWT validation
+  ([`JwtValidationError`](jwt::validator::JwtValidationError)), low-level
+  verification ([`crypto::verifier`]), and wire encoding
+  ([`oauth_form::Error`]) — design one `From` arm for [`Error`] plus arms for
+  the subsystem errors you call directly.
 
 ## Guides and explanation
 
