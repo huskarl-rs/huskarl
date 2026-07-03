@@ -19,6 +19,9 @@ pub mod guide {
     #[doc = include_str!("../docs/guide/setup.md")]
     pub mod setup {}
 
+    #[doc = include_str!("../docs/guide/client_authentication.md")]
+    pub mod client_authentication {}
+
     #[doc = include_str!("../docs/guide/authorization_code.md")]
     pub mod authorization_code {}
 
@@ -45,6 +48,9 @@ pub mod guide {
 
     #[doc = include_str!("../docs/guide/authorizer.md")]
     pub mod authorizer {}
+
+    #[doc = include_str!("../docs/guide/dpop.md")]
+    pub mod dpop {}
 }
 
 /// Understanding-oriented background on how the crate works and why.
