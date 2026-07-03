@@ -111,7 +111,7 @@ impl AuthorizationCodeGrant {
             .generate_request_object(
                 self.issuer
                     .as_deref()
-                    .unwrap_or(&self.authorization_endpoint.as_uri().to_string()),
+                    .unwrap_or(&self.authorization_endpoint.to_string()),
                 payload,
             )
             .await
@@ -430,7 +430,7 @@ fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Resul
     } else {
         '?'
     };
-    let uri_string = format!("{}{separator}{query}", endpoint.as_uri());
+    let uri_string = format!("{endpoint}{separator}{query}");
     // The form encoder only emits valid query characters, so the result is
     // well-formed — but `http::Uri` caps the total URI length at u16::MAX,
     // which large parameters (notably `id_token_hint`, an entire JWT) can

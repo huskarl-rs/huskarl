@@ -170,9 +170,8 @@ impl ClientAuthentication for JwtBearer {
                     .to_string(),
                 Audience::TokenEndpoint => token_endpoint
                     .ok_or_else(|| Error::new(ErrorKind::Config, MissingTokenEndpoint))?
-                    .as_uri()
                     .to_string(),
-                Audience::TargetEndpoint => target_endpoint.as_uri().to_string(),
+                Audience::TargetEndpoint => target_endpoint.to_string(),
                 Audience::Custom(custom) => custom.to_string(),
             };
 

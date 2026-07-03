@@ -16,7 +16,10 @@ use crate::error::{Error, ErrorKind};
 /// This is a newtype over [`Uri`] which can be constructed from common string
 /// and URL types via [`TryFrom`] — e.g. `EndpointUrl::try_from("https://…")`,
 /// `"https://…".try_into()`, or `"https://…".parse()` ([`FromStr`]). Once
-/// constructed, it can be freely cloned and passed between grants.
+/// constructed, it can be freely cloned and passed between grants. It
+/// implements [`Display`](std::fmt::Display) for formatting and logging, and
+/// converts back to a [`Uri`] via [`as_uri`](Self::as_uri) / [`AsRef`] /
+/// [`From`].
 ///
 /// Construction validates that the URL is **absolute** — it has both a scheme
 /// and an authority. A relative reference such as `/token` cannot be requested,
@@ -63,6 +66,24 @@ impl EndpointUrl {
     #[must_use]
     pub fn into_uri(self) -> Uri {
         self.0
+    }
+}
+
+impl std::fmt::Display for EndpointUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl AsRef<Uri> for EndpointUrl {
+    fn as_ref(&self) -> &Uri {
+        &self.0
+    }
+}
+
+impl From<EndpointUrl> for Uri {
+    fn from(endpoint: EndpointUrl) -> Self {
+        endpoint.0
     }
 }
 
@@ -189,5 +210,21 @@ mod tests {
         // The `Uri` impl no longer wraps unconditionally.
         let relative: Uri = "/authorize".parse().unwrap();
         assert!(EndpointUrl::try_from(relative).is_err());
+    }
+
+    #[test]
+    fn display_matches_inner_uri() {
+        let e: EndpointUrl = "https://as.example.com/authorize?foo=bar".parse().unwrap();
+        assert_eq!(e.to_string(), "https://as.example.com/authorize?foo=bar");
+        assert_eq!(format!("{e}"), e.as_uri().to_string());
+    }
+
+    #[test]
+    fn converts_back_to_uri() {
+        let e: EndpointUrl = "https://as.example.com/token".parse().unwrap();
+        let by_ref: &Uri = e.as_ref();
+        assert_eq!(by_ref, e.as_uri());
+        let owned: Uri = e.into();
+        assert_eq!(owned.to_string(), "https://as.example.com/token");
     }
 }
