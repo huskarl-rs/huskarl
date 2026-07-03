@@ -1,18 +1,17 @@
 //! Validator configuration metadata.
 
-use serde::Serialize;
-
 /// Metadata about how an access token validator is configured.
 ///
 /// Returned by [`ProvideValidatorMetadata::validator_metadata`]. Serves two
-/// purposes: as input to a Protected Resource Metadata document (RFC 9728),
-/// and as the configuration that shapes `WWW-Authenticate` challenges — via
+/// purposes: as input to a Protected Resource Metadata document (RFC 9728) —
+/// via [`to_resource_metadata`](Self::to_resource_metadata) — and as the
+/// configuration that shapes `WWW-Authenticate` challenges, via
 /// [`challenges`](Self::challenges) and the assembled
 /// [`rejection`](Self::rejection) (see the [`rejection`](crate::rejection)
 /// module).
 ///
 /// Construct one with [`builder`](Self::builder).
-#[derive(Debug, Clone, Serialize, bon::Builder)]
+#[derive(Debug, Clone, bon::Builder)]
 #[builder(on(String, into))]
 #[non_exhaustive]
 pub struct ValidatorMetadata {
@@ -20,35 +19,29 @@ pub struct ValidatorMetadata {
     ///
     /// Included as `realm="..."` in `WWW-Authenticate` challenges when set.
     /// The built-in validators fill this from their `realm` builder option.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub realm: Option<String>,
     /// The authorization server(s) this validator trusts, by issuer URI.
     ///
     /// `None` if not known or if the authorization server does not have an issuer URI.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_servers: Option<Vec<String>>,
     /// Whether this validator accepts `DPoP`-bound tokens.
     ///
     /// Drives whether a `DPoP` challenge is included in `WWW-Authenticate`
-    /// responses (RFC 9449 §7); it is not part of the RFC 9728 document, so it
-    /// is skipped during serialization. The built-in validators always accept
-    /// `DPoP` presentation and set `Some(true)`. When `None`, support is
-    /// inferred from the other fields: an advertised alg allowlist, or
-    /// `DPoP`-bound tokens being required.
-    #[serde(skip)]
+    /// responses (RFC 9449 §7); it is not part of the RFC 9728 document. The
+    /// built-in validators always accept `DPoP` presentation and set
+    /// `Some(true)`. When `None`, support is inferred from the other fields:
+    /// an advertised alg allowlist, or `DPoP`-bound tokens being required.
     pub dpop_supported: Option<bool>,
     /// `DPoP` proof signing algorithms accepted by this validator.
     ///
     /// `None` if unrestricted (the validator accepts any algorithm its verifier supports).
-    /// When `None`, this field should be omitted from RFC 9728 metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// When `None`, the field is omitted from RFC 9728 metadata.
     pub dpop_signing_alg_values_supported: Option<Vec<String>>,
     /// Whether DPoP-bound tokens are required.
     ///
     /// `Some(true)` means Bearer tokens are rejected. `None` means the requirement
     /// status is not known (e.g. a validator that cannot determine this). Maps to
     /// `dpop_bound_access_tokens_required` in RFC 9728 metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub dpop_bound_access_tokens_required: Option<bool>,
     /// Whether mutual-TLS certificate-bound access tokens (RFC 8705) are
     /// supported.
@@ -60,38 +53,86 @@ pub struct ValidatorMetadata {
     /// `Some(true)` only when the binding is required (`require_mtls`) and
     /// leave `None` otherwise. Deployments that accept optionally-bound
     /// tokens should set this themselves.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tls_client_certificate_bound_access_tokens: Option<bool>,
     /// The resource server's identifier URI.
     ///
     /// Provided by the caller to identify this specific resource instance. Maps to `resource` in
     /// RFC 9728 metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     /// Supported methods for presenting Bearer tokens (RFC 6750).
     ///
     /// Values correspond to RFC 6750 sections: `"header"` (§2.1 Authorization header),
     /// `"body"` (§2.2 form-encoded body parameter), `"query"` (§2.3 URI query parameter).
     /// `None` means unspecified. Maps to `bearer_methods_supported` in RFC 9728 metadata.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub bearer_methods_supported: Option<Vec<&'static str>>,
     /// URL of this resource's Protected Resource Metadata document (RFC 9728).
     ///
     /// Included as `resource_metadata="..."` in `WWW-Authenticate` challenges
     /// (RFC 9728 §5.1) so clients can discover the document. It locates the
-    /// document rather than appearing inside it, so it is skipped during
-    /// serialization. Derive it from the resource identifier with
+    /// document rather than appearing inside it, so
+    /// [`to_resource_metadata`](Self::to_resource_metadata) does not copy it.
+    /// Derive it from the resource identifier with
     /// [`resource_metadata::well_known_url`](crate::core::resource_metadata::well_known_url).
-    #[serde(skip)]
     pub resource_metadata: Option<String>,
 }
 
 use crate::{
     TokenType,
+    core::resource_metadata::ProtectedResourceMetadata,
     error::{ToRfc6750Error, TokenValidationError, escape_quoted},
 };
 
 impl ValidatorMetadata {
+    /// Builds the RFC 9728 Protected Resource Metadata document described by
+    /// this validator configuration.
+    ///
+    /// Returns `None` when [`resource`](Self::resource) is unset: the
+    /// document's `resource` member is required (RFC 9728 §2). The
+    /// challenge-only fields ([`realm`](Self::realm),
+    /// [`dpop_supported`](Self::dpop_supported),
+    /// [`resource_metadata`](Self::resource_metadata)) are not part of the
+    /// document, and fields only the deployment can know (`scopes_supported`,
+    /// `resource_name`, the documentation/policy URLs, `jwks_uri`, …) are
+    /// left unset — assign them on the returned document:
+    ///
+    /// ```
+    /// # use huskarl_resource_server::validator::metadata::ValidatorMetadata;
+    /// let metadata = ValidatorMetadata::builder()
+    ///     .resource("https://api.example.com")
+    ///     .dpop_bound_access_tokens_required(true)
+    ///     .build();
+    /// let mut document = metadata.to_resource_metadata().expect("resource is set");
+    /// document.scopes_supported = Some(vec!["profile.read".into()]);
+    /// let body = serde_json::to_string(&document).unwrap();
+    /// # assert!(body.contains("profile.read"));
+    /// ```
+    #[must_use]
+    pub fn to_resource_metadata(&self) -> Option<ProtectedResourceMetadata> {
+        Some(
+            ProtectedResourceMetadata::builder()
+                .resource(self.resource.clone()?)
+                .maybe_authorization_servers(self.authorization_servers.clone())
+                .maybe_dpop_signing_alg_values_supported(
+                    self.dpop_signing_alg_values_supported.clone(),
+                )
+                // `None` means "not known"; the document's RFC defaults
+                // (false) say no more than that, so unknowns map to absent.
+                .dpop_bound_access_tokens_required(
+                    self.dpop_bound_access_tokens_required.unwrap_or(false),
+                )
+                .tls_client_certificate_bound_access_tokens(
+                    self.tls_client_certificate_bound_access_tokens
+                        .unwrap_or(false),
+                )
+                .maybe_bearer_methods_supported(
+                    self.bearer_methods_supported
+                        .as_ref()
+                        .map(|methods| methods.iter().map(|m| (*m).to_owned()).collect()),
+                )
+                .build(),
+        )
+    }
+
     /// Returns the `WWW-Authenticate` challenges for a request.
     ///
     /// If `error` is `None`, returns unauthenticated challenges for all supported
@@ -578,24 +619,55 @@ mod tests {
     }
 
     #[test]
-    fn serializes_document_fields_only() {
+    fn to_resource_metadata_requires_a_resource() {
+        // The document's `resource` member is required (RFC 9728 §2).
+        assert!(meta().to_resource_metadata().is_none());
+    }
+
+    #[test]
+    fn to_resource_metadata_copies_document_fields_only() {
         let mut m = meta();
+        m.realm = Some("api".to_string());
         m.dpop_supported = Some(true);
-        m.dpop_bound_access_tokens_required = Some(false);
-        m.tls_client_certificate_bound_access_tokens = Some(true);
-        m.resource = Some("https://api.example".to_string());
         m.resource_metadata =
             Some("https://api.example/.well-known/oauth-protected-resource".to_string());
+        m.resource = Some("https://api.example".to_string());
+        m.authorization_servers = Some(vec!["https://as.example".to_string()]);
+        m.dpop_signing_alg_values_supported = Some(vec!["ES256".to_string()]);
+        m.dpop_bound_access_tokens_required = Some(true);
+        m.tls_client_certificate_bound_access_tokens = Some(true);
+        m.bearer_methods_supported = Some(vec!["header"]);
 
-        // `dpop_supported` and `resource_metadata` are not RFC 9728 document
-        // fields; the rest serialize under their RFC names.
+        // Serializing pins both the copied values and that the
+        // challenge-only fields (realm, dpop_supported, resource_metadata)
+        // stay out of the document.
+        let document = m.to_resource_metadata().unwrap();
         assert_eq!(
-            serde_json::to_value(&m).unwrap(),
+            serde_json::to_value(&document).unwrap(),
             serde_json::json!({
-                "dpop_bound_access_tokens_required": false,
-                "tls_client_certificate_bound_access_tokens": true,
                 "resource": "https://api.example",
+                "authorization_servers": ["https://as.example"],
+                "bearer_methods_supported": ["header"],
+                "dpop_signing_alg_values_supported": ["ES256"],
+                "dpop_bound_access_tokens_required": true,
+                "tls_client_certificate_bound_access_tokens": true,
             })
+        );
+    }
+
+    #[test]
+    fn to_resource_metadata_maps_unknowns_to_rfc_defaults() {
+        let mut m = meta();
+        m.resource = Some("https://api.example".to_string());
+
+        // `None` (not known) becomes the RFC default `false`, which the
+        // document omits when serialized.
+        let document = m.to_resource_metadata().unwrap();
+        assert!(!document.dpop_bound_access_tokens_required);
+        assert!(!document.tls_client_certificate_bound_access_tokens);
+        assert_eq!(
+            serde_json::to_value(&document).unwrap(),
+            serde_json::json!({"resource": "https://api.example"})
         );
     }
 
