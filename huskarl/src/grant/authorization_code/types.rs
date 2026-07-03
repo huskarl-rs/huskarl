@@ -59,6 +59,11 @@ pub struct AuthorizationPayloadWithClientId<'a> {
 }
 
 /// The input required when beginning the authorization code flow.
+///
+/// The device-authorization flow has a same-named counterpart
+/// ([`device_authorization::StartInput`](crate::grant::device_authorization::StartInput))
+/// with the same [`scopes`](Self::scopes) convenience constructor; when
+/// wiring both flows in one module, qualify or alias the imports.
 #[derive(Debug, Clone, Builder)]
 #[builder(finish_fn(vis = "", name = build_internal), on(String, into))]
 pub struct StartInput {
@@ -141,12 +146,21 @@ impl<S: start_input_builder::IsComplete> StartInputBuilder<S> {
 }
 
 /// The result of starting the authorization code flow.
+///
+/// The device-authorization flow has a same-named counterpart
+/// ([`device_authorization::StartOutput`](crate::grant::device_authorization::StartOutput))
+/// — the workflow grants deliberately share a *start → persist
+/// [`PendingState`] → complete* vocabulary. When wiring both flows in one
+/// module, qualify (`authorization_code::StartOutput`) or alias the imports.
+#[derive(Debug)]
 #[non_exhaustive]
 pub struct StartOutput {
     /// The URL to redirect the user to for authorization.
     pub authorization_url: http::Uri,
-    /// If PAR was used, the time in seconds until the request expires.
-    pub expires_in: Option<u64>,
+    /// When the pushed authorization request expires (RFC 9126 `expires_in`,
+    /// resolved to an absolute time at receipt). `None` when PAR was not
+    /// used. Restart the flow rather than redirecting to an expired request.
+    pub expires_at: Option<crate::core::platform::SystemTime>,
     /// State that must be persisted until the callback completes.
     pub pending_state: PendingState,
 }
@@ -164,6 +178,10 @@ pub struct CompleteInput {
 }
 
 /// The information needed to be stored from the initial flow setup, for use in the callback.
+///
+/// The device-authorization flow has a same-named counterpart
+/// ([`device_authorization::PendingState`](crate::grant::device_authorization::PendingState)),
+/// likewise serializable for persistence and with a redacting [`Debug`].
 #[derive(Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct PendingState {

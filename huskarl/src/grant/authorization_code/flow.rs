@@ -11,7 +11,12 @@ use subtle::ConstantTimeEq;
 ))]
 use crate::grant::authorization_code::{LoopbackError, loopback};
 use crate::{
-    core::{EndpointUrl, Error, ErrorKind, jwt::validator::ValidatedJwt, secrets::SecretString},
+    core::{
+        EndpointUrl, Error, ErrorKind,
+        jwt::validator::ValidatedJwt,
+        platform::{Duration, SystemTime},
+        secrets::SecretString,
+    },
     grant::{
         authorization_code::{
             AuthorizationCodeGrantParameters,
@@ -158,7 +163,7 @@ impl AuthorizationCodeGrant {
             .await
             .map_err(|e| e.with_context("creating JAR request object"))?;
 
-        let (authorization_url, expires_in) = if let Some(par_url) =
+        let (authorization_url, expires_at) = if let Some(par_url) =
             &self.pushed_authorization_request_endpoint
             && (self.prefer_pushed_authorization_requests
                 || self.require_pushed_authorization_requests)
@@ -175,7 +180,7 @@ impl AuthorizationCodeGrant {
 
         Ok(StartOutput {
             authorization_url,
-            expires_in,
+            expires_at,
             pending_state: PendingState {
                 redirect_uri: self.redirect_uri.clone(),
                 pkce_verifier: pkce.map(|p| p.verifier),
@@ -190,7 +195,7 @@ impl AuthorizationCodeGrant {
         &self,
         payload: &AuthorizationPayloadWithClientId<'_>,
         request_object: Option<&SecretString>,
-    ) -> Result<(Uri, Option<u64>), Error> {
+    ) -> Result<(Uri, Option<SystemTime>), Error> {
         let uri = if let Some(request_jwt) = request_object {
             #[derive(Serialize)]
             struct JarRedirect<'a> {
@@ -215,7 +220,7 @@ impl AuthorizationCodeGrant {
         payload: &AuthorizationPayloadWithClientId<'_>,
         request_object: Option<&SecretString>,
         par_url: &EndpointUrl,
-    ) -> Result<(Uri, Option<u64>), Error> {
+    ) -> Result<(Uri, Option<SystemTime>), Error> {
         // RFC 9126 §2: `client_id` is REQUIRED in the PAR body in both forms.
         let par_body = match request_object {
             Some(jwt) => par::ParBody::Jar {
@@ -263,9 +268,15 @@ impl AuthorizationCodeGrant {
             request_uri: &par_response.request_uri,
         };
 
+        // Resolve the relative `expires_in` to an absolute instant here, at
+        // receipt — the only moment the anchor is known.
+        let expires_at = SystemTime::now()
+            .checked_add(Duration::from_secs(par_response.expires_in))
+            .unwrap_or_else(SystemTime::now);
+
         Ok((
             add_payload_to_uri(&self.authorization_endpoint, push_payload)?,
-            Some(par_response.expires_in),
+            Some(expires_at),
         ))
     }
 
@@ -479,6 +490,72 @@ mod tests {
             .unwrap()
             .authorization_url
             .to_string()
+    }
+
+    /// Serves one canned PAR response, for exercising the PAR delivery path.
+    struct ParHttp;
+
+    impl HttpClient for ParHttp {
+        fn execute(
+            &self,
+            _request: http::Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            Box::pin(async {
+                Ok(HttpResponse {
+                    status: http::StatusCode::CREATED,
+                    headers: http::HeaderMap::new(),
+                    body: Bytes::from_static(
+                        br#"{"request_uri":"urn:ietf:params:oauth:request_uri:abc","expires_in":90}"#,
+                    ),
+                })
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn par_start_resolves_expiry_to_an_absolute_instant() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(ParHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .pushed_authorization_request_endpoint("https://as.example.com/par".parse().unwrap())
+            .prefer_pushed_authorization_requests(true)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let before = SystemTime::now();
+        let output = grant.start(StartInput::scopes(["openid"])).await.unwrap();
+        let expires_at = output.expires_at.expect("PAR delivery sets an expiry");
+
+        // The RFC 9126 `expires_in` (90s) is anchored at receipt.
+        let lower = before + Duration::from_secs(90);
+        let upper = SystemTime::now() + Duration::from_secs(90);
+        assert!(
+            expires_at >= lower && expires_at <= upper,
+            "expected within [{lower:?}, {upper:?}], got {expires_at:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn direct_start_has_no_expiry() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let output = grant.start(StartInput::scopes(["openid"])).await.unwrap();
+        assert_eq!(output.expires_at, None);
     }
 
     #[tokio::test]

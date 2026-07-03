@@ -59,7 +59,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     let StartOutput {
         authorization_url,
-        expires_in: _,
+        expires_at: _,
         pending_state,
         ..
     } = grant
