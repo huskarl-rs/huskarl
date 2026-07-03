@@ -77,7 +77,7 @@ impl Rejection {
     /// # use huskarl_resource_server::{error::InsufficientScope, validator::metadata::ValidatorMetadata};
     /// # fn example() -> Result<(), http::Error> {
     /// let metadata = ValidatorMetadata::builder().realm("api").build();
-    /// let rejection = metadata.rejection(&InsufficientScope, Some("read write"));
+    /// let rejection = metadata.rejection(&InsufficientScope::new("read write"), None);
     ///
     /// let response = rejection.apply(http::Response::builder()).body(())?;
     ///
@@ -105,10 +105,11 @@ impl ValidatorMetadata {
     /// The status code comes from the error's
     /// [classification](ToRfc6750Error::token_error), and the
     /// `WWW-Authenticate` challenges from [`challenges`](Self::challenges)
-    /// (empty for server-side failures). `scope` is included as the
-    /// challenges' `scope` parameter — pass the scope the resource requires,
-    /// particularly for [`InsufficientScope`](crate::error::InsufficientScope)
-    /// rejections.
+    /// (empty for server-side failures). The challenges' `scope` attribute
+    /// comes from the error's own
+    /// [`required_scope`](ToRfc6750Error::required_scope) when set — e.g.
+    /// [`InsufficientScope::new`](crate::error::InsufficientScope::new) —
+    /// falling back to the `scope` argument.
     ///
     /// The returned rejection has no `DPoP` nonce; when rejecting after a
     /// [`ValidationResult`] that carried one, either use
@@ -239,7 +240,8 @@ mod tests {
 
     #[test]
     fn metadata_rejection_insufficient_scope_is_403_with_scope() {
-        let rejection = meta().rejection(&InsufficientScope, Some("read write"));
+        // The error carries the required scope itself; no positional scope needed.
+        let rejection = meta().rejection(&InsufficientScope::new("read write"), None);
         assert_eq!(rejection.status, http::StatusCode::FORBIDDEN);
         assert_eq!(rejection.www_authenticate.len(), 1);
         assert!(rejection.www_authenticate[0].contains(r#"scope="read write""#));

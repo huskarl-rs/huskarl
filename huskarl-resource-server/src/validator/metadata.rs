@@ -79,6 +79,12 @@ impl ValidatorMetadata {
     /// returned as unauthenticated challenges. If the attempted scheme is ambiguous,
     /// both challenges include error details, as permitted by RFC 9449 §7.1.
     ///
+    /// The `scope` attribute comes from the error's
+    /// [`required_scope`](ToRfc6750Error::required_scope) when set (it names
+    /// the specific unmet requirement — see
+    /// [`InsufficientScope`](crate::error::InsufficientScope)), falling back
+    /// to the `scope` argument.
+    ///
     /// If `error` is `Some` and the error is a [`TokenValidationError::Server`], returns
     /// an empty `Vec` — server-side failures (e.g. unreachable introspection endpoint) use
     /// a 5xx status code and no `WWW-Authenticate` header, since re-authenticating would
@@ -125,6 +131,12 @@ impl ValidatorMetadata {
         let mut challenges = Vec::new();
         let attempted_scheme =
             error.and_then(super::super::error::ToRfc6750Error::attempted_scheme);
+
+        // The error's own scope requirement (e.g. `InsufficientScope::new`)
+        // names the specific unmet requirement, so it wins over the generic
+        // `scope` argument.
+        let required_scope = error.and_then(super::super::error::ToRfc6750Error::required_scope);
+        let scope = required_scope.as_deref().or(scope);
 
         let dpop_supported = self.supports_dpop();
         let bearer_allowed = !self.dpop_bound_access_tokens_required.unwrap_or(false);
@@ -480,6 +492,27 @@ mod tests {
                 r#"Bearer realm="my\"realm", scope="read", error="insufficient_user_authentication", error_description="step up", max_age=60"#
             ]
         );
+    }
+
+    #[test]
+    fn error_required_scope_fills_scope_attribute() {
+        let err = crate::error::InsufficientScope::new("admin");
+        assert_eq!(
+            meta().challenges(Some(&err), None, None),
+            vec![
+                r#"Bearer scope="admin", error="insufficient_scope", error_description="The access token has insufficient scope for the requested resource""#
+            ]
+        );
+    }
+
+    #[test]
+    fn error_required_scope_wins_over_scope_argument() {
+        // The error names the specific unmet requirement; the generic
+        // argument is the fallback.
+        let err = crate::error::InsufficientScope::new("admin");
+        let challenges = meta().challenges(Some(&err), Some("read"), None);
+        assert!(challenges[0].contains(r#"scope="admin""#), "{challenges:?}");
+        assert!(!challenges[0].contains(r#"scope="read""#), "{challenges:?}");
     }
 
     #[test]
