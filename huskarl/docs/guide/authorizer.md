@@ -27,8 +27,8 @@ records what each response reveals.
 # async fn send(_headers: HeaderMap) -> Response {
 #     Response { status: StatusCode::OK, headers: HeaderMap::new() }
 # }
-# async fn example(authorizer: &HttpAuthorizer) -> Result<(), huskarl::core::Error> {
-let uri: Uri = "https://api.example.com/v1/widgets".parse().unwrap();
+# async fn example(authorizer: &HttpAuthorizer) -> Result<(), Box<dyn std::error::Error>> {
+let uri: Uri = "https://api.example.com/v1/widgets".parse()?;
 
 let headers = authorizer.get_headers(&Method::GET, &uri).await?;
 let mut response = send(headers).await;
