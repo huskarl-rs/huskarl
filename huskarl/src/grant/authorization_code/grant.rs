@@ -69,6 +69,9 @@ pub struct AuthorizationCodeGrant {
     /// Set to true if the provider requires PAR requests only (RFC 9126 §5).
     ///
     /// The value is usually set using authorization server metadata (RFC 8414).
+    /// The builder rejects setting this without a
+    /// `pushed_authorization_request_endpoint`, so when it is `true` an
+    /// endpoint is guaranteed to be present.
     pub(super) require_pushed_authorization_requests: bool,
 
     /// Set to true if the provider supports the `iss` parameter in the authorization code callback (RFC 9207).
@@ -127,8 +130,10 @@ impl AuthorizationCodeGrant {
     /// # Errors
     ///
     /// Returns an error if a `jws_verifier_factory` is supplied without a
-    /// `jws_verifier_platform`, or if building the JWS verifier from `jwks_uri`
-    /// fails.
+    /// `jws_verifier_platform`, if building the JWS verifier from `jwks_uri`
+    /// fails, or if `require_pushed_authorization_requests` is set without a
+    /// `pushed_authorization_request_endpoint` (honoring the requirement would
+    /// be impossible, and ignoring it would silently downgrade PAR).
     #[builder(on(String, into))]
     pub async fn new(
         /// The client ID.
@@ -262,6 +267,18 @@ impl AuthorizationCodeGrant {
                     mtls_pushed_authorization_request_endpoint.as_ref(),
                 )
             });
+
+        // A grant that must use PAR (client policy, or AS metadata setting
+        // `require_pushed_authorization_requests`) but has no endpoint to push
+        // to could only ever proceed by silently downgrading to a plain
+        // authorization request — fail construction instead.
+        if require_pushed_authorization_requests && pushed_authorization_request_endpoint.is_none()
+        {
+            return Err(Error::new(
+                ErrorKind::Config,
+                super::error::RequiredParEndpointMissingSnafu.build(),
+            ));
+        }
 
         Ok(AuthorizationCodeGrant {
             client_id,
