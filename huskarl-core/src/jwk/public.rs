@@ -51,6 +51,29 @@ pub struct PublicJwk {
     #[builder(skip)]
     #[serde(rename = "x5u", default, skip_serializing)]
     pub x5u: Option<String>,
+    /// Whether the source JSON carried the private-key parameter `d`
+    /// (RFC 7518 §6.2.2/§6.3.2, RFC 8037 §2). Every valid private-key
+    /// representation of the supported key types includes `d`.
+    ///
+    /// Captured to enable rejection when a JWK from an untrusted source
+    /// carries a private key (e.g. `DPoP` proof headers, RFC 9449 §4.2).
+    /// Only presence is recorded — the value is discarded during parsing so
+    /// leaked private material never lives in this type or its `Debug`
+    /// output. Never serialized by this library.
+    #[builder(skip)]
+    #[serde(
+        rename = "d",
+        default,
+        skip_serializing,
+        deserialize_with = "de_field_presence"
+    )]
+    pub has_private_parameters: bool,
+}
+
+/// Records that a field was present while discarding its value.
+fn de_field_presence<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
 }
 
 impl PublicJwk {

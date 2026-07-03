@@ -112,6 +112,7 @@ impl DpopProofValidator {
             .ok_or_else(|| MissingJwkHeaderSnafu.build())?;
 
         ensure!(jwk.x5u.is_none(), JwkX5uSnafu);
+        ensure!(!jwk.has_private_parameters, JwkPrivateKeySnafu);
 
         let thumbprint = jwk.thumbprint();
         let alg = parsed.header.alg.clone().into_owned();
@@ -177,6 +178,9 @@ impl DpopProofError {
             Self::JwkX5u => {
                 Some("The DPoP proof JWK contains an unsupported x5u parameter".to_string())
             }
+            Self::JwkPrivateKey => {
+                Some("The DPoP proof JWK contains private-key material".to_string())
+            }
             Self::CreateVerifier { .. } => Some("The DPoP proof signature is invalid".to_string()),
             Self::InvalidProof { source } => {
                 use JwtValidationError as E;
@@ -215,6 +219,62 @@ impl DpopProofError {
     }
 }
 
+#[cfg(test)]
+#[cfg(all(not(target_family = "wasm"), feature = "default-jws-verifier-platform"))]
+mod tests {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    use super::*;
+    use crate::DefaultJwsVerifierPlatform;
+
+    const EC_PUBLIC: &str = r#""kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM""#;
+
+    /// A structurally valid proof with the given JWK JSON embedded in the
+    /// header. The signature is garbage, which is fine for these tests: the
+    /// JWK header checks fire before signature verification.
+    fn proof_with_jwk(jwk_json: &str) -> String {
+        let header = format!(r#"{{"alg":"ES256","typ":"dpop+jwt","jwk":{jwk_json}}}"#);
+        let claims = r#"{"jti":"test-jti","htm":"GET","htu":"https://rs.example/r"}"#;
+        format!(
+            "{}.{}.{}",
+            URL_SAFE_NO_PAD.encode(header),
+            URL_SAFE_NO_PAD.encode(claims),
+            URL_SAFE_NO_PAD.encode("sig")
+        )
+    }
+
+    fn validator() -> DpopProofValidator {
+        DpopProofValidator::builder()
+            .jws_verifier_platform(DefaultJwsVerifierPlatform::default().into())
+            .build()
+    }
+
+    /// RFC 9449 §4.2: the proof's `jwk` header MUST NOT contain a private key.
+    #[tokio::test]
+    async fn proof_jwk_with_private_key_material_is_rejected() {
+        let jwk = format!(r#"{{{EC_PUBLIC},"d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}}"#);
+        let err = validator()
+            .validate(&proof_with_jwk(&jwk))
+            .await
+            .err()
+            .expect("validation should fail");
+        assert!(matches!(err, DpopProofError::JwkPrivateKey), "got {err:?}");
+    }
+
+    /// Control: the same proof without `d` gets past the JWK header checks
+    /// (it fails later, on its garbage signature).
+    #[tokio::test]
+    async fn proof_jwk_without_private_key_material_passes_the_header_check() {
+        let jwk = format!("{{{EC_PUBLIC}}}");
+        let err = validator()
+            .validate(&proof_with_jwk(&jwk))
+            .await
+            .err()
+            .expect("validation should fail");
+        assert!(!matches!(err, DpopProofError::JwkPrivateKey), "got {err:?}");
+    }
+}
+
 /// Errors from `DPoP` proof structural validation.
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
@@ -231,6 +291,9 @@ pub enum DpopProofError {
     /// JWK contains `x5u`, rejected for SSRF prevention.
     #[snafu(display("DPoP proof JWK contains unsupported x5u parameter"))]
     JwkX5u,
+    /// JWK contains private-key material, forbidden by RFC 9449 §4.2.
+    #[snafu(display("DPoP proof JWK contains private-key material"))]
+    JwkPrivateKey,
     /// Cannot create verifier from embedded JWK.
     #[snafu(display("Failed to create DPoP verification key"))]
     CreateVerifier {
