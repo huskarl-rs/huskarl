@@ -325,6 +325,31 @@ mod test {
         );
     }
 
+    /// Some authorization servers emit `expires_in` as a JSON float
+    /// (e.g. `3600.0`) or as a float in a string (`"3600.0"`); fractional
+    /// values truncate toward earlier expiry.
+    #[rstest::rstest]
+    #[case::integral("3600.0", Some(3600))]
+    #[case::fractional("3599.5", Some(3599))]
+    #[case::string_float(r#""3600.0""#, Some(3600))]
+    #[case::string_fractional(r#""3599.5""#, Some(3599))]
+    fn parse_token_response_with_float_expires_in(
+        #[case] expires_in: &str,
+        #[case] expected: Option<u64>,
+    ) {
+        let token_response_str = format!(
+            r#"{{
+  "access_token":"2YotnFZFEjr1zCsicMWpAA",
+  "token_type":"example",
+  "expires_in":{expires_in}
+}}"#
+        );
+
+        let raw_token_response: RawTokenResponse =
+            serde_json::from_str(&token_response_str).expect("float expires_in parses");
+        assert_eq!(raw_token_response.expires_in, expected);
+    }
+
     /// `N_A` outside a token-exchange response (no `issued_token_type`) stays
     /// invalid — plain grants must not accept it.
     #[test]
