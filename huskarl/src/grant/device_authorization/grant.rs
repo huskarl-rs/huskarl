@@ -338,11 +338,15 @@ struct DeviceAuthorizationResponse {
     verification_uri_complete: Option<String>,
 
     /// The lifetime in seconds of the `device_code` and `user_code`.
+    #[serde(deserialize_with = "crate::serde_utils::deserialize_u32_or_string")]
     expires_in: u32,
 
     /// The minimum amount of time in seconds the client should wait between polling requests.
     /// Defaults to 5 seconds if not provided by the server.
-    #[serde(default = "default_interval")]
+    #[serde(
+        default = "default_interval",
+        deserialize_with = "crate::serde_utils::deserialize_u32_or_string"
+    )]
     interval: u32,
 }
 
@@ -509,6 +513,24 @@ mod tests {
             device_code: "dev-code".to_string(),
             interval_secs: 5,
         }
+    }
+
+    /// Same wire leniency as the token response's `expires_in`: seconds
+    /// counts may arrive as floats, number strings, or float strings.
+    #[rstest::rstest]
+    #[case::floats("1800.0", "5.5")]
+    #[case::strings(r#""1800""#, r#""5""#)]
+    #[case::float_strings(r#""1800.0""#, r#""5.5""#)]
+    fn device_authorization_response_accepts_float_and_string_seconds(
+        #[case] expires_in: &str,
+        #[case] interval: &str,
+    ) {
+        let json = format!(
+            r#"{{"device_code":"dc","user_code":"uc","verification_uri":"https://as.example/verify","expires_in":{expires_in},"interval":{interval}}}"#
+        );
+        let response: DeviceAuthorizationResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(response.expires_in, 1800);
+        assert_eq!(response.interval, 5);
     }
 
     #[test]
