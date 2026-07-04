@@ -82,7 +82,7 @@ impl std::fmt::Debug for AesGcmKey {
 
 /// Errors that can occur when loading an AES-GCM key.
 #[derive(Debug, Snafu)]
-pub enum LoadKeyError {
+pub enum AesGcmKeyLoadError {
     /// The key secret could not be fetched from its source.
     #[snafu(display("failed to fetch AES key secret"))]
     Secret {
@@ -178,12 +178,12 @@ impl AesGcmKey {
     ///
     /// # Errors
     ///
-    /// Returns [`LoadKeyError`] if the secret cannot be fetched, the key
+    /// Returns [`AesGcmKeyLoadError`] if the secret cannot be fetched, the key
     /// length is invalid, or `WebCrypto` rejects the import.
     pub async fn from_secret<S: Secret<Output = SecretBytes>>(
         secret: S,
         kid_from_identity: impl Fn(Option<&str>) -> Option<String>,
-    ) -> Result<Self, LoadKeyError> {
+    ) -> Result<Self, AesGcmKeyLoadError> {
         let key_source = secret.get_secret_value().await.context(SecretSnafu)?;
         let bytes = key_source.value.expose_secret();
         let enc_algorithm = enc_algorithm_for_len(bytes.len()).context(InvalidKeyLengthSnafu)?;
