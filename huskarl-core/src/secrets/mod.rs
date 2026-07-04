@@ -1,7 +1,8 @@
 //! Async secret access.
 //!
-//! Retrieves string and binary secrets — from environment variables, files, or
-//! your own provider — behind the [`Secret`] trait, handing them back in the
+//! Retrieves string and binary secrets — from environment variables, files, a
+//! value already in hand ([`ProvidedSecret`]), or your own provider — behind
+//! the [`Secret`] trait, handing them back in the
 //! redacted [`SecretString`]/[`SecretBytes`] wrappers. A [`SecretMap`] (see
 //! [`encodings`]) maps between secret types — decoding (Base64, hex), the UTF-8
 //! conversion, and value transforms are all instances.
@@ -28,7 +29,7 @@ use std::sync::Arc;
 pub use cached::CachedSecret;
 pub use encodings::SecretMap;
 pub use mapped::{FnMap, MappedSecret, TryFnMap};
-pub use providers::EnvVarSecret;
+pub use providers::{EnvVarSecret, ProvidedSecret};
 #[cfg(feature = "fs")]
 pub use providers::{FileBytes, FileSecret};
 use secrecy::ExposeSecret as _;
@@ -250,26 +251,9 @@ impl<S: Secret> Secret for WithIdentity<S> {
 mod tests {
     use super::*;
 
-    struct MockSecret(SecretString);
-
-    impl Secret for MockSecret {
-        type Output = SecretString;
-
-        fn get_secret_value(
-            &self,
-        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
-            Box::pin(async move {
-                Ok(SecretOutput {
-                    value: self.0.clone(),
-                    identity: None,
-                })
-            })
-        }
-    }
-
     #[tokio::test]
     async fn test_with_identity() {
-        let secret = MockSecret(SecretString::new("secret"));
+        let secret = ProvidedSecret::new(SecretString::new("secret"));
         let with_id = WithIdentity::new(secret, "my-id");
 
         let output = with_id.get_secret_value().await.unwrap();
@@ -280,7 +264,7 @@ mod tests {
     #[tokio::test]
     async fn erased_secret_dispatches() {
         let secret: Arc<dyn Secret<Output = SecretString>> =
-            Arc::new(MockSecret(SecretString::new("erased")));
+            Arc::new(ProvidedSecret::new(SecretString::new("erased")));
         let output = secret.get_secret_value().await.unwrap();
         assert_eq!(output.value.expose_secret(), "erased");
     }

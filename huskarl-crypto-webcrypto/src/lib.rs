@@ -52,7 +52,7 @@
 //! | Import a *public* verify key (JWK / JWKS) | ✔ | ✔ (`async`) |
 //! | Symmetric JWS (HMAC, e.g. `HS256` / `client_secret_jwt`) | ✔ (`SymmetricKey`) | ✘ — no symmetric signing module |
 //! | AES-GCM AEAD from key material | ✔ | ✔ (plus [`from_crypto_key`](aead::AesGcmKey::from_crypto_key) for an existing `CryptoKey`) |
-//! | Sign / verify / import calls | sync | `async` (SubtleCrypto) |
+//! | Sign / verify / import calls | sync | `async` (`SubtleCrypto`) |
 //!
 //! Practical consequences: a wasm client authenticates with `private_key_jwt`
 //! only via a key **generated in-browser** and registered by its public JWK

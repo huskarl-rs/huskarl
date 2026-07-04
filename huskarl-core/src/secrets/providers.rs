@@ -95,6 +95,72 @@ mod env_tests {
     }
 }
 
+/// A secret value the process already holds.
+///
+/// For a value obtained at runtime from a source this crate doesn't cover — a
+/// custom vault client, a configuration struct (note that [`SecretString`]
+/// implements `Deserialize`), a test fixture. Construction takes the redacted
+/// wrapper ([`SecretString`]/[`SecretBytes`]) rather than a plain string,
+/// deliberately: wrapping a value here is a statement that it was *obtained*,
+/// not written down.
+///
+/// **Do not use this to embed a credential in source code.** A hardcoded
+/// secret lands in version control, binaries, and backups, and cannot be
+/// rotated without a release. If the value is known before the process
+/// starts, read it at runtime with [`EnvVarSecret`] or `FileSecret` (behind
+/// the `fs` feature) instead.
+///
+/// The value is a snapshot: rotation in the upstream source is never
+/// observed. If the source can rotate, implement [`Secret`] for it directly
+/// (see [providing secrets](crate::_docs::guide::providing_secrets)) so each
+/// fetch sees the current value.
+#[derive(Debug, Clone)]
+pub struct ProvidedSecret<Output = SecretString> {
+    value: Output,
+}
+
+impl<O> ProvidedSecret<O> {
+    /// Wraps an already-obtained value as a [`Secret`] provider.
+    pub fn new(value: O) -> Self {
+        Self { value }
+    }
+}
+
+impl<O: Clone + MaybeSendSync> Secret for ProvidedSecret<O> {
+    type Output = O;
+
+    fn get_secret_value(
+        &self,
+    ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+        Box::pin(async move {
+            Ok(SecretOutput {
+                value: self.value.clone(),
+                identity: None,
+            })
+        })
+    }
+}
+
+#[cfg(test)]
+mod provided_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn provided_string_round_trips() {
+        let secret = ProvidedSecret::new(SecretString::new("already-fetched"));
+        let output = secret.get_secret_value().await.unwrap();
+        assert_eq!(output.value.expose_secret(), "already-fetched");
+        assert!(output.identity.is_none());
+    }
+
+    #[tokio::test]
+    async fn provided_bytes_round_trips() {
+        let secret = ProvidedSecret::new(SecretBytes::new(vec![0x2a; 4]));
+        let output = secret.get_secret_value().await.unwrap();
+        assert_eq!(output.value.expose_secret(), &[0x2a; 4]);
+    }
+}
+
 #[cfg(feature = "fs")]
 mod file_secret {
     use std::path::PathBuf;

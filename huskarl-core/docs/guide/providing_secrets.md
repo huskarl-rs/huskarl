@@ -43,6 +43,35 @@ let client_secret = FileSecret::string("/run/secrets/client_secret");
 let signing_key = FileBytes::new("/run/secrets/signing_key").mapped(Base64Encoding);
 ```
 
+## A secret you already hold
+
+[`ProvidedSecret`](crate::secrets::ProvidedSecret) wraps a value the process
+already obtained at runtime — from a store the crate has no provider for, or
+from deserialized configuration
+([`SecretString`](crate::secrets::SecretString) implements `Deserialize`):
+
+```rust
+use huskarl_core::secrets::{ProvidedSecret, SecretString};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct AppConfig {
+    client_secret: SecretString,
+}
+
+# fn example(config: AppConfig) {
+let client_secret = ProvidedSecret::new(config.client_secret);
+# let _ = client_secret;
+# }
+```
+
+Do not reach for it to embed a credential in source code — a hardcoded secret
+lands in version control, binaries, and backups, and cannot be rotated without
+a release. If the value is known before the process starts, it belongs in the
+environment or a file. `ProvidedSecret` is also a snapshot: if the upstream
+source rotates the value, [implement `Secret` for the
+source](#a-custom-provider) instead, so each fetch sees the current value.
+
 ## Transforming a secret
 
 A fetched value is often not yet the value you need — a store hands back a
