@@ -55,7 +55,7 @@ async fn run_fapi2_plan<J: Jar + Clone + 'static>(
     // Extract the public JWK to register with the conformance suite as the client JWKS.
     let client_public_jwk = client_key.public_key_jwk().into_owned();
     // Provide the full private JWK so the simulated AS can sign tokens.
-    let server_private_jwk: huskarl::core::jwk::Jwk = server_key.as_private_jwk(None).into();
+    let server_private_jwk: huskarl::core::jwk::Jwk = server_key.as_private_jwk().into();
 
     let alias = format!("huskarl-fapi2-{}", Uuid::new_v4());
 
