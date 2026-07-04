@@ -80,7 +80,7 @@ pub enum ErrorKind {
     /// Client authentication could not be constructed.
     Auth,
     /// `DPoP` proof construction or handling failed.
-    Dpop,
+    DPoP,
     /// Builder, URL, or other setup error.
     Config,
     /// Cryptographic operation failed.
@@ -222,7 +222,7 @@ impl fmt::Display for ErrorKind {
             Self::Transport { retryable: false } => "transport failure",
             Self::Protocol => "invalid or malformed server response",
             Self::Auth => "client authentication construction failed",
-            Self::Dpop => "DPoP proof handling failed",
+            Self::DPoP => "DPoP proof handling failed",
             Self::Config => "invalid configuration",
             Self::Crypto => "cryptographic operation failed",
         };

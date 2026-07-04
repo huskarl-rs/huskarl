@@ -33,8 +33,8 @@ use crate::{
         binding::DPoPBindingChecker,
         common::ValidatorInner,
         custom::custom_validator_builder::{SetAuthorizationServer, SetJwksUri},
-        dpop_nonce::DpopNonceChecker,
-        dpop_proof::DpopProofValidator,
+        dpop_nonce::DPoPNonceChecker,
+        dpop_proof::DPoPProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
         observe::{OnValidate, ValidationOutcome},
@@ -113,8 +113,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// Access token JTI uniqueness checker.
         token_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// `DPoP` nonce checker.
-        #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
-        dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
+        #[builder(with = |checker: impl DPoPNonceChecker + 'static| Arc::new(checker) as Arc<dyn DPoPNonceChecker>)]
+        dpop_nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
         /// `DPoP` JTI uniqueness checker.
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// Cryptographic platform for JWS verification.
@@ -168,7 +168,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
                 jwt_validator,
                 dpop_binding_checker: DPoPBindingChecker {
                     dpop_nonce_checker,
-                    proof_validator: DpopProofValidator::builder()
+                    proof_validator: DPoPProofValidator::builder()
                         .jws_verifier_platform(jws_verifier_platform)
                         .max_proof_age(max_dpop_proof_age)
                         .clock_leeway(clock_leeway)

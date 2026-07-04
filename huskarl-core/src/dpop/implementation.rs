@@ -159,11 +159,11 @@ impl ResourceServerDPoP for ResourceDPoP {
 /// This indicates a logic error; the caller should provide a thumbprint
 /// when `DPoP` is configured.
 fn no_thumbprint_error() -> Error {
-    Error::from(ErrorKind::Dpop).with_context("no JWK thumbprint provided for proof")
+    Error::from(ErrorKind::DPoP).with_context("no JWK thumbprint provided for proof")
 }
 
 fn no_matching_key_error() -> Error {
-    Error::from(ErrorKind::Dpop).with_context("no matching key for the given thumbprint")
+    Error::from(ErrorKind::DPoP).with_context("no matching key for the given thumbprint")
 }
 
 fn origin_from_uri(uri: &Uri) -> Origin {
@@ -195,7 +195,7 @@ async fn sign_proof(
         htm: htm.as_str(),
         htu: normalize_uri_for_dpop(htu)
             .map_err(|source| {
-                Error::new(ErrorKind::Dpop, source).with_context("normalizing URI for DPoP proof")
+                Error::new(ErrorKind::DPoP, source).with_context("normalizing URI for DPoP proof")
             })?
             .to_string(),
         ath: token.map(hash_access_token_for_dpop),
@@ -398,7 +398,7 @@ mod tests {
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
 
         let err = dpop.proof(&Method::POST, &uri, None).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Dpop);
+        assert_eq!(err.kind(), ErrorKind::DPoP);
         assert!(err.to_string().contains("no JWK thumbprint"));
     }
 
@@ -414,7 +414,7 @@ mod tests {
             .proof(&Method::POST, &uri, Some("wrong-thumbprint"))
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Dpop);
+        assert_eq!(err.kind(), ErrorKind::DPoP);
         assert!(err.to_string().contains("no matching key"));
     }
 

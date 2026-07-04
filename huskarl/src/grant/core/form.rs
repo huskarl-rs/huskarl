@@ -50,7 +50,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             parts.headers.insert(
                 "DPoP",
                 HeaderValue::from_str(proof.expose_secret()).map_err(|e| {
-                    Error::new(ErrorKind::Dpop, e)
+                    Error::new(ErrorKind::DPoP, e)
                         .with_context("DPoP proof is not a valid header value")
                 })?,
             );
@@ -130,7 +130,7 @@ fn serialize_form_error(source: oauth_form::Error) -> Error {
 /// Classification: `invalid_grant` → [`ErrorKind::InvalidGrant`] (the
 /// credential is rejected); `invalid_scope`/`invalid_target`/`invalid_resource`
 /// → [`ErrorKind::RequestRejected`] (the credential is valid but the request was
-/// malformed); `use_dpop_nonce` → [`ErrorKind::Dpop`]; any 5xx →
+/// malformed); `use_dpop_nonce` → [`ErrorKind::DPoP`]; any 5xx →
 /// [`ErrorKind::Transport`] (retryable); other `OAuth2` errors →
 /// [`ErrorKind::Protocol`]. The raw OAuth error code is carried on the error.
 fn parse_oauth2_error_response(
@@ -148,7 +148,7 @@ fn parse_oauth2_error_response(
                 "invalid_scope" | "invalid_target" | "invalid_resource" => {
                     ErrorKind::RequestRejected
                 }
-                "use_dpop_nonce" => ErrorKind::Dpop,
+                "use_dpop_nonce" => ErrorKind::DPoP,
                 _ if status.is_server_error() => ErrorKind::Transport { retryable: true },
                 _ => ErrorKind::Protocol,
             };

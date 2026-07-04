@@ -39,11 +39,11 @@ pub enum TokenBindingError {
     /// attacker who stole the token to use it without possessing the private key.
     #[snafu(display("Token is DPoP-bound but was presented as Bearer"))]
     #[strum(message = "The access token is DPoP-bound")]
-    DpopRequiredForBoundToken,
+    DPoPRequiredForBoundToken,
     /// `DPoP` is required by this resource server but the token was presented as Bearer.
     #[snafu(display("DPoP-bound tokens are required"))]
     #[strum(message = "DPoP is required to access this resource")]
-    DpopRequired,
+    DPoPRequired,
     /// The token `cnf` claim contains a confirmation method that is not supported.
     /// Only `jkt` (`DPoP`) and `x5t#S256` (mTLS) are checked; `jwe` and `jku` are rejected
     /// rather than silently ignored, per RFC 7800's requirement that applications ensure
@@ -72,8 +72,8 @@ impl ToRfc6750Error for TokenBindingError {
             Self::MissingDPoPHeader
             | Self::DPoPHeaderNotString { .. }
             | Self::DPoPBinding { .. } => Some(TokenType::DPoP),
-            Self::DpopRequiredForBoundToken
-            | Self::DpopRequired
+            Self::DPoPRequiredForBoundToken
+            | Self::DPoPRequired
             | Self::UnsupportedCnfMethod { .. }
             | Self::MtlsBinding { .. } => None,
         }
@@ -84,8 +84,8 @@ impl ToRfc6750Error for TokenBindingError {
             Self::MissingDPoPHeader | Self::DPoPHeaderNotString { .. } => {
                 TokenValidationError::Client(TokenErrorCode::InvalidRequest)
             }
-            Self::DpopRequiredForBoundToken
-            | Self::DpopRequired
+            Self::DPoPRequiredForBoundToken
+            | Self::DPoPRequired
             | Self::UnsupportedCnfMethod { .. }
             | Self::MtlsBinding { .. } => {
                 TokenValidationError::Client(TokenErrorCode::InvalidToken)

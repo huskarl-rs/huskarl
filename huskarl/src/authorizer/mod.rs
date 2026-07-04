@@ -82,7 +82,7 @@ impl HttpAuthorizer {
         let mut headers = HeaderMap::new();
 
         match token.access_token() {
-            AccessToken::Dpop(dpop_access_token) => {
+            AccessToken::DPoP(dpop_access_token) => {
                 let Some(proof) = self
                     .cache
                     .resource_server_dpop()
@@ -97,14 +97,14 @@ impl HttpAuthorizer {
                     // A DPoP-bound token paired with a proof implementation
                     // that produces no proof indicates a logic bug in the
                     // cache configuration.
-                    return Err(Error::from(ErrorKind::Dpop)
+                    return Err(Error::from(ErrorKind::DPoP)
                         .with_context("received DPoP token but no DPoP configuration present"));
                 };
 
                 headers.insert(
                     "DPoP",
                     proof.expose_secret().parse().map_err(|source| {
-                        Error::new(ErrorKind::Dpop, source)
+                        Error::new(ErrorKind::DPoP, source)
                             .with_context("DPoP proof is not a valid header value")
                     })?,
                 );

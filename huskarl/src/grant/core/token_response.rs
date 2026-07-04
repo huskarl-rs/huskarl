@@ -8,7 +8,7 @@ use snafu::Snafu;
 use crate::{
     core::{AuthorizationDetail, platform::Duration, secrets::SecretString},
     token::{
-        AccessToken, BearerAccessToken, DpopAccessToken, IdToken, NonAccessToken, RefreshToken,
+        AccessToken, BearerAccessToken, DPoPAccessToken, IdToken, NonAccessToken, RefreshToken,
     },
 };
 
@@ -140,7 +140,7 @@ impl RawTokenResponse {
     /// # Errors
     ///
     /// Returns [`InvalidTokenResponse::InvalidTokenType`] for an unknown
-    /// `token_type`, and [`InvalidTokenResponse::NoDpopThumbprint`] for a
+    /// `token_type`, and [`InvalidTokenResponse::NoDPoPThumbprint`] for a
     /// `DPoP` response without a thumbprint.
     pub fn into_token_response(
         self,
@@ -165,7 +165,7 @@ impl RawTokenResponse {
         if self.token_type.eq_ignore_ascii_case("DPoP") {
             dpop_jkt
                 .map(|jkt| ResolvedTokenType::DPoP { jkt })
-                .ok_or_else(|| NoDpopThumbprintSnafu.build())
+                .ok_or_else(|| NoDPoPThumbprintSnafu.build())
         } else if self.token_type.eq_ignore_ascii_case("bearer") {
             Ok(ResolvedTokenType::Bearer)
         } else if self.token_type.eq_ignore_ascii_case("N_A") && self.issued_token_type.is_some() {
@@ -187,7 +187,7 @@ impl RawTokenResponse {
         received_at: crate::core::platform::SystemTime,
     ) -> AccessToken {
         match token_type {
-            ResolvedTokenType::DPoP { jkt } => AccessToken::Dpop(DpopAccessToken::new(
+            ResolvedTokenType::DPoP { jkt } => AccessToken::DPoP(DPoPAccessToken::new(
                 self.access_token.clone(),
                 jkt,
                 received_at,
@@ -226,7 +226,7 @@ impl RawTokenResponse {
 pub enum InvalidTokenResponse {
     /// The response is `DPoP`-typed but no `DPoP` key thumbprint was provided.
     #[snafu(display("No DPoP thumbprint provided"))]
-    NoDpopThumbprint,
+    NoDPoPThumbprint,
     /// The `token_type` is neither `bearer` nor `DPoP`.
     #[snafu(display("Invalid token type: {}", token_type))]
     InvalidTokenType {
@@ -496,7 +496,7 @@ mod test {
 
         assert!(matches!(
             err_token_response,
-            InvalidTokenResponse::NoDpopThumbprint
+            InvalidTokenResponse::NoDPoPThumbprint
         ));
     }
 
