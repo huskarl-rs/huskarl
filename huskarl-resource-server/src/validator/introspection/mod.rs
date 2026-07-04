@@ -37,8 +37,8 @@ use crate::{
     validator::{
         AccessTokenValidator, ValidatedRequest, ValidationResult,
         binding::{DPoPBindingChecker, check_token_binding},
-        dpop_nonce::DpopNonceChecker,
-        dpop_proof::DpopProofValidator,
+        dpop_nonce::DPoPNonceChecker,
+        dpop_proof::DPoPProofValidator,
         extract::extract_token,
         introspection::{
             error::{AudienceSnafu, BindingSnafu, CallSnafu, ExtractSnafu},
@@ -170,8 +170,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// Optional server-side `DPoP` nonce enforcement (RFC 9449 §8). When set,
         /// proofs must carry a nonce this checker accepts; omitting it disables
         /// nonce enforcement.
-        #[builder(with = |checker: impl DpopNonceChecker + 'static| Arc::new(checker) as Arc<dyn DpopNonceChecker>)]
-        dpop_nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
+        #[builder(with = |checker: impl DPoPNonceChecker + 'static| Arc::new(checker) as Arc<dyn DPoPNonceChecker>)]
+        dpop_nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
         /// `DPoP` JTI uniqueness checker.
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// JWS verifier factory for RFC 9701 JWT response validation.
@@ -227,7 +227,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             http_client,
             dpop_binding_checker: DPoPBindingChecker {
                 dpop_nonce_checker,
-                proof_validator: DpopProofValidator::builder()
+                proof_validator: DPoPProofValidator::builder()
                     .jws_verifier_platform(jws_verifier_platform)
                     .max_proof_age(max_dpop_proof_age)
                     .clock_leeway(clock_leeway)

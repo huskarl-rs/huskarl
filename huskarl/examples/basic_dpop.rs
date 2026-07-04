@@ -60,7 +60,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     let resource_server_dpop = grant.dpop().to_resource_server_dpop();
 
-    let AccessToken::Dpop(dpop_token) = access_token else {
+    let AccessToken::DPoP(dpop_token) = access_token else {
         println!("Expected response to be a DPoP token");
         return Ok(());
     };

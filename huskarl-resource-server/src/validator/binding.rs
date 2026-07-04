@@ -17,11 +17,11 @@ use crate::{
         secrets::SecretString,
     },
     validator::{
-        dpop_nonce::{DpopNonceChecker, NonceCheck},
-        dpop_proof::{DpopProofError, DpopProofValidator},
+        dpop_nonce::{DPoPNonceChecker, NonceCheck},
+        dpop_proof::{DPoPProofError, DPoPProofValidator},
         error::{
-            DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DpopRequiredForBoundTokenSnafu,
-            DpopRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
+            DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DPoPRequiredForBoundTokenSnafu,
+            DPoPRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
             UnsupportedCnfMethodSnafu,
         },
     },
@@ -86,10 +86,10 @@ pub(crate) async fn check_token_binding(
             // RFC 9449 §7.1: a token with a DPoP key binding (cnf.jkt) MUST NOT be
             // accepted as a Bearer token — doing so would defeat the binding entirely.
             if cnf.and_then(|c| c.jkt.as_ref()).is_some() {
-                return (None, DpopRequiredForBoundTokenSnafu.fail());
+                return (None, DPoPRequiredForBoundTokenSnafu.fail());
             }
             if dpop_binding_checker.required {
-                return (None, DpopRequiredSnafu.fail());
+                return (None, DPoPRequiredSnafu.fail());
             }
             None
         }
@@ -155,8 +155,8 @@ pub enum MtlsBindingError {
 /// against the request, and confirms the proof key matches the `cnf.jkt`
 /// thumbprint in the token. Also validates the provided `DPoP` nonce.
 pub(crate) struct DPoPBindingChecker {
-    pub(crate) dpop_nonce_checker: Option<std::sync::Arc<dyn DpopNonceChecker>>,
-    pub(crate) proof_validator: DpopProofValidator,
+    pub(crate) dpop_nonce_checker: Option<std::sync::Arc<dyn DPoPNonceChecker>>,
+    pub(crate) proof_validator: DPoPProofValidator,
     /// If `true`, Bearer tokens are rejected — all tokens must be DPoP-bound.
     pub(crate) required: bool,
 }
@@ -267,7 +267,7 @@ pub enum DPoPBindingError {
     ThumbprintMismatch,
     /// The `DPoP` proof failed structural validation (format, signature, JWK, typ, alg, etc.).
     #[snafu(display("DPoP proof validation failed: {source}"))]
-    ProofValidation { source: DpopProofError },
+    ProofValidation { source: DPoPProofError },
     /// The HTTP URI in the proof could not be normalized.
     #[snafu(display("Malformed HTTP URL in DPoP proof"))]
     MalformedUrl { source: http::Error },
@@ -328,7 +328,7 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
             }
             Self::ProofValidation {
                 source:
-                    DpopProofError::InvalidProof {
+                    DPoPProofError::InvalidProof {
                         source: crate::core::jwt::validator::JwtValidationError::JtiCheck { .. },
                     },
             } => TokenValidationError::Server(StatusCode::INTERNAL_SERVER_ERROR),
@@ -463,12 +463,12 @@ mod tests {
     }
 
     fn checker(
-        nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
+        nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
         required: bool,
     ) -> DPoPBindingChecker {
         DPoPBindingChecker {
             dpop_nonce_checker: nonce_checker,
-            proof_validator: DpopProofValidator::builder()
+            proof_validator: DPoPProofValidator::builder()
                 .jws_verifier_platform(DefaultJwsVerifierPlatform::default().into())
                 .build(),
             required,
@@ -489,7 +489,7 @@ mod tests {
     #[derive(Debug)]
     struct FixedNonce(NonceCheck);
 
-    impl DpopNonceChecker for FixedNonce {
+    impl DPoPNonceChecker for FixedNonce {
         fn check_nonce<'a>(
             &'a self,
             _nonce: Option<&'a str>,
@@ -504,7 +504,7 @@ mod tests {
         signer: &PrivateKey,
         claims: ProofClaims,
         cnf_jkt: Option<String>,
-        nonce_checker: Option<Arc<dyn DpopNonceChecker>>,
+        nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
         required: bool,
     ) -> Result<Option<String>, DPoPBindingError> {
         let proof = sign_proof(signer, claims).await;

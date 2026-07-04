@@ -423,7 +423,7 @@ mod tests {
         mock.assert();
         let response = response.unwrap();
 
-        assert!(matches!(response.access_token(), AccessToken::Dpop(_)));
+        assert!(matches!(response.access_token(), AccessToken::DPoP(_)));
         assert_eq!(
             response.access_token().token().expose_secret(),
             "access_token"

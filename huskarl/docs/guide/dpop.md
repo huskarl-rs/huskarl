@@ -70,7 +70,7 @@ request once automatically — no handling required.
 
 Whether the issued token is actually DPoP-bound is the **server's**
 decision: [`AccessToken`](crate::token::AccessToken) distinguishes plain
-`Bearer` tokens from [`Dpop`](crate::token::AccessToken::Dpop) tokens, which
+`Bearer` tokens from [`DPoP`](crate::token::AccessToken::DPoP) tokens, which
 carry the confirmed key thumbprint (`jkt`). A server without DPoP support
 typically ignores the proof and issues a Bearer token — the rest of the
 pipeline handles either.

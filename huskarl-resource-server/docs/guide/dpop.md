@@ -66,7 +66,7 @@ challenge in `WWW-Authenticate` responses.
 Proof `iat` freshness limits replay to a window of the *client's* clock. A
 server-issued nonce (RFC 9449 §8) closes that: proofs must echo a value your
 server chose recently. Enable it with a
-[`DpopNonceChecker`](crate::validator::dpop_nonce::DpopNonceChecker); the
+[`DpopNonceChecker`](crate::validator::dpop_nonce::DPoPNonceChecker); the
 batteries-included
 [`SealedTimestampNonce`](crate::validator::dpop_nonce::SealedTimestampNonce)
 needs no storage — nonces are AEAD-sealed timestamps, so any replica holding

@@ -27,7 +27,7 @@ use crate::{
 fn userinfo_error(source: UserInfoError) -> Error {
     let kind = match &source {
         UserInfoError::JwtResponseNotSupported => ErrorKind::Config,
-        UserInfoError::DPoPHeader { .. } => ErrorKind::Dpop,
+        UserInfoError::DPoPHeader { .. } => ErrorKind::DPoP,
         _ => ErrorKind::Protocol,
     };
     Error::new(kind, source)

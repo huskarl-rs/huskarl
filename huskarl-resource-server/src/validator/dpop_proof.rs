@@ -26,7 +26,7 @@ use crate::core::{
 /// validity (signature, typ, alg, iat/exp). Whether specific claims like `htm`,
 /// `htu`, or `ath` are required is a consumer-level decision.
 #[non_exhaustive]
-pub struct ValidatedDpopProof {
+pub struct ValidatedDPoPProof {
     /// HTTP method the proof was created for (`htm` claim).
     pub htm: Option<String>,
     /// HTTP URI the proof was created for (`htu` claim).
@@ -58,17 +58,17 @@ pub struct ValidatedDpopProof {
 /// ```
 /// use std::sync::Arc;
 ///
-/// use huskarl_resource_server::validator::dpop_proof::DpopProofValidator;
+/// use huskarl_resource_server::validator::dpop_proof::DPoPProofValidator;
 /// # use huskarl_resource_server::core::crypto::verifier::JwsVerifierPlatform;
 ///
 /// # fn example(platform: Arc<dyn JwsVerifierPlatform>) {
-/// let validator = DpopProofValidator::builder()
+/// let validator = DPoPProofValidator::builder()
 ///     .jws_verifier_platform(platform)
 ///     .build();
 /// # }
 /// ```
 #[derive(Debug, Builder)]
-pub struct DpopProofValidator {
+pub struct DPoPProofValidator {
     /// Crypto platform for creating signature verifiers from embedded JWKs.
     jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
     /// Maximum allowed proof age based on `iat`. Default: 1 minute.
@@ -84,7 +84,7 @@ pub struct DpopProofValidator {
     jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
 }
 
-impl DpopProofValidator {
+impl DPoPProofValidator {
     /// Returns the allowed signing algorithms, if configured.
     #[must_use]
     pub fn allowed_signing_algorithms(&self) -> Option<&[String]> {
@@ -93,17 +93,17 @@ impl DpopProofValidator {
 
     /// Validate a `DPoP` proof's structure and signature.
     ///
-    /// On success, returns a [`ValidatedDpopProof`] containing the proof's claims
+    /// On success, returns a [`ValidatedDPoPProof`] containing the proof's claims
     /// and the JWK thumbprint. The caller is responsible for binding checks (e.g.
     /// verifying `htm`/`htu`/`ath` match the request, or `thumbprint` matches
     /// the token's `cnf.jkt`).
     ///
     /// # Errors
     ///
-    /// Returns a [`DpopProofError`] if the proof is malformed, uses a disallowed
+    /// Returns a [`DPoPProofError`] if the proof is malformed, uses a disallowed
     /// algorithm, has an invalid signature, or fails temporal checks.
-    pub async fn validate(&self, proof: &str) -> Result<ValidatedDpopProof, DpopProofError> {
-        let parsed = parse_compact_jws::<(), DpopProofClaims>(proof).context(BadFormatSnafu)?;
+    pub async fn validate(&self, proof: &str) -> Result<ValidatedDPoPProof, DPoPProofError> {
+        let parsed = parse_compact_jws::<(), DPoPProofClaims>(proof).context(BadFormatSnafu)?;
 
         let jwk = parsed
             .header
@@ -138,7 +138,7 @@ impl DpopProofValidator {
             .await
             .context(InvalidProofSnafu)?;
 
-        Ok(ValidatedDpopProof {
+        Ok(ValidatedDPoPProof {
             htm: validated.claims.htm,
             htu: validated.claims.htu,
             ath: validated.claims.ath,
@@ -161,14 +161,14 @@ impl DpopProofValidator {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct DpopProofClaims {
+struct DPoPProofClaims {
     htm: Option<String>,
     htu: Option<String>,
     ath: Option<String>,
     nonce: Option<String>,
 }
 
-impl DpopProofError {
+impl DPoPProofError {
     /// Human-readable error description suitable for RFC 6750 `error_description`.
     #[must_use]
     pub fn error_description(&self) -> Option<String> {
@@ -243,8 +243,8 @@ mod tests {
         )
     }
 
-    fn validator() -> DpopProofValidator {
-        DpopProofValidator::builder()
+    fn validator() -> DPoPProofValidator {
+        DPoPProofValidator::builder()
             .jws_verifier_platform(DefaultJwsVerifierPlatform::default().into())
             .build()
     }
@@ -258,7 +258,7 @@ mod tests {
             .await
             .err()
             .expect("validation should fail");
-        assert!(matches!(err, DpopProofError::JwkPrivateKey), "got {err:?}");
+        assert!(matches!(err, DPoPProofError::JwkPrivateKey), "got {err:?}");
     }
 
     /// Control: the same proof without `d` gets past the JWK header checks
@@ -271,14 +271,14 @@ mod tests {
             .await
             .err()
             .expect("validation should fail");
-        assert!(!matches!(err, DpopProofError::JwkPrivateKey), "got {err:?}");
+        assert!(!matches!(err, DPoPProofError::JwkPrivateKey), "got {err:?}");
     }
 }
 
 /// Errors from `DPoP` proof structural validation.
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
-pub enum DpopProofError {
+pub enum DPoPProofError {
     /// Not a valid compact JWS.
     #[snafu(display("Bad DPoP proof format"))]
     BadFormat {

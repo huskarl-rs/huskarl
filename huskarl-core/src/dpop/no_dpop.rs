@@ -36,7 +36,7 @@ impl AuthorizationServerDPoP for NoDPoP {
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async move {
             if dpop_jkt.is_some() {
-                Err(Error::new(ErrorKind::Dpop, DPoPNotConfigured))
+                Err(Error::new(ErrorKind::DPoP, DPoPNotConfigured))
             } else {
                 Ok(None)
             }
@@ -58,7 +58,7 @@ impl ResourceServerDPoP for NoDPoP {
         _access_token: &'a SecretString,
         _dpop_jkt: &'a str,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
-        Box::pin(async { Err(Error::new(ErrorKind::Dpop, DPoPNotConfigured)) })
+        Box::pin(async { Err(Error::new(ErrorKind::DPoP, DPoPNotConfigured)) })
     }
 }
 
@@ -78,13 +78,13 @@ mod tests {
             .proof(&Method::POST, &uri, Some("jkt"))
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Dpop);
+        assert_eq!(err.kind(), ErrorKind::DPoP);
 
         let resource = dpop.to_resource_server_dpop();
         let err = resource
             .proof(&Method::GET, &uri, &SecretString::new("token"), "jkt")
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Dpop);
+        assert_eq!(err.kind(), ErrorKind::DPoP);
     }
 }

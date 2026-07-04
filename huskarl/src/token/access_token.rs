@@ -32,13 +32,13 @@ fn effective_expiry(
 /// [`expose_header_value`](Self::expose_header_value) — the
 /// [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer) does this for you. The
 /// variant determines how the token is presented: a [`Bearer`](Self::Bearer)
-/// token authorizes by possession alone, while a [`Dpop`](Self::Dpop) token is
+/// token authorizes by possession alone, while a [`DPoP`](Self::DPoP) token is
 /// sender-constrained (RFC 9449) — each request must carry a `DPoP` proof over
 /// the bound key, whose thumbprint is the token's [`dpop_jkt`](Self::dpop_jkt).
 #[derive(Debug, Clone)]
 pub enum AccessToken {
     /// A `DPoP` token.
-    Dpop(DpopAccessToken),
+    DPoP(DPoPAccessToken),
     /// A `Bearer` token.
     Bearer(BearerAccessToken),
     /// Not an access token (RFC 8693 `token_type` `N_A`): the security token
@@ -54,7 +54,7 @@ impl AccessToken {
     #[must_use]
     pub fn token(&self) -> &SecretString {
         match self {
-            AccessToken::Dpop(token) => &token.token,
+            AccessToken::DPoP(token) => &token.token,
             AccessToken::Bearer(token) => &token.token,
             AccessToken::NotAccessToken(token) => &token.token,
         }
@@ -70,7 +70,7 @@ impl AccessToken {
     /// as an `Authorization` credential (RFC 8693 §2.2.1).
     pub fn expose_header_value(&self) -> Result<HeaderValue, InvalidHeaderValue> {
         match self {
-            AccessToken::Dpop(dpop_access_token) => dpop_access_token.expose_header_value(),
+            AccessToken::DPoP(dpop_access_token) => dpop_access_token.expose_header_value(),
             AccessToken::Bearer(bearer_access_token) => bearer_access_token.expose_header_value(),
             // Deterministically manufacture an InvalidHeaderValue (the type
             // has no public constructor): an N_A token has no header form,
@@ -84,7 +84,7 @@ impl AccessToken {
     #[must_use]
     pub fn dpop_jkt(&self) -> Option<&str> {
         match self {
-            AccessToken::Dpop(token) => Some(token.jkt.as_str()),
+            AccessToken::DPoP(token) => Some(token.jkt.as_str()),
             AccessToken::Bearer(_) | AccessToken::NotAccessToken(_) => None,
         }
     }
@@ -93,7 +93,7 @@ impl AccessToken {
     #[must_use]
     pub fn token_type(&self) -> &str {
         match self {
-            AccessToken::Dpop(_) => "DPoP",
+            AccessToken::DPoP(_) => "DPoP",
             AccessToken::Bearer(_) => "Bearer",
             AccessToken::NotAccessToken(_) => "N_A",
         }
@@ -114,7 +114,7 @@ impl AccessToken {
         expires_margin: Duration,
     ) -> SystemTime {
         match self {
-            AccessToken::Dpop(dpop_access_token) => {
+            AccessToken::DPoP(dpop_access_token) => {
                 dpop_access_token.effective_expiry(default_expires_in, expires_margin)
             }
             AccessToken::Bearer(bearer_access_token) => {
@@ -138,7 +138,7 @@ impl AccessToken {
     #[must_use]
     pub fn effective_lifetime(&self, default_expires_in: Duration) -> Duration {
         match self {
-            AccessToken::Dpop(dpop_access_token) => {
+            AccessToken::DPoP(dpop_access_token) => {
                 dpop_access_token.effective_lifetime(default_expires_in)
             }
             AccessToken::Bearer(bearer_access_token) => {
@@ -209,7 +209,7 @@ impl NonAccessToken {
 
 /// An access token, with the `DPoP` token type.
 #[derive(Debug, Clone)]
-pub struct DpopAccessToken {
+pub struct DPoPAccessToken {
     /// The `DPoP` access token.
     token: SecretString,
     /// The `DPoP` JWT thumbprint.
@@ -220,8 +220,8 @@ pub struct DpopAccessToken {
     expires_in: Option<Duration>,
 }
 
-impl DpopAccessToken {
-    /// Creates a new [`DpopAccessToken`] with the given token, JWT thumbprint, received time, and expiration duration.
+impl DPoPAccessToken {
+    /// Creates a new [`DPoPAccessToken`] with the given token, JWT thumbprint, received time, and expiration duration.
     #[must_use]
     pub fn new(
         token: SecretString,
