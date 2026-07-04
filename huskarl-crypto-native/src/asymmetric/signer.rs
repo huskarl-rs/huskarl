@@ -21,24 +21,6 @@ use pkcs8::DecodePrivateKey;
 use rand::Rng;
 use rsa::traits::PublicKeyParts as _;
 use signature::{SignatureEncoding, Signer as _};
-use snafu::prelude::*;
-
-/// Errors that may occur when constructing a key from JWK material.
-#[derive(Debug, Snafu)]
-pub enum AsymmetricJwkError {
-    /// The algorithm is unsupported or missing.
-    #[snafu(display("Unsupported JWK algorithm: {algorithm:?}"))]
-    UnsupportedAlgorithm {
-        /// The algorithm field from the JWK, if present.
-        algorithm: Option<String>,
-    },
-    /// The key material is invalid.
-    #[snafu(display("Invalid key material"))]
-    InvalidKeyMaterial,
-    /// The key type does not match the algorithm.
-    #[snafu(display("Key type does not match algorithm"))]
-    KeyTypeMismatch,
-}
 
 #[derive(Debug)]
 struct PrivateKeyInner {
@@ -248,16 +230,21 @@ impl Key {
         }
     }
 
-    fn from_jwk(key: jwk::PrivateKey, alg: &str) -> Result<Self, AsymmetricJwkError> {
+    fn from_jwk(key: jwk::PrivateKey, alg: &str) -> Result<Self, Error> {
         match key {
             jwk::PrivateKey::Ec(ec) => match (ec.public.crv.as_str(), alg) {
                 ("P-256", "ES256") => p256::ecdsa::SigningKey::from_slice(&ec.d)
                     .map(Key::Es256)
-                    .map_err(|_| InvalidKeyMaterialSnafu.build()),
+                    .map_err(|_| {
+                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
+                    }),
                 ("P-384", "ES384") => p384::ecdsa::SigningKey::from_slice(&ec.d)
                     .map(Key::Es384)
-                    .map_err(|_| InvalidKeyMaterialSnafu.build()),
-                _ => KeyTypeMismatchSnafu.fail(),
+                    .map_err(|_| {
+                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
+                    }),
+                _ => Err(Error::from(ErrorKind::Config)
+                    .with_context("JWK key type does not match the algorithm")),
             },
             jwk::PrivateKey::Rsa(rsa_private) => {
                 let n = rsa::BoxedUint::from_be_slice_vartime(&rsa_private.public.n);
@@ -270,8 +257,10 @@ impl Key {
                 if let Some(ref q) = rsa_private.q {
                     primes.push(rsa::BoxedUint::from_be_slice_vartime(q));
                 }
-                let rsa_key = rsa::RsaPrivateKey::from_components(n, e, d, primes)
-                    .map_err(|_| InvalidKeyMaterialSnafu.build())?;
+                let rsa_key =
+                    rsa::RsaPrivateKey::from_components(n, e, d, primes).map_err(|_| {
+                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
+                    })?;
                 match alg {
                     "RS256" => Ok(Key::Rs256(rsa::pkcs1v15::SigningKey::new(rsa_key))),
                     "RS384" => Ok(Key::Rs384(rsa::pkcs1v15::SigningKey::new(rsa_key))),
@@ -279,35 +268,34 @@ impl Key {
                     "PS256" => Ok(Key::Ps256(rsa::pss::SigningKey::new(rsa_key))),
                     "PS384" => Ok(Key::Ps384(rsa::pss::SigningKey::new(rsa_key))),
                     "PS512" => Ok(Key::Ps512(rsa::pss::SigningKey::new(rsa_key))),
-                    _ => KeyTypeMismatchSnafu.fail(),
+                    _ => Err(Error::from(ErrorKind::Config)
+                        .with_context("JWK key type does not match the algorithm")),
                 }
             }
             jwk::PrivateKey::Okp(okp) => match (okp.public.crv.as_str(), alg) {
                 ("Ed25519", "EdDSA") => {
-                    let bytes: [u8; 32] = okp
-                        .d
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| InvalidKeyMaterialSnafu.build())?;
+                    let bytes: [u8; 32] = okp.d.as_slice().try_into().map_err(|_| {
+                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
+                    })?;
                     Ok(Key::Ed25519 {
                         key: ed25519_dalek::SigningKey::from_bytes(&bytes),
                         use_fully_specified_jws_algorithm: false,
                     })
                 }
                 ("Ed25519", "Ed25519") => {
-                    let bytes: [u8; 32] = okp
-                        .d
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| InvalidKeyMaterialSnafu.build())?;
+                    let bytes: [u8; 32] = okp.d.as_slice().try_into().map_err(|_| {
+                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
+                    })?;
                     Ok(Key::Ed25519 {
                         key: ed25519_dalek::SigningKey::from_bytes(&bytes),
                         use_fully_specified_jws_algorithm: true,
                     })
                 }
-                _ => KeyTypeMismatchSnafu.fail(),
+                _ => Err(Error::from(ErrorKind::Config)
+                    .with_context("JWK key type does not match the algorithm")),
             },
-            _ => KeyTypeMismatchSnafu.fail(),
+            _ => Err(Error::from(ErrorKind::Config)
+                .with_context("JWK key type does not match the algorithm")),
         }
     }
 }
@@ -582,14 +570,12 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns a [`AsymmetricJwkError`] if the JWK is missing an algorithm, has an
-    /// unsupported algorithm, or contains invalid key material.
-    pub fn from_jwk(private_jwk: jwk::PrivateJwk) -> Result<Self, AsymmetricJwkError> {
+    /// Returns [`ErrorKind::Config`] if the JWK is missing its algorithm, uses an
+    /// unsupported one, or contains invalid key material.
+    pub fn from_jwk(private_jwk: jwk::PrivateJwk) -> Result<Self, Error> {
         let alg = private_jwk.algorithm.as_deref().ok_or_else(|| {
-            UnsupportedAlgorithmSnafu {
-                algorithm: None::<String>,
-            }
-            .build()
+            Error::from(ErrorKind::Config)
+                .with_context("JWK is missing the alg field identifying the signing algorithm")
         })?;
         let kid = private_jwk.kid;
         let signing_key = Key::from_jwk(private_jwk.key, alg)?;
@@ -629,9 +615,7 @@ impl PrivateKey {
         if private_jwk.kid.is_none() {
             private_jwk.kid = output.identity;
         }
-        Self::from_jwk(private_jwk).map_err(|source| {
-            Error::new(ErrorKind::Config, source).with_context("loading private key from JWK")
-        })
+        Self::from_jwk(private_jwk)
     }
 }
 
@@ -1062,10 +1046,7 @@ mod tests {
         private_jwk.algorithm = None;
 
         let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
-        assert!(matches!(
-            err,
-            AsymmetricJwkError::UnsupportedAlgorithm { .. }
-        ));
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     #[test]
@@ -1075,6 +1056,6 @@ mod tests {
         private_jwk.algorithm = Some("RS256".to_string());
 
         let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
-        assert!(matches!(err, AsymmetricJwkError::KeyTypeMismatch));
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 }
