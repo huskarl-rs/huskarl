@@ -48,7 +48,7 @@
 //! | Capability | native | webcrypto |
 //! |---|---|---|
 //! | Generate a signing key | ✔ (sync) | ✔ (`async`) |
-//! | **Import** a signing key (PKCS#8 / private JWK) | ✔ | ✘ — keys are generated non-extractable; there is no `load_pkcs8_*`/`from_jwk` on the signer |
+//! | **Import** a signing key (PKCS#8 / private JWK) | ✔ | ✘ — keys are generated non-extractable; there is no `from_secret`/`from_jwk` on the signer |
 //! | Import a *public* verify key (JWK / JWKS) | ✔ | ✔ (`async`) |
 //! | Symmetric JWS (HMAC, e.g. `HS256` / `client_secret_jwt`) | ✔ (`SymmetricKey`) | ✘ — no symmetric signing module |
 //! | AES-GCM AEAD from key material | ✔ | ✔ (plus [`from_crypto_key`](aead::AesGcmKey::from_crypto_key) for an existing `CryptoKey`) |

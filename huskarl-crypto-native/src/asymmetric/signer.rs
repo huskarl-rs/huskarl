@@ -3,8 +3,8 @@
 //! traits.
 //!
 //! [`PrivateKey`] is the entry type; generate one with [`PrivateKey::generate`]
-//! or load one with [`PrivateKey::from_jwk`], [`PrivateKey::load_jwk`],
-//! [`PrivateKey::load_pkcs8_pem`], or [`PrivateKey::load_pkcs8_der`].
+//! or load one with [`PrivateKey::from_jwk`] or [`PrivateKey::from_secret`]
+//! (composing a decoder such as `JwkJson`, [`Pkcs8Der`], or [`Pkcs8Pem`]).
 
 use std::{borrow::Cow, sync::Arc};
 
@@ -23,22 +23,6 @@ use rsa::traits::PublicKeyParts as _;
 use signature::{SignatureEncoding, Signer as _};
 use snafu::prelude::*;
 
-/// Errors that may occur when loading the private key.
-#[derive(Debug, Snafu)]
-pub enum AsymmetricKeyLoadError {
-    /// Failed to access secret information.
-    Secret {
-        /// The underlying error.
-        source: Error,
-    },
-    /// Failed to decode PKCS#8 key
-    #[snafu(display("Failed to decode PKCS#8 key"))]
-    KeyDecode {
-        /// The underlying error.
-        source: pkcs8::Error,
-    },
-}
-
 /// Errors that may occur when constructing a key from JWK material.
 #[derive(Debug, Snafu)]
 pub enum AsymmetricJwkError {
@@ -56,28 +40,6 @@ pub enum AsymmetricJwkError {
     KeyTypeMismatch,
 }
 
-/// Errors that may occur when loading a private key from a JWK secret.
-#[derive(Debug, Snafu)]
-#[snafu(module)]
-pub enum AsymmetricJwkLoadError {
-    /// Failed to access secret information.
-    Secret {
-        /// The underlying error.
-        source: Error,
-    },
-    /// Failed to parse the JWK JSON.
-    #[snafu(display("Failed to parse JWK JSON"))]
-    JsonParse {
-        /// The underlying error.
-        source: serde_json::Error,
-    },
-    /// JWK processing error.
-    Jwk {
-        /// The underlying error.
-        source: AsymmetricJwkError,
-    },
-}
-
 #[derive(Debug)]
 struct PrivateKeyInner {
     signing_key: Key,
@@ -91,9 +53,9 @@ struct PrivateKeyInner {
 /// Ed25519), implementing [`JwsSigner`] and [`AsymmetricJwsSigner`].
 ///
 /// Generate one with [`generate`](Self::generate), or load one with
-/// [`from_jwk`](Self::from_jwk), [`load_jwk`](Self::load_jwk),
-/// [`load_pkcs8_pem`](Self::load_pkcs8_pem), or
-/// [`load_pkcs8_der`](Self::load_pkcs8_der); cheap to clone (`Arc`-backed).
+/// [`from_jwk`](Self::from_jwk) or [`from_secret`](Self::from_secret) (composing
+/// a decoder like `JwkJson`, [`Pkcs8Der`], or [`Pkcs8Pem`]); cheap to clone
+/// (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct PrivateKey {
     inner: Arc<PrivateKeyInner>,
@@ -475,7 +437,7 @@ pub enum GenerateAlgorithm {
 
 /// Asymmetric algorithm for signing.
 ///
-/// Used with [`PrivateKey::load_pkcs8_der`] and [`PrivateKey::load_pkcs8_pem`].
+/// Used with [`Pkcs8Der`] and [`Pkcs8Pem`].
 /// For generating new keys, use [`GenerateAlgorithm`] with [`PrivateKey::generate`].
 // `UPPERCASE` serialization yields the JWA names (`Es256` -> `ES256`); the two
 // non-uppercase names (`EdDSA`, `Ed25519`) are spelled out per variant.
@@ -600,114 +562,6 @@ impl PrivateKey {
         })
     }
 
-    /// Loads the private key from a PKCS#8 DER binary secret.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AsymmetricKeyLoadError::Secret`] if the secret cannot be accessed, or
-    /// [`AsymmetricKeyLoadError::KeyDecode`] if it is not a valid PKCS#8 DER key for
-    /// `key_type`.
-    pub async fn load_pkcs8_der<
-        S: Secret<Output = SecretBytes>,
-        F: FnOnce(Option<&str>) -> Option<String>,
-    >(
-        secret: S,
-        key_type: AsymmetricAlgorithm,
-        key_id_from_secret_identity: F,
-    ) -> Result<Self, AsymmetricKeyLoadError> {
-        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
-        let bytes = secret_output.value.expose_secret();
-        let key_id = key_id_from_secret_identity(secret_output.identity.as_deref());
-        let signing_key = key_from_pkcs8_der(bytes, key_type).context(KeyDecodeSnafu)?;
-        let jwk = signing_key.as_public_jwk(key_id.as_deref());
-        let thumbprint = jwk.thumbprint();
-
-        Ok(Self {
-            inner: Arc::new(PrivateKeyInner {
-                signing_key,
-                jwk,
-                thumbprint,
-            }),
-        })
-    }
-
-    /// Loads the private key from a PKCS#8 PEM secret.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AsymmetricKeyLoadError::Secret`] if the secret cannot be accessed, or
-    /// [`AsymmetricKeyLoadError::KeyDecode`] if it is not a valid PKCS#8 PEM key for
-    /// `key_type`.
-    pub async fn load_pkcs8_pem<
-        S: Secret<Output = SecretString>,
-        F: FnOnce(Option<&str>) -> Option<String>,
-    >(
-        secret: S,
-        key_type: AsymmetricAlgorithm,
-        key_id_from_secret_identity: F,
-    ) -> Result<Self, AsymmetricKeyLoadError> {
-        fn build(
-            key_id: Option<&str>,
-            f: impl Fn() -> Result<Key, pkcs8::Error>,
-        ) -> Result<PrivateKey, pkcs8::Error> {
-            let signing_key = f()?;
-            let jwk = signing_key.as_public_jwk(key_id);
-            let thumbprint = jwk.thumbprint();
-
-            Ok(PrivateKey {
-                inner: Arc::new(PrivateKeyInner {
-                    signing_key,
-                    jwk,
-                    thumbprint,
-                }),
-            })
-        }
-
-        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
-        let bytes = secret_output.value.expose_secret();
-        let key_id = key_id_from_secret_identity(secret_output.identity.as_deref());
-
-        match key_type {
-            AsymmetricAlgorithm::Es256 => build(key_id.as_deref(), || {
-                p256::ecdsa::SigningKey::from_pkcs8_pem(bytes).map(Key::Es256)
-            }),
-            AsymmetricAlgorithm::Es384 => build(key_id.as_deref(), || {
-                p384::ecdsa::SigningKey::from_pkcs8_pem(bytes).map(Key::Es384)
-            }),
-            AsymmetricAlgorithm::Rs256 => build(key_id.as_deref(), || {
-                rsa::pkcs1v15::SigningKey::from_pkcs8_pem(bytes).map(Key::Rs256)
-            }),
-            AsymmetricAlgorithm::Rs384 => build(key_id.as_deref(), || {
-                rsa::pkcs1v15::SigningKey::from_pkcs8_pem(bytes).map(Key::Rs384)
-            }),
-            AsymmetricAlgorithm::Rs512 => build(key_id.as_deref(), || {
-                rsa::pkcs1v15::SigningKey::from_pkcs8_pem(bytes).map(Key::Rs512)
-            }),
-            AsymmetricAlgorithm::Ps256 => build(key_id.as_deref(), || {
-                rsa::pss::SigningKey::from_pkcs8_pem(bytes).map(Key::Ps256)
-            }),
-            AsymmetricAlgorithm::Ps384 => build(key_id.as_deref(), || {
-                rsa::pss::SigningKey::from_pkcs8_pem(bytes).map(Key::Ps384)
-            }),
-            AsymmetricAlgorithm::Ps512 => build(key_id.as_deref(), || {
-                rsa::pss::SigningKey::from_pkcs8_pem(bytes).map(Key::Ps512)
-            }),
-            AsymmetricAlgorithm::EdDsa => build(key_id.as_deref(), || {
-                ed25519_dalek::SigningKey::from_pkcs8_pem(bytes).map(|key| Key::Ed25519 {
-                    key,
-                    use_fully_specified_jws_algorithm: false,
-                })
-            }),
-            AsymmetricAlgorithm::Ed25519 => build(key_id.as_deref(), || {
-                ed25519_dalek::SigningKey::from_pkcs8_pem(bytes).map(|key| Key::Ed25519 {
-                    key,
-                    use_fully_specified_jws_algorithm: true,
-                })
-            }),
-        }
-        .context(KeyDecodeSnafu)
-    }
-
     /// Returns the full private key in JWK format, including the private key
     /// material — the `d` component, plus `dp`, `dq`, `p`, `q`, `qi` for RSA.
     ///
@@ -751,33 +605,6 @@ impl PrivateKey {
         })
     }
 
-    /// Loads a private key from a JWK JSON secret.
-    ///
-    /// The secret value must be a JSON string representing a JWK with private
-    /// key material (the `d` field). The JWK's `alg` and `kid` fields are used
-    /// directly.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`AsymmetricJwkLoadError`] if the secret cannot be accessed, the JSON is
-    /// invalid, or the JWK is not a valid private key.
-    pub async fn load_jwk<S: Secret<Output = SecretString>>(
-        secret: S,
-    ) -> Result<Self, AsymmetricJwkLoadError> {
-        let secret_output = secret
-            .get_secret_value()
-            .await
-            .context(asymmetric_jwk_load_error::SecretSnafu)?;
-        let json = secret_output.value.expose_secret();
-        let parsed: jwk::Jwk =
-            serde_json::from_str(json).context(asymmetric_jwk_load_error::JsonParseSnafu)?;
-        let private_jwk = parsed
-            .private_jwk()
-            .ok_or(InvalidKeyMaterialSnafu.build())
-            .context(asymmetric_jwk_load_error::JwkSnafu)?;
-        Self::from_jwk(private_jwk).context(asymmetric_jwk_load_error::JwkSnafu)
-    }
-
     /// Finalizes a private key from a secret that yields a [`jwk::PrivateJwk`].
     ///
     /// The single loading funnel: compose a decoder onto your secret to reach a
@@ -810,8 +637,8 @@ impl PrivateKey {
 
 /// Parses PKCS#8 DER bytes into a signing key of the given algorithm.
 ///
-/// Backend-internal: shared by [`PrivateKey::load_pkcs8_der`] and the
-/// [`pkcs8_der`] conversion so the per-algorithm decoding lives in one place.
+/// Backend-internal helper behind the [`pkcs8_der`] conversion, keeping the
+/// per-algorithm decoding in one place.
 fn key_from_pkcs8_der(der: &[u8], key_type: AsymmetricAlgorithm) -> Result<Key, pkcs8::Error> {
     match key_type {
         AsymmetricAlgorithm::Es256 => p256::ecdsa::SigningKey::from_pkcs8_der(der).map(Key::Es256),
@@ -903,6 +730,66 @@ impl SecretMap for Pkcs8Der {
 
     fn apply(&self, input: SecretBytes) -> Result<jwk::PrivateJwk, Error> {
         pkcs8_der(input.expose_secret(), self.algorithm, self.kid.as_deref())
+    }
+}
+
+/// Converts a PKCS#8 PEM private key into a complete [`jwk::PrivateJwk`].
+///
+/// PEM is just armored DER, so this unwraps the text envelope and defers to
+/// [`pkcs8_der`] — identical public-key derivation, `kid` stamping, and error
+/// folding, no separate per-algorithm decode.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::Config`] if `pem` is not a valid PKCS#8 PEM key for
+/// `algorithm`.
+pub fn pkcs8_pem(
+    pem: &str,
+    algorithm: AsymmetricAlgorithm,
+    kid: Option<&str>,
+) -> Result<jwk::PrivateJwk, Error> {
+    let (_label, document) = pkcs8::SecretDocument::from_pem(pem).map_err(|source| {
+        Error::new(ErrorKind::Config, source).with_context("decoding PKCS#8 PEM private key")
+    })?;
+    pkcs8_der(document.as_bytes(), algorithm, kid)
+}
+
+/// A [`SecretMap`] that decodes a PKCS#8 PEM secret into a [`jwk::PrivateJwk`].
+///
+/// The text counterpart of [`Pkcs8Der`]: `secret.mapped(Pkcs8Pem::new(alg))`.
+/// Like the DER form it needs the algorithm (PKCS#8 does not disambiguate the
+/// RSA signing schemes) and takes an optional [`with_kid`](Self::with_kid),
+/// since PEM carries no key ID.
+#[derive(Debug, Clone)]
+pub struct Pkcs8Pem {
+    algorithm: AsymmetricAlgorithm,
+    kid: Option<String>,
+}
+
+impl Pkcs8Pem {
+    /// Decodes a PKCS#8 PEM key of the given algorithm, with no key ID.
+    #[must_use]
+    pub fn new(algorithm: AsymmetricAlgorithm) -> Self {
+        Self {
+            algorithm,
+            kid: None,
+        }
+    }
+
+    /// Stamps `kid` onto the produced JWK.
+    #[must_use]
+    pub fn with_kid(mut self, kid: impl Into<String>) -> Self {
+        self.kid = Some(kid.into());
+        self
+    }
+}
+
+impl SecretMap for Pkcs8Pem {
+    type In = SecretString;
+    type Out = jwk::PrivateJwk;
+
+    fn apply(&self, input: SecretString) -> Result<jwk::PrivateJwk, Error> {
+        pkcs8_pem(input.expose_secret(), self.algorithm, self.kid.as_deref())
     }
 }
 
@@ -1114,6 +1001,25 @@ mod tests {
 
         assert_eq!(key.key_id().as_deref(), Some("in-the-jwk"));
         assert_eq!(key.jws_algorithm().as_ref(), "ES256");
+    }
+
+    #[test]
+    fn pkcs8_pem_unwraps_to_the_same_jwk_as_the_der_path() {
+        use p256::elliptic_curve::Generate as _;
+        use pkcs8::{EncodePrivateKey as _, LineEnding};
+
+        let source = p256::ecdsa::SigningKey::generate();
+        let pem = source.to_pkcs8_pem(LineEnding::LF).unwrap();
+        let der = source.to_pkcs8_der().unwrap();
+
+        let via_pem = pkcs8_pem(&pem, AsymmetricAlgorithm::Es256, Some("pem-key")).unwrap();
+        let via_der =
+            pkcs8_der(der.as_bytes(), AsymmetricAlgorithm::Es256, Some("pem-key")).unwrap();
+
+        assert_eq!(via_pem.kid.as_deref(), Some("pem-key"));
+        assert_eq!(via_pem.algorithm.as_deref(), Some("ES256"));
+        // PEM is just armored DER — both paths produce the identical JWK.
+        assert_eq!(via_pem, via_der);
     }
 
     #[test]

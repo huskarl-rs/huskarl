@@ -15,7 +15,7 @@ huskarl-core = { workspace = true }
 
 ed25519-dalek = { version = "=3.0.0-rc.1", default-features = false, features = ["pem", "zeroize"] }
 hmac = { version = "0.13", default-features = true }
-pkcs8 = { version = "0.11", default-features = false }
+pkcs8 = { version = "0.11", default-features = false, features = ["pem"] }
 p256 = { version = "=0.14.0-rc.15", default-features = false, features = ["ecdsa", "pem", "std"] }
 p384 = { version = "=0.14.0-rc.15", default-features = false, features = ["ecdsa", "pem"] }
 # Transitive rc dep
