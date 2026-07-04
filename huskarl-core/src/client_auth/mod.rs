@@ -45,85 +45,70 @@ use crate::{
 /// an underlying fetch (e.g. a secret store) as
 /// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport).
 pub trait ClientAuthentication: MaybeSendSync {
-    /// Returns the authentication parameters for a request.
-    ///
-    /// `target_endpoint` is the exact endpoint the request is sent to — the
-    /// token endpoint for grant exchanges, but equally the PAR, revocation, or
-    /// introspection endpoint. `token_endpoint` is the authorization server's
-    /// token endpoint when the caller knows it; it differs from
-    /// `target_endpoint` whenever the request targets some other endpoint, and
-    /// is `None` where the caller cannot supply it.
-    ///
-    /// Both feed the audience of signature-based client assertions: per
-    /// draft-ietf-oauth-security-topics-update §2.1.2 the safe choices are the
-    /// issuer (§2.1.2.1) or the exact `target_endpoint` (§2.1.2.2); a
-    /// `token_endpoint` audience is offered only for legacy servers that
-    /// demand it, and enables audience-injection attacks (see [`Audience`]).
-    fn authentication_params<'a>(
+    /// Returns the authentication parameters for the request described by
+    /// `ctx` (see [`AuthenticationContext`]).
+    fn authentication_context<'a>(
         &'a self,
-        client_id: &'a str,
-        issuer: Option<&'a str>,
-        token_endpoint: Option<&'a EndpointUrl>,
-        target_endpoint: &'a EndpointUrl,
-        allowed_methods: Option<&'a [String]>,
+        ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>>;
 }
 
 impl<T: ClientAuthentication + ?Sized> ClientAuthentication for &T {
-    fn authentication_params<'a>(
+    fn authentication_context<'a>(
         &'a self,
-        client_id: &'a str,
-        issuer: Option<&'a str>,
-        token_endpoint: Option<&'a EndpointUrl>,
-        target_endpoint: &'a EndpointUrl,
-        allowed_methods: Option<&'a [String]>,
+        ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(
-            client_id,
-            issuer,
-            token_endpoint,
-            target_endpoint,
-            allowed_methods,
-        )
+        (**self).authentication_context(ctx)
     }
 }
 
 impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Box<T> {
-    fn authentication_params<'a>(
+    fn authentication_context<'a>(
         &'a self,
-        client_id: &'a str,
-        issuer: Option<&'a str>,
-        token_endpoint: Option<&'a EndpointUrl>,
-        target_endpoint: &'a EndpointUrl,
-        allowed_methods: Option<&'a [String]>,
+        ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(
-            client_id,
-            issuer,
-            token_endpoint,
-            target_endpoint,
-            allowed_methods,
-        )
+        (**self).authentication_context(ctx)
     }
 }
 
 impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Arc<T> {
-    fn authentication_params<'a>(
+    fn authentication_context<'a>(
         &'a self,
-        client_id: &'a str,
-        issuer: Option<&'a str>,
-        token_endpoint: Option<&'a EndpointUrl>,
-        target_endpoint: &'a EndpointUrl,
-        allowed_methods: Option<&'a [String]>,
+        ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
-        (**self).authentication_params(
-            client_id,
-            issuer,
-            token_endpoint,
-            target_endpoint,
-            allowed_methods,
-        )
+        (**self).authentication_context(ctx)
     }
+}
+
+/// Everything an authentication method may need to build credentials for one
+/// request.
+///
+/// The endpoints feed the audience of signature-based client assertions: per
+/// draft-ietf-oauth-security-topics-update §2.1.2 the safe choices are the
+/// issuer (§2.1.2.1) or the exact [`target_endpoint`](Self::target_endpoint)
+/// (§2.1.2.2); a [`token_endpoint`](Self::token_endpoint) audience is offered
+/// only for legacy servers that demand it, and enables audience-injection
+/// attacks (see [`Audience`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Builder)]
+pub struct AuthenticationContext<'a> {
+    /// The client being authenticated.
+    pub client_id: &'a str,
+    /// The exact endpoint the request is sent to — the token endpoint for
+    /// grant exchanges, but equally the PAR, revocation, or introspection
+    /// endpoint.
+    pub target_endpoint: &'a EndpointUrl,
+    /// The authorization server's issuer identifier, when the caller knows it.
+    pub issuer: Option<&'a str>,
+    /// The authorization server's token endpoint, when the caller knows it.
+    ///
+    /// It differs from [`target_endpoint`](Self::target_endpoint) whenever the
+    /// request targets some other endpoint, and is `None` where the caller
+    /// cannot supply it.
+    pub token_endpoint: Option<&'a EndpointUrl>,
+    /// The `*_endpoint_auth_methods_supported` metadata for the target
+    /// endpoint, when the caller knows it.
+    pub allowed_methods: Option<&'a [String]>,
 }
 
 /// The authentication credentials that need to be added to the request.
@@ -145,7 +130,13 @@ mod tests {
         let auth: Arc<dyn ClientAuthentication> = Arc::new(NoAuth);
         let uri: EndpointUrl = "https://as.example/token".parse().unwrap();
         let params = auth
-            .authentication_params("my-client", None, Some(&uri), &uri, None)
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("my-client")
+                    .target_endpoint(&uri)
+                    .token_endpoint(&uri)
+                    .build(),
+            )
             .await
             .expect("no_auth never fails");
         let form = params.form_params.expect("client_id form param");

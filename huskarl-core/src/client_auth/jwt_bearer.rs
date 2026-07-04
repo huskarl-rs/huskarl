@@ -4,8 +4,7 @@ use bon::Builder;
 use snafu::Snafu;
 
 use crate::{
-    EndpointUrl,
-    client_auth::{AuthenticationParams, ClientAuthentication},
+    client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
     crypto::signer::JwsSignerSelector,
     error::{Error, ErrorKind},
     jwt::Jwt,
@@ -131,7 +130,7 @@ pub enum Audience {
 /// [`Audience::Issuer`] requires an issuer, but none was configured.
 ///
 /// Carried as the source of [`ErrorKind::Config`] errors from
-/// [`JwtBearer::authentication_params`](ClientAuthentication::authentication_params).
+/// [`JwtBearer::authentication_context`](ClientAuthentication::authentication_context).
 #[derive(Debug, Clone, Copy, Default, Snafu)]
 #[snafu(display(
     "Audience::Issuer requires an issuer; fetch authorization server metadata \
@@ -143,7 +142,7 @@ pub struct MissingIssuer;
 /// endpoint, but the caller could not supply one.
 ///
 /// Carried as the source of [`ErrorKind::Config`] errors from
-/// [`JwtBearer::authentication_params`](ClientAuthentication::authentication_params).
+/// [`JwtBearer::authentication_context`](ClientAuthentication::authentication_context).
 /// Arises when authenticating to an endpoint whose client is configured
 /// without the token endpoint (e.g. revocation or introspection).
 #[derive(Debug, Clone, Copy, Default, Snafu)]
@@ -155,23 +154,21 @@ pub struct MissingIssuer;
 pub struct MissingTokenEndpoint;
 
 impl ClientAuthentication for JwtBearer {
-    fn authentication_params<'a>(
+    fn authentication_context<'a>(
         &'a self,
-        client_id: &'a str,
-        issuer: Option<&'a str>,
-        token_endpoint: Option<&'a EndpointUrl>,
-        target_endpoint: &'a EndpointUrl,
-        _allowed_methods: Option<&'a [String]>,
+        ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
             let audience = match &self.audience {
-                Audience::Issuer => issuer
+                Audience::Issuer => ctx
+                    .issuer
                     .ok_or_else(|| Error::new(ErrorKind::Config, MissingIssuer))?
                     .to_string(),
-                Audience::TokenEndpoint => token_endpoint
+                Audience::TokenEndpoint => ctx
+                    .token_endpoint
                     .ok_or_else(|| Error::new(ErrorKind::Config, MissingTokenEndpoint))?
                     .to_string(),
-                Audience::TargetEndpoint => target_endpoint.to_string(),
+                Audience::TargetEndpoint => ctx.target_endpoint.to_string(),
                 Audience::Custom(custom) => custom.to_string(),
             };
 
@@ -182,8 +179,8 @@ impl ClientAuthentication for JwtBearer {
                     "JWT"
                 })
                 .audience(audience)
-                .issuer(client_id)
-                .subject(self.subject.as_deref().unwrap_or(client_id))
+                .issuer(ctx.client_id)
+                .subject(self.subject.as_deref().unwrap_or(ctx.client_id))
                 .issued_now_expires_after(self.expires_after)
                 .claims(())
                 .build();
@@ -195,7 +192,7 @@ impl ClientAuthentication for JwtBearer {
 
             Ok(AuthenticationParams::builder()
                 .form_params(bon::map! {
-                    "client_id": client_id,
+                    "client_id": ctx.client_id,
                     "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
                     "client_assertion": assertion
                 })
@@ -212,6 +209,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        EndpointUrl,
         client_auth::{ClientAuthentication, FormValue},
         crypto::signer::JwsSigner,
     };
@@ -284,6 +282,24 @@ mod tests {
         LazyLock::force(&E)
     }
 
+    /// A context with every audience source available.
+    fn full_ctx(client_id: &'static str) -> AuthenticationContext<'static> {
+        AuthenticationContext::builder()
+            .client_id(client_id)
+            .target_endpoint(target_endpoint())
+            .issuer("https://issuer.example.com")
+            .token_endpoint(token_endpoint())
+            .build()
+    }
+
+    /// A context with only the always-available target endpoint.
+    fn target_only_ctx(client_id: &'static str) -> AuthenticationContext<'static> {
+        AuthenticationContext::builder()
+            .client_id(client_id)
+            .target_endpoint(target_endpoint())
+            .build()
+    }
+
     #[tokio::test]
     async fn audience_issuer_with_issuer() {
         let bearer = JwtBearer::builder()
@@ -291,13 +307,7 @@ mod tests {
             .audience(Audience::Issuer)
             .build();
         let params = bearer
-            .authentication_params(
-                "cid",
-                Some("https://issuer.example.com"),
-                Some(token_endpoint()),
-                target_endpoint(),
-                None,
-            )
+            .authentication_context(full_ctx("cid"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -312,7 +322,13 @@ mod tests {
             .audience(Audience::Issuer)
             .build();
         let err = bearer
-            .authentication_params("cid", None, Some(token_endpoint()), target_endpoint(), None)
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("cid")
+                    .target_endpoint(target_endpoint())
+                    .token_endpoint(token_endpoint())
+                    .build(),
+            )
             .await
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::Config);
@@ -331,7 +347,7 @@ mod tests {
             .audience(Audience::TargetEndpoint)
             .build();
         let params = bearer
-            .authentication_params("cid", None, None, target_endpoint(), None)
+            .authentication_context(target_only_ctx("cid"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -347,7 +363,7 @@ mod tests {
             .explicit_typ(false)
             .build();
         let params = bearer
-            .authentication_params("cid", None, None, target_endpoint(), None)
+            .authentication_context(target_only_ctx("cid"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -362,13 +378,7 @@ mod tests {
             .audience(Audience::TargetEndpoint)
             .build();
         let params = bearer
-            .authentication_params(
-                "cid",
-                Some("https://issuer.example.com"),
-                Some(token_endpoint()),
-                target_endpoint(),
-                None,
-            )
+            .authentication_context(full_ctx("cid"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -383,13 +393,7 @@ mod tests {
             .audience(Audience::TokenEndpoint)
             .build();
         let params = bearer
-            .authentication_params(
-                "cid",
-                Some("https://issuer.example.com"),
-                Some(token_endpoint()),
-                target_endpoint(),
-                None,
-            )
+            .authentication_context(full_ctx("cid"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -404,12 +408,12 @@ mod tests {
             .audience(Audience::TokenEndpoint)
             .build();
         let err = bearer
-            .authentication_params(
-                "cid",
-                Some("https://issuer.example.com"),
-                None,
-                target_endpoint(),
-                None,
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("cid")
+                    .target_endpoint(target_endpoint())
+                    .issuer("https://issuer.example.com")
+                    .build(),
             )
             .await
             .unwrap_err();
@@ -429,13 +433,7 @@ mod tests {
             .audience(Audience::Custom("https://custom.example.com".into()))
             .build();
         let params = bearer
-            .authentication_params(
-                "cid",
-                Some("https://issuer.example.com"),
-                Some(token_endpoint()),
-                target_endpoint(),
-                None,
-            )
+            .authentication_context(full_ctx("cid"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -450,7 +448,7 @@ mod tests {
             .audience(Audience::TargetEndpoint)
             .build();
         let params = bearer
-            .authentication_params("my-client", None, None, target_endpoint(), None)
+            .authentication_context(target_only_ctx("my-client"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
@@ -471,7 +469,7 @@ mod tests {
             .subject("custom-subject")
             .build();
         let params = bearer
-            .authentication_params("my-client", None, None, target_endpoint(), None)
+            .authentication_context(target_only_ctx("my-client"))
             .await
             .unwrap();
         let form = params.form_params.unwrap();
