@@ -80,7 +80,7 @@ impl fmt::Debug for AesGcmKey {
 
 /// Errors that can occur when loading a key.
 #[derive(Debug, Snafu)]
-pub enum LoadKeyError {
+pub enum AesGcmKeyLoadError {
     /// There was an error fetching the secret.
     Secret {
         /// The underlying error.
@@ -119,7 +119,7 @@ impl AesGcmKey {
     pub async fn from_secret<S: Secret<Output = SecretBytes>>(
         secret: S,
         kid_from_identity: impl Fn(Option<&str>) -> Option<String>,
-    ) -> Result<Self, LoadKeyError> {
+    ) -> Result<Self, AesGcmKeyLoadError> {
         let key_source = secret.get_secret_value().await.context(SecretSnafu)?;
         let bytes = key_source.value.expose_secret();
 
@@ -368,7 +368,7 @@ mod tests {
             .await
             .unwrap_err();
             assert!(
-                matches!(err, LoadKeyError::InvalidKeyLength),
+                matches!(err, AesGcmKeyLoadError::InvalidKeyLength),
                 "{len}-byte key must be rejected"
             );
         }

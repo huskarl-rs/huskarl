@@ -68,7 +68,7 @@ pub struct SymmetricKey {
 
 /// An error that occurred while loading a symmetric key.
 #[derive(Debug, Snafu)]
-pub enum KeyLoadError {
+pub enum SymmetricKeyLoadError {
     /// The provided key was shorter than the minimum required for the algorithm.
     InvalidKeySize {
         /// The size of the provided key.
@@ -86,7 +86,7 @@ pub enum KeyLoadError {
 /// Errors that may occur when constructing a symmetric key from JWK material.
 #[derive(Debug, Snafu)]
 #[snafu(module)]
-pub enum JwkError {
+pub enum SymmetricJwkError {
     /// The algorithm is unsupported or missing.
     #[snafu(display("Unsupported JWK algorithm: {algorithm:?}"))]
     UnsupportedAlgorithm {
@@ -109,7 +109,7 @@ pub enum JwkError {
 /// Errors that may occur when loading a symmetric key from a JWK secret.
 #[derive(Debug, Snafu)]
 #[snafu(module)]
-pub enum JwkLoadError {
+pub enum SymmetricJwkLoadError {
     /// Failed to access secret information.
     Secret {
         /// The underlying error.
@@ -124,7 +124,7 @@ pub enum JwkLoadError {
     /// JWK processing error.
     Jwk {
         /// The underlying error.
-        source: JwkError,
+        source: SymmetricJwkError,
     },
 }
 
@@ -141,7 +141,7 @@ impl SymmetricKey {
         secret: S,
         algorithm: SymmetricAlgorithm,
         key_id_from_secret_identity: F,
-    ) -> Result<Self, KeyLoadError> {
+    ) -> Result<Self, SymmetricKeyLoadError> {
         let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
         let key_id = key_id_from_secret_identity(secret_output.identity.as_deref());
         let key = secret_output.value;
@@ -193,14 +193,14 @@ impl SymmetricKey {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_jwk(jwk: jwk::Jwk) -> Result<Self, JwkError> {
+    pub fn from_jwk(jwk: jwk::Jwk) -> Result<Self, SymmetricJwkError> {
         let jwk::Key::Oct(oct) = jwk.key else {
-            return jwk_error::NotOctKeySnafu.fail();
+            return symmetric_jwk_error::NotOctKeySnafu.fail();
         };
 
         let alg = jwk.algorithm.as_deref();
         let Some(algorithm) = alg.and_then(|a| a.parse::<SymmetricAlgorithm>().ok()) else {
-            return jwk_error::UnsupportedAlgorithmSnafu {
+            return symmetric_jwk_error::UnsupportedAlgorithmSnafu {
                 algorithm: alg.map(String::from),
             }
             .fail();
@@ -210,7 +210,7 @@ impl SymmetricKey {
 
         ensure!(
             oct.k.len() >= required_key_size,
-            jwk_error::InvalidKeySizeSnafu {
+            symmetric_jwk_error::InvalidKeySizeSnafu {
                 required: required_key_size,
                 actual: oct.k.len()
             }
@@ -236,15 +236,15 @@ impl SymmetricKey {
     /// or the JWK is not a valid symmetric key.
     pub async fn load_jwk<S: Secret<Output = SecretString>>(
         secret: S,
-    ) -> Result<Self, JwkLoadError> {
+    ) -> Result<Self, SymmetricJwkLoadError> {
         let secret_output = secret
             .get_secret_value()
             .await
-            .context(jwk_load_error::SecretSnafu)?;
+            .context(symmetric_jwk_load_error::SecretSnafu)?;
         let json = secret_output.value.expose_secret();
         let parsed: jwk::Jwk =
-            serde_json::from_str(json).context(jwk_load_error::JsonParseSnafu)?;
-        Self::from_jwk(parsed).context(jwk_load_error::JwkSnafu)
+            serde_json::from_str(json).context(symmetric_jwk_load_error::JsonParseSnafu)?;
+        Self::from_jwk(parsed).context(symmetric_jwk_load_error::JwkSnafu)
     }
 
     // `Hmac::new_from_slice` accepts a key of any length, so it never errors.
@@ -409,7 +409,7 @@ mod tests {
             );
             let err = SymmetricKey::from_jwk(jwk_with_key(alg, min - 1)).unwrap_err();
             assert!(
-                matches!(err, JwkError::InvalidKeySize { required, .. } if required == min),
+                matches!(err, SymmetricJwkError::InvalidKeySize { required, .. } if required == min),
                 "{alg}: {}-byte key must be rejected with required={min}",
                 min - 1
             );
@@ -449,7 +449,7 @@ mod tests {
             .build();
 
         let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(err, JwkError::NotOctKey));
+        assert!(matches!(err, SymmetricJwkError::NotOctKey));
     }
 
     #[test]
@@ -463,7 +463,10 @@ mod tests {
             .build();
 
         let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(err, JwkError::UnsupportedAlgorithm { .. }));
+        assert!(matches!(
+            err,
+            SymmetricJwkError::UnsupportedAlgorithm { .. }
+        ));
     }
 
     #[test]
@@ -478,7 +481,10 @@ mod tests {
             .build();
 
         let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(err, JwkError::UnsupportedAlgorithm { .. }));
+        assert!(matches!(
+            err,
+            SymmetricJwkError::UnsupportedAlgorithm { .. }
+        ));
     }
 
     #[test]
@@ -493,6 +499,6 @@ mod tests {
             .build();
 
         let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(err, JwkError::InvalidKeySize { .. }));
+        assert!(matches!(err, SymmetricJwkError::InvalidKeySize { .. }));
     }
 }

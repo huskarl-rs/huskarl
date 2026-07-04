@@ -25,7 +25,7 @@ use snafu::prelude::*;
 
 /// Errors that may occur when loading the private key.
 #[derive(Debug, Snafu)]
-pub enum KeyLoadError {
+pub enum AsymmetricKeyLoadError {
     /// Failed to access secret information.
     Secret {
         /// The underlying error.
@@ -41,7 +41,7 @@ pub enum KeyLoadError {
 
 /// Errors that may occur when constructing a key from JWK material.
 #[derive(Debug, Snafu)]
-pub enum JwkError {
+pub enum AsymmetricJwkError {
     /// The algorithm is unsupported or missing.
     #[snafu(display("Unsupported JWK algorithm: {algorithm:?}"))]
     UnsupportedAlgorithm {
@@ -59,7 +59,7 @@ pub enum JwkError {
 /// Errors that may occur when loading a private key from a JWK secret.
 #[derive(Debug, Snafu)]
 #[snafu(module)]
-pub enum JwkLoadError {
+pub enum AsymmetricJwkLoadError {
     /// Failed to access secret information.
     Secret {
         /// The underlying error.
@@ -74,7 +74,7 @@ pub enum JwkLoadError {
     /// JWK processing error.
     Jwk {
         /// The underlying error.
-        source: JwkError,
+        source: AsymmetricJwkError,
     },
 }
 
@@ -285,7 +285,7 @@ impl Key {
         }
     }
 
-    fn from_jwk(key: jwk::PrivateKey, alg: &str) -> Result<Self, JwkError> {
+    fn from_jwk(key: jwk::PrivateKey, alg: &str) -> Result<Self, AsymmetricJwkError> {
         match key {
             jwk::PrivateKey::Ec(ec) => match (ec.public.crv.as_str(), alg) {
                 ("P-256", "ES256") => p256::ecdsa::SigningKey::from_slice(&ec.d)
@@ -600,8 +600,8 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns [`KeyLoadError::Secret`] if the secret cannot be accessed, or
-    /// [`KeyLoadError::KeyDecode`] if it is not a valid PKCS#8 DER key for
+    /// Returns [`AsymmetricKeyLoadError::Secret`] if the secret cannot be accessed, or
+    /// [`AsymmetricKeyLoadError::KeyDecode`] if it is not a valid PKCS#8 DER key for
     /// `key_type`.
     pub async fn load_pkcs8_der<
         S: Secret<Output = SecretBytes>,
@@ -610,7 +610,7 @@ impl PrivateKey {
         secret: S,
         key_type: AsymmetricAlgorithm,
         key_id_from_secret_identity: F,
-    ) -> Result<Self, KeyLoadError> {
+    ) -> Result<Self, AsymmetricKeyLoadError> {
         fn build(
             key_id: Option<&str>,
             f: impl Fn() -> Result<Key, pkcs8::Error>,
@@ -678,8 +678,8 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns [`KeyLoadError::Secret`] if the secret cannot be accessed, or
-    /// [`KeyLoadError::KeyDecode`] if it is not a valid PKCS#8 PEM key for
+    /// Returns [`AsymmetricKeyLoadError::Secret`] if the secret cannot be accessed, or
+    /// [`AsymmetricKeyLoadError::KeyDecode`] if it is not a valid PKCS#8 PEM key for
     /// `key_type`.
     pub async fn load_pkcs8_pem<
         S: Secret<Output = SecretString>,
@@ -688,7 +688,7 @@ impl PrivateKey {
         secret: S,
         key_type: AsymmetricAlgorithm,
         key_id_from_secret_identity: F,
-    ) -> Result<Self, KeyLoadError> {
+    ) -> Result<Self, AsymmetricKeyLoadError> {
         fn build(
             key_id: Option<&str>,
             f: impl Fn() -> Result<Key, pkcs8::Error>,
@@ -768,9 +768,9 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns a [`JwkError`] if the JWK is missing an algorithm, has an
+    /// Returns a [`AsymmetricJwkError`] if the JWK is missing an algorithm, has an
     /// unsupported algorithm, or contains invalid key material.
-    pub fn from_jwk(private_jwk: jwk::PrivateJwk) -> Result<Self, JwkError> {
+    pub fn from_jwk(private_jwk: jwk::PrivateJwk) -> Result<Self, AsymmetricJwkError> {
         let alg = private_jwk.algorithm.as_deref().ok_or_else(|| {
             UnsupportedAlgorithmSnafu {
                 algorithm: None::<String>,
@@ -800,23 +800,23 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns a [`JwkLoadError`] if the secret cannot be accessed, the JSON is
+    /// Returns a [`AsymmetricJwkLoadError`] if the secret cannot be accessed, the JSON is
     /// invalid, or the JWK is not a valid private key.
     pub async fn load_jwk<S: Secret<Output = SecretString>>(
         secret: S,
-    ) -> Result<Self, JwkLoadError> {
+    ) -> Result<Self, AsymmetricJwkLoadError> {
         let secret_output = secret
             .get_secret_value()
             .await
-            .context(jwk_load_error::SecretSnafu)?;
+            .context(asymmetric_jwk_load_error::SecretSnafu)?;
         let json = secret_output.value.expose_secret();
         let parsed: jwk::Jwk =
-            serde_json::from_str(json).context(jwk_load_error::JsonParseSnafu)?;
+            serde_json::from_str(json).context(asymmetric_jwk_load_error::JsonParseSnafu)?;
         let private_jwk = parsed
             .private_jwk()
             .ok_or(InvalidKeyMaterialSnafu.build())
-            .context(jwk_load_error::JwkSnafu)?;
-        Self::from_jwk(private_jwk).context(jwk_load_error::JwkSnafu)
+            .context(asymmetric_jwk_load_error::JwkSnafu)?;
+        Self::from_jwk(private_jwk).context(asymmetric_jwk_load_error::JwkSnafu)
     }
 }
 
@@ -960,7 +960,10 @@ mod tests {
         private_jwk.algorithm = None;
 
         let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
-        assert!(matches!(err, JwkError::UnsupportedAlgorithm { .. }));
+        assert!(matches!(
+            err,
+            AsymmetricJwkError::UnsupportedAlgorithm { .. }
+        ));
     }
 
     #[test]
@@ -970,6 +973,6 @@ mod tests {
         private_jwk.algorithm = Some("RS256".to_string());
 
         let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
-        assert!(matches!(err, JwkError::KeyTypeMismatch));
+        assert!(matches!(err, AsymmetricJwkError::KeyTypeMismatch));
     }
 }
