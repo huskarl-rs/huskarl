@@ -5,8 +5,7 @@ use bon::Builder;
 use http::HeaderMap;
 
 use crate::{
-    EndpointUrl,
-    client_auth::{AuthenticationParams, ClientAuthentication},
+    client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
     error::{Error, ErrorKind},
     platform::MaybeSendBoxFuture,
     secrets::{Secret, SecretString},
@@ -85,13 +84,9 @@ impl ClientSecret {
 }
 
 impl ClientAuthentication for ClientSecret {
-    fn authentication_params<'a>(
+    fn authentication_context<'a>(
         &'a self,
-        client_id: &'a str,
-        _issuer: Option<&'a str>,
-        _token_endpoint: Option<&'a EndpointUrl>,
-        _target_endpoint: &'a EndpointUrl,
-        allowed_methods: Option<&'a [String]>,
+        ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
             let client_secret = self
@@ -100,12 +95,12 @@ impl ClientAuthentication for ClientSecret {
                 .await
                 .map_err(|err| err.with_context("fetching client secret"))?;
 
-            match select_method(allowed_methods, self.prefer_basic_auth) {
+            match select_method(ctx.allowed_methods, self.prefer_basic_auth) {
                 ClientSecretMethod::Basic => {
-                    Self::basic_authentication_params(client_id, &client_secret.value)
+                    Self::basic_authentication_params(ctx.client_id, &client_secret.value)
                 }
                 ClientSecretMethod::Post => Ok(Self::post_authentication_params(
-                    client_id,
+                    ctx.client_id,
                     client_secret.value,
                 )),
             }
@@ -151,6 +146,7 @@ fn select_method(allowed_methods: Option<&[String]>, prefer_basic: bool) -> Clie
 mod tests {
     use super::*;
     use crate::{
+        EndpointUrl,
         client_auth::ClientAuthentication,
         secrets::{Secret, SecretOutput, SecretString},
     };
@@ -239,10 +235,10 @@ mod tests {
         );
     }
 
-    // --- authentication_params ---
+    // --- authentication_context ---
 
     #[tokio::test]
-    async fn authentication_params_basic() {
+    async fn authentication_context_basic() {
         // No advertised methods → defaults to post, so opt into basic explicitly.
         let secret = ClientSecret::builder()
             .client_secret(MockSecret(SecretString::new("my-secret")))
@@ -250,7 +246,13 @@ mod tests {
             .build();
         let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let params = secret
-            .authentication_params("my-client", None, Some(&uri), &uri, None)
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("my-client")
+                    .target_endpoint(&uri)
+                    .token_endpoint(&uri)
+                    .build(),
+            )
             .await
             .unwrap();
 
@@ -270,12 +272,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authentication_params_post() {
+    async fn authentication_context_post() {
         let secret = ClientSecret::new(MockSecret(SecretString::new("s3cret")));
         let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let methods = vec!["client_secret_post".to_string()];
         let params = secret
-            .authentication_params("cid", None, Some(&uri), &uri, Some(&methods))
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("cid")
+                    .target_endpoint(&uri)
+                    .token_endpoint(&uri)
+                    .allowed_methods(&methods)
+                    .build(),
+            )
             .await
             .unwrap();
 
@@ -293,7 +302,13 @@ mod tests {
             .build();
         let uri: EndpointUrl = "https://auth.example.com/token".parse().unwrap();
         let params = secret
-            .authentication_params("cl&ent", None, Some(&uri), &uri, None)
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("cl&ent")
+                    .target_endpoint(&uri)
+                    .token_endpoint(&uri)
+                    .build(),
+            )
             .await
             .unwrap();
 

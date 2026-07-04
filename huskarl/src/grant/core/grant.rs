@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::{
     core::{
         EndpointUrl, Error, ErrorKind,
-        client_auth::{AuthenticationParams, ClientAuthentication},
+        client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
         dpop::AuthorizationServerDPoP,
         http::HttpClient,
         platform::{MaybeSend, MaybeSendSync},
@@ -113,12 +113,14 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 )
             })?;
             client_auth
-                .authentication_params(
-                    client_id,
-                    self.issuer(),
-                    Some(self.token_endpoint()),
-                    self.effective_token_endpoint(),
-                    self.allowed_auth_methods(),
+                .authentication_context(
+                    AuthenticationContext::builder()
+                        .client_id(client_id)
+                        .target_endpoint(self.effective_token_endpoint())
+                        .maybe_issuer(self.issuer())
+                        .token_endpoint(self.token_endpoint())
+                        .maybe_allowed_methods(self.allowed_auth_methods())
+                        .build(),
                 )
                 .await
         }

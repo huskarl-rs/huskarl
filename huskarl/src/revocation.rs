@@ -11,7 +11,12 @@ use bon::Builder;
 use serde::Serialize;
 
 use crate::{
-    core::{EndpointUrl, Error, client_auth::ClientAuthentication, dpop::NoDPoP, http::HttpClient},
+    core::{
+        EndpointUrl, Error,
+        client_auth::{AuthenticationContext, ClientAuthentication},
+        dpop::NoDPoP,
+        http::HttpClient,
+    },
     grant::core::form::OAuth2FormRequest,
     token::{AccessToken, RefreshToken},
 };
@@ -134,12 +139,16 @@ impl TokenRevocation {
 
         let auth_params = self
             .client_auth
-            .authentication_params(
-                &self.client_id,
-                self.issuer.as_deref(),
-                self.token_endpoint.as_ref(),
-                effective_endpoint,
-                self.revocation_endpoint_auth_methods_supported.as_deref(),
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id(&self.client_id)
+                    .target_endpoint(effective_endpoint)
+                    .maybe_issuer(self.issuer.as_deref())
+                    .maybe_token_endpoint(self.token_endpoint.as_ref())
+                    .maybe_allowed_methods(
+                        self.revocation_endpoint_auth_methods_supported.as_deref(),
+                    )
+                    .build(),
             )
             .await?;
 

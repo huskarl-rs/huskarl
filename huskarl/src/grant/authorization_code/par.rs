@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            client_auth::{ClientAuthentication, NoAuth},
+            client_auth::{AuthenticationContext, ClientAuthentication, NoAuth},
             dpop::NoDPoP,
             http::{HttpResponse, Idempotency},
             platform::MaybeSendBoxFuture,
@@ -168,7 +168,12 @@ mod tests {
         );
         let par_url = url("https://as.example/par");
         let auth = NoAuth
-            .authentication_params("client-1", None, None, &par_url, None)
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("client-1")
+                    .target_endpoint(&par_url)
+                    .build(),
+            )
             .await
             .unwrap();
 
@@ -205,7 +210,12 @@ mod tests {
             RecordingClient::new(StatusCode::BAD_REQUEST, r#"{"error":"invalid_request"}"#);
         let par_url = url("https://as.example/par");
         let auth = NoAuth
-            .authentication_params("client-1", None, None, &par_url, None)
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id("client-1")
+                    .target_endpoint(&par_url)
+                    .build(),
+            )
             .await
             .unwrap();
 

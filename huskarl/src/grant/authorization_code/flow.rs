@@ -13,6 +13,7 @@ use crate::grant::authorization_code::{LoopbackError, loopback};
 use crate::{
     core::{
         EndpointUrl, Error, ErrorKind,
+        client_auth::AuthenticationContext,
         jwt::validator::ValidatedJwt,
         platform::{Duration, SystemTime},
         secrets::SecretString,
@@ -235,12 +236,16 @@ impl AuthorizationCodeGrant {
         let par_response = with_dpop_nonce_retry!({
             let mut auth_params = self
                 .client_auth
-                .authentication_params(
-                    &self.client_id,
-                    self.issuer.as_deref(),
-                    Some(&self.token_endpoint),
-                    par_url,
-                    self.token_endpoint_auth_methods_supported.as_deref(),
+                .authentication_context(
+                    AuthenticationContext::builder()
+                        .client_id(&self.client_id)
+                        .target_endpoint(par_url)
+                        .maybe_issuer(self.issuer.as_deref())
+                        .token_endpoint(&self.token_endpoint)
+                        .maybe_allowed_methods(
+                            self.token_endpoint_auth_methods_supported.as_deref(),
+                        )
+                        .build(),
                 )
                 .await?;
 

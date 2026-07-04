@@ -10,7 +10,7 @@ use snafu::{ResultExt as _, Snafu, ensure};
 use crate::{
     core::{
         EndpointUrl, Error,
-        client_auth::ClientAuthentication,
+        client_auth::{AuthenticationContext, ClientAuthentication},
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         http::{HttpClient, HttpResponse, Idempotency},
         jwt::{
@@ -166,12 +166,13 @@ impl TokenIntrospection {
     ) -> Result<ValidatedRequest<Claims>, IntrospectionCallError> {
         let auth_params = self
             .client_auth
-            .authentication_params(
-                &self.client_id,
-                self.issuer.as_deref(),
-                self.token_endpoint.as_ref(),
-                &self.introspection_endpoint,
-                None,
+            .authentication_context(
+                AuthenticationContext::builder()
+                    .client_id(&self.client_id)
+                    .target_endpoint(&self.introspection_endpoint)
+                    .maybe_issuer(self.issuer.as_deref())
+                    .maybe_token_endpoint(self.token_endpoint.as_ref())
+                    .build(),
             )
             .await
             .context(ClientAuthSnafu)?;

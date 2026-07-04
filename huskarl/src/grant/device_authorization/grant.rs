@@ -7,7 +7,7 @@ use snafu::{ResultExt as _, Snafu};
 use crate::{
     core::{
         EndpointUrl, Error,
-        client_auth::ClientAuthentication,
+        client_auth::{AuthenticationContext, ClientAuthentication},
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         platform::{Duration, sleep},
@@ -144,12 +144,16 @@ impl DeviceAuthorizationGrant {
             // analysis, draft-ietf-oauth-security-topics-update §2.1.1.2).
             let auth_params = self
                 .client_auth
-                .authentication_params(
-                    &self.client_id,
-                    self.issuer.as_deref(),
-                    Some(&self.token_endpoint),
-                    device_auth_endpoint,
-                    self.token_endpoint_auth_methods_supported.as_deref(),
+                .authentication_context(
+                    AuthenticationContext::builder()
+                        .client_id(&self.client_id)
+                        .target_endpoint(device_auth_endpoint)
+                        .maybe_issuer(self.issuer.as_deref())
+                        .token_endpoint(&self.token_endpoint)
+                        .maybe_allowed_methods(
+                            self.token_endpoint_auth_methods_supported.as_deref(),
+                        )
+                        .build(),
                 )
                 .await?;
 

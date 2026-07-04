@@ -1,6 +1,5 @@
 use crate::{
-    EndpointUrl,
-    client_auth::{AuthenticationParams, ClientAuthentication},
+    client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
     error::Error,
     platform::MaybeSendBoxFuture,
 };
@@ -12,18 +11,14 @@ use crate::{
 pub struct NoAuth;
 
 impl ClientAuthentication for NoAuth {
-    fn authentication_params<'a>(
+    fn authentication_context<'a>(
         &'a self,
-        client_id: &'a str,
-        _issuer: Option<&'a str>,
-        _token_endpoint: Option<&'a EndpointUrl>,
-        _target_endpoint: &'a EndpointUrl,
-        _allowed_methods: Option<&'a [String]>,
+        ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
             Ok(AuthenticationParams::builder()
                 .form_params(bon::map! {
-                    "client_id": client_id
+                    "client_id": ctx.client_id
                 })
                 .build())
         })
