@@ -60,6 +60,11 @@
 //!
 //! # Further reading
 //!
+//! - [Loading a signing key](crate::_docs::guide::loading_a_signing_key) — the
+//!   recommended JWK path, and the PKCS#8 options.
+//! - [Why JWK is the native key format](crate::_docs::explanation::jwk_as_key_format)
+//!   — the design behind the loading API.
+//!
 //! These pages live in `huskarl-core`, which defines the traits this crate
 //! implements:
 //!
@@ -82,5 +87,8 @@ mod factory;
 
 pub mod asymmetric;
 pub mod symmetric;
+
+#[cfg(any(doc, docsrs))]
+pub mod _docs;
 
 pub use factory::NativeVerifierPlatform;
