@@ -16,8 +16,8 @@ mod checks;
 mod claim_check;
 mod validated_jwt;
 
-pub use checks::within_max_age;
 use checks::{check_aud, check_str_claim, check_temporal, check_typ};
+pub use checks::{within_max_age, within_max_age_secs};
 pub use claim_check::ClaimCheck;
 pub use validated_jwt::{ValidatedJwt, ValidatedJwtBuilder};
 

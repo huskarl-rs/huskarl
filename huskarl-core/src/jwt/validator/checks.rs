@@ -150,8 +150,8 @@ pub(super) fn check_typ(check: &ClaimCheck, typ: Option<&str>) -> Result<(), Jwt
 /// Returns whether `timestamp` is at most `max_age` before `now`, with clock
 /// leeway.
 ///
-/// Shared by the JWT `max_token_age` check (against `iat`) and the OIDC
-/// `max_age` check (against `auth_time`), which must agree on two invariants:
+/// Backs the JWT `max_token_age` check (`iat`); [`within_max_age_secs`] backs
+/// the OIDC `max_age` check (`auth_time`). Both keep two invariants:
 ///
 /// - A future `timestamp` (issuer clock ahead) counts as age zero rather than
 ///   a rejection. Policing future timestamps is the temporal checks' job (the
@@ -166,6 +166,21 @@ pub fn within_max_age(
     clock_leeway: Duration,
 ) -> bool {
     let age = now.duration_since(timestamp).unwrap_or(Duration::ZERO);
+    age <= max_age.saturating_add(clock_leeway)
+}
+
+/// [`within_max_age`] for a timestamp expressed as UNIX seconds.
+#[must_use]
+pub fn within_max_age_secs(
+    now: SystemTime,
+    timestamp_secs: u64,
+    max_age: Duration,
+    clock_leeway: Duration,
+) -> bool {
+    let now_since_epoch = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO);
+    let age = now_since_epoch.saturating_sub(Duration::from_secs(timestamp_secs));
     age <= max_age.saturating_add(clock_leeway)
 }
 
