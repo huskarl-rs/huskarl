@@ -4,7 +4,7 @@
 //! private→public conversions (the zeroizing husk pattern).
 #![no_main]
 
-use huskarl_core::jwk::{Jwks, PublicJwks};
+use huskarl_core::jwk::{Jwks, PrivateJwk, PublicJwks};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -16,9 +16,10 @@ fuzz_target!(|data: &[u8]| {
         if let Some(public) = key.public_jwk() {
             let _ = public.thumbprint();
         }
-        if let Some(private) = key.private_jwk() {
-            // PrivateJwk thumbprints via its own public projection; must
-            // agree with the direct one when both exist.
+        if let Some(PrivateJwk::Asymmetric(private)) = key.private_jwk() {
+            // AsymmetricPrivateJwk thumbprints via its own public projection;
+            // must agree with the direct one when both exist. (Symmetric keys
+            // have no public projection to cross-check.)
             if let Some(public) = key.public_jwk() {
                 assert_eq!(private.thumbprint(), public.thumbprint());
             }

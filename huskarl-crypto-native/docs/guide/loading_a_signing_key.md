@@ -48,15 +48,18 @@ let key = PrivateKey::generate(GenerateAlgorithm::Es256, Some("key-1".to_string(
 
 ## From a JWK you already parsed
 
-If you already hold a [`PrivateJwk`](huskarl_core::jwk::PrivateJwk) — for example
-from deserialized configuration — skip the secret machinery:
+If you already hold key material — for example from deserialized
+configuration — skip the secret machinery. `from_jwk` takes the
+[`AsymmetricPrivateJwk`](huskarl_core::jwk::AsymmetricPrivateJwk) variant
+directly; a [`PrivateJwk`](huskarl_core::jwk::PrivateJwk) (which may hold
+either an asymmetric or a symmetric key) converts with `try_into()`:
 
 ```rust
 use huskarl_core::jwk::PrivateJwk;
 use huskarl_crypto_native::asymmetric::signer::PrivateKey;
 
 # fn example(jwk: PrivateJwk) -> Result<(), huskarl_core::error::Error> {
-let key = PrivateKey::from_jwk(jwk)?;
+let key = PrivateKey::from_jwk(jwk.try_into()?)?;
 # let _ = key;
 # Ok(())
 # }
@@ -113,3 +116,28 @@ let key = PrivateKey::from_secret(
 PKCS#8 has no `kid`, so stamp one with
 [`with_kid`](crate::asymmetric::signer::Pkcs8Pem::with_kid); otherwise the
 secret's identity fills it, and failing that the key has none.
+
+## Symmetric (HMAC) keys ride the same funnel
+
+An HS256/384/512 key is loaded exactly like the asymmetric ones — same
+`from_secret`, same decoders, same `kid` precedence. A JWK-JSON secret goes
+through [`JwkJson`](huskarl_core::jwk::JwkJson) unchanged; raw key bytes take
+[`OctBytes`](huskarl_core::jwk::OctBytes), which — like the PKCS#8 decoders —
+stamps the algorithm the bare bytes cannot carry:
+
+```rust
+use huskarl_core::{
+    jwk::OctBytes,
+    secrets::{ProvidedSecret, Secret, SecretBytes},
+};
+use huskarl_crypto_native::symmetric::SymmetricKey;
+
+# async fn example(raw: ProvidedSecret<SecretBytes>) -> Result<(), huskarl_core::error::Error> {
+let key = SymmetricKey::from_secret(raw.mapped(OctBytes::new("HS256"))).await?;
+# let _ = key;
+# Ok(())
+# }
+```
+
+The AES-GCM cipher ([`AesGcmKey`](crate::aead::AesGcmKey)) loads the same way,
+with an `A128GCM`/`A192GCM`/`A256GCM` algorithm label matching its key length.

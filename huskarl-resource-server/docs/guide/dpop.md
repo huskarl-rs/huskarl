@@ -75,16 +75,15 @@ the key can validate them:
 ```rust
 # use std::sync::Arc;
 # use huskarl_resource_server::core::crypto::cipher::StaticAeadCipher;
-# use huskarl_resource_server::core::jwk::JwksSource;
-# use huskarl_resource_server::core::secrets::{EnvVarSecret, encodings::Base64Encoding};
+# use huskarl_resource_server::core::jwk::{JwksSource, OctBytes};
+# use huskarl_resource_server::core::secrets::{EnvVarSecret, Secret as _, encodings::Base64Encoding};
 # use huskarl_resource_server::validator::{dpop_nonce::SealedTimestampNonce, rfc9068::Rfc9068Validator};
 # use huskarl_crypto_native::aead::AesGcmKey;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
-// A stable AEAD key, shared by every replica (16/24/32 base64 bytes).
+// A stable AEAD key, shared by every replica (32 base64 bytes).
 let nonce_key = AesGcmKey::from_secret(
-    EnvVarSecret::new("DPOP_NONCE_KEY", &Base64Encoding)?,
-    |_id| None,
+    EnvVarSecret::new("DPOP_NONCE_KEY", &Base64Encoding)?.mapped(OctBytes::new("A256GCM")),
 )
 .await?;
 

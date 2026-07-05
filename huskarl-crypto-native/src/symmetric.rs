@@ -2,14 +2,15 @@
 //!
 //! [`SymmetricKey`] is the HMAC key (HS256/384/512) implementing huskarl-core's
 //! signer and verifier traits. Build one from a JWK with
-//! [`SymmetricKey::from_jwk`] or [`SymmetricKey::load_jwk`], or from raw bytes
-//! with [`SymmetricKey::load_bytes`].
+//! [`SymmetricKey::from_jwk`], or from a secret store with
+//! [`SymmetricKey::from_secret`] — compose [`jwk::JwkJson`] onto a JWK-JSON
+//! secret, or [`jwk::OctBytes`] onto raw key bytes.
 
 use std::{borrow::Cow, sync::Arc};
 
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use huskarl_core::{
-    Error,
+    Error, ErrorKind,
     crypto::{
         KeyMatchStrength,
         signer::{JwsSigner, JwsSignerSelector},
@@ -17,11 +18,9 @@ use huskarl_core::{
     },
     jwk,
     platform::MaybeSendBoxFuture,
-    secrets::{Secret, SecretBytes, SecretString},
+    secrets::{Secret, SecretBytes},
 };
 use sha2::Digest as _;
-use snafu::{ResultExt, Snafu, ensure};
-use subtle::ConstantTimeEq as _;
 
 /// Encodes which algorithm is used by this key.
 // `UPPERCASE` serialization yields the JWA names (`Hs256` -> `HS256`); `AsRefStr`
@@ -38,7 +37,7 @@ pub enum SymmetricAlgorithm {
 }
 
 impl SymmetricAlgorithm {
-    /// The minimum key size in bytes.
+    /// The minimum key size in bytes (RFC 7518 §3.2: the hash output size).
     fn min_key_size(self) -> usize {
         match self {
             Self::Hs256 => sha2::Sha256::output_size(),
@@ -58,193 +57,96 @@ struct SymmetricKeyInner {
 /// An HMAC symmetric key (HS256/384/512), used to both sign and verify JWS.
 ///
 /// Implements huskarl-core's [`JwsSigner`], [`JwsVerifier`], and
-/// [`JwsSignerSelector`]. Build one with [`from_jwk`](Self::from_jwk),
-/// [`load_jwk`](Self::load_jwk), or [`load_bytes`](Self::load_bytes); cheap to
-/// clone (`Arc`-backed).
+/// [`JwsSignerSelector`]. Build one with [`from_jwk`](Self::from_jwk) or
+/// [`from_secret`](Self::from_secret); cheap to clone (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct SymmetricKey {
     inner: Arc<SymmetricKeyInner>,
 }
 
-/// An error that occurred while loading a symmetric key.
-#[derive(Debug, Snafu)]
-pub enum SymmetricKeyLoadError {
-    /// The provided key was shorter than the minimum required for the algorithm.
-    InvalidKeySize {
-        /// The size of the provided key.
-        actual: usize,
-        /// The minimum required key size.
-        required: usize,
-    },
-    /// The secret could not be accessed.
-    Secret {
-        /// The underlying error.
-        source: Error,
-    },
-}
-
-/// Errors that may occur when constructing a symmetric key from JWK material.
-#[derive(Debug, Snafu)]
-#[snafu(module)]
-pub enum SymmetricJwkError {
-    /// The algorithm is unsupported or missing.
-    #[snafu(display("Unsupported JWK algorithm: {algorithm:?}"))]
-    UnsupportedAlgorithm {
-        /// The algorithm field from the JWK, if present.
-        algorithm: Option<String>,
-    },
-    /// The JWK key type is not `oct`.
-    #[snafu(display("JWK key type is not oct"))]
-    NotOctKey,
-    /// The key size does not meet the minimum for the algorithm.
-    #[snafu(display("Invalid key size: got {actual}, need at least {required}"))]
-    InvalidKeySize {
-        /// The size of the provided key.
-        actual: usize,
-        /// The required minimum key size.
-        required: usize,
-    },
-}
-
-/// Errors that may occur when loading a symmetric key from a JWK secret.
-#[derive(Debug, Snafu)]
-#[snafu(module)]
-pub enum SymmetricJwkLoadError {
-    /// Failed to access secret information.
-    Secret {
-        /// The underlying error.
-        source: Error,
-    },
-    /// Failed to parse the JWK JSON.
-    #[snafu(display("Failed to parse JWK JSON"))]
-    JsonParse {
-        /// The underlying error.
-        source: serde_json::Error,
-    },
-    /// JWK processing error.
-    Jwk {
-        /// The underlying error.
-        source: SymmetricJwkError,
-    },
-}
-
 impl SymmetricKey {
-    /// Loads the bytes from a binary secret.
+    /// Constructs a symmetric key from a [`jwk::SymmetricJwk`].
+    ///
+    /// The JWK must have an `alg` field identifying the HMAC algorithm (HS256,
+    /// HS384, or HS512) — a bare oct key cannot self-identify, unlike an AES
+    /// key whose length picks the variant. The `kid` field, if present, is
+    /// used as the key ID. Holding a [`jwk::PrivateJwk`], convert with
+    /// `try_into()` — the conversion rejects asymmetric keys.
     ///
     /// # Errors
     ///
-    /// The secret could not be accessed.
-    pub async fn load_bytes<
-        S: Secret<Output = SecretBytes>,
-        F: FnOnce(Option<&str>) -> Option<String>,
-    >(
-        secret: S,
-        algorithm: SymmetricAlgorithm,
-        key_id_from_secret_identity: F,
-    ) -> Result<Self, SymmetricKeyLoadError> {
-        let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
-        let key_id = key_id_from_secret_identity(secret_output.identity.as_deref());
-        let key = secret_output.value;
-
-        let required_key_size = algorithm.min_key_size();
-
-        ensure!(
-            key.expose_secret().len() >= required_key_size,
-            InvalidKeySizeSnafu {
-                required: required_key_size,
-                actual: key.expose_secret().len()
-            }
-        );
-
-        Ok(Self {
-            inner: Arc::new(SymmetricKeyInner {
-                key,
-                algorithm,
-                key_id,
-            }),
-        })
-    }
-
-    /// Constructs a symmetric key from a [`jwk::Jwk`].
-    ///
-    /// The JWK must be of key type `oct` and have an `alg` field identifying
-    /// the HMAC algorithm (HS256, HS384, or HS512). The `kid` field, if
-    /// present, is used as the key ID.
-    ///
-    /// # Errors
-    ///
-    /// The JWK is not an `oct` key, is missing an algorithm, has an
-    /// unsupported algorithm, or the key is too short for the algorithm.
+    /// Returns [`ErrorKind::Config`] if the JWK is missing its algorithm, uses
+    /// an unsupported one, or the key is shorter than the RFC 7518 §3.2
+    /// minimum for the algorithm (the hash output size).
     ///
     /// # Examples
     ///
     /// When the key comes from a secret store, prefer
-    /// [`load_jwk`](Self::load_jwk), which fetches and parses in one step. Use
-    /// `from_jwk` when you already hold a parsed [`Jwk`](jwk::Jwk) — for example
+    /// [`from_secret`](Self::from_secret), which fetches and decodes in one
+    /// step. Use `from_jwk` when you already hold a parsed JWK — for example
     /// one selected from a JWKS — rather than hard-coding key material:
     ///
     /// ```
-    /// use huskarl_core::jwk::Jwk;
+    /// use huskarl_core::jwk::SymmetricJwk;
     /// use huskarl_crypto_native::symmetric::SymmetricKey;
     ///
-    /// # fn example(jwk: Jwk) -> Result<(), Box<dyn std::error::Error>> {
+    /// # fn example(jwk: SymmetricJwk) -> Result<(), Box<dyn std::error::Error>> {
     /// // `jwk` was parsed from a trusted source, not baked into the binary.
     /// let key = SymmetricKey::from_jwk(jwk)?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_jwk(jwk: jwk::Jwk) -> Result<Self, SymmetricJwkError> {
-        let jwk::Key::Oct(oct) = jwk.key else {
-            return symmetric_jwk_error::NotOctKeySnafu.fail();
-        };
-
+    pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         let alg = jwk.algorithm.as_deref();
         let Some(algorithm) = alg.and_then(|a| a.parse::<SymmetricAlgorithm>().ok()) else {
-            return symmetric_jwk_error::UnsupportedAlgorithmSnafu {
-                algorithm: alg.map(String::from),
-            }
-            .fail();
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "unsupported or missing JWK algorithm for an HMAC key: {alg:?}"
+            )));
         };
 
         let required_key_size = algorithm.min_key_size();
-
-        ensure!(
-            oct.k.len() >= required_key_size,
-            symmetric_jwk_error::InvalidKeySizeSnafu {
-                required: required_key_size,
-                actual: oct.k.len()
-            }
-        );
+        let actual = jwk.key.k.len();
+        if actual < required_key_size {
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "invalid {} key size: got {actual} bytes, need at least {required_key_size}",
+                algorithm.as_ref()
+            )));
+        }
 
         Ok(Self {
             inner: Arc::new(SymmetricKeyInner {
-                key: SecretBytes::new(oct.k.clone()),
+                key: SecretBytes::new(jwk.key.k.clone()),
                 algorithm,
                 key_id: jwk.kid,
             }),
         })
     }
 
-    /// Loads a symmetric key from a JWK JSON secret.
+    /// Finalizes a symmetric key from a secret that yields a
+    /// [`jwk::PrivateJwk`].
     ///
-    /// The secret value must be a JSON string representing a JWK of key type
-    /// `oct`. The JWK's `alg` and `kid` fields are used directly.
+    /// The single loading funnel, shared with the asymmetric side: compose a
+    /// decoder onto your secret to reach a `Secret<Output = PrivateJwk>` —
+    /// [`jwk::JwkJson`] for a JWK-JSON secret, or
+    /// [`jwk::OctBytes`] for raw key bytes — and this resolves it into a
+    /// usable key.
+    ///
+    /// The key ID follows a clear precedence: an explicit `kid` in the JWK
+    /// wins; otherwise the secret's `identity` (e.g. a secret-manager version
+    /// name) fills it; otherwise there is none.
     ///
     /// # Errors
     ///
-    /// The secret could not be accessed, the JSON is invalid,
-    /// or the JWK is not a valid symmetric key.
-    pub async fn load_jwk<S: Secret<Output = SecretString>>(
+    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
+    /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
+    /// it is not a valid HMAC key.
+    pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
         secret: S,
-    ) -> Result<Self, SymmetricJwkLoadError> {
-        let secret_output = secret
-            .get_secret_value()
-            .await
-            .context(symmetric_jwk_load_error::SecretSnafu)?;
-        let json = secret_output.value.expose_secret();
-        let parsed: jwk::Jwk =
-            serde_json::from_str(json).context(symmetric_jwk_load_error::JsonParseSnafu)?;
-        Self::from_jwk(parsed).context(symmetric_jwk_load_error::JwkSnafu)
+    ) -> Result<Self, Error> {
+        let output = secret.get_secret_value().await?;
+        // Explicit JWK kid > secret identity > none.
+        let jwk = output.value.with_kid_fallback(output.identity);
+        Self::from_jwk(jwk.try_into()?)
     }
 
     // `Hmac::new_from_slice` accepts a key of any length, so it never errors.
@@ -310,6 +212,8 @@ impl JwsVerifier for SymmetricKey {
         signature: &'a [u8],
         key_match: &'a KeyMatch<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        use subtle::ConstantTimeEq as _;
+
         Box::pin(async move {
             if self.key_match(key_match).is_none() {
                 return Err(VerifyError::NoMatchingKey);
@@ -328,17 +232,25 @@ impl JwsVerifier for SymmetricKey {
 
 #[cfg(test)]
 mod tests {
-    use huskarl_core::crypto::{signer::JwsSigner, verifier::JwsVerifier};
+    use huskarl_core::{
+        crypto::{signer::JwsSigner, verifier::JwsVerifier},
+        jwk::OctBytes,
+        secrets::{ProvidedSecret, SecretString},
+    };
 
     use super::*;
 
+    fn symmetric_jwk(algorithm: &str, key_bytes: Vec<u8>) -> jwk::SymmetricJwk {
+        jwk::SymmetricJwk::builder()
+            .key(jwk::OctKey::builder().k(key_bytes).build())
+            .algorithm(algorithm)
+            .build()
+    }
+
     async fn roundtrip_symmetric(algorithm: &str, key_size: usize) {
         let key_bytes: Vec<u8> = (0..=u8::MAX).cycle().take(key_size).collect();
-        let jwk = huskarl_core::jwk::Jwk::builder()
-            .key(huskarl_core::jwk::OctKey::builder().k(key_bytes).build())
-            .algorithm(algorithm)
-            .kid("sym-key-1")
-            .build();
+        let mut jwk = symmetric_jwk(algorithm, key_bytes);
+        jwk.kid = Some("sym-key-1".into());
 
         let key = SymmetricKey::from_jwk(jwk).unwrap();
 
@@ -391,26 +303,16 @@ mod tests {
 
     #[test]
     fn from_jwk_key_size_boundaries() {
-        let jwk_with_key = |alg: &str, len: usize| {
-            huskarl_core::jwk::Jwk::builder()
-                .key(
-                    huskarl_core::jwk::OctKey::builder()
-                        .k(vec![0u8; len])
-                        .build(),
-                )
-                .algorithm(alg)
-                .build()
-        };
-
         for (alg, min) in [("HS256", 32), ("HS384", 48), ("HS512", 64)] {
             assert!(
-                SymmetricKey::from_jwk(jwk_with_key(alg, min)).is_ok(),
+                SymmetricKey::from_jwk(symmetric_jwk(alg, vec![0u8; min])).is_ok(),
                 "{alg}: RFC-minimum {min}-byte key must be accepted"
             );
-            let err = SymmetricKey::from_jwk(jwk_with_key(alg, min - 1)).unwrap_err();
-            assert!(
-                matches!(err, SymmetricJwkError::InvalidKeySize { required, .. } if required == min),
-                "{alg}: {}-byte key must be rejected with required={min}",
+            let err = SymmetricKey::from_jwk(symmetric_jwk(alg, vec![0u8; min - 1])).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                ErrorKind::Config,
+                "{alg}: {}-byte key must be rejected",
                 min - 1
             );
         }
@@ -424,11 +326,7 @@ mod tests {
         let key_bytes = URL_SAFE_NO_PAD
             .decode("AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow")
             .unwrap();
-        let jwk = huskarl_core::jwk::Jwk::builder()
-            .key(huskarl_core::jwk::OctKey::builder().k(key_bytes).build())
-            .algorithm("HS256")
-            .build();
-        let key = SymmetricKey::from_jwk(jwk).unwrap();
+        let key = SymmetricKey::from_jwk(symmetric_jwk("HS256", key_bytes)).unwrap();
 
         let input = b"eyJ0eXAiOiJKV1QiLA0KICJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJqb2UiLA0KICJleHAiOjEzMDA4MTkzODAsDQogImh0dHA6Ly9leGFtcGxlLmNvbS9pc19yb290Ijp0cnVlfQ";
         let expected = URL_SAFE_NO_PAD
@@ -441,64 +339,74 @@ mod tests {
         key.verify(input, &expected, &key_match).await.unwrap();
     }
 
-    #[test]
-    fn from_jwk_not_oct_key() {
-        let jwk = huskarl_core::jwk::Jwk::builder()
-            .key(huskarl_core::jwk::Key::Unknown)
-            .algorithm("HS256")
-            .build();
+    #[tokio::test]
+    async fn from_secret_jwk_json() {
+        // The blessed path: a JWK-JSON secret through the shared funnel.
+        let json = r#"{"kty":"oct","alg":"HS256","kid":"sym-1",
+            "k":"AyM1SysPpbyDfgZld3umj1qzKObwVMkoqQ-EstJQLr_T-1qS0gZH75aKtMN3Yj0iPS4hcgUuTwjAzZr1Z9CAow"}"#;
+        let key = SymmetricKey::from_secret(
+            ProvidedSecret::new(SecretString::new(json)).mapped(jwk::JwkJson),
+        )
+        .await
+        .unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("sym-1"));
+        assert_eq!(key.jws_algorithm().as_ref(), "HS256");
+    }
 
-        let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(err, SymmetricJwkError::NotOctKey));
+    #[tokio::test]
+    async fn from_secret_raw_bytes() {
+        // Raw bytes reach the same funnel through the OctBytes decoder.
+        let key = SymmetricKey::from_secret(
+            ProvidedSecret::new(SecretBytes::new(vec![9u8; 32]))
+                .mapped(OctBytes::new("HS256").with_kid("env-key")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("env-key"));
+    }
+
+    #[tokio::test]
+    async fn from_secret_rejects_asymmetric_jwk() {
+        // A P-256 private JWK is valid for the funnel type but not for HMAC.
+        let json = r#"{"kty":"EC","crv":"P-256","alg":"ES256",
+            "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+            "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+            "d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}"#;
+        let err = SymmetricKey::from_secret(
+            ProvidedSecret::new(SecretString::new(json)).mapped(jwk::JwkJson),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     #[test]
     fn from_jwk_missing_algorithm() {
-        let jwk = huskarl_core::jwk::Jwk::builder()
-            .key(
-                huskarl_core::jwk::OctKey::builder()
-                    .k(vec![0u8; 32])
-                    .build(),
-            )
+        let jwk = jwk::SymmetricJwk::builder()
+            .key(jwk::OctKey::builder().k(vec![0u8; 32]).build())
             .build();
 
         let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(
-            err,
-            SymmetricJwkError::UnsupportedAlgorithm { .. }
-        ));
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     #[test]
     fn from_jwk_unsupported_algorithm() {
-        let jwk = huskarl_core::jwk::Jwk::builder()
-            .key(
-                huskarl_core::jwk::OctKey::builder()
-                    .k(vec![0u8; 32])
-                    .build(),
-            )
-            .algorithm("A128KW")
-            .build();
-
-        let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(
-            err,
-            SymmetricJwkError::UnsupportedAlgorithm { .. }
-        ));
+        // A valid JWA algorithm, but not an HMAC one.
+        let err = SymmetricKey::from_jwk(symmetric_jwk("A128KW", vec![0u8; 32])).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     #[test]
-    fn from_jwk_undersized_key() {
+    fn oct_jwk_from_wire_yields_symmetric_variant() {
+        // The Jwk -> PrivateJwk -> SymmetricJwk path a JWKS consumer takes.
         let jwk = huskarl_core::jwk::Jwk::builder()
-            .key(
-                huskarl_core::jwk::OctKey::builder()
-                    .k(vec![0u8; 16])
-                    .build(),
-            )
+            .key(jwk::OctKey::builder().k(vec![1u8; 32]).build())
             .algorithm("HS256")
+            .kid("from-set")
             .build();
-
-        let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert!(matches!(err, SymmetricJwkError::InvalidKeySize { .. }));
+        let private: jwk::SymmetricJwk = jwk.private_jwk().unwrap().try_into().unwrap();
+        let key = SymmetricKey::from_jwk(private).unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("from-set"));
     }
 }

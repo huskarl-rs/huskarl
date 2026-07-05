@@ -1,7 +1,8 @@
 //! AES-GCM AEAD over the WebCrypto/SubtleCrypto API (e.g. for cookie sealing).
 //!
 //! [`AesGcmKey`] is the AES-128/192/256-GCM cipher implementing huskarl-core's
-//! [`AeadEncryptor`]/[`AeadDecryptor`]; build one from raw key bytes with
+//! [`AeadEncryptor`]/[`AeadDecryptor`]; build one from a JWK with
+//! [`AesGcmKey::from_jwk`], from a secret store with
 //! [`AesGcmKey::from_secret`], or from an already-imported key with
 //! [`AesGcmKey::from_crypto_key`]. All operations are async.
 
@@ -13,8 +14,9 @@ use huskarl_core::{
         KeyMatchStrength,
         cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch, DecryptError},
     },
+    jwk,
     platform::MaybeSendBoxFuture,
-    secrets::{Secret, SecretBytes},
+    secrets::Secret,
 };
 use snafu::prelude::*;
 use wasm_bindgen::JsValue;
@@ -80,18 +82,10 @@ impl std::fmt::Debug for AesGcmKey {
     }
 }
 
-/// Errors that can occur when loading an AES-GCM key.
+/// Errors importing key material into `WebCrypto`, folded into the core
+/// [`Error`] (kind [`ErrorKind::Crypto`]) at the public boundary.
 #[derive(Debug, Snafu)]
-pub enum AesGcmKeyLoadError {
-    /// The key secret could not be fetched from its source.
-    #[snafu(display("failed to fetch AES key secret"))]
-    Secret {
-        /// The underlying error.
-        source: Error,
-    },
-    /// The key material was not 16, 24, or 32 bytes (AES-128/192/256).
-    #[snafu(display("AES key must be 16, 24, or 32 bytes"))]
-    InvalidKeyLength,
+enum ImportError {
     /// `WebCrypto` was not available in the environment.
     #[snafu(display("WebCrypto unavailable"))]
     LoadCrypto {
@@ -118,6 +112,12 @@ pub enum AesGcmKeyLoadError {
         #[snafu(source(from(JsValue, JsError::new)))]
         source: JsError,
     },
+}
+
+impl From<ImportError> for Error {
+    fn from(value: ImportError) -> Self {
+        Error::new(ErrorKind::Crypto, value)
+    }
 }
 
 /// Errors that can occur during an encrypt/decrypt operation.
@@ -168,25 +168,35 @@ impl From<OpError> for DecryptError {
 }
 
 impl AesGcmKey {
-    /// Imports a non-extractable AES-GCM key from a [`Secret`], inferring
-    /// AES-128/192/256 from the key length.
+    /// Imports a non-extractable AES-GCM key from a [`jwk::SymmetricJwk`].
     ///
-    /// `kid_from_identity` maps the secret source's identity (e.g. a secret
-    /// manager version, a KMS key id) to the `kid` reported by
-    /// [`key_id`](AeadEncryptor::key_id) — which `huskarl-login` writes into the
-    /// kid sidecar cookie so rotation/refresh-on-miss can target the right key.
+    /// The AES-128/192/256 variant follows from the key length (16/24/32
+    /// bytes). If the JWK carries an `alg`, it must agree with the
+    /// length-selected variant (`A128GCM`/`A192GCM`/`A256GCM`). The `kid`
+    /// field, if present, is used as the key ID — which `huskarl-login`
+    /// writes into the kid sidecar cookie so rotation/refresh-on-miss can
+    /// target the right key. Holding a [`jwk::PrivateJwk`], convert with
+    /// `try_into()` — the conversion rejects asymmetric keys.
     ///
     /// # Errors
     ///
-    /// Returns [`AesGcmKeyLoadError`] if the secret cannot be fetched, the key
-    /// length is invalid, or `WebCrypto` rejects the import.
-    pub async fn from_secret<S: Secret<Output = SecretBytes>>(
-        secret: S,
-        kid_from_identity: impl Fn(Option<&str>) -> Option<String>,
-    ) -> Result<Self, AesGcmKeyLoadError> {
-        let key_source = secret.get_secret_value().await.context(SecretSnafu)?;
-        let bytes = key_source.value.expose_secret();
-        let enc_algorithm = enc_algorithm_for_len(bytes.len()).context(InvalidKeyLengthSnafu)?;
+    /// Returns [`ErrorKind::Config`] if the key material is not 16, 24, or 32
+    /// bytes or the JWK's `alg` disagrees with the key length, and
+    /// [`ErrorKind::Crypto`] if `WebCrypto` rejects the import.
+    pub async fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
+        let len = jwk.key.k.len();
+        let Some(enc_algorithm) = enc_algorithm_for_len(len) else {
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "AES-GCM key material must be 16, 24, or 32 bytes, got {len}"
+            )));
+        };
+        if let Some(alg) = jwk.algorithm.as_deref()
+            && alg != enc_algorithm
+        {
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "JWK algorithm {alg} disagrees with the key length, which selects {enc_algorithm}"
+            )));
+        }
 
         let crypto = get_crypto().context(LoadCryptoSnafu)?;
         let usages = serde_wasm_bindgen::to_value(&[KeyUsage::Encrypt, KeyUsage::Decrypt])
@@ -201,7 +211,7 @@ impl AesGcmKey {
         )
         .context(ImportSnafu)?;
 
-        let key_data = to_uint8(bytes);
+        let key_data = to_uint8(&jwk.key.k);
         let crypto_key: CryptoKey = JsFuture::from(
             crypto
                 .subtle()
@@ -217,9 +227,35 @@ impl AesGcmKey {
             inner: Arc::new(Inner {
                 crypto_key,
                 enc_algorithm,
-                kid: kid_from_identity(key_source.identity.as_deref()),
+                kid: jwk.kid,
             }),
         })
+    }
+
+    /// Finalizes a cipher from a secret that yields a [`jwk::PrivateJwk`].
+    ///
+    /// The single loading funnel, shared with every huskarl key type: compose
+    /// a decoder onto your secret to reach a `Secret<Output = PrivateJwk>` —
+    /// [`jwk::JwkJson`] for a JWK-JSON secret, or [`jwk::OctBytes`] for raw
+    /// key bytes — and this imports it as a non-extractable `WebCrypto` key.
+    ///
+    /// The key ID follows a clear precedence: an explicit `kid` in the JWK
+    /// wins; otherwise the secret's `identity` (e.g. a secret-manager version
+    /// name) fills it; otherwise there is none.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
+    /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
+    /// it is not a valid AES-GCM key, and [`ErrorKind::Crypto`] if `WebCrypto`
+    /// rejects the import.
+    pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
+        secret: S,
+    ) -> Result<Self, Error> {
+        let output = secret.get_secret_value().await?;
+        // Explicit JWK kid > secret identity > none.
+        let jwk = output.value.with_kid_fallback(output.identity);
+        Self::from_jwk(jwk.try_into()?).await
     }
 
     /// Builds a key from an already-imported [`CryptoKey`] (e.g. one provisioned
@@ -387,6 +423,7 @@ mod tests {
             KeyMatchStrength,
             cipher::{AeadDecryptor as _, AeadEncryptor as _, CipherMatch},
         },
+        jwk::{OctBytes, SymmetricJwk},
         platform::MaybeSendBoxFuture,
         secrets::{Secret, SecretBytes, SecretOutput},
     };
@@ -414,17 +451,15 @@ mod tests {
         }
     }
 
-    async fn key_from(bytes: Vec<u8>, identity: Option<&str>) -> AesGcmKey {
-        let identity = identity.map(str::to_owned);
-        AesGcmKey::from_secret(
-            TestSecret {
-                bytes: SecretBytes::new(bytes),
-                identity,
-            },
-            |id| id.map(str::to_owned),
-        )
-        .await
-        .unwrap()
+    fn oct_jwk(bytes: Vec<u8>, kid: Option<&str>) -> SymmetricJwk {
+        SymmetricJwk::builder()
+            .key(huskarl_core::jwk::OctKey::builder().k(bytes).build())
+            .maybe_kid(kid.map(str::to_owned))
+            .build()
+    }
+
+    async fn key_from(bytes: Vec<u8>, kid: Option<&str>) -> AesGcmKey {
+        AesGcmKey::from_jwk(oct_jwk(bytes, kid)).await.unwrap()
     }
 
     async fn key_256() -> AesGcmKey {
@@ -525,15 +560,24 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn invalid_key_length_is_rejected() {
-        let res = AesGcmKey::from_secret(
-            TestSecret {
-                bytes: SecretBytes::new(vec![0u8; 20]),
-                identity: None,
-            },
-            |_| None,
-        )
-        .await;
+        let res = AesGcmKey::from_jwk(oct_jwk(vec![0u8; 20], None)).await;
         assert!(res.is_err(), "a 20-byte key is not a valid AES key size");
+    }
+
+    #[wasm_bindgen_test]
+    async fn kid_derived_from_identity_through_funnel() {
+        // The shared funnel: raw bytes through OctBytes, kid falling back to
+        // the secret source's identity.
+        let key = AesGcmKey::from_secret(
+            TestSecret {
+                bytes: SecretBytes::new(vec![2u8; 32]),
+                identity: Some("kv-version-3".to_owned()),
+            }
+            .mapped(OctBytes::new("A256GCM")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("kv-version-3"));
     }
 
     #[wasm_bindgen_test]
@@ -647,23 +691,15 @@ mod tests {
     // sealed on one runtime opens on the other — e.g. a deployment migrating
     // between the native and WebCrypto cipher, or running both side by side.
 
-    async fn native_key(bytes: Vec<u8>) -> NativeAesGcmKey {
-        NativeAesGcmKey::from_secret(
-            TestSecret {
-                bytes: SecretBytes::new(bytes),
-                identity: None,
-            },
-            |_| None,
-        )
-        .await
-        .unwrap()
+    fn native_key(bytes: Vec<u8>) -> NativeAesGcmKey {
+        NativeAesGcmKey::from_jwk(oct_jwk(bytes, None)).unwrap()
     }
 
     #[wasm_bindgen_test]
     async fn webcrypto_seal_opens_under_native() {
         let bytes = vec![5u8; 32];
         let web = key_from(bytes.clone(), None).await;
-        let native = native_key(bytes).await;
+        let native = native_key(bytes);
         let aad = b"session";
 
         let out = web.encrypt(b"interop payload", aad).await.unwrap();
@@ -682,7 +718,7 @@ mod tests {
     async fn native_seal_opens_under_webcrypto() {
         let bytes = vec![5u8; 32];
         let web = key_from(bytes.clone(), None).await;
-        let native = native_key(bytes).await;
+        let native = native_key(bytes);
         let aad = b"session";
 
         // Native sealing draws its nonce from getrandom — needs the wasm_js
@@ -703,7 +739,7 @@ mod tests {
     async fn cross_impl_aad_still_binds() {
         let bytes = vec![5u8; 32];
         let web = key_from(bytes.clone(), None).await;
-        let native = native_key(bytes).await;
+        let native = native_key(bytes);
 
         let out = web.encrypt(b"payload", b"session").await.unwrap();
         let res = native
@@ -718,7 +754,7 @@ mod tests {
     async fn aes192_interops_across_impls() {
         let bytes = vec![6u8; 24];
         let web = key_from(bytes.clone(), None).await;
-        let native = native_key(bytes).await;
+        let native = native_key(bytes);
         let aad = b"session";
 
         assert_eq!(web.enc_algorithm().as_ref(), "A192GCM");
