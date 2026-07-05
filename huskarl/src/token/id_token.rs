@@ -191,7 +191,7 @@ pub struct StandardOidcAddressClaims {
 
 /// Validates an `OpenID` Connect ID token: signature (via the configured
 /// [`JwsVerifier`]), `iss`, and `aud`, plus — when configured — `nonce`,
-/// `max_age`, `azp`, `acr`, and the set of permitted signature algorithms.
+/// `max_age`, `acr`, and the set of permitted signature algorithms.
 ///
 /// Build one with [`builder`](Self::builder); call [`validate`](Self::validate)
 /// to check a token and recover its claims.
@@ -207,13 +207,15 @@ pub struct IdTokenValidator {
     /// issued to. Required: OIDC Core §3.1.3.7 step 3 makes the `aud` check
     /// mandatory for ID tokens.
     audience: String,
+    /// Audiences the client trusts beyond its own `client_id` (OIDC Core
+    /// §3.1.3.7 step 3). Empty by default.
+    #[builder(default)]
+    trusted_audiences: Vec<String>,
     /// The maximum age of the token.
     max_age: Option<Duration>,
     /// The clock leeway to use when validating the token.
     #[builder(default = Duration::from_secs(10))]
     clock_leeway: Duration,
-    /// If set, verifies the `azp` (authorized party) claim matches this value when present.
-    expected_azp: Option<String>,
     /// If set, verifies the `acr` (authentication context class reference) claim matches this value.
     required_acr: Option<String>,
     /// If set, restricts accepted signature algorithms to this set.
@@ -230,7 +232,7 @@ impl IdTokenValidator {
     /// # Errors
     ///
     /// Returns an [`IdTokenValidationError`] if any configured check fails —
-    /// signature, `iss`, `aud`, `nonce`, `max_age`, `azp`, `acr`, or signature
+    /// signature, `iss`, `aud`, `nonce`, `max_age`, `acr`, or signature
     /// algorithm.
     pub async fn validate(
         &self,
@@ -281,35 +283,21 @@ impl IdTokenValidator {
             }
         }
 
-        // OIDC Core §3.1.3.7 clauses 3 & 4: when aud contains multiple values, azp MUST be
-        // present and match our client_id.
-        if validated_jwt.audience.len() > 1 {
-            let azp = validated_jwt
-                .claims
-                .azp
-                .as_deref()
-                .ok_or_else(|| AzpMissingSnafu.build())?;
-            ensure!(
-                azp == self.audience,
-                AzpMismatchSnafu {
-                    expected: self.audience.clone(),
-                    actual: azp.to_string(),
-                }
-            );
-        }
-
-        // OIDC Core §3.1.3.7 step 5: if azp is present, it MUST contain our client_id.
-        if let Some(expected_azp) = &self.expected_azp
-            && let Some(azp) = validated_jwt.claims.azp.as_ref()
-        {
-            ensure!(
-                azp == expected_azp,
-                AzpMismatchSnafu {
-                    expected: expected_azp.clone(),
-                    actual: azp.clone(),
-                }
-            );
-        }
+        // OIDC Core §3.1.3.7 step 3: reject any audience beyond our own
+        // client_id, the only one we trust. (`azp` is deliberately not
+        // validated — OIDC erratum #973 / PR #340 — only surfaced on the claims.)
+        let untrusted_audiences: Vec<String> = validated_jwt
+            .audience
+            .iter()
+            .filter(|aud| *aud != &self.audience && !self.trusted_audiences.contains(*aud))
+            .cloned()
+            .collect();
+        ensure!(
+            untrusted_audiences.is_empty(),
+            UntrustedAudienceSnafu {
+                untrusted: untrusted_audiences,
+            }
+        );
 
         // OIDC Core §3.1.3.7 step 12: if acr was requested, check the asserted value.
         if let Some(required_acr) = &self.required_acr {
@@ -351,15 +339,12 @@ pub enum IdTokenValidationError {
         /// The maximum age in seconds.
         max_age_secs: u64,
     },
-    /// `azp` claim missing when `aud` contains multiple values. OIDC Core §3.1.3.7 clause 4.
-    #[snafu(display("azp claim is required when aud contains multiple values"))]
-    AzpMissing,
-    /// `azp` claim present but does not match the expected client ID. OIDC Core §3.1.3.7 step 5.
-    AzpMismatch {
-        /// The expected authorized party.
-        expected: String,
-        /// The actual authorized party.
-        actual: String,
+    /// The token lists one or more audiences the client does not trust.
+    /// OIDC Core §3.1.3.7 step 3.
+    #[snafu(display("token contains untrusted audience(s): {}", untrusted.join(", ")))]
+    UntrustedAudience {
+        /// The audiences on the token that are not the client's own.
+        untrusted: Vec<String>,
     },
     /// `acr` claim missing but was required.
     AcrMissing,
@@ -434,7 +419,6 @@ mod tests {
     fn validator(
         verifier: Arc<dyn JwsVerifier>,
         max_age: Option<Duration>,
-        expected_azp: Option<&str>,
         required_acr: Option<&str>,
     ) -> IdTokenValidator {
         IdTokenValidator::builder()
@@ -442,7 +426,6 @@ mod tests {
             .issuer(ISS)
             .audience(AUD)
             .maybe_max_age(max_age)
-            .maybe_expected_azp(expected_azp.map(str::to_string))
             .maybe_required_acr(required_acr.map(str::to_string))
             .build()
     }
@@ -451,7 +434,7 @@ mod tests {
     async fn valid_id_token_is_accepted() {
         let (signer, verifier) = signer_and_verifier().await;
         let token = mint_standard(&signer, IdTokenClaims::default()).await;
-        let validated = validator(verifier, None, None, None)
+        let validated = validator(verifier, None, None)
             .validate(&token, None)
             .await
             .expect("token should validate");
@@ -470,7 +453,7 @@ mod tests {
             IdTokenClaims::default(),
         )
         .await;
-        let err = validator(verifier, None, None, None)
+        let err = validator(verifier, None, None)
             .validate(&token, None)
             .await
             .unwrap_err();
@@ -491,7 +474,7 @@ mod tests {
             },
         )
         .await;
-        let err = validator(verifier, None, None, None)
+        let err = validator(verifier, None, None)
             .validate(&token, Some("expected"))
             .await
             .unwrap_err();
@@ -512,7 +495,7 @@ mod tests {
             },
         )
         .await;
-        validator(verifier, None, None, None)
+        validator(verifier, None, None)
             .validate(&token, Some("the-nonce"))
             .await
             .expect("matching nonce should validate");
@@ -531,7 +514,7 @@ mod tests {
             IdTokenClaims::default(),
         )
         .await;
-        let err = validator(verifier, None, None, None)
+        let err = validator(verifier, None, None)
             .validate(&token, None)
             .await
             .unwrap_err();
@@ -542,7 +525,7 @@ mod tests {
     async fn max_age_without_auth_time_is_rejected() {
         let (signer, verifier) = signer_and_verifier().await;
         let token = mint_standard(&signer, IdTokenClaims::default()).await;
-        let err = validator(verifier, Some(Duration::from_mins(1)), None, None)
+        let err = validator(verifier, Some(Duration::from_mins(1)), None)
             .validate(&token, None)
             .await
             .unwrap_err();
@@ -570,7 +553,7 @@ mod tests {
             },
         )
         .await;
-        validator(verifier, Some(Duration::from_mins(1)), None, None)
+        validator(verifier, Some(Duration::from_mins(1)), None)
             .validate(&token, None)
             .await
             .expect("fresh login with 2s AS clock skew should validate");
@@ -591,7 +574,7 @@ mod tests {
             },
         )
         .await;
-        let err = validator(verifier, Some(Duration::from_mins(1)), None, None)
+        let err = validator(verifier, Some(Duration::from_mins(1)), None)
             .validate(&token, None)
             .await
             .unwrap_err();
@@ -616,7 +599,7 @@ mod tests {
             },
         )
         .await;
-        validator(verifier, Some(Duration::from_mins(5)), None, None)
+        validator(verifier, Some(Duration::from_mins(5)), None)
             .validate(&token, None)
             .await
             .expect("recent auth_time should validate");
@@ -633,14 +616,34 @@ mod tests {
             },
         )
         .await;
-        validator(verifier, Some(Duration::from_mins(1)), None, None)
+        validator(verifier, Some(Duration::from_mins(1)), None)
             .validate(&token, None)
             .await
             .expect("overflowing auth_time must not panic");
     }
 
+    /// A non-matching `azp` is surfaced on the claims but never validated, so
+    /// it is ignored rather than rejected (OIDC erratum #973 / PR #340).
     #[tokio::test]
-    async fn multiple_audiences_without_azp_is_rejected() {
+    async fn non_matching_azp_is_ignored() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                azp: Some("someone-else".to_string()),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let validated = validator(verifier, None, None)
+            .validate(&token, None)
+            .await
+            .expect("a non-matching azp must be ignored, not rejected");
+        assert_eq!(validated.claims.azp.as_deref(), Some("someone-else"));
+    }
+
+    #[tokio::test]
+    async fn audience_not_trusted_is_rejected() {
         let (signer, verifier) = signer_and_verifier().await;
         let token = mint(
             &signer,
@@ -650,79 +653,40 @@ mod tests {
             IdTokenClaims::default(),
         )
         .await;
-        let err = validator(verifier, None, None, None)
+        let err = validator(verifier, None, None)
             .validate(&token, None)
             .await
             .unwrap_err();
         assert!(
-            matches!(err, IdTokenValidationError::AzpMissing),
+            matches!(
+                &err,
+                IdTokenValidationError::UntrustedAudience { untrusted }
+                    if untrusted == &["other-aud".to_string()]
+            ),
             "got {err:?}"
         );
     }
 
     #[tokio::test]
-    async fn multiple_audiences_with_wrong_azp_is_rejected() {
+    async fn extra_audience_in_trusted_set_is_accepted() {
         let (signer, verifier) = signer_and_verifier().await;
         let token = mint(
             &signer,
             ISS,
             vec![AUD.to_string(), "other-aud".to_string()],
             Some(SUB),
-            IdTokenClaims {
-                azp: Some("someone-else".to_string()),
-                ..IdTokenClaims::default()
-            },
+            IdTokenClaims::default(),
         )
         .await;
-        let err = validator(verifier, None, None, None)
+        IdTokenValidator::builder()
+            .verifier(verifier)
+            .issuer(ISS)
+            .audience(AUD)
+            .trusted_audiences(vec!["other-aud".to_string()])
+            .build()
             .validate(&token, None)
             .await
-            .unwrap_err();
-        assert!(
-            matches!(err, IdTokenValidationError::AzpMismatch { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn multiple_audiences_with_matching_azp_is_accepted() {
-        let (signer, verifier) = signer_and_verifier().await;
-        let token = mint(
-            &signer,
-            ISS,
-            vec![AUD.to_string(), "other-aud".to_string()],
-            Some(SUB),
-            IdTokenClaims {
-                azp: Some(AUD.to_string()),
-                ..IdTokenClaims::default()
-            },
-        )
-        .await;
-        validator(verifier, None, None, None)
-            .validate(&token, None)
-            .await
-            .expect("matching azp should validate");
-    }
-
-    #[tokio::test]
-    async fn expected_azp_mismatch_is_rejected() {
-        let (signer, verifier) = signer_and_verifier().await;
-        let token = mint_standard(
-            &signer,
-            IdTokenClaims {
-                azp: Some("actual-party".to_string()),
-                ..IdTokenClaims::default()
-            },
-        )
-        .await;
-        let err = validator(verifier, None, Some("expected-party"), None)
-            .validate(&token, None)
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(err, IdTokenValidationError::AzpMismatch { .. }),
-            "got {err:?}"
-        );
+            .expect("a listed extra audience should validate");
     }
 
     /// `required_acr` against the token's asserted `acr` (OIDC Core §3.1.3.7 step 12).
@@ -741,7 +705,7 @@ mod tests {
             },
         )
         .await;
-        let result = validator(verifier, None, None, Some("urn:loa:high"))
+        let result = validator(verifier, None, Some("urn:loa:high"))
             .validate(&token, None)
             .await;
         assert_eq!(result.is_err(), expect_err, "got {result:?}");
