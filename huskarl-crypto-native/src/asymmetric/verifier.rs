@@ -316,7 +316,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use crate::asymmetric::{
-        signer::{AsymmetricAlgorithm, GenerateAlgorithm, PrivateKey},
+        signer::{AsymmetricAlgorithm, GenerateAlgorithm, Pkcs8Der, Pkcs8Pem, PrivateKey},
         verifier::AsymmetricPublicKey,
     };
 
@@ -518,7 +518,9 @@ mod tests {
             value: json,
             identity: None,
         };
-        let restored = PrivateKey::load_jwk(secret).await.unwrap();
+        let restored = PrivateKey::from_secret(secret.mapped(huskarl_core::jwk::JwkJson))
+            .await
+            .unwrap();
         let selected = restored.select_asymmetric_signer().await;
 
         // Sign with restored key
@@ -572,11 +574,10 @@ mod tests {
             bytes: der.as_bytes().to_vec(),
             identity: Some("der-es256-key".to_string()),
         };
-        let loaded = PrivateKey::load_pkcs8_der(secret, AsymmetricAlgorithm::Es256, |id| {
-            id.map(String::from)
-        })
-        .await
-        .unwrap();
+        let loaded =
+            PrivateKey::from_secret(secret.mapped(Pkcs8Der::new(AsymmetricAlgorithm::Es256)))
+                .await
+                .unwrap();
 
         sign_and_verify(&loaded).await;
     }
@@ -593,11 +594,10 @@ mod tests {
             value: pem.as_str().to_string(),
             identity: Some("pem-es256-key".to_string()),
         };
-        let loaded = PrivateKey::load_pkcs8_pem(secret, AsymmetricAlgorithm::Es256, |id| {
-            id.map(String::from)
-        })
-        .await
-        .unwrap();
+        let loaded =
+            PrivateKey::from_secret(secret.mapped(Pkcs8Pem::new(AsymmetricAlgorithm::Es256)))
+                .await
+                .unwrap();
 
         sign_and_verify(&loaded).await;
     }
@@ -617,9 +617,10 @@ mod tests {
             bytes: der.as_bytes().to_vec(),
             identity: None,
         };
-        let loaded = PrivateKey::load_pkcs8_der(secret, AsymmetricAlgorithm::EdDsa, |_| None)
-            .await
-            .unwrap();
+        let loaded =
+            PrivateKey::from_secret(secret.mapped(Pkcs8Der::new(AsymmetricAlgorithm::EdDsa)))
+                .await
+                .unwrap();
 
         sign_and_verify(&loaded).await;
     }
@@ -635,9 +636,10 @@ mod tests {
             bytes: der.as_bytes().to_vec(),
             identity: None,
         };
-        let loaded = PrivateKey::load_pkcs8_der(secret, AsymmetricAlgorithm::Rs256, |_| None)
-            .await
-            .unwrap();
+        let loaded =
+            PrivateKey::from_secret(secret.mapped(Pkcs8Der::new(AsymmetricAlgorithm::Rs256)))
+                .await
+                .unwrap();
 
         sign_and_verify(&loaded).await;
     }
@@ -659,11 +661,10 @@ mod tests {
             bytes: der.as_bytes().to_vec(),
             identity: Some("cross-key".to_string()),
         };
-        let pkcs8_key = PrivateKey::load_pkcs8_der(secret, AsymmetricAlgorithm::Es256, |id| {
-            id.map(String::from)
-        })
-        .await
-        .unwrap();
+        let pkcs8_key =
+            PrivateKey::from_secret(secret.mapped(Pkcs8Der::new(AsymmetricAlgorithm::Es256)))
+                .await
+                .unwrap();
 
         // Round-trip through JWK
         let private_jwk = pkcs8_key.as_private_jwk();

@@ -80,10 +80,11 @@ let client_auth = JwtBearer::builder()
 # }
 ```
 
-In production the key is registered with the authorization server, so load
-it rather than generating: `PrivateKey::load_pkcs8_pem` / `load_pkcs8_der`
-(from a [`Secret`](crate::core::secrets::Secret) source) or
-`PrivateKey::from_jwk` in `huskarl_crypto_native`.
+In production the key is registered with the authorization server, so load it
+rather than generating: store it as a JWK and load with
+`PrivateKey::from_secret`, composing the `JwkJson` decoder onto a
+[`Secret`](crate::core::secrets::Secret) source (or convert a PKCS#8 key to a
+JWK once with `pkcs8_pem`/`pkcs8_der`) — all in `huskarl_crypto_native`.
 
 **Choose the audience deliberately.** Signature-based authentication is
 subject to audience-injection attacks
