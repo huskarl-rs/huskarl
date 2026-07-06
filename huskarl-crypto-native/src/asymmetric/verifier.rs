@@ -162,7 +162,7 @@ impl AsymmetricPublicKey {
     /// // In practice the JWK arrives from a JWKS endpoint; here we derive one
     /// // from a freshly generated key.
     /// let public_jwk = PrivateKey::generate(GenerateAlgorithm::Ed25519, Some("key-1".to_string()))?
-    ///     .as_private_jwk(Some("key-1"))
+    ///     .as_private_jwk()
     ///     .public_jwk();
     ///
     /// let verifier = AsymmetricPublicKey::from_jwk(public_jwk)
@@ -509,7 +509,7 @@ mod tests {
     async fn roundtrip_load_jwk(algorithm: GenerateAlgorithm) {
         let kid = "load-jwk-key".to_string();
         let original = PrivateKey::generate(algorithm, Some(kid.clone())).unwrap();
-        let private_jwk = original.as_private_jwk(Some(&kid));
+        let private_jwk = original.as_private_jwk();
 
         // Convert to Jwk (which is Serialize) and serialize to JSON
         let jwk: huskarl_core::jwk::Jwk = private_jwk.into();
@@ -666,7 +666,7 @@ mod tests {
         .unwrap();
 
         // Round-trip through JWK
-        let private_jwk = pkcs8_key.as_private_jwk(Some("cross-key"));
+        let private_jwk = pkcs8_key.as_private_jwk();
         let jwk_key = PrivateKey::from_jwk(private_jwk).unwrap();
 
         // Both keys should produce identical signatures (ES256 uses RFC 6979)
@@ -740,7 +740,7 @@ mod tests {
 
     async fn deterministic_signature_roundtrip(algorithm: GenerateAlgorithm) {
         let original = PrivateKey::generate(algorithm, Some("det-key".to_string())).unwrap();
-        let private_jwk = original.as_private_jwk(Some("det-key"));
+        let private_jwk = original.as_private_jwk();
         let restored = PrivateKey::from_jwk(private_jwk).unwrap();
 
         let data = b"deterministic signature test payload";
@@ -785,7 +785,7 @@ mod tests {
     async fn roundtrip_jwk(algorithm: GenerateAlgorithm) {
         let kid = "test-key-1".to_string();
         let original = PrivateKey::generate(algorithm, Some(kid.clone())).unwrap();
-        let private_jwk = original.as_private_jwk(Some(&kid));
+        let private_jwk = original.as_private_jwk();
 
         // Round-trip through from_jwk
         let restored = PrivateKey::from_jwk(private_jwk).unwrap();

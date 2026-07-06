@@ -24,10 +24,12 @@ use crate::jwk::serde_utils::{
     base64url, base64url_uint, option_base64url, option_base64url_uint, trim_leading_zeros,
 };
 
+mod decode;
 mod key;
 mod private;
 mod public;
 
+pub use decode::*;
 pub use key::*;
 pub use private::*;
 pub use public::*;

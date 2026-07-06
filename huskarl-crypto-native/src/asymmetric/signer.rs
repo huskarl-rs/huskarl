@@ -15,7 +15,7 @@ use huskarl_core::{
     },
     jwk,
     platform::MaybeSendBoxFuture,
-    secrets::{Secret, SecretBytes, SecretString},
+    secrets::{Secret, SecretBytes, SecretMap, SecretString},
 };
 use pkcs8::DecodePrivateKey;
 use rand::Rng;
@@ -81,9 +81,10 @@ pub enum AsymmetricJwkLoadError {
 #[derive(Debug)]
 struct PrivateKeyInner {
     signing_key: Key,
+    // `jwk` carries the canonical `kid` (baked in at construction); it is the
+    // single source of truth, so `key_id()` and the published JWK can't diverge.
     jwk: jwk::PublicJwk,
     thumbprint: String,
-    kid: Option<String>,
 }
 
 /// An asymmetric private key for JWS signing (ES256/384, RS/PS 256/384/512,
@@ -523,7 +524,7 @@ impl PrivateKey {
     /// let signer = PrivateKey::generate(GenerateAlgorithm::Ed25519, Some("key-1".to_string()))?;
     ///
     /// // Publish the public half in a JWKS; the private half stays local and signs.
-    /// let public_jwk = signer.as_private_jwk(Some("key-1")).public_jwk();
+    /// let public_jwk = signer.as_private_jwk().public_jwk();
     /// # Ok::<(), huskarl_core::error::Error>(())
     /// ```
     pub fn generate(key_type: GenerateAlgorithm, kid: Option<String>) -> Result<Self, Error> {
@@ -583,15 +584,18 @@ impl PrivateKey {
             }
         };
 
-        let jwk = signing_key.as_public_jwk(kid.as_deref());
+        // The thumbprint (RFC 7638) is over the key material only, so setting
+        // `kid` after computing it is immaterial — and taking `kid` by value
+        // here (rather than borrowing) keeps the signature `Option<String>`.
+        let mut jwk = signing_key.as_public_jwk(None);
         let thumbprint = jwk.thumbprint();
+        jwk.kid = kid;
 
         Ok(Self {
             inner: Arc::new(PrivateKeyInner {
                 signing_key,
                 jwk,
                 thumbprint,
-                kid,
             }),
         })
     }
@@ -611,67 +615,20 @@ impl PrivateKey {
         key_type: AsymmetricAlgorithm,
         key_id_from_secret_identity: F,
     ) -> Result<Self, AsymmetricKeyLoadError> {
-        fn build(
-            key_id: Option<&str>,
-            f: impl Fn() -> Result<Key, pkcs8::Error>,
-        ) -> Result<PrivateKey, pkcs8::Error> {
-            let signing_key = f()?;
-            let jwk = signing_key.as_public_jwk(key_id);
-            let thumbprint = jwk.thumbprint();
-
-            Ok(PrivateKey {
-                inner: Arc::new(PrivateKeyInner {
-                    signing_key,
-                    jwk,
-                    thumbprint,
-                    kid: key_id.map(std::string::ToString::to_string),
-                }),
-            })
-        }
-
         let secret_output = secret.get_secret_value().await.context(SecretSnafu)?;
         let bytes = secret_output.value.expose_secret();
         let key_id = key_id_from_secret_identity(secret_output.identity.as_deref());
+        let signing_key = key_from_pkcs8_der(bytes, key_type).context(KeyDecodeSnafu)?;
+        let jwk = signing_key.as_public_jwk(key_id.as_deref());
+        let thumbprint = jwk.thumbprint();
 
-        match key_type {
-            AsymmetricAlgorithm::Es256 => build(key_id.as_deref(), || {
-                p256::ecdsa::SigningKey::from_pkcs8_der(bytes).map(Key::Es256)
+        Ok(Self {
+            inner: Arc::new(PrivateKeyInner {
+                signing_key,
+                jwk,
+                thumbprint,
             }),
-            AsymmetricAlgorithm::Es384 => build(key_id.as_deref(), || {
-                p384::ecdsa::SigningKey::from_pkcs8_der(bytes).map(Key::Es384)
-            }),
-            AsymmetricAlgorithm::Rs256 => build(key_id.as_deref(), || {
-                rsa::pkcs1v15::SigningKey::from_pkcs8_der(bytes).map(Key::Rs256)
-            }),
-            AsymmetricAlgorithm::Rs384 => build(key_id.as_deref(), || {
-                rsa::pkcs1v15::SigningKey::from_pkcs8_der(bytes).map(Key::Rs384)
-            }),
-            AsymmetricAlgorithm::Rs512 => build(key_id.as_deref(), || {
-                rsa::pkcs1v15::SigningKey::from_pkcs8_der(bytes).map(Key::Rs512)
-            }),
-            AsymmetricAlgorithm::Ps256 => build(key_id.as_deref(), || {
-                rsa::pss::SigningKey::from_pkcs8_der(bytes).map(Key::Ps256)
-            }),
-            AsymmetricAlgorithm::Ps384 => build(key_id.as_deref(), || {
-                rsa::pss::SigningKey::from_pkcs8_der(bytes).map(Key::Ps384)
-            }),
-            AsymmetricAlgorithm::Ps512 => build(key_id.as_deref(), || {
-                rsa::pss::SigningKey::from_pkcs8_der(bytes).map(Key::Ps512)
-            }),
-            AsymmetricAlgorithm::EdDsa => build(key_id.as_deref(), || {
-                ed25519_dalek::SigningKey::from_pkcs8_der(bytes).map(|key| Key::Ed25519 {
-                    key,
-                    use_fully_specified_jws_algorithm: false,
-                })
-            }),
-            AsymmetricAlgorithm::Ed25519 => build(key_id.as_deref(), || {
-                ed25519_dalek::SigningKey::from_pkcs8_der(bytes).map(|key| Key::Ed25519 {
-                    key,
-                    use_fully_specified_jws_algorithm: true,
-                })
-            }),
-        }
-        .context(KeyDecodeSnafu)
+        })
     }
 
     /// Loads the private key from a PKCS#8 PEM secret.
@@ -702,7 +659,6 @@ impl PrivateKey {
                     signing_key,
                     jwk,
                     thumbprint,
-                    kid: key_id.map(std::string::ToString::to_string),
                 }),
             })
         }
@@ -755,10 +711,14 @@ impl PrivateKey {
     /// Returns the full private key in JWK format, including the private key
     /// material — the `d` component, plus `dp`, `dq`, `p`, `q`, `qi` for RSA.
     ///
+    /// The JWK carries this key's own `kid` (fixed at construction), so a public
+    /// JWK published from it and this key's signatures agree by construction.
     /// The returned value is sensitive and must be handled accordingly.
     #[must_use]
-    pub fn as_private_jwk(&self, kid: Option<&str>) -> jwk::PrivateJwk {
-        self.inner.signing_key.as_private_jwk(kid)
+    pub fn as_private_jwk(&self) -> jwk::PrivateJwk {
+        self.inner
+            .signing_key
+            .as_private_jwk(self.inner.jwk.kid.as_deref())
     }
 
     /// Constructs a private key from a [`jwk::PrivateJwk`].
@@ -787,7 +747,6 @@ impl PrivateKey {
                 signing_key,
                 jwk,
                 thumbprint,
-                kid,
             }),
         })
     }
@@ -817,6 +776,133 @@ impl PrivateKey {
             .ok_or(InvalidKeyMaterialSnafu.build())
             .context(asymmetric_jwk_load_error::JwkSnafu)?;
         Self::from_jwk(private_jwk).context(asymmetric_jwk_load_error::JwkSnafu)
+    }
+
+    /// Finalizes a private key from a secret that yields a [`jwk::PrivateJwk`].
+    ///
+    /// The single loading funnel: compose a decoder onto your secret to reach a
+    /// `Secret<Output = PrivateJwk>` — `secret.mapped(Pkcs8Der::new(alg))` for a
+    /// PKCS#8 secret, or a JWK-JSON decoder for a JWK secret — and this resolves
+    /// it into a usable signer on any backend.
+    ///
+    /// The key ID follows a clear precedence: an explicit `kid` in the JWK wins;
+    /// otherwise the secret's `identity` (e.g. a secret-manager version name)
+    /// fills it; otherwise there is none.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or decoded,
+    /// or if the resulting JWK is not a valid signing key.
+    pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
+        secret: S,
+    ) -> Result<Self, Error> {
+        let output = secret.get_secret_value().await?;
+        let mut private_jwk = output.value;
+        // Explicit JWK kid > secret identity > none.
+        if private_jwk.kid.is_none() {
+            private_jwk.kid = output.identity;
+        }
+        Self::from_jwk(private_jwk).map_err(|source| {
+            Error::new(ErrorKind::Config, source).with_context("loading private key from JWK")
+        })
+    }
+}
+
+/// Parses PKCS#8 DER bytes into a signing key of the given algorithm.
+///
+/// Backend-internal: shared by [`PrivateKey::load_pkcs8_der`] and the
+/// [`pkcs8_der`] conversion so the per-algorithm decoding lives in one place.
+fn key_from_pkcs8_der(der: &[u8], key_type: AsymmetricAlgorithm) -> Result<Key, pkcs8::Error> {
+    match key_type {
+        AsymmetricAlgorithm::Es256 => p256::ecdsa::SigningKey::from_pkcs8_der(der).map(Key::Es256),
+        AsymmetricAlgorithm::Es384 => p384::ecdsa::SigningKey::from_pkcs8_der(der).map(Key::Es384),
+        AsymmetricAlgorithm::Rs256 => {
+            rsa::pkcs1v15::SigningKey::from_pkcs8_der(der).map(Key::Rs256)
+        }
+        AsymmetricAlgorithm::Rs384 => {
+            rsa::pkcs1v15::SigningKey::from_pkcs8_der(der).map(Key::Rs384)
+        }
+        AsymmetricAlgorithm::Rs512 => {
+            rsa::pkcs1v15::SigningKey::from_pkcs8_der(der).map(Key::Rs512)
+        }
+        AsymmetricAlgorithm::Ps256 => rsa::pss::SigningKey::from_pkcs8_der(der).map(Key::Ps256),
+        AsymmetricAlgorithm::Ps384 => rsa::pss::SigningKey::from_pkcs8_der(der).map(Key::Ps384),
+        AsymmetricAlgorithm::Ps512 => rsa::pss::SigningKey::from_pkcs8_der(der).map(Key::Ps512),
+        AsymmetricAlgorithm::EdDsa => {
+            ed25519_dalek::SigningKey::from_pkcs8_der(der).map(|key| Key::Ed25519 {
+                key,
+                use_fully_specified_jws_algorithm: false,
+            })
+        }
+        AsymmetricAlgorithm::Ed25519 => {
+            ed25519_dalek::SigningKey::from_pkcs8_der(der).map(|key| Key::Ed25519 {
+                key,
+                use_fully_specified_jws_algorithm: true,
+            })
+        }
+    }
+}
+
+/// Converts a PKCS#8 DER private key into a complete [`jwk::PrivateJwk`],
+/// deriving the public half from the private material and stamping `kid`.
+///
+/// This is the one crypto-bearing step in loading a non-JWK key: the result is
+/// a self-describing JWK (`alg` from `algorithm`, public coordinates recomputed
+/// — so Ed25519 seeds and public-less EC keys work too) that
+/// [`PrivateKey::from_jwk`], on any backend, can finalize. PEM input is the same
+/// conversion behind a text unwrap; a JWK secret skips it entirely.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::Config`] if `der` is not a valid PKCS#8 DER key for
+/// `algorithm`.
+pub fn pkcs8_der(
+    der: &[u8],
+    algorithm: AsymmetricAlgorithm,
+    kid: Option<&str>,
+) -> Result<jwk::PrivateJwk, Error> {
+    let signing_key = key_from_pkcs8_der(der, algorithm).map_err(|source| {
+        Error::new(ErrorKind::Config, source).with_context("decoding PKCS#8 DER private key")
+    })?;
+    Ok(signing_key.as_private_jwk(kid))
+}
+
+/// A [`SecretMap`] that decodes a PKCS#8 DER secret into a [`jwk::PrivateJwk`].
+///
+/// Compose it onto any byte secret — `secret.mapped(Pkcs8Der::new(alg))` — to
+/// get a `Secret<Output = PrivateJwk>` for the JWK loading funnel. PKCS#8
+/// carries no key ID, so [`with_kid`](Self::with_kid) stamps one onto the
+/// produced JWK.
+#[derive(Debug, Clone)]
+pub struct Pkcs8Der {
+    algorithm: AsymmetricAlgorithm,
+    kid: Option<String>,
+}
+
+impl Pkcs8Der {
+    /// Decodes a PKCS#8 DER key of the given algorithm, with no key ID.
+    #[must_use]
+    pub fn new(algorithm: AsymmetricAlgorithm) -> Self {
+        Self {
+            algorithm,
+            kid: None,
+        }
+    }
+
+    /// Stamps `kid` onto the produced JWK.
+    #[must_use]
+    pub fn with_kid(mut self, kid: impl Into<String>) -> Self {
+        self.kid = Some(kid.into());
+        self
+    }
+}
+
+impl SecretMap for Pkcs8Der {
+    type In = SecretBytes;
+    type Out = jwk::PrivateJwk;
+
+    fn apply(&self, input: SecretBytes) -> Result<jwk::PrivateJwk, Error> {
+        pkcs8_der(input.expose_secret(), self.algorithm, self.kid.as_deref())
     }
 }
 
@@ -855,7 +941,7 @@ impl JwsSigner for PrivateKey {
     }
 
     fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.inner.kid.as_deref().map(Cow::Borrowed)
+        self.inner.jwk.kid.as_deref().map(Cow::Borrowed)
     }
 
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
@@ -919,6 +1005,117 @@ impl JwsSigner for PrivateKey {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn pkcs8_der_yields_a_complete_signing_jwk_with_the_requested_kid() {
+        use huskarl_core::crypto::signer::{AsymmetricJwsSigner as _, JwsSigner as _};
+        use p256::{ecdsa::signature::Verifier as _, elliptic_curve::Generate as _};
+        use pkcs8::EncodePrivateKey as _;
+
+        // A key we control, exported to PKCS#8 DER — the "raw" secret payload.
+        let source = p256::ecdsa::SigningKey::generate();
+        let der = source.to_pkcs8_der().unwrap();
+
+        // Convert via the new path and stamp a kid (PKCS#8 carries none).
+        let private_jwk =
+            pkcs8_der(der.as_bytes(), AsymmetricAlgorithm::Es256, Some("key-1")).unwrap();
+        assert_eq!(private_jwk.kid.as_deref(), Some("key-1"));
+        assert_eq!(private_jwk.algorithm.as_deref(), Some("ES256"));
+
+        // It finalizes into a usable signer whose published kid can't diverge
+        // from key_id() — single source of truth.
+        let key = PrivateKey::from_jwk(private_jwk).unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("key-1"));
+        assert_eq!(key.public_key_jwk().kid.as_deref(), Some("key-1"));
+
+        // Gold standard: a signature from the converted key verifies under the
+        // ORIGINAL key's public half, proving the DER round-tripped to the same
+        // private material.
+        let signature_bytes = key.sign(b"payload").await.unwrap();
+        let signature = p256::ecdsa::Signature::from_slice(&signature_bytes).unwrap();
+        let verifying_key = p256::ecdsa::VerifyingKey::from(&source);
+        verifying_key.verify(b"payload", &signature).unwrap();
+    }
+
+    #[test]
+    fn pkcs8_der_carries_the_fully_specified_ed25519_algorithm_into_the_jwk() {
+        use huskarl_core::crypto::signer::JwsSigner as _;
+        use pkcs8::EncodePrivateKey as _;
+        use rand::Rng as _;
+
+        let mut seed = [0u8; 32];
+        rand::rng().fill_bytes(&mut seed);
+        let source = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let der = source.to_pkcs8_der().unwrap();
+
+        // `Ed25519` selects the fully-specified JWS name; `EdDsa` would select
+        // the classic `EdDSA`. That choice is not separate state — it lands in
+        // the JWK's `alg` and round-trips back through the funnel.
+        let jwk = pkcs8_der(der.as_bytes(), AsymmetricAlgorithm::Ed25519, Some("ed")).unwrap();
+        assert_eq!(jwk.algorithm.as_deref(), Some("Ed25519"));
+
+        let key = PrivateKey::from_jwk(jwk).unwrap();
+        assert_eq!(key.jws_algorithm().as_ref(), "Ed25519");
+
+        // And the classic spelling survives the same trip.
+        let classic = pkcs8_der(der.as_bytes(), AsymmetricAlgorithm::EdDsa, None).unwrap();
+        assert_eq!(classic.algorithm.as_deref(), Some("EdDSA"));
+    }
+
+    #[tokio::test]
+    async fn from_secret_fills_kid_from_identity_then_prefers_an_explicit_jwk_kid() {
+        use huskarl_core::{
+            crypto::signer::JwsSigner as _,
+            secrets::{ProvidedSecret, Secret as _, SecretBytes, WithIdentity},
+        };
+        use p256::elliptic_curve::Generate as _;
+        use pkcs8::EncodePrivateKey as _;
+
+        let source = p256::ecdsa::SigningKey::generate();
+        let der = source.to_pkcs8_der().unwrap().as_bytes().to_vec();
+
+        // PKCS#8 carries no kid, so the secret's identity fills it.
+        let secret = WithIdentity::new(
+            ProvidedSecret::new(SecretBytes::new(der.clone())),
+            "version-42",
+        )
+        .mapped(Pkcs8Der::new(AsymmetricAlgorithm::Es256));
+        let key = PrivateKey::from_secret(secret).await.unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("version-42"));
+
+        // An explicit kid stamped onto the JWK wins over the identity.
+        let secret = WithIdentity::new(ProvidedSecret::new(SecretBytes::new(der)), "version-42")
+            .mapped(Pkcs8Der::new(AsymmetricAlgorithm::Es256).with_kid("explicit"));
+        let key = PrivateKey::from_secret(secret).await.unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("explicit"));
+    }
+
+    #[tokio::test]
+    async fn from_secret_loads_a_jwk_json_secret_with_no_alg_or_kid_arguments() {
+        use huskarl_core::{
+            crypto::signer::JwsSigner as _,
+            jwk::JwkJson,
+            secrets::{ProvidedSecret, Secret as _, SecretString},
+        };
+
+        // A self-describing JWK (its own alg + kid) stored as JSON. Loading
+        // needs no algorithm or key-id argument at all.
+        const PRIVATE_JWK: &str = r#"{
+            "kty": "EC", "crv": "P-256", "alg": "ES256", "kid": "in-the-jwk",
+            "x": "MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
+            "y": "4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM",
+            "d": "870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"
+        }"#;
+
+        let key = PrivateKey::from_secret(
+            ProvidedSecret::new(SecretString::new(PRIVATE_JWK)).mapped(JwkJson),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(key.key_id().as_deref(), Some("in-the-jwk"));
+        assert_eq!(key.jws_algorithm().as_ref(), "ES256");
+    }
+
     #[test]
     fn generate_rejects_small_rsa_modulus() {
         let error = PrivateKey::generate(
@@ -945,7 +1142,6 @@ mod tests {
                 signing_key,
                 jwk,
                 thumbprint,
-                kid: None,
             }),
         };
 
@@ -956,7 +1152,7 @@ mod tests {
     #[test]
     fn from_jwk_missing_algorithm() {
         let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
-        let mut private_jwk = key.as_private_jwk(None);
+        let mut private_jwk = key.as_private_jwk();
         private_jwk.algorithm = None;
 
         let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
@@ -969,7 +1165,7 @@ mod tests {
     #[test]
     fn from_jwk_key_type_mismatch() {
         let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
-        let mut private_jwk = key.as_private_jwk(None);
+        let mut private_jwk = key.as_private_jwk();
         private_jwk.algorithm = Some("RS256".to_string());
 
         let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
