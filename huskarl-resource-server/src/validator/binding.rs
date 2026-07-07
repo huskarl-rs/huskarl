@@ -274,12 +274,11 @@ pub enum DPoPBindingError {
     /// The request URI supplied to the validator is not absolute (e.g. an
     /// origin-form `/path` taken straight from a framework request object).
     ///
-    /// The `htu` check compares against the absolute external target URI as
-    /// the client addressed it (RFC 9449 §4.3), which only the deployment
-    /// knows once TLS-terminating or rewriting proxies are involved.
-    /// Reconstruct it from a configured public base URL or trusted forwarded
-    /// headers before calling the validator. This is an integration error on
-    /// the resource server, not a client fault.
+    /// An integration error on the resource server, not a client fault: the
+    /// `htu` check needs the absolute external target URI (RFC 9449 §4.3). See
+    /// the [`validate_request`](super::AccessTokenValidator::validate_request)
+    /// `uri` contract and [validating DPoP-bound
+    /// tokens](crate::_docs::guide::dpop) for reconstructing it behind a proxy.
     #[snafu(display(
         "Request URI '{uri}' is not absolute; reconstruct the external target URI \
          (scheme + authority + path) before calling the validator"

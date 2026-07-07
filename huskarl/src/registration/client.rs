@@ -70,12 +70,12 @@ impl ClientRegistration {
     /// # Errors
     ///
     /// Returns an error of kind
-    /// [`ErrorKind::RequestRejected`](crate::core::ErrorKind::RequestRejected)
+    /// [`ErrorKind::RequestRejected`]
     /// if the server rejects the request (the raw RFC 7591 §3.2.2 error code is
     /// preserved on the error),
-    /// [`ErrorKind::Config`](crate::core::ErrorKind::Config) for local request
+    /// [`ErrorKind::Config`] for local request
     /// problems (an invalid initial access token, a `jwks`/`jwks_uri` conflict),
-    /// and [`ErrorKind::Protocol`](crate::core::ErrorKind::Protocol) for a
+    /// and [`ErrorKind::Protocol`] for a
     /// malformed response; transport failures propagate with their own kind.
     pub async fn register(
         &self,
