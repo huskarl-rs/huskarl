@@ -22,10 +22,11 @@ use crate::{error::Error, platform::MaybeSendBoxFuture};
 ///
 /// # Example
 ///
-/// ```rust,ignore
-/// let client = MetricsHttpClient::builder()
-///     .inner(reqwest::Client::new())
-///     .build();
+/// ```rust,no_run
+/// # use huskarl_core::http::MetricsHttpClient;
+/// # let inner = (); // your HTTP backend, e.g. `huskarl_reqwest::ReqwestClient`
+/// let client = MetricsHttpClient::builder().inner(inner).build();
+/// # let _ = client;
 /// ```
 pub struct MetricsHttpClient<C> {
     inner: C,

@@ -80,7 +80,8 @@ the key can validate them:
 # use std::sync::Arc;
 # use huskarl_resource_server::core::crypto::cipher::StaticAeadCipher;
 # use huskarl_resource_server::core::jwk::{JwksSource, OctBytes};
-# use huskarl_resource_server::core::secrets::{EnvVarSecret, Secret as _, encodings::Base64Encoding};
+# use huskarl_resource_server::core::prelude::*;
+# use huskarl_resource_server::core::secrets::{EnvVarSecret, encodings::Base64Encoding};
 # use huskarl_resource_server::validator::{dpop_nonce::SealedTimestampNonce, rfc9068::Rfc9068Validator};
 # use huskarl_crypto_native::aead::AesGcmKey;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {

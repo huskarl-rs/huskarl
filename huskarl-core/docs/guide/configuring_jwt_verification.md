@@ -44,14 +44,14 @@ fetched from the endpoint on first use, the whole keyset is reloaded on the read
 path once older than the `ttl`, and an unknown-`kid` miss triggers one reload and
 retry.
 
-```rust,ignore
+```rust,no_run
 use std::sync::Arc;
 
 use huskarl_core::{jwk::JwksSource, platform::Duration};
-use huskarl_reqwest::ReqwestClient;
+# use huskarl_core::http::HttpClient;
 
-let http_client = ReqwestClient::builder().build().await?;
-
+# fn example(http_client: impl HttpClient + 'static) {
+// `http_client` is your HTTP backend — for example `huskarl_reqwest::ReqwestClient`.
 let verifier_factory = Arc::new(
     JwksSource::builder()
         .http_client(http_client)
@@ -62,16 +62,15 @@ let verifier_factory = Arc::new(
         .ttl(Duration::from_secs(5 * 60))
         .build(),
 );
-
-// Hand the factory to a client or resource-server builder, which calls it for you.
-// The platform is implicit here (default-jws-verifier-platform is on), so only the
-// factory is named:
-let validator = Rfc9068Validator::builder_from_metadata(&metadata)
-    .jws_verifier_factory(verifier_factory)
-    .audience("api://client")
-    .build()
-    .await?;
+# let _ = verifier_factory;
+# }
 ```
+
+Hand `verifier_factory` to a client or resource-server builder with
+`.jws_verifier_factory(verifier_factory)` — the builder calls the factory for
+you, passing it the discovered `jwks_uri` and the platform. The platform is
+implicit here (the `default-jws-verifier-platform` feature is on), so only the
+factory is named; each crate's setup guide shows the call in context.
 
 The `ttl` is the one knob you should set deliberately — it is a trust decision,
 not a performance one.

@@ -1,9 +1,11 @@
-//! Extended documentation: how-to guides and explanation.
+//! Extended documentation: a tutorial, how-to guides, and explanation.
 //!
 //! The API items in this crate are the **reference** documentation — they say
 //! what each type and method is. These pages cover the other
 //! [Diátaxis](https://diataxis.fr) quadrants:
 //!
+//! - **[Tutorial](tutorial)** — a start-to-finish lesson: run a local server
+//!   and obtain your first access token.
 //! - **[How-to guides](guide)** — task-oriented recipes for setting up each
 //!   grant, caching tokens, and making authenticated requests.
 //! - **[Explanation](explanation)** — understanding-oriented background on how
@@ -13,6 +15,13 @@
 //! on `cfg(docsrs)`, so its code blocks are real doctests that run only under
 //! `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly test --doc` (mirroring the
 //! docs.rs build environment); a plain `cargo test --doc` skips them.
+
+/// A start-to-finish lesson: obtain your first access token against a local
+/// authorization server.
+pub mod tutorial {
+    #[doc = include_str!("../docs/tutorial/first_token.md")]
+    pub mod first_token {}
+}
 
 /// Task-oriented recipes for setting up grants and making authenticated requests.
 pub mod guide {
