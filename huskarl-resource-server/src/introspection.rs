@@ -296,8 +296,9 @@ fn parse_optional_timestamp(
     value
         .map(|ts| {
             u64::try_from(ts)
-                .map(|ts| SystemTime::UNIX_EPOCH + Duration::from_secs(ts))
-                .map_err(|_| InvalidTimestampSnafu { field, value: ts }.build())
+                .ok()
+                .and_then(|ts| SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(ts)))
+                .ok_or_else(|| InvalidTimestampSnafu { field, value: ts }.build())
         })
         .transpose()
 }
@@ -392,6 +393,46 @@ where
     }
 
     deserializer.deserialize_option(OptionalStringOrVec)
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::*;
+
+    #[test]
+    fn absent_timestamp_is_none() {
+        assert!(parse_optional_timestamp("exp", None).unwrap().is_none());
+    }
+
+    #[test]
+    fn ordinary_timestamp_round_trips() {
+        let parsed = parse_optional_timestamp("iat", Some(1_700_000_000))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parsed
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            1_700_000_000
+        );
+    }
+
+    #[test]
+    fn negative_timestamp_is_rejected() {
+        assert!(matches!(
+            parse_optional_timestamp("exp", Some(-1)),
+            Err(IntrospectionCallError::InvalidTimestamp {
+                field: "exp",
+                value: -1
+            })
+        ));
+    }
+
+    #[test]
+    fn extreme_timestamp_never_panics() {
+        let _ = parse_optional_timestamp("exp", Some(i64::MAX));
+    }
 }
 
 /// Error returned by [`TokenIntrospection::introspect`].
