@@ -11,7 +11,9 @@ use snafu::{ensure, prelude::*};
 
 use crate::core::{
     crypto::verifier::JwsVerifier,
-    jwt::validator::{ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt, within_max_age},
+    jwt::validator::{
+        ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt, within_max_age_secs,
+    },
     platform::{Duration, SystemTime},
 };
 
@@ -208,7 +210,7 @@ pub struct IdTokenValidator {
     /// The maximum age of the token.
     max_age: Option<Duration>,
     /// The clock leeway to use when validating the token.
-    #[builder(default)]
+    #[builder(default = Duration::from_secs(10))]
     clock_leeway: Duration,
     /// If set, verifies the `azp` (authorized party) claim matches this value when present.
     expected_azp: Option<String>,
@@ -269,9 +271,8 @@ impl IdTokenValidator {
             );
 
             if let Some(auth_time) = validated_jwt.claims.auth_time {
-                let auth_at = SystemTime::UNIX_EPOCH + Duration::from_secs(auth_time);
                 ensure!(
-                    within_max_age(SystemTime::now(), auth_at, max_age, self.clock_leeway),
+                    within_max_age_secs(SystemTime::now(), auth_time, max_age, self.clock_leeway),
                     AuthTimeTooOldSnafu {
                         auth_time,
                         max_age_secs: max_age.as_secs(),
@@ -619,6 +620,23 @@ mod tests {
             .validate(&token, None)
             .await
             .expect("recent auth_time should validate");
+    }
+
+    #[tokio::test]
+    async fn auth_time_at_u64_max_does_not_panic() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(u64::MAX),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        validator(verifier, Some(Duration::from_mins(1)), None, None)
+            .validate(&token, None)
+            .await
+            .expect("overflowing auth_time must not panic");
     }
 
     #[tokio::test]
