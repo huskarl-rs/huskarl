@@ -170,6 +170,14 @@ pub trait JwsVerifierPlatform: std::fmt::Debug + MaybeSendSync {
         &self,
         jwk: PublicJwk,
     ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, CreateVerifierError>>;
+
+    /// The JWS `alg` values this platform can verify, independent of loaded keys.
+    ///
+    /// A static capability upper bound for the `*_signing_alg_values_supported`
+    /// metadata fields; operators usually advertise a policy subset. Scoped to
+    /// the JWS signing registry — JWE `alg`/`enc` are a separate concern and not
+    /// covered here.
+    fn supported_signature_algorithms(&self) -> &[&str];
 }
 
 /// Factory for constructing a [`JwsVerifier`] from a JWKS URI and a verifier platform.
