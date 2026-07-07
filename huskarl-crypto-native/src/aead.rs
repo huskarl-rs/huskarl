@@ -2,10 +2,11 @@
 //!
 //! [`AesGcmKey`] is the user-facing cipher implementing huskarl-core's
 //! [`AeadEncryptor`] and
-//! [`AeadDecryptor`]. Build one with
-//! [`AesGcmKey::from_secret`], which infers AES-128/192/256 from the key length
-//! (16/24/32 bytes) — e.g. to back the `DPoP` nonce store. Note the per-key
-//! encryption bound in [`AesGcmKey`]'s docs when sizing key rotation.
+//! [`AeadDecryptor`]. Build one from a JWK with [`AesGcmKey::from_jwk`], or
+//! from a secret store with [`AesGcmKey::from_secret`] — the AES-128/192/256
+//! variant follows from the key length (16/24/32 bytes) — e.g. to back the
+//! `DPoP` nonce store. Note the per-key encryption bound in [`AesGcmKey`]'s
+//! docs when sizing key rotation.
 
 use std::{array::TryFromSliceError, borrow::Cow, fmt};
 
@@ -16,8 +17,9 @@ use huskarl_core::{
         KeyMatchStrength,
         cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch, DecryptError},
     },
+    jwk,
     platform::MaybeSendBoxFuture,
-    secrets::{Secret, SecretBytes},
+    secrets::Secret,
 };
 use sha2::digest::array::Array;
 use snafu::prelude::*;
@@ -44,9 +46,9 @@ impl NativeKey {
 
 /// An AES-GCM AEAD cipher (`RustCrypto`), doing both encryption and decryption.
 ///
-/// Build one with [`from_secret`](Self::from_secret), which selects
-/// AES-128/192/256 from the key length. Implements huskarl-core's
-/// [`AeadEncryptor`] and
+/// Build one with [`from_jwk`](Self::from_jwk) or
+/// [`from_secret`](Self::from_secret); the AES-128/192/256 variant follows
+/// from the key length. Implements huskarl-core's [`AeadEncryptor`] and
 /// [`AeadDecryptor`].
 ///
 /// # Usage bound (NIST SP 800-38D §8.3)
@@ -78,26 +80,74 @@ impl fmt::Debug for AesGcmKey {
     }
 }
 
-/// Errors that can occur when loading a key.
-#[derive(Debug, Snafu)]
-pub enum AesGcmKeyLoadError {
-    /// There was an error fetching the secret.
-    Secret {
-        /// The underlying error.
-        source: Error,
-    },
-    /// The key material was not 16, 24, or 32 bytes (AES-128/192/256).
-    InvalidKeyLength,
-}
-
 impl AesGcmKey {
-    /// Load a key from a secret, inferring AES-128/192/256 from the key length
-    /// (16/24/32 bytes).
+    /// Constructs a cipher from a [`jwk::SymmetricJwk`].
+    ///
+    /// The AES-128/192/256 variant follows from the key length (16/24/32
+    /// bytes) — unlike an HMAC key, an AES key needs no `alg` to
+    /// self-identify. If the JWK does carry an `alg`, it must agree with the
+    /// length-selected variant (`A128GCM`/`A192GCM`/`A256GCM`). The `kid`
+    /// field, if present, is used as the key ID. Holding a
+    /// [`jwk::PrivateJwk`], convert with `try_into()` — the conversion
+    /// rejects asymmetric keys.
     ///
     /// # Errors
     ///
-    /// Fails if the secret cannot be fetched, or the key material is not 16, 24,
-    /// or 32 bytes.
+    /// Returns [`ErrorKind::Config`] if the key material is not 16, 24, or 32
+    /// bytes, or if the JWK's `alg` disagrees with the key length.
+    pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
+        // `new_from_slice` cannot fail inside the matched arms, but mapping the
+        // error (rather than unwrapping) keeps this panic-free.
+        let bad_len = |len: usize| {
+            Error::from(ErrorKind::Config).with_context(format!(
+                "AES-GCM key material must be 16, 24, or 32 bytes, got {len}"
+            ))
+        };
+        let len = jwk.key.k.len();
+        let inner = match len {
+            16 => NativeKey::Aes128(Box::new(
+                aes_gcm::Aes128Gcm::new_from_slice(&jwk.key.k).map_err(|_| bad_len(len))?,
+            )),
+            24 => NativeKey::Aes192(Box::new(
+                Aes192Gcm::new_from_slice(&jwk.key.k).map_err(|_| bad_len(len))?,
+            )),
+            32 => NativeKey::Aes256(Box::new(
+                aes_gcm::Aes256Gcm::new_from_slice(&jwk.key.k).map_err(|_| bad_len(len))?,
+            )),
+            len => return Err(bad_len(len)),
+        };
+
+        if let Some(alg) = jwk.algorithm.as_deref()
+            && alg != inner.enc_algorithm()
+        {
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "JWK algorithm {alg} disagrees with the key length, which selects {}",
+                inner.enc_algorithm()
+            )));
+        }
+
+        Ok(AesGcmKey {
+            inner,
+            kid: jwk.kid,
+        })
+    }
+
+    /// Finalizes a cipher from a secret that yields a [`jwk::PrivateJwk`].
+    ///
+    /// The single loading funnel, shared with the signing keys: compose a
+    /// decoder onto your secret to reach a `Secret<Output = PrivateJwk>` —
+    /// [`jwk::JwkJson`] for a JWK-JSON secret, or [`jwk::OctBytes`] for raw
+    /// key bytes — and this resolves it into a usable cipher.
+    ///
+    /// The key ID follows a clear precedence: an explicit `kid` in the JWK
+    /// wins; otherwise the secret's `identity` (e.g. a secret-manager version
+    /// name) fills it; otherwise there is none.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
+    /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
+    /// it is not a valid AES-GCM key.
     ///
     /// # Examples
     ///
@@ -105,43 +155,26 @@ impl AesGcmKey {
     /// environment variable holding base64 key material:
     ///
     /// ```
-    /// use huskarl_core::secrets::{EnvVarSecret, encodings::Base64Encoding};
+    /// use huskarl_core::{
+    ///     jwk::OctBytes,
+    ///     secrets::{EnvVarSecret, Secret as _, encodings::Base64Encoding},
+    /// };
     /// use huskarl_crypto_native::aead::AesGcmKey;
     ///
     /// # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    /// // 32 decoded bytes select AES-256-GCM (16 → AES-128, 24 → AES-192). The
-    /// // closure derives an optional `kid` from the secret's identity.
+    /// // 32 decoded bytes select AES-256-GCM (16 → AES-128, 24 → AES-192).
     /// let key_source = EnvVarSecret::new("AEAD_KEY", &Base64Encoding)?;
-    /// let cipher = AesGcmKey::from_secret(key_source, |_id| None).await?;
+    /// let cipher = AesGcmKey::from_secret(key_source.mapped(OctBytes::new("A256GCM"))).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn from_secret<S: Secret<Output = SecretBytes>>(
+    pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
         secret: S,
-        kid_from_identity: impl Fn(Option<&str>) -> Option<String>,
-    ) -> Result<Self, AesGcmKeyLoadError> {
-        let key_source = secret.get_secret_value().await.context(SecretSnafu)?;
-        let bytes = key_source.value.expose_secret();
-
-        let inner = match bytes.len() {
-            16 => NativeKey::Aes128(Box::new(
-                aes_gcm::Aes128Gcm::new_from_slice(bytes)
-                    .map_err(|_| InvalidKeyLengthSnafu.build())?,
-            )),
-            24 => NativeKey::Aes192(Box::new(
-                Aes192Gcm::new_from_slice(bytes).map_err(|_| InvalidKeyLengthSnafu.build())?,
-            )),
-            32 => NativeKey::Aes256(Box::new(
-                aes_gcm::Aes256Gcm::new_from_slice(bytes)
-                    .map_err(|_| InvalidKeyLengthSnafu.build())?,
-            )),
-            _ => return InvalidKeyLengthSnafu.fail(),
-        };
-
-        Ok(AesGcmKey {
-            inner,
-            kid: kid_from_identity(key_source.identity.as_deref()),
-        })
+    ) -> Result<Self, Error> {
+        let output = secret.get_secret_value().await?;
+        // Explicit JWK kid > secret identity > none.
+        let jwk = output.value.with_kid_fallback(output.identity);
+        Self::from_jwk(jwk.try_into()?)
     }
 }
 
@@ -296,16 +329,16 @@ mod tests {
         }
     }
 
-    async fn key_from(bytes: Vec<u8>, identity: Option<&str>) -> AesGcmKey {
-        AesGcmKey::from_secret(
-            TestSecret {
-                bytes,
-                identity: identity.map(str::to_owned),
-            },
-            |id| id.map(str::to_owned),
-        )
-        .await
-        .unwrap()
+    fn oct_jwk(bytes: Vec<u8>) -> jwk::SymmetricJwk {
+        jwk::SymmetricJwk::builder()
+            .key(jwk::OctKey::builder().k(bytes).build())
+            .build()
+    }
+
+    fn key_from(bytes: Vec<u8>, kid: Option<&str>) -> AesGcmKey {
+        let mut jwk = oct_jwk(bytes);
+        jwk.kid = kid.map(str::to_owned);
+        AesGcmKey::from_jwk(jwk).unwrap()
     }
 
     /// Decode an ASCII hex string into bytes (for the NIST known-answer test).
@@ -321,7 +354,7 @@ mod tests {
     }
 
     async fn roundtrip(key_bytes: Vec<u8>, expected_enc: &str) {
-        let key = key_from(key_bytes, None).await;
+        let key = key_from(key_bytes, None);
         assert_eq!(key.enc_algorithm().as_ref(), expected_enc);
 
         let pt = b"the quick brown fox jumps over the lazy dog";
@@ -355,29 +388,59 @@ mod tests {
         roundtrip(vec![3u8; 32], "A256GCM").await;
     }
 
-    #[tokio::test]
-    async fn invalid_key_length_rejected() {
+    #[test]
+    fn invalid_key_length_rejected() {
         for len in [0usize, 15, 17, 31, 33, 64] {
-            let err = AesGcmKey::from_secret(
-                TestSecret {
-                    bytes: vec![0u8; len],
-                    identity: None,
-                },
-                |_| None,
-            )
-            .await
-            .unwrap_err();
-            assert!(
-                matches!(err, AesGcmKeyLoadError::InvalidKeyLength),
+            let err = AesGcmKey::from_jwk(oct_jwk(vec![0u8; len])).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                ErrorKind::Config,
                 "{len}-byte key must be rejected"
             );
         }
     }
 
+    #[test]
+    fn alg_must_agree_with_key_length() {
+        let mut jwk = oct_jwk(vec![0u8; 32]);
+        jwk.algorithm = Some("A128GCM".into());
+        let err = AesGcmKey::from_jwk(jwk).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
+
+        // A matching alg — and no alg at all — are both fine.
+        let mut jwk = oct_jwk(vec![0u8; 32]);
+        jwk.algorithm = Some("A256GCM".into());
+        assert!(AesGcmKey::from_jwk(jwk).is_ok());
+    }
+
     #[tokio::test]
     async fn kid_derived_from_identity() {
-        let key = key_from(vec![4u8; 32], Some("cookie-key-2026")).await;
+        // The funnel's fallback: no kid in the JWK, so the secret source's
+        // identity fills it.
+        let key = AesGcmKey::from_secret(
+            TestSecret {
+                bytes: vec![4u8; 32],
+                identity: Some("cookie-key-2026".into()),
+            }
+            .mapped(huskarl_core::jwk::OctBytes::new("A256GCM")),
+        )
+        .await
+        .unwrap();
         assert_eq!(key.key_id().as_deref(), Some("cookie-key-2026"));
+    }
+
+    #[tokio::test]
+    async fn jwk_kid_beats_identity() {
+        let key = AesGcmKey::from_secret(
+            TestSecret {
+                bytes: vec![4u8; 32],
+                identity: Some("version-7".into()),
+            }
+            .mapped(huskarl_core::jwk::OctBytes::new("A256GCM").with_kid("explicit")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(key.key_id().as_deref(), Some("explicit"));
     }
 
     /// Mirror of the webcrypto backend's `kid_drives_cipher_match`: both
@@ -389,7 +452,7 @@ mod tests {
     async fn kid_drives_cipher_match() {
         use huskarl_core::crypto::KeyMatchStrength;
 
-        let key = key_from(vec![1u8; 32], Some("v1")).await;
+        let key = key_from(vec![1u8; 32], Some("v1"));
 
         assert!(matches!(
             key.cipher_match(&CipherMatch::builder().kid("v1").build()),
@@ -413,7 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_aad_fails_to_open() {
-        let key = key_from(vec![5u8; 32], None).await;
+        let key = key_from(vec![5u8; 32], None);
         let out = key.encrypt(b"payload", b"session").await.unwrap();
         let res = key
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"other")
@@ -423,7 +486,7 @@ mod tests {
 
     #[tokio::test]
     async fn tampered_ciphertext_fails_to_open() {
-        let key = key_from(vec![6u8; 32], None).await;
+        let key = key_from(vec![6u8; 32], None);
         let out = key.encrypt(b"payload", b"session").await.unwrap();
         let mut ct = out.ciphertext.clone();
         ct[0] ^= 0x01;
@@ -438,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_length_nonce_and_tag_rejected() {
-        let key = key_from(vec![7u8; 32], None).await;
+        let key = key_from(vec![7u8; 32], None);
         let out = key.encrypt(b"payload", b"session").await.unwrap();
 
         // Nonce too short (11 bytes instead of 12).
@@ -483,7 +546,7 @@ mod tests {
              1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b39",
         );
 
-        let key = key_from(key_bytes, None).await;
+        let key = key_from(key_bytes, None);
         let pt = key
             .decrypt(None, &nonce, &ciphertext, &tag, &aad)
             .await

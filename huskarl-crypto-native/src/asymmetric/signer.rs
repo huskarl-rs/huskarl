@@ -161,7 +161,7 @@ impl Key {
     // The `expect`s below are infallible by construction: a freshly derived
     // private key always carries its components.
     #[allow(clippy::expect_used)]
-    pub fn as_private_jwk(&self, kid: Option<&str>) -> jwk::PrivateJwk {
+    pub fn as_private_jwk(&self, kid: Option<&str>) -> jwk::AsymmetricPrivateJwk {
         use p256::elliptic_curve::PrimeField as _;
 
         match self {
@@ -304,8 +304,8 @@ fn build_private_jwk(
     key: impl Into<jwk::PrivateKey>,
     alg: &str,
     kid: Option<&str>,
-) -> jwk::PrivateJwk {
-    jwk::PrivateJwk::builder()
+) -> jwk::AsymmetricPrivateJwk {
+    jwk::AsymmetricPrivateJwk::builder()
         .key(key)
         .key_use(jwk::KeyUse::Sign)
         .algorithm(alg)
@@ -319,7 +319,7 @@ fn convert_rsa_to_private_jwk(
     private_key: impl AsRef<rsa::RsaPrivateKey>,
     kid: Option<&str>,
     alg: &str,
-) -> jwk::PrivateJwk {
+) -> jwk::AsymmetricPrivateJwk {
     use rsa::traits::{PrivateKeyParts as _, PublicKeyParts as _};
     let key = private_key.as_ref();
     let public_key = key.to_public_key();
@@ -557,22 +557,24 @@ impl PrivateKey {
     /// JWK published from it and this key's signatures agree by construction.
     /// The returned value is sensitive and must be handled accordingly.
     #[must_use]
-    pub fn as_private_jwk(&self) -> jwk::PrivateJwk {
+    pub fn as_private_jwk(&self) -> jwk::AsymmetricPrivateJwk {
         self.inner
             .signing_key
             .as_private_jwk(self.inner.jwk.kid.as_deref())
     }
 
-    /// Constructs a private key from a [`jwk::PrivateJwk`].
+    /// Constructs a private key from a [`jwk::AsymmetricPrivateJwk`].
     ///
     /// The JWK must have an `alg` field identifying the signing algorithm.
-    /// The `kid` field, if present, is used as the key ID.
+    /// The `kid` field, if present, is used as the key ID. Holding a
+    /// [`jwk::PrivateJwk`], convert with `try_into()` — the conversion rejects
+    /// symmetric keys.
     ///
     /// # Errors
     ///
     /// Returns [`ErrorKind::Config`] if the JWK is missing its algorithm, uses an
     /// unsupported one, or contains invalid key material.
-    pub fn from_jwk(private_jwk: jwk::PrivateJwk) -> Result<Self, Error> {
+    pub fn from_jwk(private_jwk: jwk::AsymmetricPrivateJwk) -> Result<Self, Error> {
         let alg = private_jwk.algorithm.as_deref().ok_or_else(|| {
             Error::from(ErrorKind::Config)
                 .with_context("JWK is missing the alg field identifying the signing algorithm")
@@ -595,8 +597,8 @@ impl PrivateKey {
     ///
     /// The single loading funnel: compose a decoder onto your secret to reach a
     /// `Secret<Output = PrivateJwk>` — `secret.mapped(Pkcs8Der::new(alg))` for a
-    /// PKCS#8 secret, or a JWK-JSON decoder for a JWK secret — and this resolves
-    /// it into a usable signer on any backend.
+    /// PKCS#8 secret, or [`jwk::JwkJson`] for the blessed path — and this
+    /// resolves it into a usable signer on any backend.
     ///
     /// The key ID follows a clear precedence: an explicit `kid` in the JWK wins;
     /// otherwise the secret's `identity` (e.g. a secret-manager version name)
@@ -605,17 +607,15 @@ impl PrivateKey {
     /// # Errors
     ///
     /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or decoded,
-    /// or if the resulting JWK is not a valid signing key.
+    /// if the JWK is symmetric (`oct`) rather than an asymmetric private key,
+    /// or if it is not a valid signing key.
     pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
         secret: S,
     ) -> Result<Self, Error> {
         let output = secret.get_secret_value().await?;
-        let mut private_jwk = output.value;
         // Explicit JWK kid > secret identity > none.
-        if private_jwk.kid.is_none() {
-            private_jwk.kid = output.identity;
-        }
-        Self::from_jwk(private_jwk)
+        let private_jwk = output.value.with_kid_fallback(output.identity);
+        Self::from_jwk(private_jwk.try_into()?)
     }
 }
 
@@ -654,8 +654,9 @@ fn key_from_pkcs8_der(der: &[u8], key_type: AsymmetricAlgorithm) -> Result<Key, 
     }
 }
 
-/// Converts a PKCS#8 DER private key into a complete [`jwk::PrivateJwk`],
-/// deriving the public half from the private material and stamping `kid`.
+/// Converts a PKCS#8 DER private key into a complete
+/// [`jwk::AsymmetricPrivateJwk`], deriving the public half from the private
+/// material and stamping `kid`.
 ///
 /// This is the one crypto-bearing step in loading a non-JWK key: the result is
 /// a self-describing JWK (`alg` from `algorithm`, public coordinates recomputed
@@ -671,7 +672,7 @@ pub fn pkcs8_der(
     der: &[u8],
     algorithm: AsymmetricAlgorithm,
     kid: Option<&str>,
-) -> Result<jwk::PrivateJwk, Error> {
+) -> Result<jwk::AsymmetricPrivateJwk, Error> {
     let signing_key = key_from_pkcs8_der(der, algorithm).map_err(|source| {
         Error::new(ErrorKind::Config, source).with_context("decoding PKCS#8 DER private key")
     })?;
@@ -713,11 +714,12 @@ impl SecretMap for Pkcs8Der {
     type Out = jwk::PrivateJwk;
 
     fn apply(&self, input: SecretBytes) -> Result<jwk::PrivateJwk, Error> {
-        pkcs8_der(input.expose_secret(), self.algorithm, self.kid.as_deref())
+        pkcs8_der(input.expose_secret(), self.algorithm, self.kid.as_deref()).map(Into::into)
     }
 }
 
-/// Converts a PKCS#8 PEM private key into a complete [`jwk::PrivateJwk`].
+/// Converts a PKCS#8 PEM private key into a complete
+/// [`jwk::AsymmetricPrivateJwk`].
 ///
 /// PEM is just armored DER, so this unwraps the text envelope and defers to
 /// [`pkcs8_der`] — identical public-key derivation, `kid` stamping, and error
@@ -731,7 +733,7 @@ pub fn pkcs8_pem(
     pem: &str,
     algorithm: AsymmetricAlgorithm,
     kid: Option<&str>,
-) -> Result<jwk::PrivateJwk, Error> {
+) -> Result<jwk::AsymmetricPrivateJwk, Error> {
     let (_label, document) = pkcs8::SecretDocument::from_pem(pem).map_err(|source| {
         Error::new(ErrorKind::Config, source).with_context("decoding PKCS#8 PEM private key")
     })?;
@@ -773,7 +775,7 @@ impl SecretMap for Pkcs8Pem {
     type Out = jwk::PrivateJwk;
 
     fn apply(&self, input: SecretString) -> Result<jwk::PrivateJwk, Error> {
-        pkcs8_pem(input.expose_secret(), self.algorithm, self.kid.as_deref())
+        pkcs8_pem(input.expose_secret(), self.algorithm, self.kid.as_deref()).map(Into::into)
     }
 }
 

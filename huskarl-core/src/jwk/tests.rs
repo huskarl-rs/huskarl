@@ -485,11 +485,19 @@ fn test_other_prime_info_debug_hides_secrets() {
 
 // --- PrivateJwk tests ---
 
+/// Unwraps the Asymmetric variant, panicking with context otherwise.
+fn expect_asymmetric(jwk: PrivateJwk) -> AsymmetricPrivateJwk {
+    match jwk {
+        PrivateJwk::Asymmetric(jwk) => *jwk,
+        PrivateJwk::Symmetric(_) => panic!("expected an asymmetric private JWK"),
+    }
+}
+
 #[test]
 fn test_private_jwk_from_ec() {
     let json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE","use":"enc","kid":"1"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let private_jwk = jwk.private_jwk().unwrap();
+    let private_jwk = expect_asymmetric(jwk.private_jwk().unwrap());
 
     assert!(matches!(&private_jwk.key, PrivateKey::Ec(_)));
     assert_eq!(private_jwk.key_use, Some(KeyUse::Encrypt));
@@ -500,7 +508,7 @@ fn test_private_jwk_from_ec() {
 fn test_private_jwk_from_rsa() {
     let json = r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYjqxnf7vQoSmcnVQ","alg":"RS256","kid":"rsa-1"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let private_jwk = jwk.private_jwk().unwrap();
+    let private_jwk = expect_asymmetric(jwk.private_jwk().unwrap());
 
     assert!(matches!(&private_jwk.key, PrivateKey::Rsa(_)));
     assert_eq!(private_jwk.algorithm.as_deref(), Some("RS256"));
@@ -511,7 +519,7 @@ fn test_private_jwk_from_rsa() {
 fn test_private_jwk_from_okp() {
     let json = r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let private_jwk = jwk.private_jwk().unwrap();
+    let private_jwk = expect_asymmetric(jwk.private_jwk().unwrap());
 
     assert!(matches!(&private_jwk.key, PrivateKey::Okp(_)));
 }
@@ -525,8 +533,22 @@ fn test_private_jwk_none_for_public_only() {
 }
 
 #[test]
-fn test_private_jwk_none_for_oct() {
-    let json = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg"}"#;
+fn test_private_jwk_symmetric_for_oct() {
+    // An oct key is nothing but secret material, so it yields the
+    // Symmetric variant with its metadata carried over.
+    let json = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg","alg":"A128KW","kid":"oct-1"}"#;
+    let jwk: Jwk = serde_json::from_str(json).unwrap();
+    let PrivateJwk::Symmetric(sjwk) = jwk.private_jwk().unwrap() else {
+        panic!("an oct key must yield the Symmetric variant");
+    };
+    assert_eq!(sjwk.key.k.len(), 16);
+    assert_eq!(sjwk.algorithm.as_deref(), Some("A128KW"));
+    assert_eq!(sjwk.kid.as_deref(), Some("oct-1"));
+}
+
+#[test]
+fn test_private_jwk_none_for_unknown() {
+    let json = r#"{"kty":"XYZ","something":"else"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
     assert!(jwk.private_jwk().is_none());
 }
@@ -535,7 +557,7 @@ fn test_private_jwk_none_for_oct() {
 fn test_private_jwk_to_public_jwk() {
     let json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE","use":"enc","kid":"1"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let private_jwk = jwk.private_jwk().unwrap();
+    let private_jwk = expect_asymmetric(jwk.private_jwk().unwrap());
     let public_jwk: PublicJwk = private_jwk.clone().into();
 
     // Metadata preserved
@@ -552,7 +574,17 @@ fn test_private_jwk_to_jwk_roundtrip() {
     let jwk: Jwk = serde_json::from_str(json).unwrap();
     let private_jwk = jwk.private_jwk().unwrap();
 
-    // Convert back to Jwk
+    // Convert back to Jwk (via the enum: variant choice must not lose data)
+    let jwk_back: Jwk = private_jwk.into();
+    assert_eq!(jwk, jwk_back);
+}
+
+#[test]
+fn test_symmetric_jwk_to_jwk_roundtrip() {
+    let json = r#"{"kty":"oct","k":"GawgguFyGrWKav7AX4VKUg","alg":"HS256","kid":"oct-1"}"#;
+    let jwk: Jwk = serde_json::from_str(json).unwrap();
+    let private_jwk = jwk.private_jwk().unwrap();
+
     let jwk_back: Jwk = private_jwk.into();
     assert_eq!(jwk, jwk_back);
 }
@@ -561,14 +593,14 @@ fn test_private_jwk_to_jwk_roundtrip() {
 fn test_private_jwk_thumbprint_matches_public() {
     let json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
-    let private_jwk = jwk.private_jwk().unwrap();
+    let private_jwk = expect_asymmetric(jwk.private_jwk().unwrap());
     let public_jwk = jwk.public_jwk().unwrap();
 
     assert_eq!(private_jwk.thumbprint(), public_jwk.thumbprint());
 }
 
 #[test]
-fn test_private_jwk_builder() {
+fn test_asymmetric_private_jwk_builder() {
     let ec_key = EcPrivateKey {
         public: EcPublicKey::builder()
             .crv("P-256")
@@ -577,7 +609,7 @@ fn test_private_jwk_builder() {
             .build(),
         d: vec![7, 8, 9],
     };
-    let pjwk = PrivateJwk::builder()
+    let pjwk = AsymmetricPrivateJwk::builder()
         .key(ec_key)
         .kid("test-key")
         .algorithm("ES256")
@@ -586,4 +618,35 @@ fn test_private_jwk_builder() {
     assert_eq!(pjwk.kid.as_deref(), Some("test-key"));
     assert_eq!(pjwk.algorithm.as_deref(), Some("ES256"));
     assert!(matches!(&pjwk.key, PrivateKey::Ec(_)));
+}
+
+#[test]
+fn test_private_jwk_kid_fallback() {
+    let sjwk = SymmetricJwk::builder()
+        .key(OctKey::builder().k(vec![0u8; 32]).build())
+        .algorithm("HS256")
+        .build();
+    let pjwk = PrivateJwk::Symmetric(sjwk);
+    assert_eq!(pjwk.kid(), None);
+
+    // An absent kid takes the fallback...
+    let filled = pjwk.with_kid_fallback(Some("from-identity".into()));
+    assert_eq!(filled.kid(), Some("from-identity"));
+
+    // ...but an explicit JWK kid wins over it.
+    let kept = filled.with_kid_fallback(Some("other".into()));
+    assert_eq!(kept.kid(), Some("from-identity"));
+}
+
+#[test]
+fn test_private_jwk_try_from_wrong_variant() {
+    let sjwk = SymmetricJwk::builder()
+        .key(OctKey::builder().k(vec![0u8; 32]).build())
+        .build();
+    let pjwk = PrivateJwk::Symmetric(sjwk);
+    let err = AsymmetricPrivateJwk::try_from(pjwk.clone()).unwrap_err();
+    assert_eq!(err.kind(), crate::error::ErrorKind::Config);
+
+    // The matching variant converts cleanly.
+    assert!(SymmetricJwk::try_from(pjwk).is_ok());
 }
