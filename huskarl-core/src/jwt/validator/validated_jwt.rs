@@ -10,20 +10,21 @@ use crate::{jwt::ConfirmationClaim, platform::SystemTime};
 /// Produced only by the validator. Transform the custom claims payload with
 /// [`map_claims`](Self::map_claims) or [`try_map_claims`](Self::try_map_claims).
 #[non_exhaustive]
+#[allow(clippy::should_implement_trait)] // `sub` is the JWT claim name, not arithmetic subtraction
 #[derive(Debug, Builder)]
 pub struct ValidatedJwt<Claims> {
-    /// The issuer of the JWT, if present.
-    pub issuer: Option<String>,
-    /// The subject of the JWT, if present.
-    pub subject: Option<String>,
-    /// The audience of the JWT, if present.
-    pub audience: Vec<String>,
+    /// The `iss` (issuer) claim of the JWT, if present.
+    pub iss: Option<String>,
+    /// The `sub` (subject) claim of the JWT, if present.
+    pub sub: Option<String>,
+    /// The `aud` (audience) claim of the JWT; empty if absent.
+    pub aud: Vec<String>,
     /// The JWT ID, if present.
     pub jti: Option<String>,
-    /// The issued-at timestamp of the JWT, if present.
-    pub issued_at: Option<SystemTime>,
-    /// The expiration timestamp of the JWT, if present.
-    pub expiration: Option<SystemTime>,
+    /// The `iat` (issued-at) timestamp of the JWT, if present.
+    pub iat: Option<SystemTime>,
+    /// The `exp` (expiration) timestamp of the JWT, if present.
+    pub exp: Option<SystemTime>,
     /// The key confirmation claim (`cnf`), if present; see [`ConfirmationClaim`]
     /// for what it binds the token to.
     pub cnf: Option<ConfirmationClaim>,
@@ -38,12 +39,12 @@ impl<Claims> ValidatedJwt<Claims> {
         F: FnOnce(Claims) -> C1,
     {
         ValidatedJwt {
-            issuer: self.issuer,
-            subject: self.subject,
-            audience: self.audience,
+            iss: self.iss,
+            sub: self.sub,
+            aud: self.aud,
             jti: self.jti,
-            issued_at: self.issued_at,
-            expiration: self.expiration,
+            iat: self.iat,
+            exp: self.exp,
             cnf: self.cnf,
             claims: f(self.claims),
         }
@@ -59,12 +60,12 @@ impl<Claims> ValidatedJwt<Claims> {
         F: FnOnce(Claims) -> Result<C1, E>,
     {
         Ok(ValidatedJwt {
-            issuer: self.issuer,
-            subject: self.subject,
-            audience: self.audience,
+            iss: self.iss,
+            sub: self.sub,
+            aud: self.aud,
             jti: self.jti,
-            issued_at: self.issued_at,
-            expiration: self.expiration,
+            iat: self.iat,
+            exp: self.exp,
             cnf: self.cnf,
             claims: f(self.claims)?,
         })

@@ -13,8 +13,8 @@ use huskarl_crypto_webcrypto::asymmetric::signer::{GenerateAlgorithm, PrivateKey
 let key = PrivateKey::generate(GenerateAlgorithm::Es256, Some("key-1".to_string())).await?;
 
 let jwt = Jwt::builder()
-    .issuer("https://issuer.example")
-    .subject("user-123")
+    .iss("https://issuer.example")
+    .sub("user-123")
     .issued_now_expires_after(std::time::Duration::from_secs(300))
     .claims(serde_json::json!({ "scope": "read write" }))
     .build();

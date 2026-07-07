@@ -146,12 +146,12 @@ impl DPoPProofValidator {
             jti: validated.jti,
             thumbprint: Some(thumbprint),
             alg,
-            iat: validated.issued_at.and_then(|t| {
+            iat: validated.iat.and_then(|t| {
                 t.duration_since(SystemTime::UNIX_EPOCH)
                     .ok()
                     .map(|d| d.as_secs())
             }),
-            exp: validated.expiration.and_then(|t| {
+            exp: validated.exp.and_then(|t| {
                 t.duration_since(SystemTime::UNIX_EPOCH)
                     .ok()
                     .map(|d| d.as_secs())

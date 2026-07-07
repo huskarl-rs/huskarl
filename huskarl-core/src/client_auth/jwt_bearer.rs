@@ -156,8 +156,8 @@ impl ClientAuthentication for JwtBearer {
                     "JWT"
                 })
                 .audience(audience)
-                .issuer(ctx.client_id)
-                .subject(self.subject.as_deref().unwrap_or(ctx.client_id))
+                .iss(ctx.client_id)
+                .sub(self.subject.as_deref().unwrap_or(ctx.client_id))
                 .issued_now_expires_after(self.expires_after)
                 .claims(())
                 .build();

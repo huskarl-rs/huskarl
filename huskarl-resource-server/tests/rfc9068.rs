@@ -76,11 +76,11 @@ async fn test_rfc9068_validator() {
 
     let jwt = Jwt::builder()
         .typ("at+jwt")
-        .issuer(issuer.clone())
+        .iss(issuer.clone())
         .audience("api://resource")
-        .subject("user-123")
+        .sub("user-123")
         .issued_now()
-        .expiration(
+        .exp(
             huskarl_resource_server::core::platform::SystemTime::now()
                 + std::time::Duration::from_secs(3600),
         )
@@ -112,9 +112,9 @@ async fn test_rfc9068_validator() {
         .outcome
         .expect("Token should be valid")
         .expect("Token should be present");
-    assert_eq!(validated.issuer.as_deref().unwrap(), issuer);
-    assert_eq!(validated.subject.as_deref().unwrap(), "user-123");
-    assert_eq!(validated.audience, vec!["api://resource".to_string()]);
+    assert_eq!(validated.iss.as_deref().unwrap(), issuer);
+    assert_eq!(validated.sub.as_deref().unwrap(), "user-123");
+    assert_eq!(validated.aud, vec!["api://resource".to_string()]);
     assert_eq!(validated.claims.client_id, "client-789");
 
     jwks_mock.assert();

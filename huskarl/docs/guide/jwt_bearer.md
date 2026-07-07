@@ -146,8 +146,8 @@ use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 let key = PrivateKey::generate(GenerateAlgorithm::Es256, None)?;
 
 let jwt = Jwt::builder()
-    .issuer("https://issuer.example.com") // who vouches for the assertion (iss)
-    .subject("user@example.com") // the principal the token is for (sub)
+    .iss("https://issuer.example.com") // who vouches for the assertion
+    .sub("user@example.com") // the principal the token is for
     .audience("https://my-issuer") // the authorization server (aud)
     .issued_now_expires_after(Duration::from_secs(300))
     .claims(())

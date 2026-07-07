@@ -21,7 +21,7 @@ async fn validator_for(
                 .parse::<EndpointUrl>()
                 .unwrap(),
         )
-        .audience(audience)
+        .aud(audience)
         .client_auth(NoAuth)
         .http_client(http_client)
         .build()
@@ -79,8 +79,8 @@ async fn matching_audience_is_accepted() {
         .await
         .expect("token should validate")
         .expect("token should be present");
-    assert_eq!(validated.audience, vec!["api://rs1".to_string()]);
-    assert_eq!(validated.subject.as_deref(), Some("user-123"));
+    assert_eq!(validated.aud, vec!["api://rs1".to_string()]);
+    assert_eq!(validated.sub.as_deref(), Some("user-123"));
     mock.assert();
 }
 
@@ -113,7 +113,7 @@ async fn authorization_details_flow_into_typed_claims() {
                 .parse::<EndpointUrl>()
                 .unwrap(),
         )
-        .audience(ClaimCheck::required_value("api://rs1"))
+        .aud(ClaimCheck::required_value("api://rs1"))
         .client_auth(NoAuth)
         .http_client(http_client)
         .build()
@@ -208,5 +208,5 @@ async fn no_check_accepts_missing_audience() {
         .await
         .expect("token should validate")
         .expect("token should be present");
-    assert_eq!(validated.subject.as_deref(), Some("user-123"));
+    assert_eq!(validated.sub.as_deref(), Some("user-123"));
 }

@@ -101,18 +101,18 @@ pub struct ValidationResult<C, E> {
 /// Returned by [`super::AccessTokenValidator::validate_request`].
 #[derive(Debug)]
 pub struct ValidatedRequest<Claims> {
-    /// The issuer of the token, if present.
-    pub issuer: Option<String>,
-    /// The subject of the token, if present.
-    pub subject: Option<String>,
-    /// The audience of the token.
-    pub audience: Vec<String>,
+    /// The `iss` (issuer) claim of the token, if present.
+    pub iss: Option<String>,
+    /// The `sub` (subject) claim of the token, if present.
+    pub sub: Option<String>,
+    /// The `aud` (audience) claim of the token; empty if absent.
+    pub aud: Vec<String>,
     /// The token ID, if present.
     pub jti: Option<String>,
-    /// The issued-at timestamp, if present.
-    pub issued_at: Option<SystemTime>,
-    /// The expiration timestamp, if present.
-    pub expiration: Option<SystemTime>,
+    /// The `iat` (issued-at) timestamp, if present.
+    pub iat: Option<SystemTime>,
+    /// The `exp` (expiration) timestamp, if present.
+    pub exp: Option<SystemTime>,
     /// The key confirmation claim (`cnf`, RFC 7800), if present.
     ///
     /// Binds the token to a `DPoP` key (`jkt`, RFC 9449) or mTLS certificate
@@ -135,12 +135,12 @@ pub struct ValidatedRequest<Claims> {
 impl<C> From<ValidatedJwt<C>> for ValidatedRequest<C> {
     fn from(jwt: ValidatedJwt<C>) -> Self {
         Self {
-            issuer: jwt.issuer,
-            subject: jwt.subject,
-            audience: jwt.audience,
+            iss: jwt.iss,
+            sub: jwt.sub,
+            aud: jwt.aud,
             jti: jwt.jti,
-            issued_at: jwt.issued_at,
-            expiration: jwt.expiration,
+            iat: jwt.iat,
+            exp: jwt.exp,
             cnf: jwt.cnf,
             claims: jwt.claims,
             introspection_jwt: None,

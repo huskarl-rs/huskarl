@@ -208,12 +208,12 @@ mod tests {
 
     fn validated() -> ValidatedRequest<()> {
         ValidatedRequest {
-            issuer: None,
-            subject: None,
-            audience: Vec::new(),
+            iss: None,
+            sub: None,
+            aud: Vec::new(),
             jti: None,
-            issued_at: None,
-            expiration: None,
+            iat: None,
+            exp: None,
             cnf: None,
             claims: (),
             introspection_jwt: None,

@@ -3,7 +3,7 @@
 //! Use [`CustomValidator`] when your authorization server issues JWT access
 //! tokens that do not conform to RFC 9068. Validation rules are configured via
 //! [`AccessTokenValidationRules`] or through individual builder methods such as
-//! `.audience()`, `.issuer()`, and `.subject()`. For RFC 9068-compliant
+//! `.aud()`, `.iss()`, and `.sub()`. For RFC 9068-compliant
 //! authorization servers, use [`crate::validator::rfc9068::Rfc9068Validator`].
 //!
 //! For a step-by-step setup walkthrough see the [custom validator
@@ -233,19 +233,19 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_bu
     }
 
     /// Check the `typ` header. Defaults to no check.
-    pub fn token_type(mut self, typ: impl Into<ClaimCheck>) -> Self {
+    pub fn typ(mut self, typ: impl Into<ClaimCheck>) -> Self {
         self.rules.typ = typ.into();
         self
     }
 
     /// Check on the `iss` claim. Defaults to requiring presence.
-    pub fn issuer(mut self, iss: impl Into<ClaimCheck>) -> Self {
+    pub fn iss(mut self, iss: impl Into<ClaimCheck>) -> Self {
         self.rules.iss = iss.into();
         self
     }
 
     /// Check on the `aud` claim. Defaults to no check.
-    pub fn audience(mut self, aud: impl Into<ClaimCheck>) -> Self {
+    pub fn aud(mut self, aud: impl Into<ClaimCheck>) -> Self {
         self.rules.aud = aud.into();
         self
     }
@@ -263,7 +263,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_bu
     }
 
     /// Check on the `sub` claim. Defaults to requiring presence.
-    pub fn subject(mut self, sub: impl Into<ClaimCheck>) -> Self {
+    #[allow(clippy::should_implement_trait)] // `sub` is the JWT claim name, not arithmetic subtraction
+    pub fn sub(mut self, sub: impl Into<ClaimCheck>) -> Self {
         self.rules.sub = sub.into();
         self
     }

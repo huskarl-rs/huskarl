@@ -93,12 +93,12 @@ where
     /// (`iss`, `sub`, `aud`, `exp`, `cnf`, …) pass through unchanged.
     fn remap(&self, v: ValidatedRequest<V::Claims>) -> ValidatedRequest<C> {
         ValidatedRequest {
-            issuer: v.issuer,
-            subject: v.subject,
-            audience: v.audience,
+            iss: v.iss,
+            sub: v.sub,
+            aud: v.aud,
             jti: v.jti,
-            issued_at: v.issued_at,
-            expiration: v.expiration,
+            iat: v.iat,
+            exp: v.exp,
             cnf: v.cnf,
             claims: (self.f)(v.claims),
             introspection_jwt: v.introspection_jwt,
