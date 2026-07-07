@@ -53,8 +53,13 @@ and explanation in a `_docs` module:
   OIDC discovery documents.
 - **Wire encoding** — [`oauth_form`](https://docs.rs/huskarl-core/latest/huskarl_core/oauth_form/) serializes OAuth messages as
   `application/x-www-form-urlencoded`, including structured RFC 9396 values.
-- **Errors** — every operation returns the one concrete [`Error`](https://docs.rs/huskarl-core/latest/huskarl_core/error/struct.Error.html)/[`ErrorKind`](https://docs.rs/huskarl-core/latest/huskarl_core/error/enum.ErrorKind.html),
-  which embeds cleanly in your own error type.
+- **Errors** — the flows return the one concrete [`Error`](https://docs.rs/huskarl-core/latest/huskarl_core/error/struct.Error.html)/[`ErrorKind`](https://docs.rs/huskarl-core/latest/huskarl_core/error/enum.ErrorKind.html),
+  which embeds cleanly in your own error type. A few subsystems return their
+  own typed errors where the variants *are* the API — JWT validation
+  ([`JwtValidationError`](https://docs.rs/huskarl-core/latest/huskarl_core/jwt/validator/enum.JwtValidationError.html)), low-level
+  verification ([`crypto::verifier`](https://docs.rs/huskarl-core/latest/huskarl_core/crypto/verifier/)), and wire encoding
+  ([`oauth_form::Error`](https://docs.rs/huskarl-core/latest/huskarl_core/oauth_form/enum.Error.html)) — design one `From` arm for [`Error`](https://docs.rs/huskarl-core/latest/huskarl_core/error/struct.Error.html) plus arms for
+  the subsystem errors you call directly.
 
 ## Guides and explanation
 

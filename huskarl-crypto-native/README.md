@@ -71,6 +71,11 @@ to `huskarl-core`’s JWT validator.
 
 # Further reading
 
+- [Loading a signing key](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/_docs/guide/loading_a_signing_key/) — the
+  recommended JWK path, and the PKCS#8 options.
+- [Why JWK is the native key format](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/_docs/explanation/jwk_as_key_format/)
+  — the design behind the loading API.
+
 These pages live in `huskarl-core`, which defines the traits this crate
 implements:
 
