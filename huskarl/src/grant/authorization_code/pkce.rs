@@ -93,6 +93,15 @@ mod wasm_tests {
 mod tests {
     use super::*;
 
+    /// RFC 7636 §4.1 code-verifier validity: 43–128 chars, all from the
+    /// unreserved set `[A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"`.
+    fn is_valid_rfc7636_verifier(verifier: &str) -> bool {
+        (43..=128).contains(&verifier.len())
+            && verifier
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'))
+    }
+
     /// Tests RFC 7636 §4.1 - Code Verifier length validation
     ///
     /// Per RFC 7636, the code verifier MUST have a minimum length of 43 characters
@@ -163,44 +172,33 @@ mod tests {
         );
     }
 
-    /// Tests RFC 7636 §4.1 - Reject invalid verifiers
-    ///
-    /// This test documents what would constitute an invalid verifier
-    /// according to RFC 7636.
+    /// Tests RFC 7636 §4.1 - the validity predicate rejects malformed verifiers
+    /// and accepts every verifier the implementation generates.
     ///
     /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.1>
     #[test]
     fn test_rfc7636_4_1_reject_invalid_verifier() {
-        // Test that our implementation generates valid verifiers
-        // Invalid cases (for documentation):
-
-        // Too short (< 43 chars)
-        let too_short = "a".repeat(42);
-        assert!(
-            too_short.len() < 43,
-            "verifiers shorter than 43 chars would be invalid"
-        );
-
-        // Too long (> 128 chars)
-        let too_long = "a".repeat(129);
-        assert!(
-            too_long.len() > 128,
-            "verifiers longer than 128 chars would be invalid"
-        );
-
-        // Invalid characters (examples)
-        let invalid_chars = vec![
+        assert!(!is_valid_rfc7636_verifier(&"a".repeat(42)), "too short");
+        assert!(!is_valid_rfc7636_verifier(&"a".repeat(129)), "too long");
+        for invalid in [
             "valid+verifier", // '+' not allowed
             "valid/verifier", // '/' not allowed
             "valid=verifier", // '=' not allowed (no padding)
             "valid verifier", // space not allowed
             "valid$verifier", // '$' not allowed
-        ];
-
-        for invalid in invalid_chars {
+        ] {
             assert!(
-                invalid.contains(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_'),
-                "'{invalid}' contains invalid characters"
+                !is_valid_rfc7636_verifier(invalid),
+                "'{invalid}' has disallowed characters"
+            );
+        }
+
+        // Every generated verifier must satisfy the predicate.
+        for _ in 0..100 {
+            let verifier = Pkce::generate_s256_pair().verifier;
+            assert!(
+                is_valid_rfc7636_verifier(&verifier),
+                "generated verifier '{verifier}' must be valid"
             );
         }
     }
@@ -266,36 +264,27 @@ mod tests {
         );
     }
 
-    /// Tests RFC 7636 §4.2 - Code Challenge plain method (discouraged)
-    ///
-    /// The plain method sets `code_challenge` = `code_verifier`.
-    /// This method is NOT RECOMMENDED and should only be used if S256 is not possible.
-    ///
-    /// Note: Our implementation only supports S256 (the secure method).
+    /// Tests RFC 7636 §4.2 - the S256 method never emits `challenge == verifier`.
     ///
     /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.2>
     #[test]
-    fn test_rfc7636_4_2_challenge_plain_method_not_used() {
+    fn test_rfc7636_4_2_s256_challenge_differs_from_verifier() {
         let pkce = Pkce::generate_s256_pair();
-
-        // Verify we're NOT using plain method (challenge != verifier)
+        assert_eq!(pkce.method, "S256");
         assert_ne!(
             pkce.challenge, pkce.verifier,
-            "implementation should use S256, not plain method (RFC 7636 §4.2)"
+            "S256 challenge must be the hash, not the verifier"
         );
+    }
 
-        // Verify challenge is longer than verifier (base64 encoding of hash)
-        // SHA-256 hash (32 bytes) -> base64url (43 chars)
-        // Our verifier is also 43 chars (from 32 random bytes)
-        // So they should be equal length, but the challenge should be
-        // the hash of verifier, not the verifier itself
-
-        // Compute what plain method would produce
-        let plain_challenge = &pkce.verifier;
-
-        assert_ne!(
-            &pkce.challenge, plain_challenge,
-            "must use S256 method, not plain (RFC 7636 §4.2)"
-        );
+    /// Tests RFC 7636 §4.2 - the plain method sets `challenge == verifier`.
+    ///
+    /// Reference: <https://tools.ietf.org/html/rfc7636#section-4.2>
+    #[test]
+    fn test_rfc7636_4_2_plain_pair() {
+        let pkce = Pkce::generate_plain_pair();
+        assert_eq!(pkce.method, "plain");
+        assert_eq!(pkce.challenge, pkce.verifier);
+        assert!(is_valid_rfc7636_verifier(&pkce.verifier));
     }
 }
