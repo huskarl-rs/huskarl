@@ -73,9 +73,6 @@ pub struct IdTokenClaims {
     /// The authorized party from the token claims.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub azp: Option<String>,
-    /// Subject - Identifier for the End-User at the Issuer.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub: Option<String>,
     /// Session ID — identifies a specific login session at the issuer. Defined
     /// in OIDC Front-Channel Logout 1.0 §3; front-channel and back-channel
     /// logout requests carry it so the RP can scope logout to the session this
@@ -96,9 +93,9 @@ pub struct IdTokenClaims {
 ///
 /// Shared between [`IdTokenClaims`] and
 /// [`UserInfo`](crate::userinfo::UserInfo) — the same claim set may be
-/// asserted in either place (OIDC Core §5.4). `sub` is excluded: it is
-/// optional on ID-token claims but required on `UserInfo` responses, so each
-/// outer type carries its own.
+/// asserted in either place (OIDC Core §5.4). `sub` is excluded: on the ID
+/// token it is the registered JWT claim (see [`ValidatedJwt`]); `UserInfo`
+/// carries its own required field.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct StandardOidcProfileClaims {
