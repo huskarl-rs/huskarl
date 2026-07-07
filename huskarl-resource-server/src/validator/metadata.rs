@@ -290,7 +290,7 @@ impl ValidatorMetadata {
         if scheme == "DPoP"
             && let Some(algs) = &self.dpop_signing_alg_values_supported
         {
-            parts.push(format!(r#"algs="{}""#, algs.join(" ")));
+            parts.push(format!(r#"algs="{}""#, escape_quoted(&algs.join(" "))));
         }
 
         if parts.is_empty() {
