@@ -22,6 +22,8 @@ This crate does the first. A [`validator`](https://docs.rs/huskarl-resource-serv
 (signature/introspection, expiry, audience, and any sender-constraint
 binding) and returns a [`ValidatedRequest`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/validator/struct.ValidatedRequest.html)
 carrying its claims — from which your application makes the second decision.
+When validation fails, [`rejection`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/rejection/) turns the failure into the matching
+response: status code, `WWW-Authenticate` challenges, and `DPoP-Nonce`.
 
 ## The huskarl ecosystem
 
@@ -51,14 +53,15 @@ let validator = Rfc9068Validator::builder()
     .jws_verifier_factory(Arc::new(
         JwksSource::builder().http_client(http_client).build(),
     ))
-    .build();
+    .build()
+    .await?;
 ```
 
 ## Guides and explanation
 
 The API items here are the reference docs. For task-oriented how-to guides
-(validating RFC 9068, custom, introspection, and multi-issuer tokens) and
-design explanation (choosing a validator, how multi-issuer routing stays
-safe), see the [`_docs`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/) module.
+(validating RFC 9068, custom, introspection, and multi-issuer tokens, plus
+`DPoP` enforcement) and design explanation (choosing a validator, how
+multi-issuer routing stays safe), see the [`_docs`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/) module.
 
 <!-- cargo-reedme: end -->

@@ -77,8 +77,11 @@ or more calls to the token endpoint.
 - [`TokenExchange`](https://docs.rs/huskarl/latest/huskarl/grant/token_exchange/struct.TokenExchangeGrant.html)
   Allows the client to exchange an existing token for a new security token, supporting
   impersonation and delegation use cases.
+- [`JwtBearer`](https://docs.rs/huskarl/latest/huskarl/grant/jwt_bearer/struct.JwtBearerGrant.html)
+  Allows a client to present a caller-supplied signed JWT assertion (RFC 7523) in exchange for
+  an access token; the assertion vouches for the principal the token is issued for.
 
-Further grants — CIBA, JWT authorization, provider-specific flows — can be implemented in this
+Further grants — CIBA, provider-specific flows — can be implemented in this
 crate or by external crates.
 
 Beyond grants, the [`registration`](https://docs.rs/huskarl/latest/huskarl/registration/) module implements OAuth 2.0 Dynamic Client Registration
@@ -121,9 +124,11 @@ println!(
 ## Guides and explanation
 
 The API items in this crate are the **reference** documentation. For
-task-oriented how-to guides — setting up each grant, caching tokens, and
-making authenticated requests — and design explanation (error handling,
-sharing a refresh token store, refresh timing), see the [`_docs`](https://docs.rs/huskarl/latest/huskarl/_docs/) module.
+task-oriented how-to guides — setting up each grant, choosing [client
+authentication](https://docs.rs/huskarl/latest/huskarl/_docs/guide/client_authentication/), sender-constraining
+tokens with [`DPoP`](https://docs.rs/huskarl/latest/huskarl/_docs/guide/dpop/), caching tokens, and making
+authenticated requests — and design explanation (error handling, sharing a
+refresh token store, refresh timing), see the [`_docs`](https://docs.rs/huskarl/latest/huskarl/_docs/) module.
 
 Most applications wrap a grant in an
 [`InMemoryTokenCache`](https://docs.rs/huskarl/latest/huskarl/cache/in_memory/struct.InMemoryTokenCache.html) and an
