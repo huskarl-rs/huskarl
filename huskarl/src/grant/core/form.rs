@@ -127,12 +127,10 @@ fn serialize_form_error(source: oauth_form::Error) -> Error {
 
 /// Parses an error response body as an `OAuth2` error. Always returns an error.
 ///
-/// Classification: `invalid_grant` → [`ErrorKind::InvalidGrant`] (the
-/// credential is rejected); `invalid_scope`/`invalid_target`/`invalid_resource`
-/// → [`ErrorKind::RequestRejected`] (the credential is valid but the request was
-/// malformed); `use_dpop_nonce` → [`ErrorKind::DPoP`]; any 5xx →
-/// [`ErrorKind::Transport`] (retryable); other `OAuth2` errors →
-/// [`ErrorKind::Protocol`]. The raw OAuth error code is carried on the error.
+/// Any 5xx → retryable [`ErrorKind::Transport`] whatever the body says; else by
+/// code: `invalid_grant` → [`ErrorKind::InvalidGrant`], `invalid_scope`/
+/// `invalid_target`/`invalid_resource` → [`ErrorKind::RequestRejected`],
+/// `use_dpop_nonce` → [`ErrorKind::DPoP`], other → [`ErrorKind::Protocol`].
 fn parse_oauth2_error_response(
     status: http::StatusCode,
     content_type: Option<HeaderValue>,
@@ -141,16 +139,19 @@ fn parse_oauth2_error_response(
     match serde_json::from_slice::<OAuth2ErrorBody>(body) {
         Ok(error_body) => {
             let code = error_body.error.clone();
-            let kind = match code.as_str() {
-                "invalid_grant" => ErrorKind::InvalidGrant,
-                // Request-shape rejections: the credential is intact, only the
-                // request needs adjusting (a narrower scope, a valid resource).
-                "invalid_scope" | "invalid_target" | "invalid_resource" => {
-                    ErrorKind::RequestRejected
+            // 5xx is a server fault, not a verdict on the credential (RFC 6749
+            // §5.2 requires 4xx): don't discard a valid RT on a stray code.
+            let kind = if status.is_server_error() {
+                ErrorKind::Transport { retryable: true }
+            } else {
+                match code.as_str() {
+                    "invalid_grant" => ErrorKind::InvalidGrant,
+                    "invalid_scope" | "invalid_target" | "invalid_resource" => {
+                        ErrorKind::RequestRejected
+                    }
+                    "use_dpop_nonce" => ErrorKind::DPoP,
+                    _ => ErrorKind::Protocol,
                 }
-                "use_dpop_nonce" => ErrorKind::DPoP,
-                _ if status.is_server_error() => ErrorKind::Transport { retryable: true },
-                _ => ErrorKind::Protocol,
             };
             Error::new(
                 kind,
@@ -300,3 +301,34 @@ macro_rules! with_dpop_nonce_retry {
 }
 
 pub(crate) use with_dpop_nonce_retry;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn classify(status: u16, body: &str) -> ErrorKind {
+        parse_oauth2_error_response(
+            http::StatusCode::from_u16(status).unwrap(),
+            None,
+            &Bytes::copy_from_slice(body.as_bytes()),
+        )
+        .kind()
+    }
+
+    #[test]
+    fn invalid_grant_on_400_rejects_credential() {
+        assert_eq!(
+            classify(400, r#"{"error":"invalid_grant"}"#),
+            ErrorKind::InvalidGrant
+        );
+    }
+
+    #[test]
+    fn invalid_grant_in_5xx_body_is_retryable_transport() {
+        // A stray invalid_grant in a server-error body must not drop the token.
+        assert_eq!(
+            classify(503, r#"{"error":"invalid_grant"}"#),
+            ErrorKind::Transport { retryable: true }
+        );
+    }
+}
