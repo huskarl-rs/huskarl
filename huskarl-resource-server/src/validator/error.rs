@@ -32,6 +32,10 @@ pub enum TokenBindingError {
         /// The underlying string conversion error.
         source: ToStrError,
     },
+    /// More than one `DPoP` header was present (RFC 9449 §4.3 requires exactly one).
+    #[snafu(display("Request has more than one DPoP header"))]
+    #[strum(message = "The request has more than one DPoP header")]
+    MultipleDPoPHeaders,
     /// The token has a `DPoP` key binding (`cnf.jkt`) but was presented as a Bearer token.
     ///
     /// Per RFC 9449 §7.1, DPoP-bound tokens MUST be presented using the `DPoP`
@@ -71,6 +75,7 @@ impl ToRfc6750Error for TokenBindingError {
         match self {
             Self::MissingDPoPHeader
             | Self::DPoPHeaderNotString { .. }
+            | Self::MultipleDPoPHeaders
             | Self::DPoPBinding { .. } => Some(TokenType::DPoP),
             Self::DPoPRequiredForBoundToken
             | Self::DPoPRequired
@@ -81,7 +86,9 @@ impl ToRfc6750Error for TokenBindingError {
 
     fn token_error(&self) -> TokenValidationError {
         match self {
-            Self::MissingDPoPHeader | Self::DPoPHeaderNotString { .. } => {
+            Self::MissingDPoPHeader
+            | Self::DPoPHeaderNotString { .. }
+            | Self::MultipleDPoPHeaders => {
                 TokenValidationError::Client(TokenErrorCode::InvalidRequest)
             }
             Self::DPoPRequiredForBoundToken
