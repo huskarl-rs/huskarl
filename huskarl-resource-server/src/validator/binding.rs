@@ -18,7 +18,7 @@ use crate::{
     },
     validator::{
         dpop_nonce::{DPoPNonceChecker, NonceCheck},
-        dpop_proof::{DPoPProofError, DPoPProofValidator},
+        dpop_proof::{DPoPProofError, DPoPProofValidator, ValidatedDPoPProof},
         error::{
             DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DPoPRequiredForBoundTokenSnafu,
             DPoPRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
@@ -104,19 +104,13 @@ pub(crate) async fn check_token_binding(
                 Err(e) => return (None, Err(e)),
             };
 
-            match dpop_binding_checker
+            let (nonce, result) = dpop_binding_checker
                 .check(cnf, access_token, dpop_proof, http_method, http_uri)
-                .await
-            {
-                Ok(nonce) => nonce,
-                Err(e) => {
-                    let nonce = if let DPoPBindingError::NonceRequired { ref nonce } = e {
-                        Some(nonce.clone())
-                    } else {
-                        None
-                    };
-                    return (nonce, Err(e).context(DPoPBindingSnafu));
-                }
+                .await;
+            match result {
+                Ok(()) => nonce,
+                // `nonce` is carried on every error path, so rotation survives.
+                Err(e) => return (nonce, Err(e).context(DPoPBindingSnafu)),
             }
         }
     };
@@ -169,87 +163,116 @@ impl DPoPBindingChecker {
         dpop_proof: &str,
         method: &http::Method,
         uri: &http::Uri,
-    ) -> Result<Option<String>, DPoPBindingError> {
+    ) -> (Option<String>, Result<(), DPoPBindingError>) {
         // The `htu` comparison below needs the absolute external target URI
         // (RFC 9449 §4.3), which only the deployment knows once proxies are
         // involved. A framework request object usually carries only the
         // origin-form path, which can never match a compliant proof — fail
         // with an integration error instead of a per-request `htu` mismatch.
-        ensure!(
-            uri.scheme().is_some() && uri.authority().is_some(),
-            RequestUriNotAbsoluteSnafu {
-                uri: uri.to_string()
-            }
-        );
+        if uri.scheme().is_none() || uri.authority().is_none() {
+            return (
+                None,
+                RequestUriNotAbsoluteSnafu {
+                    uri: uri.to_string(),
+                }
+                .fail(),
+            );
+        }
 
-        let validated_proof = self
+        let validated_proof = match self
             .proof_validator
             .validate(dpop_proof)
             .await
-            .context(ProofValidationSnafu)?;
-
-        let proof_nonce = validated_proof.nonce.as_deref();
+            .context(ProofValidationSnafu)
+        {
+            Ok(proof) => proof,
+            Err(e) => return (None, Err(e)),
+        };
 
         let nonce_check = match self.dpop_nonce_checker.as_ref() {
-            Some(c) => c.check_nonce(proof_nonce).await,
+            Some(c) => c.check_nonce(validated_proof.nonce.as_deref()).await,
             None => Ok(NonceCheck::Valid),
-        }
-        .map_err(|source| DPoPBindingError::NonceCheckFailed { source })?;
+        };
+        let nonce_check = match nonce_check {
+            Ok(check) => check,
+            Err(source) => return (None, Err(DPoPBindingError::NonceCheckFailed { source })),
+        };
 
         let new_nonce = match nonce_check {
             NonceCheck::Valid => None,
             NonceCheck::ValidWithNewNonce(n) => Some(n),
-            NonceCheck::Invalid(n) => return NonceRequiredSnafu { nonce: n }.fail(),
+            // Required retry: return the nonce *and* fail.
+            NonceCheck::Invalid(n) => {
+                return (Some(n.clone()), NonceRequiredSnafu { nonce: n }.fail());
+            }
         };
 
-        let access_token_hash = hash_access_token_for_dpop(access_token.expose_secret());
-
-        match (
-            validated_proof.htm.as_ref(),
-            validated_proof.htu.as_ref(),
-            validated_proof.ath.as_ref(),
-        ) {
-            (None, _, _) => return MissingProofClaimSnafu { claim: "htm" }.fail(),
-            (_, None, _) => return MissingProofClaimSnafu { claim: "htu" }.fail(),
-            (_, _, None) => return MissingProofClaimSnafu { claim: "ath" }.fail(),
-            (Some(htm), Some(htu), Some(ath)) => {
-                ensure!(
-                    htm == method.as_str(),
-                    ProofClaimMismatchSnafu {
-                        claim: "htm",
-                        expected: method.as_str(),
-                        actual: htm,
-                    }
-                );
-                ensure!(
-                    *htu == normalize_uri_for_dpop(uri)
-                        .context(MalformedUrlSnafu)?
-                        .to_string(),
-                    ProofClaimMismatchSnafu {
-                        claim: "htu",
-                        expected: uri.to_string(),
-                        actual: htu,
-                    }
-                );
-                ensure!(
-                    *ath == access_token_hash,
-                    ProofClaimMismatchSnafu {
-                        claim: "ath",
-                        expected: &access_token_hash,
-                        actual: ath,
-                    }
-                );
-            }
-        }
-
-        match (cnf.and_then(|c| c.jkt.as_ref()), validated_proof.thumbprint) {
-            (None, _) => return MissingThumbprintBindingSnafu.fail(),
-            (_, None) => return NoThumbprintForKeySnafu.fail(),
-            (Some(jkt), Some(tp)) => ensure!(*jkt == tp, ThumbprintMismatchSnafu),
-        }
-
-        Ok(new_nonce)
+        // Failures below must still surface `new_nonce` (see check_token_binding).
+        let result = verify_claims_and_binding(cnf, access_token, &validated_proof, method, uri);
+        (new_nonce, result)
     }
+}
+
+/// Checks the `htm`/`htu`/`ath` proof claims against the request and the proof
+/// key thumbprint against the token's `cnf.jkt`. Does not touch the nonce —
+/// that is resolved by [`DPoPBindingChecker::check`] before this runs.
+fn verify_claims_and_binding(
+    cnf: Option<&ConfirmationClaim>,
+    access_token: &SecretString,
+    validated_proof: &ValidatedDPoPProof,
+    method: &http::Method,
+    uri: &http::Uri,
+) -> Result<(), DPoPBindingError> {
+    let access_token_hash = hash_access_token_for_dpop(access_token.expose_secret());
+
+    match (
+        validated_proof.htm.as_ref(),
+        validated_proof.htu.as_ref(),
+        validated_proof.ath.as_ref(),
+    ) {
+        (None, _, _) => return MissingProofClaimSnafu { claim: "htm" }.fail(),
+        (_, None, _) => return MissingProofClaimSnafu { claim: "htu" }.fail(),
+        (_, _, None) => return MissingProofClaimSnafu { claim: "ath" }.fail(),
+        (Some(htm), Some(htu), Some(ath)) => {
+            ensure!(
+                htm == method.as_str(),
+                ProofClaimMismatchSnafu {
+                    claim: "htm",
+                    expected: method.as_str(),
+                    actual: htm,
+                }
+            );
+            ensure!(
+                *htu == normalize_uri_for_dpop(uri)
+                    .context(MalformedUrlSnafu)?
+                    .to_string(),
+                ProofClaimMismatchSnafu {
+                    claim: "htu",
+                    expected: uri.to_string(),
+                    actual: htu,
+                }
+            );
+            ensure!(
+                *ath == access_token_hash,
+                ProofClaimMismatchSnafu {
+                    claim: "ath",
+                    expected: &access_token_hash,
+                    actual: ath,
+                }
+            );
+        }
+    }
+
+    match (
+        cnf.and_then(|c| c.jkt.as_ref()),
+        validated_proof.thumbprint.as_ref(),
+    ) {
+        (None, _) => return MissingThumbprintBindingSnafu.fail(),
+        (_, None) => return NoThumbprintForKeySnafu.fail(),
+        (Some(jkt), Some(tp)) => ensure!(jkt == tp, ThumbprintMismatchSnafu),
+    }
+
+    Ok(())
 }
 
 /// Error returned by [`DPoPBindingChecker::check`].
@@ -498,14 +521,15 @@ mod tests {
         }
     }
 
-    /// Runs `check` for the fixed request against a freshly signed proof.
-    async fn run(
+    /// Runs `check` for the fixed request against a freshly signed proof,
+    /// returning the raw `(nonce, result)` pair.
+    async fn run_raw(
         signer: &PrivateKey,
         claims: ProofClaims,
         cnf_jkt: Option<String>,
         nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
         required: bool,
-    ) -> Result<Option<String>, DPoPBindingError> {
+    ) -> (Option<String>, Result<(), DPoPBindingError>) {
         let proof = sign_proof(signer, claims).await;
         let confirmation = cnf(cnf_jkt);
         checker(nonce_checker, required)
@@ -517,6 +541,19 @@ mod tests {
                 &req_uri(),
             )
             .await
+    }
+
+    /// Like [`run_raw`] but collapses the pair to the nonce-on-success shape the
+    /// outcome-focused tests assert against.
+    async fn run(
+        signer: &PrivateKey,
+        claims: ProofClaims,
+        cnf_jkt: Option<String>,
+        nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
+        required: bool,
+    ) -> Result<Option<String>, DPoPBindingError> {
+        let (nonce, result) = run_raw(signer, claims, cnf_jkt, nonce_checker, required).await;
+        result.map(|()| nonce)
     }
 
     /// Regression: a proof whose `iat` is a couple of seconds ahead of the RS
@@ -538,7 +575,7 @@ mod tests {
             .unwrap();
 
         let confirmation = cnf(Some(matching_jkt(&signer)));
-        let result = checker(None, false)
+        let (nonce, result) = checker(None, false)
             .check(
                 Some(&confirmation),
                 &SecretString::new(ACCESS_TOKEN),
@@ -548,8 +585,8 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(result, Ok(None)),
-            "2s future iat within default leeway must validate, got {result:?}"
+            nonce.is_none() && result.is_ok(),
+            "2s future iat within default leeway must validate, got ({nonce:?}, {result:?})"
         );
     }
 
@@ -561,7 +598,7 @@ mod tests {
         let signer = es256();
         let proof = sign_proof(&signer, valid_claims()).await;
         let confirmation = cnf(Some(matching_jkt(&signer)));
-        let result = checker(None, false)
+        let (nonce, result) = checker(None, false)
             .check(
                 Some(&confirmation),
                 &SecretString::new(ACCESS_TOKEN),
@@ -571,8 +608,9 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(result, Err(DPoPBindingError::RequestUriNotAbsolute { .. })),
-            "expected RequestUriNotAbsolute, got {result:?}"
+            nonce.is_none()
+                && matches!(result, Err(DPoPBindingError::RequestUriNotAbsolute { .. })),
+            "expected RequestUriNotAbsolute, got ({nonce:?}, {result:?})"
         );
     }
 
@@ -696,6 +734,36 @@ mod tests {
         );
     }
 
+    /// Regression: a rotated nonce must still reach the caller when a later
+    /// binding check fails (here `htu`), so the client can retry with it.
+    #[tokio::test]
+    async fn rotating_nonce_is_returned_even_when_binding_fails() {
+        let signer = es256();
+        let nonce_checker = Arc::new(FixedNonce(NonceCheck::ValidWithNewNonce(
+            "rotated-nonce".to_string(),
+        )));
+        let (nonce, result) = run_raw(
+            &signer,
+            ProofClaims {
+                htu: Some("https://evil.example/other".to_string()),
+                ..valid_claims()
+            },
+            Some(matching_jkt(&signer)),
+            Some(nonce_checker),
+            false,
+        )
+        .await;
+        assert_eq!(
+            nonce.as_deref(),
+            Some("rotated-nonce"),
+            "rotated nonce must survive a binding failure"
+        );
+        assert!(
+            matches!(result, Err(DPoPBindingError::ProofClaimMismatch { claim, .. }) if claim == "htu"),
+            "expected htu mismatch, got {result:?}"
+        );
+    }
+
     /// Signs a proof whose embedded `jwk` header is `embedded`'s public key but
     /// whose signature is produced by `signer` — a proof not signed by the key
     /// it claims to be signed by.
@@ -725,7 +793,7 @@ mod tests {
         let victim = es256();
         let proof = sign_proof_with_embedded_jwk(&attacker, &victim, valid_claims()).await;
         let confirmation = cnf(Some(matching_jkt(&victim)));
-        let err = checker(None, false)
+        let (_nonce, result) = checker(None, false)
             .check(
                 Some(&confirmation),
                 &SecretString::new(ACCESS_TOKEN),
@@ -733,8 +801,8 @@ mod tests {
                 &http::Method::POST,
                 &req_uri(),
             )
-            .await
-            .unwrap_err();
+            .await;
+        let err = result.unwrap_err();
         assert!(
             matches!(err, DPoPBindingError::ProofValidation { .. }),
             "expected ProofValidation (signature vs embedded key), got {err:?}"
