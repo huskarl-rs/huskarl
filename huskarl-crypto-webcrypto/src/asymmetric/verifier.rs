@@ -148,6 +148,11 @@ async fn create_ec_key(
     .ok()
 }
 
+/// Union of [`Key::supported_algorithms`] across all variants.
+pub(crate) const SUPPORTED_SIGNATURE_ALGORITHMS: &[&str] = &[
+    "ES256", "ES384", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "Ed25519", "EdDSA",
+];
+
 impl Key {
     fn supported_algorithms(&self) -> &[&str] {
         match self {

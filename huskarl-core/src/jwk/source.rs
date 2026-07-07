@@ -172,6 +172,10 @@ mod tests {
         {
             Box::pin(async { Err(CreateVerifierError::UnsupportedKey) })
         }
+
+        fn supported_signature_algorithms(&self) -> &[&str] {
+            &[]
+        }
     }
 
     fn jwks_with_keys(n: usize) -> String {

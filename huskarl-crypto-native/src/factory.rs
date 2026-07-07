@@ -24,4 +24,8 @@ impl JwsVerifierPlatform for NativeVerifierPlatform {
             })
         })
     }
+
+    fn supported_signature_algorithms(&self) -> &[&str] {
+        crate::asymmetric::verifier::SUPPORTED_SIGNATURE_ALGORITHMS
+    }
 }
