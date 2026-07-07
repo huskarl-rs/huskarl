@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, RwLock},
-    time::Duration,
 };
 
 use base64::prelude::*;
@@ -202,9 +201,11 @@ async fn sign_proof(
         nonce,
     };
 
+    // RFC 9449 §4.2 defines only iat (not exp) for a DPoP proof; freshness is the
+    // server's judgment via its iat acceptance window, jti replay tracking, and nonce.
     let jwt = Jwt::builder()
         .typ("dpop+jwt")
-        .issued_now_expires_after(Duration::from_mins(1))
+        .issued_now()
         .jwk(signer.public_key_jwk().into_owned())
         .claims(extra_claims)
         .build();
@@ -386,7 +387,6 @@ mod tests {
         assert!(htu.starts_with("https://auth.example.com"));
         assert!(claims.get("jti").is_some());
         assert!(claims.get("iat").is_some());
-        assert!(claims.get("exp").is_some());
     }
 
     #[tokio::test]
