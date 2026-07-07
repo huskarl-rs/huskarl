@@ -24,7 +24,11 @@ point of the binding.
 One integration requirement carries over from [validating a
 request](crate::_docs::guide::rfc9068): the `uri` passed to
 `validate_request` must be the **absolute external URI** the client
-addressed, because it is compared against the proof's `htu` claim. A
+addressed — scheme, authority, and path — because it is compared against the
+proof's `htu` claim (RFC 9449 §4.3). Framework request objects usually carry
+only the origin-form path (`/resource`), and once TLS-terminating or rewriting
+proxies sit in front only the deployment knows the external URI: reconstruct it
+from a configured public base URL, or from forwarded headers you trust. A
 non-absolute URI surfaces as a server-side integration error rather than
 per-request mismatches.
 

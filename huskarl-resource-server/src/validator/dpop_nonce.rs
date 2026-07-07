@@ -81,18 +81,15 @@ impl<T: DPoPNonceChecker + ?Sized> DPoPNonceChecker for Arc<T> {
 /// without a database, as long as the encryption key is stable across requests.
 #[derive(Debug, Builder)]
 pub struct SealedTimestampNonce<S: AeadSealerSelector + AeadUnsealer> {
-    /// The AEAD sealer-selector/unsealer used to encrypt and decrypt nonce
-    /// timestamps.
+    /// The AEAD sealer/unsealer for nonce timestamps — one object that seals on
+    /// the way out and unseals on the way in.
     ///
-    /// Both directions come from one object that selects a sealer on the way out
-    /// and unseals on the way in. For a fixed key, wrap an
-    /// [`AeadCipher`](crate::core::crypto::cipher::AeadCipher) (a symmetric key,
-    /// or a KMS-backed cipher) in
-    /// [`StaticAeadCipher`](crate::core::crypto::cipher::StaticAeadCipher); for a
-    /// rotating key, use
-    /// [`ScheduledRefreshCipher`](crate::core::crypto::cipher::ScheduledRefreshCipher).
-    /// Either can be erased to `Arc<dyn SealedAeadCipherSelector>`. Selecting the
-    /// sealer per nonce keeps the emitted key consistent across a rotation.
+    /// Wrap a fixed [`AeadCipher`](crate::core::crypto::cipher::AeadCipher) (a
+    /// symmetric or KMS-backed key) in
+    /// [`StaticAeadCipher`](crate::core::crypto::cipher::StaticAeadCipher), or a
+    /// rotating key in
+    /// [`ScheduledRefreshCipher`](crate::core::crypto::cipher::ScheduledRefreshCipher);
+    /// either erases to `Arc<dyn SealedAeadCipherSelector>`.
     sealer: S,
     /// The maximum age of a valid nonce. Defaults to 1 hour.
     #[builder(into, default = Duration::from_hours(1))]

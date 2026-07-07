@@ -61,6 +61,12 @@ pub mod explanation {
     #[doc = include_str!("../docs/explanation/sharing_a_token_store.md")]
     pub mod sharing_a_token_store {}
 
+    #[doc = include_str!("../docs/explanation/token_source_resolution.md")]
+    pub mod token_source_resolution {}
+
     #[doc = include_str!("../docs/explanation/refresh_timing.md")]
     pub mod refresh_timing {}
+
+    #[doc = include_str!("../docs/explanation/prelude.md")]
+    pub mod prelude {}
 }

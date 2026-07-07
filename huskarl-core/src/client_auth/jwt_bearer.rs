@@ -11,42 +11,19 @@ use crate::{
     platform::MaybeSendBoxFuture,
 };
 
-/// JWT Authentication (RFC 7521 / 7523 / `OpenID` Connect Core 1.0 §9)
+/// Client authentication with a signed JWT assertion (RFC 7521 / 7523, `OpenID`
+/// Connect Core 1.0 §9).
 ///
-/// With this method, the client authenticates using a JWT which has been
-/// cryptographically signed.
+/// An asymmetric [`signer`](JwtBearerBuilder::signer) implements `private_key_jwt`
+/// (RFC 7523); an HMAC signer implements `client_secret_jwt` (OIDC Core §9). The
+/// caller supplies the client ID and signer.
 ///
-/// The caller provides the client ID and signing implementation.
-///
-/// The implementation creates a JWT with these claims:
-///  - iss (client ID)
-///  - sub (client ID)
-///  - aud (per the configured [`Audience`] policy)
-///  - exp (expiry time)
-///  - iat (current time)
-///  - jti (unique ID for replay protection)
-///
-/// The JWT carries the explicit type `client-authentication+jwt`
-/// (draft-ietf-oauth-rfc7523bis); set `explicit_typ(false)` for
-/// authorization servers that reject it.
-///
-/// ## Asymmetric private key
-///
-/// When the underlying key is an asymmetric private key, the code implements
-/// RFC 7523 (private key JWT).
-///
-/// Benefits:
-///  - no shared secrets
-///  - stateless verification
-///  - non-repudiation (proof that the client sent it)
-///
-/// ## HMAC shared key
-///
-/// When the underlying key is a symmetric HMAC key, the code implements
-/// `OpenID` Connect Core 1.0 §9 (`client_secret_jwt`).
-///
-/// Benefits:
-///  - simpler setup when a shared secret is acceptable
+/// The assertion carries `iss` and `sub` (both the client ID), `aud` (per the
+/// configured [`Audience`] policy), `exp`, `iat`, and a unique `jti` for replay
+/// protection, with the explicit type `client-authentication+jwt`
+/// (draft-ietf-oauth-rfc7523bis); set
+/// [`explicit_typ(false)`](JwtBearerBuilder::explicit_typ) for authorization
+/// servers that reject it.
 #[derive(Debug, Clone, Builder)]
 pub struct JwtBearer {
     /// The signer of the JWT.

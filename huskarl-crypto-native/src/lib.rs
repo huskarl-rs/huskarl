@@ -28,35 +28,12 @@
 //!   - PS384
 //!   - PS512
 //!
-//! # Getting started
-//!
-//! Generate a signing key, then build and sign a JWT with it:
-//!
-//! ```
-//! use huskarl_core::jwt::Jwt;
-//! use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
-//!
-//! # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
-//! // A signer backed by a freshly generated Ed25519 key.
-//! let signer = PrivateKey::generate(GenerateAlgorithm::Ed25519, Some("key-1".to_string()))?;
-//!
-//! let jwt = Jwt::builder()
-//!     .issuer("https://issuer.example")
-//!     .subject("user-123")
-//!     .issued_now_expires_after(std::time::Duration::from_secs(300))
-//!     .claims(serde_json::json!({ "scope": "read write" }))
-//!     .build();
-//!
-//! // A compact JWS string, ready for the wire.
-//! let compact = jwt.to_jws_compact(&signer).await?;
-//! # let _ = compact;
-//! # Ok::<(), huskarl_core::error::Error>(())
-//! # }).unwrap();
-//! ```
-//!
-//! To verify, build an [`AsymmetricPublicKey`](asymmetric::verifier::AsymmetricPublicKey)
-//! from a public JWK (or use [`NativeVerifierPlatform`] over a JWKS) and hand it
-//! to `huskarl-core`'s JWT validator.
+//! To sign, generate or load a
+//! [`PrivateKey`](asymmetric::signer::PrivateKey) and hand it to `huskarl-core`'s
+//! [`Jwt`](huskarl_core::jwt::Jwt) builder; to verify, build an
+//! [`AsymmetricPublicKey`](asymmetric::verifier::AsymmetricPublicKey) from a
+//! public JWK (or use [`NativeVerifierPlatform`] over a JWKS) and hand it to the
+//! JWT validator. The guides below walk through both.
 //!
 //! # Further reading
 //!

@@ -25,53 +25,19 @@ signing and verification, plus AES-GCM AEAD. wasm32-only.
 
 Because `WebCrypto` is async, signing, verification, and key import are `async`.
 
-# Getting started
-
-Generate a non-extractable signing key, then build and sign a JWT with it.
-Every crypto call is `async`, and the key never leaves `SubtleCrypto`:
-
-```rust
-use huskarl_core::jwt::Jwt;
-use huskarl_crypto_webcrypto::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
-
-let signer = PrivateKey::generate(GenerateAlgorithm::Es256, Some("key-1".to_string())).await?;
-
-let jwt = Jwt::builder()
-    .issuer("https://issuer.example")
-    .subject("user-123")
-    .issued_now_expires_after(std::time::Duration::from_secs(300))
-    .claims(serde_json::json!({ "scope": "read write" }))
-    .build();
-
-// A compact JWS string, ready for the wire.
-let compact = jwt.to_jws_compact(&signer).await?;
-```
-
-To verify, build an [`AsymmetricPublicKey`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/asymmetric/verifier/struct.AsymmetricPublicKey.html)
-from a public JWK (or use [`WebCryptoVerifierPlatform`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/factory/struct.WebCryptoVerifierPlatform.html) over a JWKS) and hand
-it to `huskarl-core`’s JWT validator.
-
-# Parity with `huskarl-crypto-native`
-
-Code written against `huskarl-crypto-native` does not always port directly;
-the differences are `WebCrypto` platform constraints, not omissions:
-
-| Capability | native | webcrypto |
-|---|---|---|
-| Generate a signing key | ✔ (sync) | ✔ (`async`) |
-| **Import** a signing key (PKCS#8 / private JWK) | ✔ | ✘ — keys are generated non-extractable; there is no `from_secret`/`from_jwk` on the signer |
-| Import a *public* verify key (JWK / JWKS) | ✔ | ✔ (`async`) |
-| Symmetric JWS (HMAC, e.g. `HS256` / `client_secret_jwt`) | ✔ (`SymmetricKey`) | ✘ — no symmetric signing module |
-| AES-GCM AEAD from key material | ✔ | ✔ (plus [`from_crypto_key`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/aead/struct.AesGcmKey.html#method.from_crypto_key) for an existing `CryptoKey`) |
-| Sign / verify / import calls | sync | `async` (`SubtleCrypto`) |
-
-Practical consequences: a wasm client authenticates with `private_key_jwt`
-only via a key **generated in-browser** and registered by its public JWK
-(which also suits `DPoP`, where an ephemeral per-session key is the normal
-deployment) — it cannot load a pre-provisioned private key, and
-`client_secret_jwt` is unavailable.
+To sign, generate a non-extractable
+[`PrivateKey`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/asymmetric/signer/struct.PrivateKey.html) and hand it to `huskarl-core`’s
+[`Jwt`](https://docs.rs/huskarl_core/latest/huskarl_core/jwt/builder/struct.Jwt.html) builder; to verify, build an
+[`AsymmetricPublicKey`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/asymmetric/verifier/struct.AsymmetricPublicKey.html) from a
+public JWK (or use [`WebCryptoVerifierPlatform`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/factory/struct.WebCryptoVerifierPlatform.html) over a JWKS).
 
 # Further reading
+
+- [Signing a JWT in the browser](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/_docs/guide/signing_a_jwt/) — the
+  `async`, non-extractable signing flow.
+- [Platform constraints](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/_docs/explanation/platform_constraints/) —
+  how this backend differs from `huskarl-crypto-native` and why (no private-key
+  import, no `client_secret_jwt`).
 
 These pages live in `huskarl-core`, which defines the traits this crate
 implements:

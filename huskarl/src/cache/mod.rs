@@ -194,7 +194,8 @@ mod tests {
 ///
 /// A [`GrantTokenSource`] treats its store as singly owned. Sharing one store
 /// across owners or processes is safe *except* for rotation-only public clients
-/// — see [Sharing a store](self#sharing-a-store) before sharing.
+/// — see [sharing a token store](crate::_docs::explanation::sharing_a_token_store)
+/// before sharing.
 pub trait RefreshTokenStore: MaybeSendSync {
     /// Returns the current refresh token, if one exists.
     fn get(&self) -> MaybeSendBoxFuture<'_, Result<Option<RefreshToken>, Error>>;

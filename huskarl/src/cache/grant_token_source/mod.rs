@@ -26,124 +26,63 @@ use breaker::Breaker;
 ///
 /// Hand this to an [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache),
 /// which adds caching, single-flight, and expiry on top. Wrap it in an `Arc` and
-/// keep a clone to [`prime`](Self::prime) or inspect it after it is in the cache.
+/// keep a clone to [`prime`](Self::prime) or inspect it after it is in the cache;
+/// [caching tokens](crate::_docs::guide::caching) shows the full wiring. After an
+/// interactive login, hand the freshly obtained token to a running source with
+/// [`prime`](Self::prime) instead of (or alongside) a parameter source; it is
+/// served once and its refresh token persisted.
 ///
-/// # Examples
-///
-/// Build a source over a grant, then put it behind a cache for an
-/// [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer):
-///
-/// ```rust
-/// # use huskarl::core::client_auth::NoAuth;
-/// # use huskarl::core::http::HttpClient;
-/// # use huskarl::grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters};
-/// use huskarl::{
-///     authorizer::HttpAuthorizer,
-///     cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
-/// };
-/// # async fn example(http_client: impl HttpClient + 'static) -> Result<(), Box<dyn std::error::Error>> {
-/// # let grant = ClientCredentialsGrant::builder()
-/// #     .client_id("client-id")
-/// #     .client_auth(NoAuth)
-/// #     .token_endpoint("https://as.example.com/token".parse()?)
-/// #     .http_client(http_client)
-/// #     .build();
-/// // `grant` is any grant, built as shown in the crate-level examples.
-/// let source = GrantTokenSource::builder()
-///     .grant(grant)
-///     .grant_parameters(ClientCredentialsGrantParameters::builder().build())
-///     .refresh_store(InMemoryRefreshTokenStore::default())
-///     .build();
-///
-/// let authorizer = HttpAuthorizer::builder()
-///     .cache(InMemoryTokenCache::builder().source(source).build())
-///     .build();
-/// # let _ = authorizer;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// After an interactive login, hand the freshly obtained token to a running
-/// source with [`prime`](Self::prime) instead of (or alongside) a parameter
-/// source; it is served once and its refresh token persisted.
+/// [Token source resolution](crate::_docs::explanation::token_source_resolution)
+/// explains *why* the rules below hold.
 ///
 /// # Resolution order
 ///
-/// Each [`token`](TokenSource::token) call resolves in strict precedence; the
-/// first step that yields a token wins:
+/// Each [`token`](TokenSource::token) call resolves in strict precedence, first
+/// hit wins:
 ///
-/// 1. **Serve a primed token** if one was handed in via [`prime`](Self::prime).
-/// 2. **Refresh** using the stored refresh token, if any. On `invalid_grant` the
-///    dead refresh token is discarded; transient failures keep it for a later
-///    attempt.
-/// 3. **Acquire parameters** from the configured [`GrantParametersSource`] and
-///    run a **fresh grant exchange**. The source is consulted only here — after
-///    the refresh attempt — so a usable refresh token avoids re-producing
-///    parameters (e.g. re-signing a [`from_fn`](crate::cache::from_fn)
-///    assertion).
+/// 1. A **primed token** from [`prime`](Self::prime), if any.
+/// 2. A **refresh** using the stored refresh token, if any.
+/// 3. A **fresh grant exchange** using parameters from the configured
+///    [`GrantParametersSource`] — consulted only here, after the refresh attempt.
 ///
-/// A source built with an explicit [`NoSource`](crate::cache::NoSource) parameter source only
-/// performs steps 1–2, refreshing a [`prime`](Self::prime)d token.
+/// A source built with [`NoSource`](crate::cache::NoSource) performs only
+/// steps 1–2 (it refreshes a [`prime`](Self::prime)d token but never exchanges).
 ///
 /// # Credential lifecycle
 ///
-/// Two credentials are abandoned once they cannot succeed again, stopping futile
-/// replays:
+/// A credential is abandoned once it cannot succeed again:
 ///
 /// - the **refresh token** is discarded on `invalid_grant`;
-/// - a **fixed parameter source** is spent on `invalid_grant` (the credential
-///   is dead), provided the source opts in via
+/// - a **fixed parameter source** is spent on `invalid_grant` if it opts in via
 ///   [`discard_after_rejection`](GrantParametersSource::discard_after_rejection)
-///   (true for fixed values, false for [`from_fn`](crate::cache::from_fn), whose
-///   next value may differ). Single-use sources ([`single_use`](crate::cache::single_use))
-///   are consumed on first use and never replayed.
+///   (true for fixed values, false for [`from_fn`](crate::cache::from_fn)).
+///   [`single_use`](crate::cache::single_use) sources are consumed on first use.
 ///
-/// A **request-shape rejection** ([`RequestRejected`](crate::core::ErrorKind::RequestRejected):
+/// A spent fixed source stays spent for the life of the source; neither
+/// [`prime`](Self::prime) nor [`clear`](TokenSource::clear) revives it. A
+/// **request-shape rejection**
+/// ([`RequestRejected`](crate::core::ErrorKind::RequestRejected):
 /// `invalid_scope`, `invalid_target`, `invalid_resource`) is *not* a credential
-/// failure: the source is kept and the error is surfaced unchanged, so a caller
-/// can retry with a narrower request using the same credential.
-///
-/// A spent fixed source stays spent for the life of the source. The parameter
-/// source is fixed at construction and immutable — neither [`prime`](Self::prime)
-/// nor [`clear`](TokenSource::clear) revives it, because its rejected value
-/// cannot become valid again. To supply a fresh credential, build a new source
-/// or use a [`from_fn`](crate::cache::from_fn) parameter source, which mints a
-/// new value per exchange and is never spent.
+/// failure — the source is kept and the error surfaced unchanged.
 ///
 /// The returned error is
 /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired) **only when no
-/// automatic recovery path remains** — a retryable transport failure, a retained
-/// refresh token, a request-shape rejection, or a still-live dynamic source each
-/// keeps its own classification instead (see [the error
-/// model](crate::core::error)). The cause is always a
-/// [`GetTokenError`] variant identifying which paths were exhausted.
+/// automatic recovery path remains**; a retryable transport failure, a retained
+/// refresh token, a request-shape rejection, or a live dynamic source each keeps
+/// its own classification. The cause is always a [`GetTokenError`] variant.
 ///
 /// # Backoff
 ///
-/// Some sources keep failing non-recoverably from scratch — most often a
-/// [`from_fn`](crate::cache::from_fn) re-signing against a revoked key: every
-/// fresh value is rejected with `invalid_grant`, the source is never spent, and
-/// each call hits the signer and token endpoint again. A breaker bounds this.
-/// After `breaker_threshold` consecutive non-recoverable failures (transient and
-/// request-shape failures don't count) the source backs off for
-/// `breaker_cooldown`, then allows one trial per cooldown until it succeeds. Any
-/// success, or a fresh [`prime`](Self::prime), resets it; tune both knobs on the
-/// builder.
-///
-/// The breaker gates only the **from-scratch exchange**: a refresh is still
-/// attempted first on every call, so a usable refresh token always recovers.
-/// While open, the from-scratch path short-circuits with
-/// [`GetTokenError::Backoff`] under [`Backoff`](crate::core::ErrorKind::Backoff),
-/// without re-running the signer or the exchange. A retained refresh token whose
-/// latest attempt failed only transiently still surfaces that retryable error
-/// rather than `Backoff`, since the refresh path recovers independently of the
-/// breaker.
-///
-/// That [`Backoff`](crate::core::ErrorKind::Backoff) is deliberately not
-/// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired): an application
-/// should retry on a delay rather than bouncing the user through login. See
-/// [`ErrorKind::Backoff`] for the full
-/// distinction.
+/// A source that keeps failing non-recoverably from scratch (most often a
+/// [`from_fn`](crate::cache::from_fn) re-signing against a revoked key) is bounded
+/// by a breaker: after `breaker_threshold` consecutive non-recoverable failures
+/// (transient and request-shape failures don't count) it backs off for
+/// `breaker_cooldown`, then allows one trial per cooldown. Any success or a fresh
+/// [`prime`](Self::prime) resets it; tune both knobs on the builder. The breaker
+/// gates only the from-scratch exchange — a refresh is still attempted first on
+/// every call — and short-circuits with [`GetTokenError::Backoff`] under
+/// [`Backoff`](crate::core::ErrorKind::Backoff), which is deliberately not
+/// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired).
 #[derive(Builder)]
 pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     /// The grant this source runs to obtain tokens — refreshes through its

@@ -31,94 +31,23 @@ authorization servers — Keycloak, Dex, `node-oidc-provider`, and Okta — in C
 See the [repository](https://github.com/huskarl-rs/huskarl) for the full provider
 matrix and conformance plans.
 
-## Setup
+## Grants
 
-1. Create a HTTP client instance (e.g. with `huskarl-reqwest`).
-2. Get authorization server metadata (or OIDC discovery data) when appropriate (but not necessary).
-3. Set up your client's authentication.
-4. Create the grant, filling in its fields, and supplying the client authentication.
+Each grant is driven by grant-specific parameters and exchanges them for a token
+at the token endpoint. The simplest need only an `exchange` call; the workflow
+grants add interactive steps first. Each has a [how-to guide](_docs::guide) with
+setup and a worked example.
 
-Once you have a grant, how exactly to use it depends on the grant. The simplest grants only
-require the `exchange` call, which exchanges grant-specific parameters for a token at the token
-endpoint.
-
-Other grants act like workflows, with a set of steps required, which will also involve one
-or more calls to the token endpoint.
-
-## Grants provided in this crate:
-
-- [`ClientCredentials`](grant::client_credentials::ClientCredentialsGrant)
-  Allows a client to exchange its own credentials in return for an access token.
-- [`Refresh`](grant::refresh::RefreshGrant)
-  Allows a client which previously received a refresh token alongside an access token, to exchange
-  it in return for an access token.
-- [`AuthorizationCode`](grant::authorization_code::AuthorizationCodeGrant)
-  Provides the ability for a client to send the interactive user a URL at which to authenticate;
-  a code from a successful authentication is returned to the client, which can exchange it in
-  return for an access token.
-- [`DeviceAuthorization`](grant::device_authorization::DeviceAuthorizationGrant)
-  Enables a client to provide a code and/or URL to an interactive user, which they can use to
-  log in from another machine. They complete the requirements of login, and the authorization
-  server is notified that it can provide the corresponding access token to the client.
-- [`TokenExchange`](grant::token_exchange::TokenExchangeGrant)
-  Allows the client to exchange an existing token for a new security token, supporting
-  impersonation and delegation use cases.
-- [`JwtBearer`](grant::jwt_bearer::JwtBearerGrant)
-  Allows a client to present a caller-supplied signed JWT assertion (RFC 7523) in exchange for
-  an access token; the assertion vouches for the principal the token is issued for.
+- [`ClientCredentialsGrant`](grant::client_credentials::ClientCredentialsGrant) — RFC 6749 §4.4
+- [`RefreshGrant`](grant::refresh::RefreshGrant) — RFC 6749 §6
+- [`AuthorizationCodeGrant`](grant::authorization_code::AuthorizationCodeGrant) — RFC 6749 §4.1
+- [`DeviceAuthorizationGrant`](grant::device_authorization::DeviceAuthorizationGrant) — RFC 8628
+- [`TokenExchangeGrant`](grant::token_exchange::TokenExchangeGrant) — RFC 8693
+- [`JwtBearerGrant`](grant::jwt_bearer::JwtBearerGrant) — RFC 7523
 
 Further grants — CIBA, provider-specific flows — can be implemented in this
-crate or by external crates.
-
-Beyond grants, the [`registration`] module implements OAuth 2.0 Dynamic Client Registration
-(RFC 7591), letting a client register itself with an authorization server and obtain the
-`client_id`/`client_secret` that drive the grants above.
-
-## Examples
-
-### Client Credentials Grant
-
-```rust
-# use huskarl::prelude::*;
-# use huskarl::core::http::HttpClient;
-# use huskarl::core::secrets::{EnvVarSecret, encodings::StringEncoding};
-# use huskarl::core::server_metadata::AuthorizationServerMetadata;
-# use huskarl::grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters};
-# use huskarl::core::client_auth::ClientSecret;
-#
-# async fn example(http_client: impl HttpClient + 'static) {
-# let issuer = "https://issuer";
-# let client_id = "client_id";
-# let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding).unwrap();
-#
-let metadata = AuthorizationServerMetadata::fetch()
-    .http_client(&http_client)
-    .issuer(issuer)
-    .call()
-    .await
-    .unwrap();
-
-let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
-    .client_id(client_id)
-    .http_client(http_client)
-    .client_auth(ClientSecret::new(client_secret))
-    .build();
-
-let token_response = grant
-    .exchange(
-        ClientCredentialsGrantParameters::builder()
-            .scopes(vec!["test"])
-            .build(),
-    )
-    .await
-    .unwrap();
-
-println!(
-    "Access token: {}",
-    token_response.access_token().token().expose_secret()
-);
-# }
-```
+crate or by external crates. The [`registration`] module implements OAuth 2.0
+Dynamic Client Registration (RFC 7591).
 
 ## Guides and explanation
 
