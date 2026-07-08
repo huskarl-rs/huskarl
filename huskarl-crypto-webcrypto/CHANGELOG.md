@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-webcrypto-v0.8.0...huskarl-crypto-webcrypto-v0.9.0) - 2026-07-08
+
+### Added
+
+- Add supported_signature_algorithms to JwsVerifierPlatform. ([#196](https://github.com/huskarl-rs/huskarl/pull/196))
+- *(core)* Add ProvidedSecret for when you have a live secret to pass to secret API. ([#180](https://github.com/huskarl-rs/huskarl/pull/180))
+- [**breaking**] Make key selection async and split refresh into miss/TTL paths ([#130](https://github.com/huskarl-rs/huskarl/pull/130))
+
+### Fixed
+
+- *(resource-server)* Escape the DPoP algs challenge value ([#203](https://github.com/huskarl-rs/huskarl/pull/203))
+- *(crypto-webcrypto)* Validate RSA modulus by bit length with an upper bound ([#201](https://github.com/huskarl-rs/huskarl/pull/201))
+- *(crypto-webcrypto)* Surface JS error details instead of an empty string ([#149](https://github.com/huskarl-rs/huskarl/pull/149))
+- *(crypto-webcrypto)* Reject kid-mismatched tokens in verify() ([#148](https://github.com/huskarl-rs/huskarl/pull/148))
+
+### Other
+
+- Update documentation ([#195](https://github.com/huskarl-rs/huskarl/pull/195))
+- Update documentation ([#193](https://github.com/huskarl-rs/huskarl/pull/193))
+- *(crypto)* [**breaking**] Make PrivateJwk a sum type and route symmetric keys through the JWK funnel ([#188](https://github.com/huskarl-rs/huskarl/pull/188))
+- *(crypto)* [**breaking**] Add Pkcs8Pem and remove the legacy key loaders ([#185](https://github.com/huskarl-rs/huskarl/pull/185))
+- [**breaking**] Disambiguate crypto-native key-load error enums ([#183](https://github.com/huskarl-rs/huskarl/pull/183))
+- Pay down the usability-review docs debt ([#179](https://github.com/huskarl-rs/huskarl/pull/179))
+- Document that a particular AES-GCM key shoud be used at most 2^32 times ([#158](https://github.com/huskarl-rs/huskarl/pull/158))
+- Document crypto strategies, JWT verification config, and revocation TTL ([#131](https://github.com/huskarl-rs/huskarl/pull/131))
+- Require RSA keys to be 2024 bits or more for webcrypto. ([#120](https://github.com/huskarl-rs/huskarl/pull/120))
+- Docs update ([#92](https://github.com/huskarl-rs/huskarl/pull/92))
+
  - Require RSA keys to be at least 2048 bits.
 
 ## [0.8.0] - 2026-06-15
