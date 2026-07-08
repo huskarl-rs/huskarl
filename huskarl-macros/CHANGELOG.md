@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.3.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-macros-v0.3.0...huskarl-macros-v0.3.1) - 2026-07-08
+
+### Added
+
+- *(macros)* Handle metadata fields that are keywords ([#160](https://github.com/huskarl-rs/huskarl/pull/160))
+
+### Other
+
+- Pay down the usability-review docs debt ([#179](https://github.com/huskarl-rs/huskarl/pull/179))
+- Docs update ([#92](https://github.com/huskarl-rs/huskarl/pull/92))
+
 ### Removed
 
 - `#[try_builder]` and its `#[try_setter(Trait::method)]` field attribute.

@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1199,7 +1199,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-core"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1231,7 +1231,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-native"
-version = "0.8.5"
+version = "0.9.0"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-webcrypto"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64",
  "huskarl-core",
@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-macros"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bon",
  "darling",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-reqwest"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "bon",
  "bytes",
@@ -1328,7 +1328,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64",
  "bon",

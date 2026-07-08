@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.7.1...huskarl-core-v0.8.0) - 2026-07-08
+
+### Added
+
+- Add supported_signature_algorithms to JwsVerifierPlatform. ([#196](https://github.com/huskarl-rs/huskarl/pull/196))
+- *(crypto)* [**breaking**] Load private keys through JWKs ([#184](https://github.com/huskarl-rs/huskarl/pull/184))
+- *(core)* Add ProvidedSecret for when you have a live secret to pass to secret API. ([#180](https://github.com/huskarl-rs/huskarl/pull/180))
+- *(core)* Let ClaimCheck fields accept plain strings ([#178](https://github.com/huskarl-rs/huskarl/pull/178))
+- *(core)* Add the RFC 9728 ProtectedResourceMetadata document ([#174](https://github.com/huskarl-rs/huskarl/pull/174))
+- *(core)* Add RFC 9728 protected resource metadata URL derivation ([#172](https://github.com/huskarl-rs/huskarl/pull/172))
+- *(core)* Reject non-http(s) schemes and userinfo in EndpointUrl ([#169](https://github.com/huskarl-rs/huskarl/pull/169))
+- *(core)* Give EndpointUrl Display and Uri conversions ([#168](https://github.com/huskarl-rs/huskarl/pull/168))
+- *(resource-server)* Refuse to validate DPoP keys that have a private component. ([#155](https://github.com/huskarl-rs/huskarl/pull/155))
+- *(core)* [**breaking**] Enable mapping of secret output, make b64/hex more forgiving. ([#153](https://github.com/huskarl-rs/huskarl/pull/153))
+- [**breaking**] Make key selection async and split refresh into miss/TTL paths ([#130](https://github.com/huskarl-rs/huskarl/pull/130))
+- *(core)* Add configurable TTL to JwksSource ([#129](https://github.com/huskarl-rs/huskarl/pull/129))
+
+### Fixed
+
+- *(dpop)* Stop setting exp on client DPoP proofs by default ([#205](https://github.com/huskarl-rs/huskarl/pull/205))
+- *(oidc)* Guard ID-token auth_time overflow and default clock leeway ([#189](https://github.com/huskarl-rs/huskarl/pull/189))
+- *(core)* Don't reject future-iat tokens via the max_token_age check ([#140](https://github.com/huskarl-rs/huskarl/pull/140))
+- *(core)* Skip malformed JWKS entries instead of failing the whole set ([#139](https://github.com/huskarl-rs/huskarl/pull/139))
+- *(core)* Enforce refresh policy under the single-flight lock ([#138](https://github.com/huskarl-rs/huskarl/pull/138))
+- *(core)* Remove fuzz Cargo.lock
+- *(core)* Bound metrics alg label to registered JWS algorithms ([#125](https://github.com/huskarl-rs/huskarl/pull/125))
+
+### Other
+
+- Update documentation ([#206](https://github.com/huskarl-rs/huskarl/pull/206))
+- Update documentation ([#195](https://github.com/huskarl-rs/huskarl/pull/195))
+- Update documentation ([#193](https://github.com/huskarl-rs/huskarl/pull/193))
+- *(crypto)* [**breaking**] Make PrivateJwk a sum type and route symmetric keys through the JWK funnel ([#188](https://github.com/huskarl-rs/huskarl/pull/188))
+- [**breaking**] Normalize DPoP capitalization across types. ([#182](https://github.com/huskarl-rs/huskarl/pull/182))
+- [**breaking**] Make authentication_params a builder struct, rename authentication_context ([#181](https://github.com/huskarl-rs/huskarl/pull/181))
+- Pay down the usability-review docs debt ([#179](https://github.com/huskarl-rs/huskarl/pull/179))
+- Align the preludes on a call-side-traits principle ([#173](https://github.com/huskarl-rs/huskarl/pull/173))
+- *(core)* Serialize EndpointUrl without an intermediate allocation ([#170](https://github.com/huskarl-rs/huskarl/pull/170))
+- Extract common max-age handling to a shared function ([#161](https://github.com/huskarl-rs/huskarl/pull/161))
+- Document that a particular AES-GCM key shoud be used at most 2^32 times ([#158](https://github.com/huskarl-rs/huskarl/pull/158))
+- Document crypto strategies, JWT verification config, and revocation TTL ([#131](https://github.com/huskarl-rs/huskarl/pull/131))
+- *(core)* [**breaking**] Remove dead UnsealError::AuthenticationFailed variant ([#128](https://github.com/huskarl-rs/huskarl/pull/128))
+- Update docs ([#124](https://github.com/huskarl-rs/huskarl/pull/124))
+- Limit body size of responses (default 1Mb) ([#123](https://github.com/huskarl-rs/huskarl/pull/123))
+
 ## [0.7.1] - 2026-06-29
 
 ### Changes
