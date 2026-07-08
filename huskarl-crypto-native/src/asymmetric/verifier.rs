@@ -53,13 +53,14 @@ impl Key {
 
     pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Option<Key> {
         fn rsa_key_from_jwk(rsa_jwk: jwk::RsaPublicKey) -> Option<rsa::RsaPublicKey> {
-            // RFC 7518 §4.2 sets 2048 bits as the minimum RSA key size for JWS;
-            // anything smaller is rejected rather than verified.
-            let modulus_bytes = rsa_jwk.n.iter().skip_while(|&&b| b == 0).count();
-            if modulus_bytes < 2048 / 8 {
+            // Min: RFC 7518 §3.3. Max: DoS guard on attacker-supplied JWKs (e.g. a DPoP-proof key).
+            const MIN_RSA_BITS: u32 = 2048;
+            const MAX_RSA_BITS: u32 = 8192;
+
+            let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
+            if !(MIN_RSA_BITS..=MAX_RSA_BITS).contains(&n_boxed.bits_vartime()) {
                 return None;
             }
-            let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
             let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e.into_boxed_slice());
             RsaPublicKey::new(n_boxed, e_boxed).ok()
         }
@@ -153,8 +154,8 @@ impl AsymmetricPublicKey {
     ///
     /// Returns `None` if the JWK cannot be used for verification: its `use` is
     /// not `sig`, its `key_ops` excludes `verify`, the algorithm is unsupported,
-    /// the key material fails to parse, or — for RSA — the modulus is under 2048
-    /// bits (RFC 7518 §6.3).
+    /// the key material fails to parse, or — for RSA — the modulus is outside the
+    /// 2048–8192 bit range (RFC 7518 §3.3 sets the 2048-bit minimum).
     ///
     /// # Examples
     ///
@@ -412,12 +413,27 @@ mod tests {
 
     #[test]
     fn from_jwk_rejects_small_rsa_modulus() {
-        // A 1024-bit modulus is below the RFC 7518 §4.2 minimum of 2048 bits.
+        // 1024-bit: below the RFC 7518 §3.3 minimum of 2048.
         let jwk = huskarl_core::jwk::PublicJwk::builder()
             .algorithm("RS256")
             .key(
                 huskarl_core::jwk::RsaPublicKey::builder()
                     .n([0xFF; 128])
+                    .e([0x01, 0x00, 0x01])
+                    .build(),
+            )
+            .build();
+        assert!(AsymmetricPublicKey::from_jwk(jwk).is_none());
+    }
+
+    #[test]
+    fn from_jwk_rejects_oversized_rsa_modulus() {
+        // 16384-bit: above the 8192-bit DoS ceiling.
+        let jwk = huskarl_core::jwk::PublicJwk::builder()
+            .algorithm("RS256")
+            .key(
+                huskarl_core::jwk::RsaPublicKey::builder()
+                    .n([0xFF; 2048])
                     .e([0x01, 0x00, 0x01])
                     .build(),
             )
