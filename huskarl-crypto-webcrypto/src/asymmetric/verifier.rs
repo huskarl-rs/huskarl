@@ -108,7 +108,12 @@ fn rsa_modulus_bits(n: &[u8]) -> u32 {
     match n.iter().position(|&b| b != 0) {
         None => 0,
         // Saturate: a modulus too long to fit u32 bytes is far past MAX_RSA_BITS anyway.
-        Some(i) => u32::try_from(n.len() - i).unwrap_or(u32::MAX).saturating_mul(8) - n[i].leading_zeros(),
+        Some(i) => {
+            u32::try_from(n.len() - i)
+                .unwrap_or(u32::MAX)
+                .saturating_mul(8)
+                - n[i].leading_zeros()
+        }
     }
 }
 
