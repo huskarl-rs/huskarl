@@ -21,8 +21,8 @@ use crate::{
         dpop_proof::{DPoPProofError, DPoPProofValidator, ValidatedDPoPProof},
         error::{
             DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DPoPRequiredForBoundTokenSnafu,
-            DPoPRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, TokenBindingError,
-            UnsupportedCnfMethodSnafu,
+            DPoPRequiredSnafu, MissingDPoPHeaderSnafu, MtlsBindingSnafu, MultipleDPoPHeadersSnafu,
+            TokenBindingError, UnsupportedCnfMethodSnafu,
         },
     },
 };
@@ -94,6 +94,10 @@ pub(crate) async fn check_token_binding(
             None
         }
         TokenType::DPoP => {
+            // RFC 9449 §4.3: exactly one DPoP header.
+            if headers.get_all("DPoP").iter().count() > 1 {
+                return (None, MultipleDPoPHeadersSnafu.fail());
+            }
             let dpop_proof = match headers
                 .get("DPoP")
                 .map(|hv| hv.to_str().context(DPoPHeaderNotStringSnafu))
@@ -761,6 +765,32 @@ mod tests {
         assert!(
             matches!(result, Err(DPoPBindingError::ProofClaimMismatch { claim, .. }) if claim == "htu"),
             "expected htu mismatch, got {result:?}"
+        );
+    }
+
+    /// RFC 9449 §4.3: more than one `DPoP` header must be rejected outright.
+    #[tokio::test]
+    async fn multiple_dpop_headers_are_rejected() {
+        let mut headers = http::HeaderMap::new();
+        headers.append("DPoP", http::HeaderValue::from_static("proof-one"));
+        headers.append("DPoP", http::HeaderValue::from_static("proof-two"));
+        let confirmation = cnf(Some("some-jkt".to_string()));
+        let (nonce, result) = check_token_binding(
+            TokenType::DPoP,
+            Some(&confirmation),
+            &SecretString::new(ACCESS_TOKEN),
+            &checker(None, false),
+            false,
+            &headers,
+            &http::Method::POST,
+            &req_uri(),
+            None,
+        )
+        .await;
+        assert!(nonce.is_none());
+        assert!(
+            matches!(result, Err(TokenBindingError::MultipleDPoPHeaders)),
+            "got {result:?}"
         );
     }
 
