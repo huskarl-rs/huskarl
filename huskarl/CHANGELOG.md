@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.9.0...huskarl-v0.9.1) - 2026-07-08
+
+### Other
+
+- Give resource-server both version and path dep in root Cargo.toml - doc fix
+
 ## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.8.0...huskarl-v0.9.0) - 2026-07-08
 
 ### Added
