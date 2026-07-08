@@ -1147,7 +1147,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "arc-swap",
  "base64",
