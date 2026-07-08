@@ -33,7 +33,7 @@ use crate::{
                 PendingState, StartInput, StartOutput,
             },
         },
-        core::{OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry},
+        core::{OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry, join_space},
     },
     token::id_token::{IdTokenClaims, IdTokenValidator},
 };
@@ -405,7 +405,7 @@ fn build_authorization_payload<'a>(
         rest: AuthorizationPayload {
             response_type: "code",
             redirect_uri: &grant.redirect_uri,
-            scope: start_input.scopes.as_deref(),
+            scope: join_space(start_input.scope.as_deref()),
             state: &start_input.state,
             code_challenge: pkce.map(|p| p.challenge.as_ref()),
             code_challenge_method: pkce.map(|p| p.method),
@@ -416,9 +416,9 @@ fn build_authorization_payload<'a>(
             // unknown parameters do not. `send_oidc_nonce` forces either way.
             nonce: {
                 let is_oidc = start_input
-                    .scopes
+                    .scope
                     .as_deref()
-                    .is_some_and(|s| s.split(' ').any(|scope| scope == "openid"));
+                    .is_some_and(|s| s.iter().any(|scope| scope == "openid"));
                 grant
                     .send_oidc_nonce
                     .unwrap_or(is_oidc)
@@ -427,10 +427,10 @@ fn build_authorization_payload<'a>(
             display: start_input.display.as_ref(),
             prompt: start_input.prompt.as_ref(),
             max_age: start_input.max_age.map(|d| d.as_secs()),
-            ui_locales: start_input.ui_locales.as_ref().map(|l| l.join(" ")),
+            ui_locales: join_space(start_input.ui_locales.as_deref()),
             id_token_hint: start_input.id_token_hint.as_ref(),
             login_hint: start_input.login_hint.as_deref(),
-            acr_values: start_input.acr_values.as_ref().map(|l| l.join(" ")),
+            acr_values: join_space(start_input.acr_values.as_deref()),
             resource: start_input.resource.as_deref(),
             authorization_details: start_input.authorization_details.as_deref(),
         },
@@ -490,7 +490,7 @@ mod tests {
 
     async fn start_url(grant: &Grant) -> String {
         grant
-            .start(StartInput::scopes(["openid"]))
+            .start(StartInput::scope(bon::vec!["openid"]))
             .await
             .unwrap()
             .authorization_url
@@ -534,7 +534,10 @@ mod tests {
             .unwrap();
 
         let before = SystemTime::now();
-        let output = grant.start(StartInput::scopes(["openid"])).await.unwrap();
+        let output = grant
+            .start(StartInput::scope(bon::vec!["openid"]))
+            .await
+            .unwrap();
         let expires_at = output.expires_at.expect("PAR delivery sets an expiry");
 
         // The RFC 9126 `expires_in` (90s) is anchored at receipt.
@@ -559,7 +562,10 @@ mod tests {
             .await
             .unwrap();
 
-        let output = grant.start(StartInput::scopes(["openid"])).await.unwrap();
+        let output = grant
+            .start(StartInput::scope(bon::vec!["openid"]))
+            .await
+            .unwrap();
         assert_eq!(output.expires_at, None);
     }
 
@@ -636,13 +642,19 @@ mod tests {
             .await
             .unwrap();
 
-        let openid = grant.start(StartInput::scopes(["openid"])).await.unwrap();
+        let openid = grant
+            .start(StartInput::scope(bon::vec!["openid"]))
+            .await
+            .unwrap();
         assert!(
             openid.pending_state.nonce.is_some(),
             "openid scope sends the nonce, so it must be persisted"
         );
 
-        let plain = grant.start(StartInput::scopes(["profile"])).await.unwrap();
+        let plain = grant
+            .start(StartInput::scope(bon::vec!["profile"]))
+            .await
+            .unwrap();
         assert!(
             plain.pending_state.nonce.is_none(),
             "no openid scope: nonce not sent, so none persisted for completion"
@@ -665,7 +677,7 @@ mod tests {
             .unwrap();
 
         let start_input = StartInput::builder()
-            .scopes(["openid"])
+            .scope(bon::vec!["openid"])
             .authorization_details(vec![
                 AuthorizationDetail::builder("payment_initiation")
                     .with("actions", serde_json::json!(["initiate"]))
@@ -695,7 +707,7 @@ mod tests {
                 crate::core::AuthorizationDetail::builder("payment_initiation").build(),
             ])
             .build();
-        assert!(start_input.scopes.is_none());
+        assert!(start_input.scope.is_none());
         assert!(start_input.authorization_details.is_some());
     }
 
@@ -847,7 +859,7 @@ mod tests {
         let result = grant
             .start(
                 StartInput::builder()
-                    .scopes(["openid"])
+                    .scope(bon::vec!["openid"])
                     .id_token_hint(crate::token::IdToken::from("a".repeat(70 * 1024)))
                     .build(),
             )

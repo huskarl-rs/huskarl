@@ -79,7 +79,7 @@ use huskarl::{
 #     grant: &DeviceAuthorizationGrant,
 # ) -> Result<(), Box<dyn std::error::Error>> {
 
-let start_output = grant.start(StartInput::scopes(["read", "write"])).await?;
+let start_output = grant.start(StartInput::scope(bon::vec!["read", "write"])).await?;
 
 // Display to the user — they visit the URL and enter the code on another device.
 println!("Visit: {}", start_output.verification_uri);

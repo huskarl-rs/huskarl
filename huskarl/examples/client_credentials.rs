@@ -39,7 +39,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
     let token_response = grant
         .exchange(
             ClientCredentialsGrantParameters::builder()
-                .scopes(vec!["test"])
+                .scope(bon::vec!["test"])
                 .build(),
         )
         .await

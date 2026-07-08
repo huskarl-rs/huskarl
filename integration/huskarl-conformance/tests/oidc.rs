@@ -119,7 +119,7 @@ async fn run_plan(plan_name: &str) -> Vec<String> {
             &client_id(),
             client_auth(),
             NoDPoP,
-            ["openid", "profile", "email"],
+            bon::vec!["openid", "profile", "email"],
             &listener,
             &redirect_uri,
             NoJar,

@@ -21,7 +21,7 @@ use crate::{
         http::HttpClient,
         secrets::SecretString,
     },
-    grant::core::{OAuth2ExchangeGrant, mk_scopes},
+    grant::core::{OAuth2ExchangeGrant, join_space},
     token::RefreshToken,
 };
 
@@ -136,7 +136,7 @@ impl OAuth2ExchangeGrant for RefreshGrant {
         RefreshGrantForm {
             grant_type: "refresh_token",
             refresh_token: params.refresh_token.token().clone(),
-            scope: params.scope,
+            scope: join_space(params.scope.as_deref()),
             resource: params.resource,
             authorization_details: params.authorization_details,
         }
@@ -149,8 +149,7 @@ pub struct RefreshGrantParameters {
     /// The refresh token to use in the refresh token request.
     refresh_token: RefreshToken,
     /// Scopes for downscoping (must be previously granted scopes).
-    #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
-    scope: Option<String>,
+    scope: Option<Vec<String>>,
     /// The target resource(s) for the access token.
     resource: Option<Vec<String>>,
     /// RFC 9396 `authorization_details` requested for the issued access token.

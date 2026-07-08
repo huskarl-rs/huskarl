@@ -128,7 +128,7 @@ impl DeviceAuthorizationGrant {
     /// authorization request.
     pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
         let payload = DeviceAuthorizationRequest {
-            scope: start_input.scopes.as_deref(),
+            scope: crate::grant::core::join_space(start_input.scope.as_deref()),
             resource: start_input.resource.as_deref(),
             authorization_details: start_input.authorization_details.as_deref(),
         };
@@ -368,7 +368,7 @@ pub const DEFAULT_MIN_POLL_INTERVAL_SECS: u32 = 5;
 
 #[derive(Debug, Serialize)]
 struct DeviceAuthorizationRequest<'a> {
-    scope: Option<&'a str>,
+    scope: Option<String>,
     resource: Option<&'a [String]>,
     authorization_details: Option<&'a [crate::core::AuthorizationDetail]>,
 }
@@ -443,11 +443,11 @@ pub enum PollResult {
 /// The input to start the device authorization flow.
 #[derive(Debug, Clone, Builder)]
 pub struct StartInput {
-    #[builder(required, default, with = |scopes: impl IntoIterator<Item = impl Into<String>>| crate::grant::core::mk_scopes(scopes))]
-    scopes: Option<String>,
+    /// The requested scope(s) for the device authorization request.
+    scope: Option<Vec<String>>,
     resource: Option<Vec<String>>,
     /// RFC 9396 Rich Authorization Requests, sent on the device authorization
-    /// request alongside (or instead of) `scopes`.
+    /// request alongside (or instead of) `scope`.
     authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
@@ -457,8 +457,8 @@ impl StartInput {
     /// This is enough for most use cases; the builder exists as an extensible
     /// API where arbitrary extra fields may be added in future.
     #[must_use]
-    pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self::builder().scopes(scopes).build()
+    pub fn scope(scope: Vec<String>) -> Self {
+        Self::builder().scope(scope).build()
     }
 }
 
@@ -553,7 +553,7 @@ mod tests {
                 .build(),
         ];
         let payload = DeviceAuthorizationRequest {
-            scope: Some("openid"),
+            scope: Some("openid".into()),
             resource: None,
             authorization_details: Some(&details),
         };
@@ -576,7 +576,7 @@ mod tests {
                 crate::core::AuthorizationDetail::builder("payment_initiation").build(),
             ])
             .build();
-        assert!(input.scopes.is_none());
+        assert!(input.scope.is_none());
         assert!(input.authorization_details.is_some());
     }
 

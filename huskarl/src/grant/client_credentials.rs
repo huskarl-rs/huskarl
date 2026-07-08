@@ -22,7 +22,7 @@ use crate::{
         platform::MaybeSendBoxFuture,
     },
     grant::{
-        core::{OAuth2ExchangeGrant, mk_scopes},
+        core::{OAuth2ExchangeGrant, join_space},
         refresh::RefreshGrant,
     },
 };
@@ -143,7 +143,7 @@ impl OAuth2ExchangeGrant for ClientCredentialsGrant {
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {
         ClientCredentialsGrantForm {
             grant_type: "client_credentials",
-            scope: params.scope,
+            scope: join_space(params.scope.as_deref()),
             resource: params.resource,
             authorization_details: params.authorization_details,
         }
@@ -155,8 +155,7 @@ impl OAuth2ExchangeGrant for ClientCredentialsGrant {
 #[builder(on(String, into))]
 pub struct ClientCredentialsGrantParameters {
     /// The requested scope(s) for the access token.
-    #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
-    scope: Option<String>,
+    scope: Option<Vec<String>>,
     /// The target resource(s) for the access token.
     resource: Option<Vec<String>>,
     /// RFC 9396 `authorization_details` requested for the issued access token.

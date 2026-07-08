@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     core::{AuthorizationDetail, platform::Duration},
-    grant::core::mk_scopes,
     token::IdToken,
 };
 
@@ -16,7 +15,7 @@ pub struct AuthorizationPayload<'a> {
     pub(super) response_type: &'static str,
     pub(super) redirect_uri: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) scope: Option<&'a str>,
+    pub(super) scope: Option<String>,
     pub(super) state: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) code_challenge: Option<&'a str>,
@@ -62,7 +61,7 @@ pub struct AuthorizationPayloadWithClientId<'a> {
 ///
 /// The device-authorization flow has a same-named counterpart
 /// ([`device_authorization::StartInput`](crate::grant::device_authorization::StartInput))
-/// with the same [`scopes`](Self::scopes) convenience constructor; when
+/// with the same [`scope`](Self::scope) convenience constructor; when
 /// wiring both flows in one module, qualify or alias the imports.
 #[derive(Debug, Clone, Builder)]
 #[builder(finish_fn(vis = "", name = build_internal), on(String, into))]
@@ -71,8 +70,8 @@ pub struct StartInput {
     pub(super) state: String,
     #[builder(finish_fn)]
     pub(super) nonce: String,
-    #[builder(required, default, with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
-    pub(super) scopes: Option<String>,
+    /// The requested scope(s) for the authorization request.
+    pub(super) scope: Option<Vec<String>>,
     pub(super) resource: Option<Vec<String>>,
     /// RFC 9396 Rich Authorization Requests: fine-grained authorization
     /// requirements expressed as typed authorization-details objects.
@@ -134,8 +133,9 @@ impl StartInput {
     ///
     /// This is enough for most use cases; the builder exists as an extensible
     /// API where arbitrary extra fields may be added in future.
-    pub fn scopes(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self::builder().scopes(scopes).build()
+    #[must_use]
+    pub fn scope(scope: Vec<String>) -> Self {
+        Self::builder().scope(scope).build()
     }
 }
 
@@ -247,7 +247,7 @@ mod tests {
         let payload = AuthorizationPayload {
             response_type: "code",
             redirect_uri: "http://127.0.0.1/cb",
-            scope: Some("openid"),
+            scope: Some("openid".into()),
             state: "state",
             code_challenge: None,
             code_challenge_method: None,

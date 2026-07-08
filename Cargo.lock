@@ -1183,6 +1183,7 @@ dependencies = [
 name = "huskarl-conformance"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "bytes",
  "http",
  "huskarl",
@@ -1285,6 +1286,7 @@ dependencies = [
 name = "huskarl-integration"
 version = "0.1.0"
 dependencies = [
+ "bon",
  "http",
  "huskarl",
  "huskarl-crypto-native",

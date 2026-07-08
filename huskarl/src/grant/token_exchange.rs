@@ -24,7 +24,7 @@ use crate::{
         secrets::SecretString,
     },
     grant::{
-        core::{OAuth2ExchangeGrant, mk_scopes},
+        core::{OAuth2ExchangeGrant, join_space},
         refresh::RefreshGrant,
     },
 };
@@ -153,7 +153,7 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
             resource: params.resource,
             authorization_details: params.authorization_details,
             audience: params.audience,
-            scope: params.scope,
+            scope: join_space(params.scope.as_deref()),
             requested_token_type: params.requested_token_type,
             subject_token: params.subject.token,
             subject_token_type: params.subject.token_type,
@@ -176,8 +176,7 @@ pub struct TokenExchangeGrantParameters {
     /// The logical name of the target service or resource where the requested token will be used.
     audience: Option<String>,
     /// The requested scope(s) for the issued security token.
-    #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
-    scope: Option<String>,
+    scope: Option<Vec<String>>,
     /// The type of the requested security token (e.g. `urn:ietf:params:oauth:token-type:access_token`).
     requested_token_type: Option<String>,
     /// An optional security token representing the party acting on behalf of the subject.
@@ -294,7 +293,7 @@ mod tests {
                     .build(),
             )
             .audience("https://api.example")
-            .scopes(["read", "write"])
+            .scope(bon::vec!["read", "write"])
             .requested_token_type("urn:ietf:params:oauth:token-type:access_token")
             .authorization_details(vec![
                 crate::core::AuthorizationDetail::builder("payment_initiation")
@@ -329,7 +328,7 @@ mod tests {
         // Only the subject is supplied; every other field is optional.
         let params = TokenExchangeGrantParameters::builder()
             .subject(subject())
-            .scopes(Vec::<String>::new())
+            .scope(vec![])
             .build();
 
         let encoded = crate::core::oauth_form::to_string(&grant().build_form(params)).unwrap();
@@ -361,7 +360,7 @@ mod tests {
                 "https://api.example.com".to_string(),
                 "https://other.example.com".to_string(),
             ])
-            .scopes(Vec::<String>::new())
+            .scope(vec![])
             .build();
 
         let encoded = crate::core::oauth_form::to_string(&grant().build_form(params)).unwrap();

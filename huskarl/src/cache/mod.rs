@@ -176,7 +176,7 @@ mod tests {
             )
             .grant_parameters(
                 ClientCredentialsGrantParameters::builder()
-                    .scopes(["read", "write"])
+                    .scope(bon::vec!["read", "write"])
                     .build(),
             )
             .refresh_store(InMemoryRefreshTokenStore::default())

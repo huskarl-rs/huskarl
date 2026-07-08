@@ -25,7 +25,7 @@ use crate::{
         secrets::SecretString,
     },
     grant::{
-        core::{OAuth2ExchangeGrant, mk_scopes},
+        core::{OAuth2ExchangeGrant, join_space},
         refresh::RefreshGrant,
     },
 };
@@ -154,7 +154,7 @@ impl OAuth2ExchangeGrant for JwtBearerGrant {
         JwtBearerGrantForm {
             grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
             assertion: params.assertion,
-            scope: params.scope,
+            scope: join_space(params.scope.as_deref()),
             resource: params.resource,
             authorization_details: params.authorization_details,
         }
@@ -176,8 +176,7 @@ pub struct JwtBearerGrantParameters {
     #[builder(into)]
     assertion: SecretString,
     /// The requested scope(s) for the access token.
-    #[builder(required, default, name = "scopes", with = |scopes: impl IntoIterator<Item = impl Into<String>>| mk_scopes(scopes))]
-    scope: Option<String>,
+    scope: Option<Vec<String>>,
     /// The target resource(s) for the access token (RFC 8707).
     resource: Option<Vec<String>>,
     /// RFC 9396 `authorization_details` requested for the issued access token.

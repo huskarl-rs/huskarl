@@ -76,7 +76,7 @@ use huskarl::grant::authorization_code::{AuthorizationCodeGrant, StartInput};
 #     grant: &AuthorizationCodeGrant,
 # ) -> Result<(), Box<dyn std::error::Error>> {
 
-let start_output = grant.start(StartInput::scopes(["read", "write"])).await?;
+let start_output = grant.start(StartInput::scope(bon::vec!["read", "write"])).await?;
 
 // Redirect the user to this URL to authorize.
 let authorization_url = start_output.authorization_url;

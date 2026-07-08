@@ -19,6 +19,7 @@ huskarl-crypto-native = { workspace = true }
 huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
 huskarl-resource-server = { path = "../../huskarl-resource-server", default-features = true }
 huskarl-testkit = { path = "../huskarl-testkit" }
+bon = { workspace = true }
 http = "1"
 # Custom `harness = false` test harness for the per-provider `tests/*.rs`.
 libtest-mimic = "0.8"

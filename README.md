@@ -84,7 +84,7 @@ async fn fetch_token() -> Result<(), huskarl::core::Error> {
     let token_response = grant
         .exchange(
             ClientCredentialsGrantParameters::builder()
-                .scopes(vec!["read"])
+                .scope(bon::vec!["read"])
                 .build(),
         )
         .await?;

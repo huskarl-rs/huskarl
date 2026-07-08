@@ -63,7 +63,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         pending_state,
         ..
     } = grant
-        .start(StartInput::scopes(["test"]))
+        .start(StartInput::scope(bon::vec!["test"]))
         .await
         .whatever_context("Getting authorization URL failed")?;
 
