@@ -103,12 +103,20 @@ enum Key {
     Ed25519(CryptoKey),
 }
 
-/// RFC 7518 §4.2 sets 2048 bits as the minimum RSA key size for JWS; anything
-/// smaller is rejected rather than imported. `SubtleCrypto.importKey` performs
-/// no such check, so we enforce it here to match the native backend.
-fn rsa_modulus_at_least_2048(rsa_key: &jwk::RsaPublicKey) -> bool {
-    let modulus_bytes = rsa_key.n.iter().skip_while(|&&b| b == 0).count();
-    modulus_bytes >= 2048 / 8
+/// Bit length of a big-endian modulus, sans bignum dep (native uses `crypto-bigint`).
+fn rsa_modulus_bits(n: &[u8]) -> u32 {
+    match n.iter().position(|&b| b != 0) {
+        None => 0,
+        // Saturate: a modulus too long to fit u32 bytes is far past MAX_RSA_BITS anyway.
+        Some(i) => u32::try_from(n.len() - i).unwrap_or(u32::MAX).saturating_mul(8) - n[i].leading_zeros(),
+    }
+}
+
+/// Min: RFC 7518 §3.3 floor. Max: `DoS` guard on attacker-supplied JWKs (importKey enforces neither).
+fn rsa_modulus_in_range(rsa_key: &jwk::RsaPublicKey) -> bool {
+    const MIN_RSA_BITS: u32 = 2048;
+    const MAX_RSA_BITS: u32 = 8192;
+    (MIN_RSA_BITS..=MAX_RSA_BITS).contains(&rsa_modulus_bits(&rsa_key.n))
 }
 
 async fn create_rsa_key(
@@ -186,7 +194,7 @@ impl Key {
                 Some(Key::Es384(create_ec_key(&crypto, "P-384", &jwk).await?))
             }
             jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.is_none() && rsa_modulus_at_least_2048(rsa_key) =>
+                if jwk.algorithm.is_none() && rsa_modulus_in_range(rsa_key) =>
             {
                 Some(Key::Rsa {
                     rs256: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk).await?,
@@ -199,7 +207,7 @@ impl Key {
             }
             jwk::PublicKey::Rsa(rsa_key)
                 if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS256")
-                    && rsa_modulus_at_least_2048(rsa_key) =>
+                    && rsa_modulus_in_range(rsa_key) =>
             {
                 Some(Key::Rs256(
                     create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk).await?,
@@ -207,7 +215,7 @@ impl Key {
             }
             jwk::PublicKey::Rsa(rsa_key)
                 if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS384")
-                    && rsa_modulus_at_least_2048(rsa_key) =>
+                    && rsa_modulus_in_range(rsa_key) =>
             {
                 Some(Key::Rs384(
                     create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-384", &jwk).await?,
@@ -215,7 +223,7 @@ impl Key {
             }
             jwk::PublicKey::Rsa(rsa_key)
                 if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS512")
-                    && rsa_modulus_at_least_2048(rsa_key) =>
+                    && rsa_modulus_in_range(rsa_key) =>
             {
                 Some(Key::Rs512(
                     create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-512", &jwk).await?,
@@ -223,7 +231,7 @@ impl Key {
             }
             jwk::PublicKey::Rsa(rsa_key)
                 if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS256")
-                    && rsa_modulus_at_least_2048(rsa_key) =>
+                    && rsa_modulus_in_range(rsa_key) =>
             {
                 Some(Key::Ps256(
                     create_rsa_key(&crypto, "RSA-PSS", "SHA-256", &jwk).await?,
@@ -231,7 +239,7 @@ impl Key {
             }
             jwk::PublicKey::Rsa(rsa_key)
                 if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS384")
-                    && rsa_modulus_at_least_2048(rsa_key) =>
+                    && rsa_modulus_in_range(rsa_key) =>
             {
                 Some(Key::Ps384(
                     create_rsa_key(&crypto, "RSA-PSS", "SHA-384", &jwk).await?,
@@ -239,7 +247,7 @@ impl Key {
             }
             jwk::PublicKey::Rsa(rsa_key)
                 if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS512")
-                    && rsa_modulus_at_least_2048(rsa_key) =>
+                    && rsa_modulus_in_range(rsa_key) =>
             {
                 Some(Key::Ps512(
                     create_rsa_key(&crypto, "RSA-PSS", "SHA-512", &jwk).await?,
@@ -660,6 +668,37 @@ mod tests {
             )
             .build();
         assert!(AsymmetricPublicKey::from_jwk(jwk_no_alg).await.is_none());
+    }
+
+    /// Above the 8192-bit ceiling: rejected before any `SubtleCrypto` import.
+    #[wasm_bindgen_test]
+    async fn from_jwk_rejects_oversized_rsa_modulus() {
+        // A 16384-bit modulus (2048 bytes) is above the 8192-bit ceiling.
+        let jwk = jwk::PublicJwk::builder()
+            .algorithm("RS256")
+            .key(
+                jwk::RsaPublicKey::builder()
+                    .n([0xFF; 2048])
+                    .e([0x01, 0x00, 0x01])
+                    .build(),
+            )
+            .build();
+        assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
+    }
+
+    /// Significant bits of a big-endian modulus, skipping leading zero bytes.
+    #[wasm_bindgen_test]
+    fn modulus_bits_counts_significant_bits() {
+        use super::rsa_modulus_bits;
+        assert_eq!(rsa_modulus_bits(&[]), 0);
+        assert_eq!(rsa_modulus_bits(&[0x00, 0x00]), 0);
+        assert_eq!(rsa_modulus_bits(&[0x00, 0x01]), 1);
+        assert_eq!(rsa_modulus_bits(&[0xFF]), 8);
+        assert_eq!(rsa_modulus_bits(&[0x01, 0x00]), 9);
+        // 256 big-endian bytes led by 0x80 is exactly 2048 bits.
+        let mut n = [0u8; 256];
+        n[0] = 0x80;
+        assert_eq!(rsa_modulus_bits(&n), 2048);
     }
 
     /// A P-256 key labelled `ES384` matches no [`Key::new`] arm and is rejected.
