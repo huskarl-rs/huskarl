@@ -10,6 +10,11 @@ keywords = ["oauth2", "security", "authentication", "wasm"]
 categories = ["authentication"]
 readme = "README.md"
 
+[package.metadata.docs.rs]
+# The crate is empty off-wasm32 (see lib.rs), so docs.rs must build the wasm
+# target to render anything.
+default-target = "wasm32-unknown-unknown"
+
 [dependencies]
 huskarl-core = { workspace = true }
 

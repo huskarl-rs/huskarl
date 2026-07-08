@@ -32,6 +32,10 @@
 //! - [Composing crypto strategies](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/crypto_strategies/index.html)
 //!   — how the multi-key, refreshable, and retrying wrappers stack on these keys.
 
+// WebCrypto is a browser API and every trait impl here wraps `JsFuture`
+// (`!Send`), so the crate only compiles for wasm32 — off-wasm32 it's empty,
+// letting `cargo publish`/docs.rs verification build on the host target.
+#![cfg(target_arch = "wasm32")]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
