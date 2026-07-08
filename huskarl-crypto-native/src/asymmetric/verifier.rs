@@ -53,12 +53,11 @@ impl Key {
 
     pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Option<Key> {
         fn rsa_key_from_jwk(rsa_jwk: jwk::RsaPublicKey) -> Option<rsa::RsaPublicKey> {
-            // Min: RFC 7518 §3.3. Max: DoS guard on attacker-supplied JWKs (e.g. a DPoP-proof key).
+            // RFC 7518 §3.3 minimum. (RsaPublicKey::new enforces the 8192-bit max itself.)
             const MIN_RSA_BITS: u32 = 2048;
-            const MAX_RSA_BITS: u32 = 8192;
 
             let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
-            if !(MIN_RSA_BITS..=MAX_RSA_BITS).contains(&n_boxed.bits_vartime()) {
+            if n_boxed.bits_vartime() < MIN_RSA_BITS {
                 return None;
             }
             let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e.into_boxed_slice());
