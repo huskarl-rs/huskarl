@@ -84,7 +84,7 @@ doc-scrape-examples = true
 [dev-dependencies]
 huskarl = { path = ".", default-features = true }
 huskarl-crypto-native = { workspace = true }
-huskarl-resource-server = { path = "../huskarl-resource-server", default-features = true }
+huskarl-resource-server = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
 wasm-bindgen-test = "0.3"

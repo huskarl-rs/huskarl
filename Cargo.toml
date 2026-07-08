@@ -37,6 +37,7 @@ huskarl-macros = { version = "0.3", path = "./huskarl-macros" }
 huskarl-reqwest = { version = "0.7", path = "./huskarl-reqwest" }
 huskarl-crypto-native = { version = "0.9", path = "./huskarl-crypto-native" }
 huskarl-crypto-webcrypto = { version = "0.9", path = "./huskarl-crypto-webcrypto" }
+huskarl-resource-server = { version = "0.9", path = "./huskarl-resource-server" }
 
 bon = { version = "3.9", default-features = false, features = [
   "alloc",
