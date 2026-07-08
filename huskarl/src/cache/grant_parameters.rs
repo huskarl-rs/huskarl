@@ -169,14 +169,28 @@ where
 /// refresh-token attempt), so each gets freshly-produced parameters — e.g. a
 /// JWT-bearer assertion re-signed with a current `iat`/`exp`/`jti`:
 ///
-/// ```ignore
-/// .grant_parameters(from_fn(move || {
+/// ```rust,no_run
+/// use huskarl::{cache::from_fn, grant::jwt_bearer::JwtBearerGrantParameters};
+/// # #[derive(Clone)]
+/// # struct Signer;
+/// # async fn mint_assertion(_signer: &Signer) -> Result<String, huskarl::core::Error> {
+/// #     Ok(String::new())
+/// # }
+/// # fn example(signer: Signer) {
+/// // Pass the result to a cache builder's `.grant_parameters(...)`.
+/// let source = from_fn(move || {
 ///     let signer = signer.clone();
 ///     async move {
 ///         let assertion = mint_assertion(&signer).await?;
-///         Ok(JwtBearerGrantParameters::builder().assertion(assertion).build())
+///         Ok::<_, huskarl::core::Error>(
+///             JwtBearerGrantParameters::builder()
+///                 .assertion(assertion)
+///                 .build(),
+///         )
 ///     }
-/// }))
+/// });
+/// # let _ = source;
+/// # }
 /// ```
 pub fn from_fn<F>(f: F) -> FromFn<F> {
     FromFn(f)

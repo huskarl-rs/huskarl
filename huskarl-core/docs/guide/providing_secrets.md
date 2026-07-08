@@ -34,13 +34,15 @@ convenient for mounted-secret rotation. It is `FileBytes` (the raw file
 contents) composed with a `SecretMap`; the same composition is available on any
 provider through [`Secret::mapped`](crate::secrets::Secret::mapped):
 
-```ignore
+```rust,no_run
+use huskarl_core::prelude::*; // brings `Secret::mapped` into scope
 use huskarl_core::secrets::{FileBytes, FileSecret, encodings::Base64Encoding};
 
 let client_secret = FileSecret::string("/run/secrets/client_secret");
 
 // Equivalent to FileSecret::new(path, Base64Encoding):
 let signing_key = FileBytes::new("/run/secrets/signing_key").mapped(Base64Encoding);
+# let _ = (client_secret, signing_key);
 ```
 
 ## A secret you already hold
@@ -87,8 +89,9 @@ in place, leaving the source (and its `identity`) untouched:
   convenient form for a one-off transform at the call site.
 
 ```rust
+use huskarl_core::prelude::*; // brings `Secret::mapped` / `Secret::map` into scope
 use huskarl_core::secrets::{
-    EnvVarSecret, Secret as _, SecretString,
+    EnvVarSecret, SecretString,
     encodings::{Base64Encoding, StringToBytes},
 };
 

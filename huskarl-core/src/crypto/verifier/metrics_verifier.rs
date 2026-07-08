@@ -70,11 +70,14 @@ fn alg_label(alg: &str) -> &'static str {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # use huskarl_core::crypto::verifier::MetricsJwsVerifier;
+/// # let my_verifier = (); // your inner `JwsVerifier`
 /// let verifier = MetricsJwsVerifier::builder()
 ///     .inner(my_verifier)
 ///     .name("https://auth.example.com")
 ///     .build();
+/// # let _ = verifier;
 /// ```
 #[derive(Debug)]
 pub struct MetricsJwsVerifier<V> {

@@ -13,10 +13,8 @@ your secret manager, and load it by composing the
 [`JwkJson`](huskarl_core::jwk::JwkJson) decoder onto the secret:
 
 ```rust
-use huskarl_core::{
-    jwk::JwkJson,
-    secrets::{ProvidedSecret, Secret, SecretString},
-};
+use huskarl_core::prelude::*; // brings `Secret::mapped` into scope
+use huskarl_core::{jwk::JwkJson, secrets::{ProvidedSecret, SecretString}};
 use huskarl_crypto_native::asymmetric::signer::PrivateKey;
 
 # async fn example(jwk_json: SecretString) -> Result<(), huskarl_core::error::Error> {
@@ -98,7 +96,8 @@ If you must keep PKCS#8 in your secret store, compose the matching decoder
 [`Pkcs8Der`](crate::asymmetric::signer::Pkcs8Der)) onto the secret instead:
 
 ```rust
-use huskarl_core::secrets::{ProvidedSecret, Secret, SecretString};
+use huskarl_core::prelude::*; // brings `Secret::mapped` into scope
+use huskarl_core::secrets::{ProvidedSecret, SecretString};
 use huskarl_crypto_native::asymmetric::signer::{
     AsymmetricAlgorithm, Pkcs8Pem, PrivateKey,
 };
@@ -126,10 +125,8 @@ through [`JwkJson`](huskarl_core::jwk::JwkJson) unchanged; raw key bytes take
 stamps the algorithm the bare bytes cannot carry:
 
 ```rust
-use huskarl_core::{
-    jwk::OctBytes,
-    secrets::{ProvidedSecret, Secret, SecretBytes},
-};
+use huskarl_core::prelude::*; // brings `Secret::mapped` into scope
+use huskarl_core::{jwk::OctBytes, secrets::{ProvidedSecret, SecretBytes}};
 use huskarl_crypto_native::symmetric::SymmetricKey;
 
 # async fn example(raw: ProvidedSecret<SecretBytes>) -> Result<(), huskarl_core::error::Error> {

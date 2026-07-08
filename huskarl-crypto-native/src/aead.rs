@@ -155,9 +155,10 @@ impl AesGcmKey {
     /// environment variable holding base64 key material:
     ///
     /// ```
+    /// use huskarl_core::prelude::*; // brings `Secret::mapped` into scope
     /// use huskarl_core::{
     ///     jwk::OctBytes,
-    ///     secrets::{EnvVarSecret, Secret as _, encodings::Base64Encoding},
+    ///     secrets::{EnvVarSecret, encodings::Base64Encoding},
     /// };
     /// use huskarl_crypto_native::aead::AesGcmKey;
     ///

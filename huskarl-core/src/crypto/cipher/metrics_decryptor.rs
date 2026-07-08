@@ -43,11 +43,14 @@ use crate::{
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # use huskarl_core::crypto::cipher::MetricsAeadDecryptor;
+/// # let my_decryptor = (); // your inner `AeadDecryptor`
 /// let decryptor = MetricsAeadDecryptor::builder()
 ///     .inner(my_decryptor)
 ///     .name("session-cookie")
 ///     .build();
+/// # let _ = decryptor;
 /// ```
 #[derive(Debug)]
 pub struct MetricsAeadDecryptor<D> {
