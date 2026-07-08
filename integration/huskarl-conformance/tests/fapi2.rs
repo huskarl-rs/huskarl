@@ -133,7 +133,7 @@ async fn run_fapi2_plan<J: Jar + Clone + 'static>(
             &client_id(),
             client_auth,
             dpop,
-            ["openid", "profile", "email"],
+            bon::vec!["openid", "profile", "email"],
             &listener,
             &redirect_uri,
             jar,

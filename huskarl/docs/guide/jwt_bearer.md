@@ -110,7 +110,7 @@ use huskarl::core::client_auth::ClientSecret;
 
 let params = JwtBearerGrantParameters::builder()
     .assertion(assertion)
-    .scopes(vec!["read", "write"])
+    .scope(bon::vec!["read", "write"])
     .build();
 let response = grant.exchange(params).await?;
 let token: &AccessToken = response.access_token();

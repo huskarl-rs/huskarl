@@ -377,7 +377,7 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         pending_state,
         ..
     } = grant
-        .start(StartInput::scopes(["openid"]))
+        .start(StartInput::scope(bon::vec!["openid"]))
         .await
         .expect("start auth-code flow");
 

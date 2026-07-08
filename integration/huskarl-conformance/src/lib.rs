@@ -148,7 +148,7 @@ pub async fn run_auth_code_flow<
     client_id: &str,
     client_auth: Auth,
     dpop: D,
-    scopes: impl IntoIterator<Item = impl Into<String>>,
+    scopes: Vec<String>,
     jar: J,
 ) -> Result<(TokenResponse, HttpAuthorizer), String> {
     let listener = bind_loopback(0)
@@ -188,7 +188,7 @@ pub async fn run_auth_code_flow_with_listener<
     client_id: &str,
     client_auth: Auth,
     dpop: D,
-    scopes: impl IntoIterator<Item = impl Into<String>>,
+    scopes: Vec<String>,
     listener: &TcpListener,
     redirect_uri: &str,
     jar: J,
@@ -245,7 +245,7 @@ pub async fn run_auth_code_flow_with_listener<
         pending_state,
         ..
     } = grant
-        .start(StartInput::scopes(scopes))
+        .start(StartInput::scope(scopes))
         .await
         .map_err(|e| format!("failed to start authorization: {e}"))?;
 

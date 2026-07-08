@@ -65,9 +65,15 @@ pub struct ClientMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logo_uri: Option<String>,
 
-    /// Space-separated list of scope values the client can request.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scope: Option<String>,
+    /// Scope values the client can request. Modeled as a list; serialized as the
+    /// single space-delimited `scope` string RFC 7591 §2 defines.
+    #[serde(
+        default,
+        skip_serializing_if = "scope_serde::is_empty",
+        serialize_with = "scope_serde::serialize",
+        deserialize_with = "scope_serde::deserialize"
+    )]
+    pub scope: Option<Vec<String>>,
 
     /// Ways to contact people responsible for the client, typically email
     /// addresses.
@@ -279,6 +285,37 @@ mod jwks_serde {
     }
 }
 
+/// (De)serializes the RFC 7591 §2 `scope` member as the single space-delimited
+/// string the wire uses, while modeling it as a list of scope values in Rust
+/// (matching how the grant builders carry scopes).
+// `&Option<_>` signatures are required by serde's `skip_serializing_if` /
+// `serialize_with`, which hand the field by shared reference.
+#[allow(clippy::ref_option)]
+mod scope_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn is_empty(scope: &Option<Vec<String>>) -> bool {
+        scope.as_ref().is_none_or(Vec::is_empty)
+    }
+
+    pub(super) fn serialize<S: Serializer>(
+        scope: &Option<Vec<String>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match scope {
+            Some(values) => serializer.serialize_str(&values.join(" ")),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vec<String>>, D::Error> {
+        Ok(Option::<String>::deserialize(deserializer)?
+            .map(|s| s.split_whitespace().map(str::to_owned).collect()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -376,6 +413,33 @@ mod tests {
             "typed fields must not fall into extra: {:?}",
             parsed.extra
         );
+    }
+
+    #[test]
+    fn scope_is_a_space_delimited_string_on_the_wire_and_round_trips() {
+        let metadata = ClientMetadata::builder()
+            .scope(bon::vec!["openid", "profile", "email"])
+            .build();
+
+        // RFC 7591 §2: `scope` is one space-delimited string, not a JSON array.
+        let value = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(value["scope"], "openid profile email");
+
+        // A server echo splits back into the modeled list.
+        let parsed: ClientMetadata = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            parsed.scope,
+            Some(vec![
+                "openid".to_owned(),
+                "profile".to_owned(),
+                "email".to_owned()
+            ])
+        );
+
+        // An empty scope is omitted, like the other empty collections.
+        let empty = ClientMetadata::builder().scope(vec![]).build();
+        let value = serde_json::to_value(&empty).unwrap();
+        assert!(!value.as_object().unwrap().contains_key("scope"));
     }
 
     #[test]
