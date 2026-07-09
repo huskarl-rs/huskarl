@@ -16,13 +16,14 @@ use std::sync::Arc;
 
 use http::{Method, Uri};
 pub use implementation::{
-    DPoP, DPoPBuilder, ResourceDPoP, ResourceDPoPBuilder, hash_access_token_for_dpop,
-    normalize_uri_for_dpop,
+    DPoP, DPoPBuilder, ResourceDPoP, ResourceDPoPBuilder, SessionKeyedDPoP,
+    hash_access_token_for_dpop, normalize_uri_for_dpop,
 };
 pub use no_dpop::{DPoPNotConfigured, NoDPoP};
 pub use nonce::{DPoPNonceChecker, NonceCheck, SealedTimestampNonce, SealedTimestampNonceBuilder};
 
 use crate::{
+    crypto::signer::AsymmetricJwsSignerSelector,
     error::Error,
     platform::{MaybeSendBoxFuture, MaybeSendSync},
     secrets::SecretString,
@@ -53,6 +54,19 @@ pub trait AuthorizationServerDPoP: sealed::Sealed + MaybeSendSync {
 
     /// Returns the corresponding resource server variant.
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP>;
+
+    /// Binds a per-session signing key, sharing this instance's server-scoped
+    /// nonce.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless this is a [`SessionKeyedDPoP`]; a fixed-key
+    /// [`DPoP`] or [`NoDPoP`] rejects the override rather than silently
+    /// accepting it.
+    fn with_session_key(
+        &self,
+        signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error>;
 }
 
 /// Proof implementation for `DPoP` when calling resource servers.
@@ -94,6 +108,13 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for &T {
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         (**self).to_resource_server_dpop()
     }
+
+    fn with_session_key(
+        &self,
+        signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
+        (**self).with_session_key(signer)
+    }
 }
 
 impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Box<T> {
@@ -117,6 +138,13 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Box<T> {
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         (**self).to_resource_server_dpop()
     }
+
+    fn with_session_key(
+        &self,
+        signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
+        (**self).with_session_key(signer)
+    }
 }
 
 impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Arc<T> {
@@ -139,6 +167,13 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Arc<T> {
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         (**self).to_resource_server_dpop()
+    }
+
+    fn with_session_key(
+        &self,
+        signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
+        (**self).with_session_key(signer)
     }
 }
 

@@ -91,6 +91,100 @@ impl AuthorizationServerDPoP for DPoP {
             nonces: Arc::default(),
         })
     }
+
+    fn with_session_key(
+        &self,
+        _signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
+        // A fixed-key grant must not be silently overridden with a session key.
+        Err(fixed_key_override_error())
+    }
+}
+
+/// Authorization-server `DPoP` holding only the shared, server-scoped nonce
+/// (RFC 9449); the signing key is bound per session with
+/// [`with_session_key`](AuthorizationServerDPoP::with_session_key) (the
+/// grants' `with_session_dpop_key`).
+///
+/// Lets a multi-tenant client keep one grant per authorization server with a
+/// distinct key per user session, all sharing this nonce. Using the template
+/// directly without binding a key fails on first proof.
+#[derive(Debug, Clone, Default)]
+pub struct SessionKeyedDPoP {
+    nonce: Arc<Mutex<Option<Arc<String>>>>,
+}
+
+impl SessionKeyedDPoP {
+    /// Creates a `SessionKeyedDPoP` with a fresh, empty shared nonce.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl super::sealed::Sealed for SessionKeyedDPoP {}
+
+impl AuthorizationServerDPoP for SessionKeyedDPoP {
+    fn update_nonce(&self, nonce: String) {
+        let _ = self
+            .nonce
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(Arc::new(nonce));
+    }
+
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
+        // Key is bound per session via `with_session_key`.
+        Box::pin(async { None })
+    }
+
+    fn proof<'a>(
+        &'a self,
+        _method: &'a Method,
+        _uri: &'a Uri,
+        _dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        // Reached only when no per-session key was bound.
+        Box::pin(async { Err(no_session_key_error()) })
+    }
+
+    fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
+        // Resource-server proofs come from the keyed `DPoP` produced by
+        // `with_session_key`, not from the unkeyed session template.
+        Arc::new(SessionKeyedResourceDPoP)
+    }
+
+    fn with_session_key(
+        &self,
+        signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
+        Ok(Arc::new(DPoP {
+            signer,
+            nonce: Arc::clone(&self.nonce), // shared per-server nonce
+        }))
+    }
+}
+
+/// Placeholder resource-server `DPoP` for a [`SessionKeyedDPoP`] with no key
+/// bound. Per-session resource-server proofs come from the keyed [`DPoP`] that
+/// [`SessionKeyedDPoP::with_session_key`] produces, not from this object.
+#[derive(Debug, Clone, Copy, Default)]
+struct SessionKeyedResourceDPoP;
+
+impl super::sealed::Sealed for SessionKeyedResourceDPoP {}
+
+impl ResourceServerDPoP for SessionKeyedResourceDPoP {
+    fn update_nonce(&self, _uri: &Uri, _nonce: String) {}
+
+    fn proof<'a>(
+        &'a self,
+        _method: &'a Method,
+        _uri: &'a Uri,
+        _access_token: &'a SecretString,
+        _dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        Box::pin(async { Err(no_session_key_error()) })
+    }
 }
 
 impl super::sealed::Sealed for ResourceDPoP {}
@@ -163,6 +257,22 @@ fn no_thumbprint_error() -> Error {
 
 fn no_matching_key_error() -> Error {
     Error::from(ErrorKind::DPoP).with_context("no matching key for the given thumbprint")
+}
+
+/// A per-session key was bound, but this `DPoP` is not session-keyed.
+fn fixed_key_override_error() -> Error {
+    Error::from(ErrorKind::DPoP).with_context(
+        "a per-session DPoP key was bound, but this grant is configured with a fixed DPoP key; \
+         configure SessionKeyedDPoP to accept per-session keys",
+    )
+}
+
+/// A `SessionKeyedDPoP` template was used directly, without a key bound.
+fn no_session_key_error() -> Error {
+    Error::from(ErrorKind::DPoP).with_context(
+        "SessionKeyedDPoP has no key bound; bind a per-session key first (the grant's \
+         with_session_dpop_key)",
+    )
 }
 
 fn origin_from_uri(uri: &Uri) -> Origin {
@@ -500,5 +610,102 @@ mod tests {
         let claims2: serde_json::Value =
             serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts2[1]).unwrap()).unwrap();
         assert_eq!(claims2["nonce"], "nonce-2");
+    }
+
+    // --- SessionKeyedDPoP ---
+
+    #[tokio::test]
+    async fn session_keyed_dpop_binds_session_key() {
+        let jwk = mock_public_jwk();
+        let thumbprint = jwk.thumbprint();
+        let signer: Arc<dyn AsymmetricJwsSignerSelector> =
+            Arc::new(MockAsymmetricJwsSigner { jwk });
+
+        let session = SessionKeyedDPoP::new();
+        // No key until one is bound.
+        assert!(session.get_current_thumbprint().await.is_none());
+
+        let keyed = session.with_session_key(signer).unwrap();
+
+        // Thumbprint now comes from the bound session key.
+        assert_eq!(
+            keyed.get_current_thumbprint().await.as_deref(),
+            Some(thumbprint.as_str())
+        );
+
+        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let proof = keyed
+            .proof(&Method::POST, &uri, Some(&thumbprint))
+            .await
+            .unwrap();
+        assert!(proof.is_some());
+    }
+
+    #[tokio::test]
+    async fn session_keyed_dpop_shares_nonce_across_sessions() {
+        let jwk = mock_public_jwk();
+        let thumbprint = jwk.thumbprint();
+
+        let session = SessionKeyedDPoP::new();
+        let a = session
+            .with_session_key(Arc::new(MockAsymmetricJwsSigner { jwk: jwk.clone() }))
+            .unwrap();
+        let b = session
+            .with_session_key(Arc::new(MockAsymmetricJwsSigner { jwk }))
+            .unwrap();
+
+        // A nonce learned via one session's proof object is visible to another
+        // and to the shared template — the nonce is server-scoped, not per-key.
+        a.update_nonce("server-nonce".into());
+
+        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let proof = b
+            .proof(&Method::POST, &uri, Some(&thumbprint))
+            .await
+            .unwrap()
+            .unwrap();
+        let parts: Vec<&str> = proof.expose_secret().split('.').collect();
+        let claims: serde_json::Value =
+            serde_json::from_slice(&BASE64_URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(claims["nonce"], "server-nonce");
+    }
+
+    #[tokio::test]
+    async fn session_keyed_dpop_without_key_errors() {
+        let session = SessionKeyedDPoP::new();
+        let uri: Uri = "https://auth.example.com/token".parse().unwrap();
+        let err = session
+            .proof(&Method::POST, &uri, Some("jkt"))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DPoP);
+    }
+
+    #[tokio::test]
+    async fn fixed_dpop_rejects_session_key() {
+        let session_key: Arc<dyn AsymmetricJwsSignerSelector> = Arc::new(MockAsymmetricJwsSigner {
+            jwk: mock_public_jwk(),
+        });
+        let dpop = DPoP::builder()
+            .signer(MockAsymmetricJwsSigner {
+                jwk: mock_public_jwk(),
+            })
+            .build();
+        // `unwrap_err` would require the Ok type (a non-Debug trait object) to
+        // be Debug, so recover the error via `.err()`.
+        let err = dpop.with_session_key(session_key).err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::DPoP);
+    }
+
+    #[tokio::test]
+    async fn no_dpop_rejects_session_key() {
+        let session_key: Arc<dyn AsymmetricJwsSignerSelector> = Arc::new(MockAsymmetricJwsSigner {
+            jwk: mock_public_jwk(),
+        });
+        let err = crate::dpop::NoDPoP
+            .with_session_key(session_key)
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), ErrorKind::DPoP);
     }
 }

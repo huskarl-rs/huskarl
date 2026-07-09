@@ -7,7 +7,10 @@ use crate::{
     core::{
         EndpointUrl, Error, ErrorKind,
         client_auth::ClientAuthentication,
-        crypto::verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
+        crypto::{
+            signer::AsymmetricJwsSignerSelector,
+            verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
+        },
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
     },
@@ -118,6 +121,28 @@ impl AuthorizationCodeGrant {
     #[must_use]
     pub fn client_id(&self) -> &str {
         &self.client_id
+    }
+
+    /// Binds a per-session `DPoP` key, returning a grant that signs with it.
+    ///
+    /// Derived grants share the grant's server-scoped `DPoP` nonce, so one
+    /// grant per authorization server serves every session. Bind the same key
+    /// before [`start`](Self::start) and [`complete`](Self::complete);
+    /// `complete` rejects a key that differs from the one bound at
+    /// authorization time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the configured `DPoP` is
+    /// [`SessionKeyedDPoP`](crate::core::dpop::SessionKeyedDPoP).
+    pub fn with_session_dpop_key(
+        &self,
+        key: impl AsymmetricJwsSignerSelector + 'static,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            dpop: self.dpop.with_session_key(Arc::new(key))?,
+            ..self.clone()
+        })
     }
 }
 
