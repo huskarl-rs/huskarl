@@ -1,12 +1,9 @@
-use std::{borrow::Cow, pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc};
 
 use crate::{
     crypto::{
         KeyMatchStrength,
-        cipher::{
-            AeadCipherSelector, AeadDecryptor, AeadEncryptor, AeadOutput, AeadSealer,
-            AeadSealerSelector, AeadUnsealer, AeadV1Cipher, CipherMatch, DecryptError,
-        },
+        cipher::{AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, CipherMatch, DecryptError},
         refreshable::ScheduledRefreshable,
     },
     error::Error,
@@ -19,15 +16,15 @@ use crate::{
 /// long a removed key lingers; key *additions* are handled by the miss-triggered
 /// [`RetryingDecryptor`](super::RetryingDecryptor) layered on top.
 ///
-/// On each [`decrypt`](AeadDecryptor::decrypt)/[`unseal`](AeadUnsealer::unseal),
-/// and inside each [`select_cipher`](AeadCipherSelector::select_cipher)/[`select_sealer`](AeadSealerSelector::select_sealer),
+/// On each [`decrypt`](AeadDecryptor::decrypt), and inside each
+/// [`select_encryptor`](AeadEncryptorSelector::select_encryptor),
 /// the first caller past the TTL reloads single-flight (non-blocking for others),
-/// then proceeds against a frozen snapshot; for the outbound selectors the TTL
+/// then proceeds against a frozen snapshot; for the outbound selector the TTL
 /// bounds how quickly a rotated-in key is discovered rather than how quickly a removed
-/// one is dropped. Using the type directly as
-/// an [`AeadEncryptor`] serves the current snapshot *without* a reload — go through
-/// the selector for the freshness guarantee. The pure swap mechanism without policy
-/// is [`RefreshableCipher`](super::RefreshableCipher).
+/// one is dropped. The type is deliberately *not* an [`AeadEncryptor`]: all
+/// outbound use goes through the selector, so there is no reload-free path to
+/// encrypt with (or read metadata off) a stale key. The pure swap mechanism
+/// without policy is [`RefreshableCipher`](super::RefreshableCipher).
 ///
 /// See [composing crypto strategies](crate::_docs::explanation::crypto_strategies)
 /// for how this layer (removals) pairs with the retrying layer (additions). All
@@ -43,6 +40,16 @@ impl<C> Clone for ScheduledRefreshCipher<C> {
         Self {
             inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+impl<C: AeadEncryptorSelector + 'static> AeadEncryptorSelector for ScheduledRefreshCipher<C> {
+    fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        Box::pin(async move {
+            self.inner.poll_refresh_ahead().await;
+            let selector = self.inner.load_full();
+            selector.select_encryptor().await
+        })
     }
 }
 
@@ -86,11 +93,10 @@ impl<C: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshCipher<C> {
     /// Reloads the key if it has outlived its TTL and the rate-limit/backoff
     /// policy permits; a within-TTL key is left in place. Blocking.
     ///
-    /// A manual staleness poll: the selector paths
-    /// ([`select_cipher`](AeadCipherSelector::select_cipher),
-    /// [`select_sealer`](AeadSealerSelector::select_sealer)) already reload a stale
-    /// key during selection, so this only pre-warms the key ahead of a
-    /// latency-sensitive encrypt/seal. Distinct from the inbound miss path
+    /// A manual staleness poll: the selector path
+    /// ([`select_encryptor`](AeadEncryptorSelector::select_encryptor)) already
+    /// reloads a stale key during selection, so this only pre-warms the key
+    /// ahead of a latency-sensitive encrypt/seal. Distinct from the inbound miss path
     /// [`AeadDecryptor::try_refresh`], which is not TTL-gated;
     /// [`refresh`](Self::refresh) reloads unconditionally.
     ///
@@ -110,27 +116,6 @@ impl<C: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshCipher<C> {
     /// Returns an error if the factory call fails.
     pub async fn refresh(&self) -> Result<bool, Error> {
         self.inner.refresh().await
-    }
-}
-
-impl<C: AeadEncryptor + 'static> AeadEncryptor for ScheduledRefreshCipher<C> {
-    fn enc_algorithm(&self) -> Cow<'_, str> {
-        Cow::Owned(self.inner.load().enc_algorithm().into_owned())
-    }
-
-    fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.inner
-            .load()
-            .key_id()
-            .map(|kid| Cow::Owned(kid.into_owned()))
-    }
-
-    fn encrypt<'a>(
-        &'a self,
-        plaintext: &'a [u8],
-        aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
-        Box::pin(async move { self.inner.load_full().encrypt(plaintext, aad).await })
     }
 }
 
@@ -169,66 +154,28 @@ impl<C: AeadDecryptor + 'static> AeadDecryptor for ScheduledRefreshCipher<C> {
     }
 }
 
-impl<C: AeadEncryptor + 'static> AeadCipherSelector for ScheduledRefreshCipher<C> {
-    fn select_cipher(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
-        Box::pin(async move {
-            // Reload a stale key during selection, then hand back the fresh key as
-            // one frozen snapshot — the caller encrypts against exactly this key.
-            self.inner.poll_refresh_ahead().await;
-            let encryptor: Arc<dyn AeadEncryptor> = self.inner.load_full();
-            encryptor
-        })
-    }
-}
-
-impl<C: AeadEncryptor + 'static> AeadSealerSelector for ScheduledRefreshCipher<C> {
-    fn select_sealer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadSealer>> {
-        Box::pin(async move {
-            // Reload on the outbound read path, then frame the frozen snapshot as a
-            // v1 sealer whose metadata and `seal` describe and use the same key.
-            self.inner.poll_refresh_ahead().await;
-            let sealer: Arc<dyn AeadSealer> = Arc::new(AeadV1Cipher::new(self.inner.load_full()));
-            sealer
-        })
-    }
-}
-
-impl<C: AeadDecryptor + 'static> AeadUnsealer for ScheduledRefreshCipher<C> {
-    fn unseal<'a>(
-        &'a self,
-        cipher_match: Option<&'a CipherMatch<'a>>,
-        bundle: &'a [u8],
-        aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
-        Box::pin(async move {
-            // Same read-path staleness bound as `decrypt`: reload past the TTL,
-            // then parse and open against the current snapshot.
-            self.inner.poll_refresh_ahead().await;
-            AeadV1Cipher::new(self.inner.load_full())
-                .unseal(cipher_match, bundle, aad)
-                .await
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        borrow::Cow,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     use rstest::rstest;
 
     use super::*;
+    use crate::crypto::cipher::AeadOutput;
 
     /// An identity cipher (ciphertext == plaintext) that reports a fixed `kid`
     /// and stamps that `kid` into the authentication tag, so the generation that
     /// actually performed an operation is observable in both its metadata and its
     /// output.
     #[derive(Debug)]
-    struct FakeCipher {
+    struct FakeEncryptor {
         kid: String,
     }
 
-    impl AeadEncryptor for FakeCipher {
+    impl AeadEncryptor for FakeEncryptor {
         fn enc_algorithm(&self) -> Cow<'_, str> {
             "A256GCM".into()
         }
@@ -252,6 +199,26 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct FakeCipher {
+        inner: Arc<FakeEncryptor>,
+    }
+
+    impl FakeCipher {
+        fn new(kid: String) -> Self {
+            Self {
+                inner: Arc::new(FakeEncryptor { kid }),
+            }
+        }
+    }
+
+    impl AeadEncryptorSelector for FakeCipher {
+        fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+            let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
+            Box::pin(async move { snapshot })
+        }
+    }
+
     impl AeadDecryptor for FakeCipher {
         fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
             Some(KeyMatchStrength::ByAlgorithm)
@@ -269,43 +236,50 @@ mod tests {
         }
     }
 
-    /// A generational cipher (`gen-0`, `gen-1`, …) with the given policy.
+    /// A generational cipher (`gen-0`, `gen-1`, …) with the given policy, plus
+    /// its factory-invocation counter — the reload-free way to observe refresh
+    /// behaviour (selection itself reloads a stale key).
     async fn generational_cipher(
         ttl: Duration,
         min_refresh_interval: Duration,
-    ) -> ScheduledRefreshCipher<FakeCipher> {
-        let counter = Arc::new(AtomicUsize::new(0));
-        ScheduledRefreshCipher::builder()
+    ) -> (Arc<AtomicUsize>, ScheduledRefreshCipher<FakeCipher>) {
+        let builds = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&builds);
+        let cipher = ScheduledRefreshCipher::builder()
             .factory(move || {
                 let n = counter.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move {
-                    Ok(FakeCipher {
-                        kid: format!("gen-{n}"),
-                    })
-                })
+                Box::pin(async move { Ok(FakeCipher::new(format!("gen-{n}"))) })
             })
             .ttl(ttl)
             .min_refresh_interval(min_refresh_interval)
             .build()
             .await
-            .unwrap()
+            .unwrap();
+        (builds, cipher)
     }
 
-    fn current_kid(cipher: &ScheduledRefreshCipher<FakeCipher>) -> Option<String> {
-        cipher.key_id().map(std::borrow::Cow::into_owned)
+    /// Reads the current kid through the selector — reload-free only while the
+    /// key is within its TTL.
+    async fn current_kid(cipher: &ScheduledRefreshCipher<FakeCipher>) -> Option<String> {
+        let encryptor = cipher.select_encryptor().await;
+        encryptor.key_id().map(std::borrow::Cow::into_owned)
     }
 
     #[tokio::test]
-    async fn delegates_encryptor_metadata_to_inner() {
-        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
-        assert_eq!(cipher.enc_algorithm().as_ref(), "A256GCM");
-        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-0"));
+    async fn selected_encryptor_exposes_inner_metadata() {
+        let (_, cipher) =
+            generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
+        let encryptor = cipher.select_encryptor().await;
+        assert_eq!(encryptor.enc_algorithm().as_ref(), "A256GCM");
+        assert_eq!(encryptor.key_id().as_deref(), Some("gen-0"));
     }
 
     #[tokio::test]
     async fn encrypt_and_decrypt_delegate_to_inner() {
-        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
-        let out = cipher.encrypt(b"plaintext", b"aad").await.unwrap();
+        let (_, cipher) =
+            generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
+        let encryptor = cipher.select_encryptor().await;
+        let out = encryptor.encrypt(b"plaintext", b"aad").await.unwrap();
         let recovered = cipher
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"aad")
             .await
@@ -315,7 +289,8 @@ mod tests {
 
     #[tokio::test]
     async fn cipher_match_delegates_to_inner() {
-        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
+        let (_, cipher) =
+            generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
         let m = CipherMatch {
             enc: Some("A256GCM"),
             kid: None,
@@ -326,26 +301,28 @@ mod tests {
     #[tokio::test]
     async fn forced_refresh_bypasses_policy() {
         // A long TTL would block a policy-gated refresh, but `refresh` is forced.
-        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_mins(1)).await;
-        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-0"));
+        let (_, cipher) =
+            generational_cipher(Duration::from_hours(1), Duration::from_mins(1)).await;
+        assert_eq!(current_kid(&cipher).await.as_deref(), Some("gen-0"));
         assert!(cipher.refresh().await.unwrap());
-        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&cipher).await.as_deref(), Some("gen-1"));
     }
 
     /// `refresh_if_stale` is gated by the TTL: a fresh value is left in place, a
-    /// stale one (zero TTL) is swapped for the next generation.
+    /// stale one (zero TTL) is swapped for the next generation. Observed via the
+    /// factory counter — with a zero TTL, selection itself would reload again.
     #[rstest]
-    #[case::blocked_while_fresh(Duration::from_hours(1), false, "gen-0")]
-    #[case::allowed_when_stale(Duration::from_secs(0), true, "gen-1")]
+    #[case::blocked_while_fresh(Duration::from_hours(1), false, 1)]
+    #[case::allowed_when_stale(Duration::from_secs(0), true, 2)]
     #[tokio::test]
     async fn refresh_if_stale_respects_ttl_policy(
         #[case] ttl: Duration,
         #[case] expected_refreshed: bool,
-        #[case] expected_kid: &str,
+        #[case] expected_builds: usize,
     ) {
-        let cipher = generational_cipher(ttl, Duration::from_secs(0)).await;
+        let (builds, cipher) = generational_cipher(ttl, Duration::from_secs(0)).await;
         assert_eq!(cipher.refresh_if_stale().await, expected_refreshed);
-        assert_eq!(current_kid(&cipher).as_deref(), Some(expected_kid));
+        assert_eq!(builds.load(Ordering::SeqCst), expected_builds);
     }
 
     /// The inbound miss path (`AeadDecryptor::try_refresh`) is **not** TTL-gated:
@@ -355,9 +332,10 @@ mod tests {
     async fn decryptor_try_refresh_is_not_ttl_gated() {
         // A large TTL — the value is nowhere near stale — yet the miss path still
         // reloads, swapping gen-0 for gen-1.
-        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
+        let (_, cipher) =
+            generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
         assert!(AeadDecryptor::try_refresh(&cipher).await);
-        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&cipher).await.as_deref(), Some("gen-1"));
     }
 
     /// A decryptor whose generation 0 decrypts (holds the key) and every later
@@ -449,46 +427,24 @@ mod tests {
         assert_eq!(builds.load(Ordering::SeqCst), 1, "no reload while fresh");
     }
 
+    /// The crux of the encryptor-selector: a selected encryptor is a *frozen*
+    /// snapshot, so a rotation landing after selection cannot make its `key_id`
+    /// and its output describe different keys. `FakeCipher` stamps its `kid` into
+    /// the tag, so the key that actually encrypted is observable in the output.
     #[tokio::test]
-    async fn select_cipher_hands_back_the_current_snapshot() {
-        let cipher = generational_cipher(Duration::from_hours(1), Duration::from_secs(0)).await;
-        assert_eq!(
-            cipher.select_cipher().await.key_id().as_deref(),
-            Some("gen-0")
-        );
-    }
+    async fn selected_encryptor_kid_and_output_agree_across_a_rotation() {
+        let (_, cipher) = generational_cipher(Duration::from_hours(1), Duration::ZERO).await;
 
-    #[tokio::test]
-    async fn select_cipher_reloads_a_stale_key_during_selection() {
-        // Zero TTL: the outbound read path reloads before handing back the snapshot.
-        let cipher = generational_cipher(Duration::ZERO, Duration::ZERO).await;
-        assert_eq!(
-            cipher.select_cipher().await.key_id().as_deref(),
-            Some("gen-1")
-        );
-    }
+        let frozen = cipher.select_encryptor().await;
+        assert_eq!(frozen.key_id().as_deref(), Some("gen-0"));
 
-    /// The crux of the sealer-selector: a sealer is a *frozen* snapshot, so a
-    /// rotation landing after selection cannot make its `key_id` and its `seal`
-    /// describe different keys. `FakeCipher` tags every bundle with its `kid`, so
-    /// the key that actually sealed is observable in the ciphertext.
-    #[tokio::test]
-    async fn selected_sealer_kid_and_ciphertext_agree_across_a_rotation() {
-        let cipher = generational_cipher(Duration::from_hours(1), Duration::ZERO).await;
-
-        let sealer = cipher.select_sealer().await;
-        let kid = sealer.key_id().map(std::borrow::Cow::into_owned);
-        assert_eq!(kid.as_deref(), Some("gen-0"));
-
-        // Rotate the underlying key out from under the held sealer.
+        // Rotate the underlying key out from under the held encryptor.
         assert!(cipher.refresh().await.unwrap());
-        assert_eq!(current_kid(&cipher).as_deref(), Some("gen-1"));
+        assert_eq!(current_kid(&cipher).await.as_deref(), Some("gen-1"));
 
-        // The frozen sealer still seals with gen-0 — the key its `kid` named —
-        // not the freshly rotated gen-1.
-        let bundle = sealer.seal(b"payload", b"aad").await.unwrap();
-        // v1 layout: [0x01, nonce_len=0, tag_len=5, ciphertext="payload", tag="gen-0"]
-        let tag = &bundle[bundle.len() - 5..];
-        assert_eq!(tag, b"gen-0");
+        // The frozen snapshot still encrypts with gen-0 — the key its `kid`
+        // named — not the freshly rotated gen-1.
+        let out = frozen.encrypt(b"payload", b"aad").await.unwrap();
+        assert_eq!(out.tag, b"gen-0");
     }
 }

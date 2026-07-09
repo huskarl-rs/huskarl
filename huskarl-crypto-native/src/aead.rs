@@ -1,21 +1,25 @@
 //! AES-GCM AEAD cipher, backed by `RustCrypto`'s `aes-gcm`.
 //!
-//! [`AesGcmKey`] is the user-facing cipher implementing huskarl-core's
-//! [`AeadEncryptor`] and
-//! [`AeadDecryptor`]. Build one from a JWK with [`AesGcmKey::from_jwk`], or
+//! [`AesGcmKey`] is the user-facing cipher — an
+//! [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher): an
+//! [`AeadEncryptorSelector`] handing out its shared inner [`AeadEncryptor`],
+//! plus an [`AeadDecryptor`]. Build one from a JWK with [`AesGcmKey::from_jwk`], or
 //! from a secret store with [`AesGcmKey::from_secret`] — the AES-128/192/256
 //! variant follows from the key length (16/24/32 bytes) — e.g. to back the
 //! `DPoP` nonce store. Note the per-key encryption bound in [`AesGcmKey`]'s
 //! docs when sizing key rotation.
 
-use std::{array::TryFromSliceError, borrow::Cow, fmt};
+use std::{array::TryFromSliceError, borrow::Cow, fmt, sync::Arc};
 
 use aes_gcm::{AeadInOut, KeyInit, aead::Generate};
 use huskarl_core::{
     Error, ErrorKind,
     crypto::{
         KeyMatchStrength,
-        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch, DecryptError},
+        cipher::{
+            AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, AeadOutput, CipherMatch,
+            DecryptError,
+        },
     },
     jwk,
     platform::MaybeSendBoxFuture,
@@ -48,8 +52,10 @@ impl NativeKey {
 ///
 /// Build one with [`from_jwk`](Self::from_jwk) or
 /// [`from_secret`](Self::from_secret); the AES-128/192/256 variant follows
-/// from the key length. Implements huskarl-core's [`AeadEncryptor`] and
-/// [`AeadDecryptor`].
+/// from the key length. Implements huskarl-core's [`AeadEncryptorSelector`]
+/// (selection hands out the key's shared inner [`AeadEncryptor`]) and
+/// [`AeadDecryptor`] — together, an
+/// [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher).
 ///
 /// # Usage bound (NIST SP 800-38D §8.3)
 ///
@@ -66,15 +72,22 @@ impl NativeKey {
 /// decrypt-only via
 /// [`MultiKeyCipher`](huskarl_core::crypto::cipher::MultiKeyCipher) /
 /// [`MultiKeyDecryptor`](huskarl_core::crypto::cipher::MultiKeyDecryptor).
+#[derive(Debug, Clone)]
 pub struct AesGcmKey {
-    inner: NativeKey,
+    inner: Arc<AesGcmKeyInner>,
+}
+
+/// The shared key material behind an `AesGcmKey` — the encryptor snapshot
+/// `select_encryptor` hands out.
+struct AesGcmKeyInner {
+    key: NativeKey,
     kid: Option<String>,
 }
 
-impl fmt::Debug for AesGcmKey {
+impl fmt::Debug for AesGcmKeyInner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("AesGcmKey")
-            .field("enc", &self.inner.enc_algorithm())
+        f.debug_struct("AesGcmKeyInner")
+            .field("enc", &self.key.enc_algorithm())
             .field("kid", &self.kid)
             .finish_non_exhaustive()
     }
@@ -104,7 +117,7 @@ impl AesGcmKey {
             ))
         };
         let len = jwk.key.k.len();
-        let inner = match len {
+        let key = match len {
             16 => NativeKey::Aes128(Box::new(
                 aes_gcm::Aes128Gcm::new_from_slice(&jwk.key.k).map_err(|_| bad_len(len))?,
             )),
@@ -118,17 +131,16 @@ impl AesGcmKey {
         };
 
         if let Some(alg) = jwk.algorithm.as_deref()
-            && alg != inner.enc_algorithm()
+            && alg != key.enc_algorithm()
         {
             return Err(Error::from(ErrorKind::Config).with_context(format!(
                 "JWK algorithm {alg} disagrees with the key length, which selects {}",
-                inner.enc_algorithm()
+                key.enc_algorithm()
             )));
         }
 
         Ok(AesGcmKey {
-            inner,
-            kid: jwk.kid,
+            inner: Arc::new(AesGcmKeyInner { key, kid: jwk.kid }),
         })
     }
 
@@ -216,9 +228,34 @@ impl From<AesGcmError> for DecryptError {
     }
 }
 
-impl AeadEncryptor for AesGcmKey {
+impl AeadEncryptorSelector for AesGcmKey {
+    fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
+        Box::pin(async move { snapshot })
+    }
+}
+
+impl AeadDecryptor for AesGcmKey {
+    fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+        self.inner.cipher_match(m)
+    }
+
+    fn decrypt<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+        self.inner
+            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+    }
+}
+
+impl AeadEncryptor for AesGcmKeyInner {
     fn enc_algorithm(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.inner.enc_algorithm())
+        Cow::Borrowed(self.key.enc_algorithm())
     }
 
     fn key_id(&self) -> Option<Cow<'_, str>> {
@@ -234,7 +271,7 @@ impl AeadEncryptor for AesGcmKey {
             let nonce = Array::generate();
             let mut ciphertext = plaintext.to_vec();
 
-            let tag = match &self.inner {
+            let tag = match &self.key {
                 NativeKey::Aes128(aes_gcm) => {
                     aes_gcm.encrypt_inout_detached(&nonce, aad, ciphertext.as_mut_slice().into())
                 }
@@ -256,9 +293,9 @@ impl AeadEncryptor for AesGcmKey {
     }
 }
 
-impl AeadDecryptor for AesGcmKey {
+impl AeadDecryptor for AesGcmKeyInner {
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
-        m.strength_for(self.inner.enc_algorithm(), self.kid.as_deref())
+        m.strength_for(self.key.enc_algorithm(), self.kid.as_deref())
     }
 
     fn decrypt<'a>(
@@ -274,7 +311,7 @@ impl AeadDecryptor for AesGcmKey {
             let tag = tag.try_into().context(InvalidTagSnafu)?;
             let mut plaintext = ciphertext.to_vec();
 
-            match &self.inner {
+            match &self.key {
                 NativeKey::Aes128(aes_gcm) => aes_gcm.decrypt_inout_detached(
                     &nonce,
                     aad,
@@ -356,11 +393,12 @@ mod tests {
 
     async fn roundtrip(key_bytes: Vec<u8>, expected_enc: &str) {
         let key = key_from(key_bytes, None);
-        assert_eq!(key.enc_algorithm().as_ref(), expected_enc);
+        let encryptor = key.select_encryptor().await;
+        assert_eq!(encryptor.enc_algorithm().as_ref(), expected_enc);
 
         let pt = b"the quick brown fox jumps over the lazy dog";
         let aad = b"session-context";
-        let out = key.encrypt(pt, aad).await.unwrap();
+        let out = encryptor.encrypt(pt, aad).await.unwrap();
 
         assert_eq!(out.nonce.len(), 12, "96-bit nonce");
         assert_eq!(out.tag.len(), 16, "128-bit tag");
@@ -427,7 +465,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("cookie-key-2026"));
+        let encryptor = key.select_encryptor().await;
+        assert_eq!(encryptor.key_id().as_deref(), Some("cookie-key-2026"));
     }
 
     #[tokio::test]
@@ -441,7 +480,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("explicit"));
+        let encryptor = key.select_encryptor().await;
+        assert_eq!(encryptor.key_id().as_deref(), Some("explicit"));
     }
 
     /// Mirror of the webcrypto backend's `kid_drives_cipher_match`: both
@@ -478,7 +518,8 @@ mod tests {
     #[tokio::test]
     async fn wrong_aad_fails_to_open() {
         let key = key_from(vec![5u8; 32], None);
-        let out = key.encrypt(b"payload", b"session").await.unwrap();
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
         let res = key
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"other")
             .await;
@@ -488,7 +529,8 @@ mod tests {
     #[tokio::test]
     async fn tampered_ciphertext_fails_to_open() {
         let key = key_from(vec![6u8; 32], None);
-        let out = key.encrypt(b"payload", b"session").await.unwrap();
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
         let mut ct = out.ciphertext.clone();
         ct[0] ^= 0x01;
         let res = key
@@ -503,7 +545,8 @@ mod tests {
     #[tokio::test]
     async fn wrong_length_nonce_and_tag_rejected() {
         let key = key_from(vec![7u8; 32], None);
-        let out = key.encrypt(b"payload", b"session").await.unwrap();
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
 
         // Nonce too short (11 bytes instead of 12).
         let res = key

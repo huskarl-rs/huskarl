@@ -59,8 +59,8 @@ handed a token to match; the caller chooses the current key. That choice goes
 through a *selector*:
 [`select_signer`](crate::crypto::signer::JwsSignerSelector::select_signer) hands
 out the signer to use right now, and
-[`select_cipher`](crate::crypto::cipher::AeadCipherSelector::select_cipher) the
-encryptor. [`KeyMatchStrength`](crate::crypto::KeyMatchStrength) plays no part
+[`select_encryptor`](crate::crypto::cipher::AeadEncryptorSelector::select_encryptor)
+the encryptor. [`KeyMatchStrength`](crate::crypto::KeyMatchStrength) plays no part
 here. The multi-key signer ([`MultiKeySigner`](crate::crypto::signer::MultiKeySigner))
 returns its default key, or — via
 [`select_signer_by_thumbprint`](crate::crypto::signer::AsymmetricJwsSignerSelector::select_signer_by_thumbprint)
@@ -97,8 +97,14 @@ back a frozen snapshot, and the caller runs the whole read-header-then-sign
 sequence against that one snapshot. Rotation happens *between* selections, never
 within one — which is why a selected signer should be used immediately and
 dropped, not cached across a rotation. Encryption and
-[`AeadCipherSelector`](crate::crypto::cipher::AeadCipherSelector) work the same
-way.
+[`AeadEncryptorSelector`](crate::crypto::cipher::AeadEncryptorSelector) work the
+same way.
+
+The relation is deliberately one-way: you hold a *selector* and get an
+encryptor, never the reverse. Even a fixed key is a selector — it hands out its
+shared inner [`AeadEncryptor`](crate::crypto::cipher::AeadEncryptor) — so
+there is no wrapper for lifting a bare encryptor into selection, which would
+silently freeze anything rotating beneath it.
 
 ## The wrapper families
 
@@ -141,8 +147,8 @@ relevant trait — the operation trait inbound, the selector trait outbound:
   failure backoff rate-limit the reloads. The outbound selectors work the same
   way: selection
   ([`select_signer`](crate::crypto::signer::JwsSignerSelector::select_signer) /
-  [`select_cipher`](crate::crypto::cipher::AeadCipherSelector::select_cipher)) is
-  async, so it reloads a stale key *during selection* — the outbound read path —
+  [`select_encryptor`](crate::crypto::cipher::AeadEncryptorSelector::select_encryptor))
+  is async, so it reloads a stale key *during selection* — the outbound read path —
   and hands back a fresh frozen snapshot. There the TTL bounds how quickly a
   rotated-in key is discovered rather than how quickly a removed one is dropped,
   but the mechanism is identical and the caller never has to poll.
@@ -201,40 +207,78 @@ reload on an explicit rotation event.
 Encryption has one more layer for values that must travel on their own —
 encrypted cookies, stateless tokens — where the nonce and tag have to ride along
 with the ciphertext. [`AeadSealer`](crate::crypto::cipher::AeadSealer) and
-[`AeadUnsealer`](crate::crypto::cipher::AeadUnsealer) frame an AEAD operation as
-a versioned, self-describing bundle
-(`[0x01 || nonce_len || tag_len || nonce || ciphertext || tag]`), implemented by
-[`AeadV1Cipher`](crate::crypto::cipher::AeadV1Cipher) over any inner cipher. The
-impls are capability-conditional: wrapping a cipher that does both directions
-yields a [`SealedAeadCipher`](crate::crypto::cipher::SealedAeadCipher); an
-encrypt-only key yields just a sealer; a decrypt-only key — a retired rotation
-key that can still open old bundles — yields just an unsealer.
+[`AeadUnsealer`](crate::crypto::cipher::AeadUnsealer) describe that operation:
+sealing packs one opaque byte string, unsealing re-opens it.
+[`AeadV1Cipher`](crate::crypto::cipher::AeadV1Cipher) is the local
+implementation, framing an AEAD operation as a versioned, self-describing bundle
+(`[0x01 || nonce_len || tag_len || nonce || ciphertext || tag]`) over any inner
+key stack. Its impls are capability-conditional: an
+[`AeadEncryptorSelector`](crate::crypto::cipher::AeadEncryptorSelector) inside
+yields a sealer; an [`AeadDecryptor`](crate::crypto::cipher::AeadDecryptor) — a
+retired rotation key that can still open old bundles, say — yields an unsealer;
+and an inner with both, an [`AeadCipher`](crate::crypto::cipher::AeadCipher),
+yields an [`AeadSealerUnsealer`](crate::crypto::cipher::AeadSealerUnsealer), the
+combined trait that erases to one `Arc<dyn AeadSealerUnsealer>` carrying both
+directions.
 
-Sealing is an **outbound** operation, so — like signing — it reaches its key
-through a *selector*.
-[`select_sealer`](crate::crypto::cipher::AeadSealerSelector::select_sealer) hands
-back a *frozen* [`AeadSealer`](crate::crypto::cipher::AeadSealer), and
-[`unseal`](crate::crypto::cipher::AeadUnsealer::unseal) takes the same match
-criteria as decryption, so a caller can record *which* key sealed a bundle — a
-cookie attribute, a database column — for a later unseal to select on. The frozen
-snapshot is what makes that recorded `kid` trustworthy: it collapses the separate
-"read the [`key_id`](crate::crypto::cipher::AeadEncryptor::key_id)" and
-"[`seal`](crate::crypto::cipher::AeadSealer::seal)" steps onto one key, so a
-rotation between them cannot leave the bundle carrying one key's `kid` over
-another's ciphertext — the same corruption a
-[`JwsSignerSelector`](crate::crypto::signer::JwsSignerSelector) prevents for
-read-header-then-sign. Note the hazard lives in the *caller's* out-of-band `kid`,
-not in the bundle, which carries none.
+Sealing is an **outbound** operation, but unlike signing it needs no separate
+selector trait: each [`seal`](crate::crypto::cipher::AeadSealer::seal) selects
+one frozen encryptor snapshot internally and runs the whole encrypt-then-frame
+sequence against it, so a rotation cannot land between choosing the key and
+using it — the read-header-then-sign hazard, closed off inside the one call.
+The price is opacity: a sealer exposes no `key_id`, so *which* key sealed a
+bundle cannot be observed or recorded alongside it — fitting, since the bundle
+carries no `kid` either. The inbound path leans on the AEAD tag instead: a
+multi-key unsealer tries its candidate keys, and a wrong key is a clean
+authentication failure, never a wrong plaintext.
+[`unseal`](crate::crypto::cipher::AeadUnsealer::unseal) still takes the same
+match criteria as decryption, for a caller that knows the key some other way.
 
-For a key that never rotates, wrap it in
-[`StaticAeadCipher`](crate::crypto::cipher::StaticAeadCipher) — the fixed-key base
-case, the cipher analogue of a signing key that is its own selector. For one that
-does, a [`RefreshableCipher`](crate::crypto::cipher::RefreshableCipher) or
-[`ScheduledRefreshCipher`](crate::crypto::cipher::ScheduledRefreshCipher) reloads a
-stale key during `select_sealer` exactly as it does for
-[`select_cipher`](crate::crypto::cipher::AeadCipherSelector::select_cipher),
-bounding how quickly a rotated-in key is discovered; both erase to
-`Arc<dyn SealedAeadCipherSelector>` when the key source is chosen at runtime. A
-resource server uses this to issue and check stateless `DPoP` nonces: select a
-sealer, seal the issue time into a bundle, hand it out, and unseal it later to
-verify its age without server-side storage.
+Because a raw key is already a selector, `AeadV1Cipher::new(key)` is the whole
+fixed-key story. For a rotating key, put a
+[`ScheduledRefreshCipher`](crate::crypto::cipher::ScheduledRefreshCipher) (or
+[`RefreshableCipher`](crate::crypto::cipher::RefreshableCipher)) inside instead,
+and the stale key is reloaded during each seal's internal selection, bounding
+how quickly a rotated-in key is discovered. A resource server uses this to issue
+and check stateless `DPoP` nonces: seal the issue time into a bundle, hand it
+out, and unseal it later to verify its age without server-side storage.
+
+The sealer traits are also a *boundary*, not just a framing: they are where
+encryption can be delegated wholesale to an external service. A KMS- or
+Vault-style encrypt endpoint returns one opaque, self-describing token — there
+is no nonce/ciphertext/tag decomposition to expose, so such a service cannot
+implement [`AeadEncryptor`](crate::crypto::cipher::AeadEncryptor) at all — but
+it implements [`AeadSealer`](crate::crypto::cipher::AeadSealer) /
+[`AeadUnsealer`](crate::crypto::cipher::AeadUnsealer) naturally, handling
+rotation on its own side. Consumers bound on the sealer traits accept either
+world unchanged.
+
+## The three operations, compared
+
+Everything above follows from two rules and one question. The rules: an
+**outbound** operation is compound, so it must run against one frozen key
+snapshot — reached through a selector, refreshed at selection; an **inbound**
+operation is handed its selection criteria by what arrived — matched by
+strength, where the worst a stale keyset can produce is a recoverable miss. The
+question: does the key material arrive as data (then a platform must
+materialise it) or is it handed in fully formed? Signing is the outbound rule
+alone, verification the inbound rule alone, and encryption is the one operation
+family where both rules apply to a single key — which is why it alone has a
+combined trait (`AeadCipher`) and the sealing layer on top.
+
+|                        | Signing                                     | Verification                                 | Encryption / decryption                                        |
+|------------------------|---------------------------------------------|----------------------------------------------|----------------------------------------------------------------|
+| Direction              | outbound                                    | inbound                                      | both, on one key family                                        |
+| Base trait             | `JwsSigner`                                 | `JwsVerifier`                                | `AeadEncryptor` / `AeadDecryptor`; `AeadCipher` for both       |
+| Key chosen by          | caller, via `JwsSignerSelector`             | the token, via `key_match`                   | caller via `AeadEncryptorSelector`; bundle via `cipher_match`  |
+| Hot-swap wrapper is    | the *selector*, never a `JwsSigner`         | the operation itself                         | the selector outbound; the operation inbound                   |
+| Miss reaction          | none — no outbound miss exists              | `RetryingVerifier`: refresh, retry once      | `RetryingDecryptor`: same, inbound only                        |
+| Ambiguous key match    | n/a — default key, or by thumbprint         | fails closed: wrong-key acceptance is a risk | try-all is safe: the AEAD tag self-authenticates               |
+| Materialisation seam   | none — keys are handed in                   | `JwsVerifierPlatform`, keys arrive as a JWKS | none — keys are handed in                                      |
+| Extra layer            | by-thumbprint selection (`DPoP`'s `dpop_jkt`) | —                                          | sealing: self-contained bundles, external sealers              |
+
+The columns differ only where the direction or the key's origin genuinely
+differs; where neither does, the machinery is deliberately identical — the
+refresh wrappers share one mechanism, the two match methods share
+[`KeyMatchStrength`](crate::crypto::KeyMatchStrength), and the two miss-driven
+retry wrappers share their split of work with the TTL layer.

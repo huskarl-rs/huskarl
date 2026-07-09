@@ -1,14 +1,13 @@
-use std::{borrow::Cow, sync::Arc};
+use std::sync::Arc;
 
 use futures_util::future::join_all;
 
 use crate::{
     crypto::{
         KeyMatchStrength,
-        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch, DecryptError},
+        cipher::{AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, CipherMatch, DecryptError},
     },
-    error::Error,
-    platform::MaybeSendBoxFuture,
+    platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
 
 /// An [`AeadDecryptor`] that holds multiple keys and applies [`CipherMatch`] /
@@ -183,8 +182,8 @@ impl AeadDecryptor for MultiKeyDecryptor {
     }
 }
 
-/// An [`AeadEncryptor`] + [`AeadDecryptor`] that encrypts with a single key
-/// and decrypts with a [`MultiKeyDecryptor`].
+/// An [`AeadEncryptorSelector`] + [`AeadDecryptor`] that encrypts with a
+/// single primary key and decrypts with a [`MultiKeyDecryptor`].
 ///
 /// This allows a single value to be passed where both encryption and decryption
 /// capabilities are needed (e.g. encrypted cookies with key rotation).
@@ -204,25 +203,13 @@ impl<E> MultiKeyCipher<E> {
     }
 }
 
-impl<E: AeadEncryptor> AeadEncryptor for MultiKeyCipher<E> {
-    fn enc_algorithm(&self) -> Cow<'_, str> {
-        self.encryptor.enc_algorithm()
-    }
-
-    fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.encryptor.key_id()
-    }
-
-    fn encrypt<'a>(
-        &'a self,
-        plaintext: &'a [u8],
-        aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
-        self.encryptor.encrypt(plaintext, aad)
+impl<E: AeadEncryptorSelector> AeadEncryptorSelector for MultiKeyCipher<E> {
+    fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        self.encryptor.select_encryptor()
     }
 }
 
-impl<E: AeadEncryptor> AeadDecryptor for MultiKeyCipher<E> {
+impl<E: std::fmt::Debug + MaybeSendSync> AeadDecryptor for MultiKeyCipher<E> {
     fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
         self.decryptor.cipher_match(m)
     }
@@ -246,15 +233,16 @@ impl<E: AeadEncryptor> AeadDecryptor for MultiKeyCipher<E> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use rstest::rstest;
 
     use super::*;
     use crate::{
+        Error,
         crypto::{
             KeyMatchStrength::*,
-            cipher::{
-                AeadSealer, AeadSealerSelector, AeadUnsealer, AeadV1Cipher, StaticAeadCipher,
-            },
+            cipher::{AeadOutput, AeadSealer, AeadSealerUnsealer, AeadUnsealer, AeadV1Cipher},
         },
         error::ErrorKind,
     };
@@ -472,6 +460,27 @@ mod tests {
     #[derive(Debug)]
     struct FakeEncryptor;
 
+    /// Raw-key shape: a selector handing out its shared inner encryptor.
+    #[derive(Debug)]
+    struct FakeKey {
+        inner: Arc<FakeEncryptor>,
+    }
+
+    impl FakeKey {
+        fn new() -> Self {
+            Self {
+                inner: Arc::new(FakeEncryptor),
+            }
+        }
+    }
+
+    impl AeadEncryptorSelector for FakeKey {
+        fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+            let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
+            Box::pin(async move { snapshot })
+        }
+    }
+
     impl AeadEncryptor for FakeEncryptor {
         fn enc_algorithm(&self) -> Cow<'_, str> {
             "A256GCM".into()
@@ -498,14 +507,16 @@ mod tests {
     #[tokio::test]
     async fn multi_key_cipher_delegates_each_direction() {
         let cipher = MultiKeyCipher::new(
-            FakeEncryptor,
+            FakeKey::new(),
             MultiKeyDecryptor::new(vec![dec(None, Outcome::Ok(b"plaintext"))]),
         );
 
-        // Encryptor side → delegates to the inner encryptor.
-        assert_eq!(cipher.enc_algorithm().as_ref(), "A256GCM");
-        assert_eq!(cipher.key_id().as_deref(), Some("enc-kid"));
-        let out = cipher.encrypt(b"plaintext", b"aad").await.unwrap();
+        // Encryptor side → delegates to the selected encryptor.
+        let selected = cipher.select_encryptor().await;
+
+        assert_eq!(selected.enc_algorithm().as_ref(), "A256GCM");
+        assert_eq!(selected.key_id().as_deref(), Some("enc-kid"));
+        let out = selected.encrypt(b"plaintext", b"aad").await.unwrap();
         assert_eq!(out.ciphertext, b"plaintext");
 
         // Decryptor side → delegates to the MultiKeyDecryptor.
@@ -523,17 +534,11 @@ mod tests {
     /// whose tag is its own `kid`. So which key sealed a cookie is observable, and
     /// a cookie can only be unsealed by the key that sealed it.
     #[derive(Debug)]
-    struct KeyedCookieCipher {
+    struct KeyedCookieEncryptor {
         kid: &'static str,
     }
 
-    impl KeyedCookieCipher {
-        fn new(kid: &'static str) -> Self {
-            Self { kid }
-        }
-    }
-
-    impl AeadEncryptor for KeyedCookieCipher {
+    impl AeadEncryptor for KeyedCookieEncryptor {
         fn enc_algorithm(&self) -> Cow<'_, str> {
             "A256GCM".into()
         }
@@ -557,9 +562,29 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct KeyedCookieCipher {
+        inner: Arc<KeyedCookieEncryptor>,
+    }
+
+    impl KeyedCookieCipher {
+        fn new(kid: &'static str) -> Self {
+            Self {
+                inner: Arc::new(KeyedCookieEncryptor { kid }),
+            }
+        }
+    }
+
+    impl AeadEncryptorSelector for KeyedCookieCipher {
+        fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+            let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
+            Box::pin(async move { snapshot })
+        }
+    }
+
     impl AeadDecryptor for KeyedCookieCipher {
         fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
-            m.strength_for("A256GCM", Some(self.kid))
+            m.strength_for("A256GCM", Some(self.inner.kid))
         }
         fn decrypt<'a>(
             &'a self,
@@ -569,7 +594,7 @@ mod tests {
             tag: &'a [u8],
             _aad: &'a [u8],
         ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
-            let opens = tag == self.kid.as_bytes();
+            let opens = tag == self.inner.kid.as_bytes();
             let plaintext = ciphertext.to_vec();
             Box::pin(async move {
                 if opens {
@@ -581,12 +606,11 @@ mod tests {
         }
     }
 
-    /// The rotated-cookie-keys shape: one `StaticAeadCipher<MultiKeyCipher>` seals
+    /// The rotated-cookie-keys shape: one `AeadV1Cipher<MultiKeyCipher>` seals
     /// every new cookie with the current primary key while still unsealing cookies
     /// sealed by any key left in the decryptor set — and a key dropped from the set
-    /// can no longer open its old cookies. This is the composition the sealing docs
-    /// name; it exercises `select_sealer` (encrypt with one) and `unseal` (decrypt
-    /// against many) on the same value.
+    /// can no longer open its old cookies. Erased to `Arc<dyn AeadSealerUnsealer>`,
+    /// it is a single handle carrying both directions.
     #[tokio::test]
     async fn rotated_cookie_keys_seal_new_and_unseal_old() {
         // A cookie minted with v1 before the rotation, and one minted with a
@@ -601,21 +625,17 @@ mod tests {
             .unwrap();
 
         // After rotation: seal with v2, still decrypt v2 and v1 (v0 dropped).
-        let cookies = StaticAeadCipher::new(MultiKeyCipher::new(
-            KeyedCookieCipher::new("v2"),
-            MultiKeyDecryptor::new(vec![
-                Arc::new(KeyedCookieCipher::new("v2")) as Arc<dyn AeadDecryptor>,
-                Arc::new(KeyedCookieCipher::new("v1")) as Arc<dyn AeadDecryptor>,
-            ]),
-        ));
+        let cookies: Arc<dyn AeadSealerUnsealer> =
+            Arc::new(AeadV1Cipher::new(MultiKeyCipher::new(
+                KeyedCookieCipher::new("v2"),
+                MultiKeyDecryptor::new(vec![
+                    Arc::new(KeyedCookieCipher::new("v2")) as Arc<dyn AeadDecryptor>,
+                    Arc::new(KeyedCookieCipher::new("v1")) as Arc<dyn AeadDecryptor>,
+                ]),
+            )));
 
         // New cookies are sealed with the current primary (v2)...
-        let new_cookie = cookies
-            .select_sealer()
-            .await
-            .seal(b"session", b"aad")
-            .await
-            .unwrap();
+        let new_cookie = cookies.seal(b"session", b"aad").await.unwrap();
         assert_eq!(
             &new_cookie[new_cookie.len() - 2..],
             b"v2",

@@ -80,8 +80,10 @@ transient failure (KMS, HSM) as
   signatures.
 - [`JwsVerifier`](crate::crypto::verifier::JwsVerifier) — verify them, reporting
   match quality through [`key_match`](crate::crypto::verifier::JwsVerifier::key_match).
-- [`AeadEncryptor`](crate::crypto::cipher::AeadEncryptor) /
-  [`AeadDecryptor`](crate::crypto::cipher::AeadDecryptor) — content encryption.
+- [`AeadEncryptorSelector`](crate::crypto::cipher::AeadEncryptorSelector) /
+  [`AeadEncryptor`](crate::crypto::cipher::AeadEncryptor) /
+  [`AeadDecryptor`](crate::crypto::cipher::AeadDecryptor) — content encryption;
+  the key type is the selector, handing out its shared inner encryptor.
 
 You usually implement only the single-key trait; the [composable
 wrappers](crate::_docs::explanation::crypto_strategies) (multi-key, refreshable,

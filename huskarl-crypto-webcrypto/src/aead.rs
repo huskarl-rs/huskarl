@@ -1,7 +1,8 @@
 //! AES-GCM AEAD over the WebCrypto/SubtleCrypto API (e.g. for cookie sealing).
 //!
 //! [`AesGcmKey`] is the AES-128/192/256-GCM cipher implementing huskarl-core's
-//! [`AeadEncryptor`]/[`AeadDecryptor`]; build one from a JWK with
+//! [`AeadEncryptorSelector`] (handing out its shared inner [`AeadEncryptor`])
+//! and [`AeadDecryptor`]; build one from a JWK with
 //! [`AesGcmKey::from_jwk`], from a secret store with
 //! [`AesGcmKey::from_secret`], or from an already-imported key with
 //! [`AesGcmKey::from_crypto_key`]. All operations are async.
@@ -12,7 +13,10 @@ use huskarl_core::{
     Error, ErrorKind,
     crypto::{
         KeyMatchStrength,
-        cipher::{AeadDecryptor, AeadEncryptor, AeadOutput, CipherMatch, DecryptError},
+        cipher::{
+            AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, AeadOutput, CipherMatch,
+            DecryptError,
+        },
     },
     jwk,
     platform::MaybeSendBoxFuture,
@@ -43,9 +47,19 @@ struct Inner {
     kid: Option<String>,
 }
 
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("enc", &self.enc_algorithm)
+            .field("kid", &self.kid)
+            .finish_non_exhaustive()
+    }
+}
+
 /// A non-extractable AES-GCM key backed by the `WebCrypto`/Subtle API.
 ///
-/// Implements [`AeadEncryptor`] + [`AeadDecryptor`] — and therefore
+/// Implements [`AeadEncryptorSelector`] (handing out its shared inner
+/// [`AeadEncryptor`]) + [`AeadDecryptor`] — and therefore
 /// [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher) by blanket impl — so
 /// it can seal `huskarl-login`'s session and login-state cookies on platforms
 /// whose only available crypto is `WebCrypto`: Cloudflare Workers, browsers,
@@ -280,13 +294,20 @@ impl AesGcmKey {
     }
 }
 
-impl AeadEncryptor for AesGcmKey {
+impl AeadEncryptorSelector for AesGcmKey {
+    fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
+        Box::pin(async move { snapshot })
+    }
+}
+
+impl AeadEncryptor for Inner {
     fn enc_algorithm(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.inner.enc_algorithm)
+        Cow::Borrowed(self.enc_algorithm)
     }
 
     fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.inner.kid.as_deref().map(Cow::Borrowed)
+        self.kid.as_deref().map(Cow::Borrowed)
     }
 
     fn encrypt<'a>(
@@ -307,7 +328,7 @@ impl AeadEncryptor for AesGcmKey {
             let result = JsFuture::from(
                 crypto
                     .subtle()
-                    .encrypt_with_object_and_u8_array(&params, &self.inner.crypto_key, plaintext)
+                    .encrypt_with_object_and_u8_array(&params, &self.crypto_key, plaintext)
                     .context(OpSnafu)?,
             )
             .await
@@ -421,7 +442,9 @@ mod tests {
         Error,
         crypto::{
             KeyMatchStrength,
-            cipher::{AeadDecryptor as _, AeadEncryptor as _, CipherMatch},
+            cipher::{
+                AeadDecryptor as _, AeadEncryptor as _, AeadEncryptorSelector as _, CipherMatch,
+            },
         },
         jwk::{OctBytes, SymmetricJwk},
         platform::MaybeSendBoxFuture,
@@ -472,7 +495,8 @@ mod tests {
         let aad = b"session";
         let pt = b"the quick brown fox jumps over the lazy dog";
 
-        let out = key.encrypt(pt, aad).await.unwrap();
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(pt, aad).await.unwrap();
         assert_eq!(out.nonce.len(), 12, "96-bit nonce");
         assert_eq!(out.tag.len(), 16, "128-bit tag");
         assert_ne!(
@@ -491,8 +515,9 @@ mod tests {
     #[wasm_bindgen_test]
     async fn nonces_differ_across_seals() {
         let key = key_256().await;
-        let a = key.encrypt(b"x", b"aad").await.unwrap();
-        let b = key.encrypt(b"x", b"aad").await.unwrap();
+        let encryptor = key.select_encryptor().await;
+        let a = encryptor.encrypt(b"x", b"aad").await.unwrap();
+        let b = encryptor.encrypt(b"x", b"aad").await.unwrap();
         assert_ne!(a.nonce, b.nonce, "each seal must draw a fresh CSPRNG nonce");
     }
 
@@ -500,7 +525,8 @@ mod tests {
     async fn wrong_aad_fails_to_open() {
         // The AAD binding is what domain-separates session vs login-state cookies.
         let key = key_256().await;
-        let out = key.encrypt(b"payload", b"session").await.unwrap();
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
         let res = key
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"session_ptr")
             .await;
@@ -510,7 +536,11 @@ mod tests {
     #[wasm_bindgen_test]
     async fn tampered_ciphertext_fails_to_open() {
         let key = key_256().await;
-        let mut out = key.encrypt(b"payload data here", b"aad").await.unwrap();
+        let encryptor = key.select_encryptor().await;
+        let mut out = encryptor
+            .encrypt(b"payload data here", b"aad")
+            .await
+            .unwrap();
         out.ciphertext[0] ^= 0xff;
         let res = key
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"aad")
@@ -525,7 +555,8 @@ mod tests {
     async fn other_key_cannot_open() {
         let a = key_from(vec![7u8; 32], None).await;
         let b = key_from(vec![9u8; 32], None).await;
-        let out = a.encrypt(b"secret", b"aad").await.unwrap();
+        let encryptor = a.select_encryptor().await;
+        let out = encryptor.encrypt(b"secret", b"aad").await.unwrap();
         let res = b
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"aad")
             .await;
@@ -539,7 +570,8 @@ mod tests {
     async fn aes_128_and_192_roundtrip() {
         for len in [16usize, 24] {
             let key = key_from(vec![3u8; len], None).await;
-            let out = key.encrypt(b"data", b"aad").await.unwrap();
+            let encryptor = key.select_encryptor().await;
+            let out = encryptor.encrypt(b"data", b"aad").await.unwrap();
             let recovered = key
                 .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"aad")
                 .await
@@ -554,7 +586,12 @@ mod tests {
         // what `cipher_match` keys on, so each AES size must label itself.
         for (len, enc) in [(16usize, "A128GCM"), (24, "A192GCM"), (32, "A256GCM")] {
             let key = key_from(vec![3u8; len], None).await;
-            assert_eq!(key.enc_algorithm().as_ref(), enc, "AES key length {len}");
+            let encryptor = key.select_encryptor().await;
+            assert_eq!(
+                encryptor.enc_algorithm().as_ref(),
+                enc,
+                "AES key length {len}"
+            );
         }
     }
 
@@ -577,7 +614,8 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("kv-version-3"));
+        let encryptor = key.select_encryptor().await;
+        assert_eq!(encryptor.key_id().as_deref(), Some("kv-version-3"));
     }
 
     #[wasm_bindgen_test]
@@ -585,7 +623,8 @@ mod tests {
         // The kid is what lets a MultiKeyDecryptor route — and a refresh-on-miss
         // distinguish "wrong key" from "tampered". Exercise the match contract.
         let key = key_from(vec![1u8; 32], Some("v1")).await;
-        assert_eq!(key.key_id().as_deref(), Some("v1"));
+        let encryptor = key.select_encryptor().await;
+        assert_eq!(encryptor.key_id().as_deref(), Some("v1"));
 
         assert!(matches!(
             key.cipher_match(&CipherMatch::builder().kid("v1").build()),
@@ -642,12 +681,16 @@ mod tests {
         let crypto_key = import_raw_aes_crypto_key(&bytes).await;
         let key = AesGcmKey::from_crypto_key(crypto_key, 256, Some("startup".to_string()));
 
-        assert_eq!(key.enc_algorithm().as_ref(), "A256GCM");
-        assert_eq!(key.key_id().as_deref(), Some("startup"));
+        let encryptor = key.select_encryptor().await;
+        assert_eq!(encryptor.enc_algorithm().as_ref(), "A256GCM");
+        assert_eq!(encryptor.key_id().as_deref(), Some("startup"));
 
         // It seals and opens like any other key.
         let aad = b"session";
-        let out = key.encrypt(b"provisioned payload", aad).await.unwrap();
+        let out = encryptor
+            .encrypt(b"provisioned payload", aad)
+            .await
+            .unwrap();
         let recovered = key
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
             .await
@@ -680,7 +723,8 @@ mod tests {
             (9999, "A256GCM"),
         ] {
             let key = AesGcmKey::from_crypto_key(crypto_key.clone(), bits, None);
-            assert_eq!(key.enc_algorithm().as_ref(), enc, "key_bits {bits}");
+            let encryptor = key.select_encryptor().await;
+            assert_eq!(encryptor.enc_algorithm().as_ref(), enc, "key_bits {bits}");
         }
     }
 
@@ -702,7 +746,8 @@ mod tests {
         let native = native_key(bytes);
         let aad = b"session";
 
-        let out = web.encrypt(b"interop payload", aad).await.unwrap();
+        let encryptor = web.select_encryptor().await;
+        let out = encryptor.encrypt(b"interop payload", aad).await.unwrap();
         let recovered = native
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
             .await
@@ -723,7 +768,8 @@ mod tests {
 
         // Native sealing draws its nonce from getrandom — needs the wasm_js
         // backend cfg at build time (see the dev-dependency comment).
-        let out = native.encrypt(b"interop payload", aad).await.unwrap();
+        let encryptor = native.select_encryptor().await;
+        let out = encryptor.encrypt(b"interop payload", aad).await.unwrap();
         let recovered = web
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
             .await
@@ -741,7 +787,8 @@ mod tests {
         let web = key_from(bytes.clone(), None).await;
         let native = native_key(bytes);
 
-        let out = web.encrypt(b"payload", b"session").await.unwrap();
+        let encryptor = web.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
         let res = native
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"session_ptr")
             .await;
@@ -757,11 +804,13 @@ mod tests {
         let native = native_key(bytes);
         let aad = b"session";
 
-        assert_eq!(web.enc_algorithm().as_ref(), "A192GCM");
-        assert_eq!(native.enc_algorithm().as_ref(), "A192GCM");
+        let web_encryptor = web.select_encryptor().await;
+        let native_encryptor = native.select_encryptor().await;
+        assert_eq!(web_encryptor.enc_algorithm().as_ref(), "A192GCM");
+        assert_eq!(native_encryptor.enc_algorithm().as_ref(), "A192GCM");
 
         // WebCrypto seals → native opens.
-        let out = web.encrypt(b"aes192 payload", aad).await.unwrap();
+        let out = web_encryptor.encrypt(b"aes192 payload", aad).await.unwrap();
         let recovered = native
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
             .await
@@ -769,7 +818,10 @@ mod tests {
         assert_eq!(recovered, b"aes192 payload".to_vec());
 
         // Native seals → WebCrypto opens.
-        let out = native.encrypt(b"aes192 payload", aad).await.unwrap();
+        let out = native_encryptor
+            .encrypt(b"aes192 payload", aad)
+            .await
+            .unwrap();
         let recovered = web
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
             .await
