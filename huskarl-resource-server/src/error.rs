@@ -293,7 +293,14 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
     }
 
     fn token_error(&self) -> TokenValidationError {
-        TokenValidationError::Client(TokenErrorCode::InvalidToken)
+        // A JTI checker malfunction (e.g. an unreachable backing store) is not
+        // a client error; the token was never judged.
+        match self {
+            crate::core::jwt::validator::JwtValidationError::JtiCheck { .. } => {
+                TokenValidationError::Server(http::StatusCode::INTERNAL_SERVER_ERROR)
+            }
+            _ => TokenValidationError::Client(TokenErrorCode::InvalidToken),
+        }
     }
 
     fn error_description(&self) -> Option<String> {
