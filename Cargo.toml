@@ -6,6 +6,7 @@ members = [
   "huskarl-crypto-native",
   "huskarl-crypto-webcrypto",
   "huskarl-macros",
+  "huskarl-redis",
   "huskarl-reqwest",
   "huskarl-resource-server",
   "integration/huskarl-conformance",
@@ -21,6 +22,7 @@ default-members = [
   "huskarl-core",
   "huskarl-crypto-native",
   "huskarl-macros",
+  "huskarl-redis",
   "huskarl-reqwest",
   "huskarl-resource-server",
   "integration/huskarl-conformance",
@@ -34,6 +36,7 @@ exclude = ["huskarl-core/fuzz"]
 huskarl = { version = "0.9", path = "./huskarl" }
 huskarl-core = { version = "0.8", path = "./huskarl-core" }
 huskarl-macros = { version = "0.3", path = "./huskarl-macros" }
+huskarl-redis = { version = "0.1", path = "./huskarl-redis" }
 huskarl-reqwest = { version = "0.7", path = "./huskarl-reqwest" }
 huskarl-crypto-native = { version = "0.9", path = "./huskarl-crypto-native" }
 huskarl-crypto-webcrypto = { version = "0.9", path = "./huskarl-crypto-webcrypto" }
@@ -45,6 +48,7 @@ bon = { version = "3.9", default-features = false, features = [
   "implied-bounds",
 ] }
 form_urlencoded = { version = "1", default-features = false, features = ["std"] }
+hex = { version = "0.4", default-features = false, features = ["std"] }
 rand = { version = "0.10", default-features = false, features = ["std", "sys_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1", default-features = false, features = ["std"] }

@@ -144,6 +144,7 @@ jobs:
           docker compose up --wait                                                # Keycloak (8080 + 8444)
           docker compose -f dex/docker-compose.yml up -d                          # Dex (5556)
           docker compose -f node-oidc-provider/docker-compose.yml up -d --build   # node-oidc (3000)
+          docker compose -f redis/docker-compose.yml up --wait                    # Redis (6379)
           # Dex and node-oidc images carry no healthcheck, so wait on their
           # discovery endpoints from the host (mirrors the mise `*:up` tasks).
           for url in \
@@ -159,6 +160,10 @@ jobs:
       # feature, the okta binary's trials are ignored.
       - name: Run tests
         run: cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc
+      # huskarl-redis's server-backed tests are `#[ignore]`d without the
+      # opt-in, so they need their own invocation (mirrors `redis:test`).
+      - name: Run huskarl-redis tests
+        run: cargo nextest run -p huskarl-redis --test redis --run-ignored ignored-only
       - name: Stop providers
         working-directory: integration
         if: always()
@@ -166,3 +171,4 @@ jobs:
           docker compose down
           docker compose -f dex/docker-compose.yml down
           docker compose -f node-oidc-provider/docker-compose.yml down
+          docker compose -f redis/docker-compose.yml down
