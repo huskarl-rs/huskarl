@@ -38,7 +38,7 @@ bon = { workspace = true }
 bytes = { version = "1", default-features = false }
 form_urlencoded = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-hex = { version = "0.4", default-features = false, features = ["std"] }
+hex = { workspace = true }
 http = { version = "1", default-features = false, features = ["std"] }
 rand = { workspace = true }
 secrecy = { version = "0.10.3", default-features = false }

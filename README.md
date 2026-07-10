@@ -168,6 +168,7 @@ for the conformance setup.
 | [`huskarl-crypto-native`](https://docs.rs/huskarl-crypto-native) | Crypto backend built on the RustCrypto crates |
 | [`huskarl-crypto-webcrypto`](https://docs.rs/huskarl-crypto-webcrypto) | Crypto backend built on `WebCrypto`, for WASM environments |
 | [`huskarl-reqwest`](https://docs.rs/huskarl-reqwest) | [`reqwest`](https://docs.rs/reqwest)-backed HTTP client for the crates above |
+| [`huskarl-redis`](https://docs.rs/huskarl-redis) | Redis-backed replay prevention: shares the JWT/`DPoP` `jti` seen-set across server replicas |
 
 A rule of thumb for the split: if both a resource server and a client might
 need it, it lives in `huskarl-core`.

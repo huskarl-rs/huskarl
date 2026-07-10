@@ -66,6 +66,18 @@ run = "docker compose -f node-oidc-provider/docker-compose.yml down"
 run = "cargo nextest run -p huskarl-integration --test node_oidc --features node-oidc"
 depends = ["node-oidc:up"]
 
+# Redis (for huskarl-redis's replay-prevention integration tests, which are
+# `#[ignore]`d without a server)
+[tasks."redis:up"]
+run = "docker compose -f redis/docker-compose.yml up --wait"
+
+[tasks."redis:down"]
+run = "docker compose -f redis/docker-compose.yml down"
+
+[tasks."redis:test"]
+run = "cargo nextest run -p huskarl-redis --test redis --run-ignored ignored-only"
+depends = ["redis:up"]
+
 # Okta (hosted tenant — no local server; configure via OKTA_* env, see
 # huskarl_testkit::okta). No `up` task: the tenant is provisioned out-of-band.
 [tasks."okta:test"]
