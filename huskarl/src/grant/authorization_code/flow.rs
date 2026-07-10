@@ -231,7 +231,7 @@ impl AuthorizationCodeGrant {
             None => par::ParBody::Expanded(Box::new(payload.clone())),
         };
 
-        let dpop_jkt = self.dpop.get_current_thumbprint().await;
+        let dpop_jkt = payload.rest.dpop_jkt.as_deref();
 
         let par_response = with_dpop_nonce_retry!({
             let mut auth_params = self
@@ -262,7 +262,7 @@ impl AuthorizationCodeGrant {
                 auth_params,
                 &par_body,
                 self.dpop.as_ref(),
-                dpop_jkt.as_deref(),
+                dpop_jkt,
             )
             .await
             .map_err(|e| e.with_context("making PAR request"))
