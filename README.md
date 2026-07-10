@@ -1,9 +1,15 @@
 # Huskarl — OAuth 2 clients and resource servers for Rust
 
-[![crates.io](https://img.shields.io/crates/v/huskarl.svg)](https://crates.io/crates/huskarl)
-[![docs.rs](https://img.shields.io/docsrs/huskarl)](https://docs.rs/huskarl)
 [![CI](https://github.com/huskarl-rs/huskarl/actions/workflows/ci.yml/badge.svg)](https://github.com/huskarl-rs/huskarl/actions/workflows/ci.yml)
 [![Conformance](https://github.com/huskarl-rs/huskarl/actions/workflows/conformance.yml/badge.svg)](https://github.com/huskarl-rs/huskarl/actions/workflows/conformance.yml)
+
+[![huskarl](https://img.shields.io/crates/v/huskarl.svg?label=huskarl)](https://crates.io/crates/huskarl) [![docs.rs](https://img.shields.io/docsrs/huskarl)](https://docs.rs/huskarl)\
+[![huskarl-resource-server](https://img.shields.io/crates/v/huskarl-resource-server.svg?label=huskarl-resource-server)](https://crates.io/crates/huskarl-resource-server) [![docs.rs](https://img.shields.io/docsrs/huskarl-resource-server)](https://docs.rs/huskarl-resource-server)\
+[![huskarl-core](https://img.shields.io/crates/v/huskarl-core.svg?label=huskarl-core)](https://crates.io/crates/huskarl-core) [![docs.rs](https://img.shields.io/docsrs/huskarl-core)](https://docs.rs/huskarl-core)\
+[![huskarl-crypto-native](https://img.shields.io/crates/v/huskarl-crypto-native.svg?label=huskarl-crypto-native)](https://crates.io/crates/huskarl-crypto-native) [![docs.rs](https://img.shields.io/docsrs/huskarl-crypto-native)](https://docs.rs/huskarl-crypto-native)\
+[![huskarl-crypto-webcrypto](https://img.shields.io/crates/v/huskarl-crypto-webcrypto.svg?label=huskarl-crypto-webcrypto)](https://crates.io/crates/huskarl-crypto-webcrypto) [![docs.rs](https://img.shields.io/docsrs/huskarl-crypto-webcrypto)](https://docs.rs/huskarl-crypto-webcrypto)\
+[![huskarl-reqwest](https://img.shields.io/crates/v/huskarl-reqwest.svg?label=huskarl-reqwest)](https://crates.io/crates/huskarl-reqwest) [![docs.rs](https://img.shields.io/docsrs/huskarl-reqwest)](https://docs.rs/huskarl-reqwest)\
+[![huskarl-redis](https://img.shields.io/crates/v/huskarl-redis.svg?label=huskarl-redis)](https://crates.io/crates/huskarl-redis) [![docs.rs](https://img.shields.io/docsrs/huskarl-redis)](https://docs.rs/huskarl-redis)
 
 A húskarl was a well-paid, well-trained household bodyguard in medieval
 northern Europe. Likewise, huskarl guards access to your services: a suite of
