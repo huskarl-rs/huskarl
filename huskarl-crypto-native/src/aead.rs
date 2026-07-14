@@ -1,7 +1,6 @@
 //! AEAD ciphers, backed by `RustCrypto`.
 //!
-//! Both implement huskarl-core's
-//! [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher)
+//! Both implement huskarl-core's [`AeadCipher`]
 //! ([`AeadEncryptorSelector`] + [`AeadDecryptor`]) and are built from a JWK
 //! (`from_jwk`) or a secret store (`from_secret`):
 //!
@@ -10,6 +9,9 @@
 //!   backend.
 //! - [`XChaChaKey`] — `XC20P`, 256-bit key, 192-bit nonce, no per-key
 //!   encryption bound. Native-only: `WebCrypto` has no `ChaCha` primitive.
+//!
+//! The module-level [`from_jwk`]/[`from_secret`] build either, dispatching on
+//! the JWK's `alg`.
 
 use std::{array::TryFromSliceError, borrow::Cow, fmt, sync::Arc};
 
@@ -20,8 +22,8 @@ use huskarl_core::{
     crypto::{
         KeyMatchStrength,
         cipher::{
-            AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, AeadOutput, CipherMatch,
-            DecryptError,
+            AeadCipher, AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, AeadOutput,
+            CipherMatch, DecryptError,
         },
     },
     jwk,
@@ -30,6 +32,55 @@ use huskarl_core::{
 };
 use sha2::digest::array::Array;
 use snafu::prelude::*;
+
+/// Builds an AEAD cipher from a symmetric JWK, dispatching on its `alg`.
+///
+/// Unlike [`AesGcmKey::from_jwk`] and [`XChaChaKey::from_jwk`], which each bind
+/// the call site to one cipher, this returns whichever the JWK names as an
+/// `Arc<dyn AeadCipher>` — the algorithm is a key-material choice, not a code
+/// change.
+///
+/// - `alg` present — `A128GCM`/`A192GCM`/`A256GCM` build an [`AesGcmKey`],
+///   `XC20P` an [`XChaChaKey`]; the selected cipher still validates the key
+///   length (and, for AES-GCM, that `alg` agrees with it).
+/// - `alg` absent — the key length selects AES-GCM (16/24/32 bytes →
+///   `A128`/`A192`/`A256`). `XC20P` shares the 32-byte length with `A256GCM`, so
+///   it is reachable only by naming it in `alg`.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::Config`] if `alg` names an AEAD algorithm this crate
+/// does not implement, or if the key material is invalid for the selected
+/// cipher.
+pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Arc<dyn AeadCipher>, Error> {
+    match jwk.algorithm.as_deref() {
+        Some("A128GCM" | "A192GCM" | "A256GCM") | None => Ok(Arc::new(AesGcmKey::from_jwk(jwk)?)),
+        Some(XC20P) => Ok(Arc::new(XChaChaKey::from_jwk(jwk)?)),
+        Some(other) => Err(Error::from(ErrorKind::Config)
+            .with_context(format!("unsupported AEAD algorithm {other}"))),
+    }
+}
+
+/// Builds an AEAD cipher from a secret that yields a [`jwk::PrivateJwk`],
+/// dispatching on its `alg` as [`from_jwk`] does.
+///
+/// Shares the loading funnel and key-ID precedence (explicit JWK `kid` >
+/// secret `identity` > none) of [`AesGcmKey::from_secret`] and
+/// [`XChaChaKey::from_secret`].
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::Config`] if the secret cannot be fetched or decoded, if
+/// the JWK is asymmetric rather than symmetric (`oct`), or for the same reasons
+/// as [`from_jwk`].
+pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
+    secret: S,
+) -> Result<Arc<dyn AeadCipher>, Error> {
+    let output = secret.get_secret_value().await?;
+    // Explicit JWK kid > secret identity > none.
+    let jwk = output.value.with_kid_fallback(output.identity);
+    from_jwk(jwk.try_into()?)
+}
 
 // aes-gcm ships `Aes128Gcm`/`Aes256Gcm` aliases but not 192; spell it out from
 // the re-exported `aes` building blocks (96-bit nonce, like the other two).
@@ -56,8 +107,7 @@ impl NativeKey {
 /// Build one with [`from_jwk`](Self::from_jwk) or
 /// [`from_secret`](Self::from_secret); the AES-128/192/256 variant follows
 /// from the key length. Implements huskarl-core's [`AeadEncryptorSelector`]
-/// and [`AeadDecryptor`] — together, an
-/// [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher).
+/// and [`AeadDecryptor`] — together, an [`AeadCipher`].
 ///
 /// # Usage bound (NIST SP 800-38D §8.3)
 ///
@@ -353,7 +403,7 @@ const XC20P: &str = "XC20P";
 /// Build one with [`from_jwk`](Self::from_jwk) or
 /// [`from_secret`](Self::from_secret); the key is always 256-bit. Implements
 /// huskarl-core's [`AeadEncryptorSelector`] and [`AeadDecryptor`] — together,
-/// an [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher).
+/// an [`AeadCipher`].
 ///
 /// # No rotation-for-nonce-safety bound
 ///
@@ -984,5 +1034,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pt, expected_pt);
+    }
+
+    #[tokio::test]
+    async fn from_jwk_dispatches_on_alg() {
+        // An explicit `alg` selects the named cipher.
+        let mut aes = oct_jwk(vec![1u8; 32]);
+        aes.algorithm = Some("A256GCM".into());
+        let encryptor = from_jwk(aes).unwrap().select_encryptor().await;
+        assert_eq!(encryptor.enc_algorithm().as_ref(), "A256GCM");
+
+        let mut xc = oct_jwk(vec![1u8; 32]);
+        xc.algorithm = Some("XC20P".into());
+        let encryptor = from_jwk(xc).unwrap().select_encryptor().await;
+        assert_eq!(encryptor.enc_algorithm().as_ref(), "XC20P");
+    }
+
+    #[tokio::test]
+    async fn from_jwk_without_alg_defaults_to_aes_gcm() {
+        // 32 bytes are shared by A256GCM and XC20P; with no `alg` the length
+        // selects AES-GCM, so XC20P is reachable only by naming it explicitly.
+        for (bytes, expected_enc) in [(vec![1u8; 32], "A256GCM"), (vec![1u8; 16], "A128GCM")] {
+            let encryptor = from_jwk(oct_jwk(bytes)).unwrap().select_encryptor().await;
+            assert_eq!(encryptor.enc_algorithm().as_ref(), expected_enc);
+        }
+    }
+
+    #[test]
+    fn from_jwk_rejects_unsupported_alg() {
+        let mut jwk = oct_jwk(vec![1u8; 32]);
+        jwk.algorithm = Some("A256CBC-HS512".into());
+        let err = from_jwk(jwk).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
+    }
+
+    /// One erased `dyn AeadCipher` covers both directions of a round-trip.
+    #[tokio::test]
+    async fn from_jwk_erased_cipher_roundtrips() {
+        let mut jwk = oct_jwk(vec![2u8; 32]);
+        jwk.algorithm = Some("XC20P".into());
+        let cipher = from_jwk(jwk).unwrap();
+
+        let encryptor = cipher.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"aad").await.unwrap();
+        let pt = cipher
+            .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"aad")
+            .await
+            .unwrap();
+        assert_eq!(pt, b"payload");
     }
 }

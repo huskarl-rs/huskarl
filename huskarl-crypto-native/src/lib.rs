@@ -9,7 +9,8 @@
 //!   feature-gated default verifier platform for the ecosystem.
 //! - [`aead`] provides two AEAD ciphers — [`AesGcmKey`](aead::AesGcmKey)
 //!   (`A128GCM`/`A192GCM`/`A256GCM`) and [`XChaChaKey`](aead::XChaChaKey)
-//!   (`XC20P`).
+//!   (`XC20P`) — plus [`aead::from_jwk`], which selects between them by the
+//!   JWK's `alg`.
 //!
 //! The following JWS algorithms are available:
 //!
