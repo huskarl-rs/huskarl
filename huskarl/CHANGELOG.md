@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.9.1...huskarl-v0.9.2) - 2026-07-16
+
+### Fixed
+
+- *(client)* Set authentication headers (Authorization/DPoP) as sensitive. ([#221](https://github.com/huskarl-rs/huskarl/pull/221))
+- *(client)* Make sure the same DPoP key thumbprint is used in PAR body. ([#220](https://github.com/huskarl-rs/huskarl/pull/220))
+
 ## [0.9.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.9.0...huskarl-v0.9.1) - 2026-07-08
 
 ### Other
