@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use bon::Builder;
 pub use challenge::{Challenge, ChallengePayload, parse_challenges};
-use http::{HeaderMap, HeaderName, Method, Uri, header::AUTHORIZATION};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri, header::AUTHORIZATION};
 
 use crate::{
     cache::TokenCache,
@@ -101,31 +101,34 @@ impl HttpAuthorizer {
                         .with_context("received DPoP token but no DPoP configuration present"));
                 };
 
-                headers.insert(
-                    "DPoP",
+                let mut proof_value: HeaderValue =
                     proof.expose_secret().parse().map_err(|source| {
                         Error::new(ErrorKind::DPoP, source)
                             .with_context("DPoP proof is not a valid header value")
-                    })?,
-                );
-                headers.insert(
-                    &self.authorization_header,
+                    })?;
+                // The DPoP proof is a short-lived signed credential; keep it out
+                // of the HPACK/QPACK dynamic table and out of header debug output.
+                proof_value.set_sensitive(true);
+                headers.insert("DPoP", proof_value);
+
+                let mut token_value =
                     dpop_access_token.expose_header_value().map_err(|source| {
                         Error::new(ErrorKind::Protocol, source)
                             .with_context("access token is not a valid header value")
-                    })?,
-                );
+                    })?;
+                token_value.set_sensitive(true);
+                headers.insert(&self.authorization_header, token_value);
             }
             AccessToken::Bearer(bearer_access_token) => {
-                headers.insert(
-                    &self.authorization_header,
+                let mut token_value =
                     bearer_access_token
                         .expose_header_value()
                         .map_err(|source| {
                             Error::new(ErrorKind::Protocol, source)
                                 .with_context("access token is not a valid header value")
-                        })?,
-                );
+                        })?;
+                token_value.set_sensitive(true);
+                headers.insert(&self.authorization_header, token_value);
             }
             AccessToken::NotAccessToken(_) => {
                 // RFC 8693 §2.2.1: an N_A issuance is not an access token and
