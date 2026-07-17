@@ -89,8 +89,10 @@ let pending_state = start_output.pending_state;
 
 ## 4a. Complete the authorization flow
 
-When the authorization server redirects back to your application, extract the
-`code` and `state` query parameters and pass them to `complete()`.
+When the authorization server redirects back to your application, parse the
+callback URL (or just its query string) into a `CompleteInput` and pass it to
+`complete()`. Parsing captures `code`, `state`, and the RFC 9207 `iss`
+parameter, and rejects OAuth error responses (e.g. the user denied access).
 
 ```rust
 use huskarl::{
@@ -100,21 +102,29 @@ use huskarl::{
 # async fn complete_flow(
 #     grant: &AuthorizationCodeGrant,
 #     pending_state: &PendingState,
-#     code_from_callback: String,
-#     state_from_callback: String,
+#     callback_url: &str,
 # ) -> Result<(), Box<dyn std::error::Error>> {
 
-// Build from the query parameters in the redirect callback.
-let complete_input = CompleteInput::builder()
-    .code(code_from_callback)
-    .state(state_from_callback)
-    .build();
+// The redirect callback URL, or just its query string
+// ("code=..&state=..&iss=..").
+let complete_input: CompleteInput = callback_url.parse()?;
 
 let response = grant.complete(pending_state, complete_input).await?;
 let token: &AccessToken = response.access_token();
 # Ok(())
 # }
 ```
+
+To also set fields the callback does not carry — RFC 8707 `resource`
+indicators for the token exchange — use
+`CompleteInput::builder_from_callback(url)?`, which returns the parsed but
+unbuilt builder, set them, then `build()`.
+
+When building `CompleteInput` via its builder instead (e.g. from
+framework-typed query parameters), include `iss`: a server that advertises
+RFC 9207 support in its metadata — as conforming servers do — makes the
+parameter mandatory, and completion fails with `MissingIssuer` if it is
+dropped.
 
 ## 4b. Alternative for CLI tools: complete using the loopback server
 
