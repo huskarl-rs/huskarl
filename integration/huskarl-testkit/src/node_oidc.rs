@@ -85,7 +85,7 @@ impl TestProvider for NodeOidcProvider {
             .as_str()
             .ok_or("registration response missing client_id")?
             .to_owned();
-        let secret = registered["client_secret"].as_str().map(ToOwned::to_owned);
+        let secret = registered["client_secret"].as_str().map(Into::into);
 
         Ok(ProvisionedClient {
             client_id,

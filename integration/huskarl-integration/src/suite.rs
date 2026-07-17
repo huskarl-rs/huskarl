@@ -11,6 +11,7 @@ use huskarl::{
         crypto::signer::AsymmetricJwsSigner as _,
         dpop::DPoP,
         jwk::JwksSource,
+        secrets::{ProvidedSecret, SecretString},
         server_metadata::AuthorizationServerMetadata,
     },
     grant::{
@@ -26,9 +27,7 @@ use huskarl_resource_server::{
     core::jwt::validator::ClaimCheck,
     validator::{custom::CustomValidator, introspection::IntrospectionValidator},
 };
-use huskarl_testkit::{
-    ClientSpec, Features, PlainSecret, ProvisionedClient, TestProvider, Transport,
-};
+use huskarl_testkit::{ClientSpec, Features, ProvisionedClient, TestProvider, Transport};
 
 pub const AUDIENCE: &str = "huskarl-rs";
 
@@ -56,7 +55,7 @@ async fn fetch_metadata(
 async fn provision_with_secret(
     provider: &dyn TestProvider,
     spec: ClientSpec,
-) -> (ProvisionedClient, String) {
+) -> (ProvisionedClient, SecretString) {
     let client = provider
         .provision_client(spec)
         .await
@@ -166,7 +165,7 @@ pub async fn client_credentials_flow(provider: &dyn TestProvider, features: Feat
                 .audience(Audience::Issuer)
                 .build(),
         ),
-        None => Arc::new(ClientSecret::new(PlainSecret::new(&secret))),
+        None => Arc::new(ClientSecret::new(ProvidedSecret::new(secret))),
     };
 
     let authorizer =
@@ -218,7 +217,7 @@ pub async fn refresh_flow(provider: &dyn TestProvider, features: Features) {
     let grant = ClientCredentialsGrant::builder_from_metadata(&metadata)
         .client_id(&client.client_id)
         .http_client(http.clone())
-        .client_auth(ClientSecret::new(PlainSecret::new(&secret)))
+        .client_auth(ClientSecret::new(ProvidedSecret::new(secret)))
         .build();
 
     let initial = grant
@@ -276,7 +275,7 @@ pub async fn introspection_flow(provider: &dyn TestProvider, features: Features)
         &metadata,
         &http,
         &client.client_id,
-        ClientSecret::new(PlainSecret::new(&secret)),
+        ClientSecret::new(ProvidedSecret::new(secret.clone())),
         None,
     );
 
@@ -296,7 +295,7 @@ pub async fn introspection_flow(provider: &dyn TestProvider, features: Features)
         .issuer(&issuer)
         .introspection_endpoint(introspection_endpoint)
         .audience(ClaimCheck::required_value(AUDIENCE))
-        .client_auth(ClientSecret::new(PlainSecret::new(&secret)))
+        .client_auth(ClientSecret::new(ProvidedSecret::new(secret)))
         .http_client(http.clone())
         .build()
         .await
@@ -360,7 +359,7 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         .expect("server advertises an authorization endpoint")
         .client_id(&client.client_id)
         .http_client(http.clone())
-        .client_auth(ClientSecret::new(PlainSecret::new(&secret)))
+        .client_auth(ClientSecret::new(ProvidedSecret::new(secret)))
         .redirect_uri(&redirect_uri)
         .jws_verifier_factory(Arc::new(
             JwksSource::builder().http_client(http.clone()).build(),
@@ -463,7 +462,9 @@ pub async fn mtls_flow(provider: &dyn TestProvider, features: Features) {
     let (client, secret) = provision_with_secret(provider, spec).await;
 
     let http: ReqwestClient = ReqwestClient::builder()
-        .mtls(MtlsPem::new(PlainSecret::new(material.client_identity_pem)))
+        .mtls(MtlsPem::new(ProvidedSecret::new(
+            material.client_identity_pem,
+        )))
         .root_certificates(vec![ca_cert])
         .build()
         .await
@@ -476,7 +477,7 @@ pub async fn mtls_flow(provider: &dyn TestProvider, features: Features) {
         &metadata,
         &http,
         &client.client_id,
-        ClientSecret::new(PlainSecret::new(&secret)),
+        ClientSecret::new(ProvidedSecret::new(secret)),
         None,
     );
 
@@ -504,7 +505,7 @@ pub async fn wrong_audience_flow(provider: &dyn TestProvider, features: Features
         &metadata,
         &http,
         &client.client_id,
-        ClientSecret::new(PlainSecret::new(&secret)),
+        ClientSecret::new(ProvidedSecret::new(secret)),
         None,
     );
     let (request_method, request_uri) = test_request();

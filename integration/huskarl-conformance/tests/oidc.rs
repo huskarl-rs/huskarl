@@ -1,7 +1,12 @@
 use std::time::Duration;
 
 use huskarl::{
-    core::{client_auth::ClientSecret, dpop::NoDPoP, server_metadata::AuthorizationServerMetadata},
+    core::{
+        client_auth::ClientSecret,
+        dpop::NoDPoP,
+        secrets::{ProvidedSecret, SecretString},
+        server_metadata::AuthorizationServerMetadata,
+    },
     grant::authorization_code::{NoJar, bind_loopback},
     userinfo::UserInfoClient,
 };
@@ -10,15 +15,16 @@ use huskarl_conformance::{
     assert_no_failures, base_url, build_browser, build_http_client, client_id,
     report_module_result, run_auth_code_flow_with_listener,
 };
-use huskarl_testkit::PlainSecret;
 use uuid::Uuid;
 
-fn client_secret() -> String {
-    std::env::var("CONFORMANCE_CLIENT_SECRET").unwrap_or_else(|_| "client-secret".to_string())
+fn client_secret() -> SecretString {
+    std::env::var("CONFORMANCE_CLIENT_SECRET")
+        .unwrap_or_else(|_| "client-secret".to_string())
+        .into()
 }
 
 fn client_auth() -> ClientSecret {
-    ClientSecret::new(PlainSecret::new(client_secret()))
+    ClientSecret::new(ProvidedSecret::new(client_secret()))
 }
 
 /// Drives every module in a conformance plan.

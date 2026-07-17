@@ -13,7 +13,7 @@
 use std::env;
 
 use async_trait::async_trait;
-use huskarl_core::jwk::PublicJwk;
+use huskarl_core::{jwk::PublicJwk, secrets::SecretString};
 use serde::Deserialize;
 
 use crate::{
@@ -94,7 +94,7 @@ impl OktaProvider {
         name: &str,
         redirect_uri: &str,
         jwks: Option<&PublicJwk>,
-    ) -> Result<(String, String), Error> {
+    ) -> Result<(String, SecretString), Error> {
         if let Some((client_id, secret)) = self.find_client(name).await? {
             if let Some(jwk) = jwks {
                 self.update_client_jwks(&client_id, jwk).await?;
@@ -105,7 +105,7 @@ impl OktaProvider {
     }
 
     /// Finds a confidential client by its exact label, returning `(client_id, secret)`.
-    async fn find_client(&self, name: &str) -> Result<Option<(String, String)>, Error> {
+    async fn find_client(&self, name: &str) -> Result<Option<(String, SecretString)>, Error> {
         #[derive(Deserialize)]
         struct App {
             label: String,
@@ -119,7 +119,7 @@ impl OktaProvider {
         #[derive(Deserialize)]
         struct OauthClient {
             client_id: String,
-            client_secret: Option<String>,
+            client_secret: Option<SecretString>,
         }
         let resp = self
             .http
@@ -142,11 +142,11 @@ impl OktaProvider {
         name: &str,
         redirect_uri: &str,
         jwks: Option<&PublicJwk>,
-    ) -> Result<(String, String), Error> {
+    ) -> Result<(String, SecretString), Error> {
         #[derive(Deserialize)]
         struct DcrResponse {
             client_id: String,
-            client_secret: Option<String>,
+            client_secret: Option<SecretString>,
         }
         let mut body = serde_json::json!({
             "client_name": name,

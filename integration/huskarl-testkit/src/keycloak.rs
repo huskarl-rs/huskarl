@@ -5,6 +5,7 @@
 use std::{collections::HashMap, ops::Deref, path::PathBuf};
 
 use async_trait::async_trait;
+use huskarl_core::secrets::SecretString;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -61,14 +62,16 @@ impl TestProvider for KeycloakProvider {
         let certs = certs_dir();
         Some(MtlsMaterial {
             ca_pem: std::fs::read(certs.join("ca.pem")).ok()?,
-            client_identity_pem: std::fs::read_to_string(certs.join("client-identity.pem")).ok()?,
+            client_identity_pem: std::fs::read_to_string(certs.join("client-identity.pem"))
+                .ok()?
+                .into(),
             client_cert_pem: std::fs::read_to_string(certs.join("client.pem")).ok()?,
         })
     }
 
     async fn provision_client(&self, spec: ClientSpec) -> Result<ProvisionedClient, Error> {
         let client_id = format!("client-{}", Uuid::new_v4());
-        let secret = format!("secret-{}", Uuid::new_v4());
+        let secret: SecretString = format!("secret-{}", Uuid::new_v4()).into();
         let body = ClientRepresentation::build(&spec, &client_id, &secret);
 
         self.realm.create_client(&body).await?;
@@ -310,7 +313,7 @@ impl TestRealm {
 #[serde(rename_all = "camelCase")]
 struct ClientRepresentation {
     client_id: String,
-    secret: String,
+    secret: SecretString,
     enabled: bool,
     protocol: &'static str,
     public_client: bool,
@@ -337,7 +340,7 @@ struct ProtocolMapperRepresentation {
 }
 
 impl ClientRepresentation {
-    fn build(spec: &ClientSpec, client_id: &str, secret: &str) -> Self {
+    fn build(spec: &ClientSpec, client_id: &str, secret: &SecretString) -> Self {
         let f = spec.features;
         let mut attributes = HashMap::new();
 

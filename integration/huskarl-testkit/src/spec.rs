@@ -3,7 +3,7 @@
 
 use bitflags::bitflags;
 use bon::Builder;
-use huskarl_core::jwk::PublicJwk;
+use huskarl_core::{jwk::PublicJwk, secrets::SecretString};
 
 bitflags! {
     /// A set of OAuth2/OIDC features. A flow runs iff its required features are
@@ -61,7 +61,7 @@ pub struct ClientSpec {
 pub struct ProvisionedClient {
     pub client_id: String,
     /// `None` for public clients.
-    pub secret: Option<String>,
+    pub secret: Option<SecretString>,
     pub redirect_uris: Vec<String>,
 }
 
@@ -71,7 +71,7 @@ pub struct MtlsMaterial {
     /// CA certificate (PEM).
     pub ca_pem: Vec<u8>,
     /// Client certificate and private key concatenated (PEM).
-    pub client_identity_pem: String,
+    pub client_identity_pem: SecretString,
     /// Client certificate alone (PEM); drives the `cnf.x5t#S256` check.
     pub client_cert_pem: String,
 }
