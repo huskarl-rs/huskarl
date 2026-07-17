@@ -433,7 +433,11 @@ mod tests {
     use super::*;
     use crate::{
         DefaultJwsVerifierPlatform,
-        core::{crypto::signer::AsymmetricJwsSigner, jwt::Jwt, platform::Duration},
+        core::{
+            crypto::signer::{AsymmetricJwsSignerSelector as _, JwsSignerSelector as _},
+            jwt::Jwt,
+            platform::Duration,
+        },
     };
 
     // The request the proof is bound to. Tests keep these fixed and vary the proof.
@@ -449,7 +453,7 @@ mod tests {
 
     /// The `cnf.jkt` value that correctly binds the token to `signer`'s key.
     fn matching_jkt(signer: &PrivateKey) -> String {
-        signer.public_key_jwk().thumbprint()
+        signer.as_private_jwk().public_jwk().thumbprint()
     }
 
     /// `DPoP` proof claims, with `None` fields omitted entirely from the JWT so
@@ -477,13 +481,14 @@ mod tests {
     }
 
     async fn sign_proof(signer: &PrivateKey, claims: ProofClaims) -> SecretString {
+        let signer = signer.select_asymmetric_signer().await;
         Jwt::builder()
             .typ("dpop+jwt")
             .issued_now_expires_after(Duration::from_mins(1))
             .jwk(signer.public_key_jwk().into_owned())
             .claims(claims)
             .build()
-            .to_jws_compact(signer)
+            .to_jws_compact(&*signer)
             .await
             .unwrap()
     }
@@ -567,14 +572,15 @@ mod tests {
     async fn proof_with_slightly_future_iat_is_accepted() {
         let signer = es256();
         let now = crate::core::platform::SystemTime::now();
+        let selected = signer.select_asymmetric_signer().await;
         let proof = Jwt::builder()
             .typ("dpop+jwt")
             .issued_at(now + Duration::from_secs(2))
             .expiration(now + Duration::from_mins(1))
-            .jwk(signer.public_key_jwk().into_owned())
+            .jwk(selected.public_key_jwk().into_owned())
             .claims(valid_claims())
             .build()
-            .to_jws_compact(&signer)
+            .to_jws_compact(&*selected)
             .await
             .unwrap();
 
@@ -805,10 +811,10 @@ mod tests {
         Jwt::builder()
             .typ("dpop+jwt")
             .issued_now_expires_after(Duration::from_mins(1))
-            .jwk(embedded.public_key_jwk().into_owned())
+            .jwk(embedded.as_private_jwk().public_jwk())
             .claims(claims)
             .build()
-            .to_jws_compact(signer)
+            .to_jws_compact(&*signer.select_signer().await)
             .await
             .unwrap()
     }

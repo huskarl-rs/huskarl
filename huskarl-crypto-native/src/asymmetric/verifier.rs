@@ -310,6 +310,7 @@ mod tests {
         Error,
         crypto::signer::{
             AsymmetricJwsSigner as _, AsymmetricJwsSignerSelector as _, JwsSigner as _,
+            JwsSignerSelector as _,
         },
         jwt::{
             Jwt,
@@ -692,8 +693,8 @@ mod tests {
 
         // Both keys should produce identical signatures (ES256 uses RFC 6979)
         let data = b"cross-construction test payload";
-        let sig_pkcs8 = pkcs8_key.sign(data).await.unwrap();
-        let sig_jwk = jwk_key.sign(data).await.unwrap();
+        let sig_pkcs8 = pkcs8_key.select_signer().await.sign(data).await.unwrap();
+        let sig_jwk = jwk_key.select_signer().await.sign(data).await.unwrap();
         assert_eq!(
             sig_pkcs8, sig_jwk,
             "PKCS#8-loaded and JWK-restored keys must produce identical signatures"
@@ -765,8 +766,8 @@ mod tests {
         let restored = PrivateKey::from_jwk(private_jwk).unwrap();
 
         let data = b"deterministic signature test payload";
-        let sig_original = original.sign(data).await.unwrap();
-        let sig_restored = restored.sign(data).await.unwrap();
+        let sig_original = original.select_signer().await.sign(data).await.unwrap();
+        let sig_restored = restored.select_signer().await.sign(data).await.unwrap();
 
         assert_eq!(
             sig_original, sig_restored,
@@ -860,7 +861,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let verifier = AsymmetricPublicKey::from_jwk(rsa.public_key_jwk().into_owned()).unwrap();
+        let verifier = AsymmetricPublicKey::from_jwk(rsa.as_private_jwk().public_jwk()).unwrap();
 
         // RS256→HS256 confusion is prevented at key selection: an RSA key
         // advertises only RSA algorithms, so a token claiming `alg: HS256` finds
@@ -894,7 +895,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let rsa_pub_jwk = rsa.public_key_jwk().into_owned();
+        let rsa_pub_jwk = rsa.as_private_jwk().public_jwk();
         let verifier = AsymmetricPublicKey::from_jwk(rsa_pub_jwk.clone()).unwrap();
         let validator = JwtValidator::builder().verifier(verifier).build();
 

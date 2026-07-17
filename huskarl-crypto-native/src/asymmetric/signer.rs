@@ -22,6 +22,8 @@ use rand::Rng;
 use rsa::traits::PublicKeyParts as _;
 use signature::{SignatureEncoding, Signer as _};
 
+/// The shared key material behind a `PrivateKey` — the signer snapshot the
+/// selectors hand out.
 #[derive(Debug)]
 struct PrivateKeyInner {
     signing_key: Key,
@@ -32,7 +34,8 @@ struct PrivateKeyInner {
 }
 
 /// An asymmetric private key for JWS signing (ES256/384, RS/PS 256/384/512,
-/// Ed25519), implementing [`JwsSigner`] and [`AsymmetricJwsSigner`].
+/// Ed25519): a [`JwsSignerSelector`] / [`AsymmetricJwsSignerSelector`] whose
+/// selection hands out the key's shared inner [`JwsSigner`].
 ///
 /// Generate one with [`generate`](Self::generate), or load one with
 /// [`from_jwk`](Self::from_jwk) or [`from_secret`](Self::from_secret) (composing
@@ -781,40 +784,40 @@ impl SecretMap for Pkcs8Pem {
 
 impl JwsSignerSelector for PrivateKey {
     fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
-        let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
-        Box::pin(async move { signer })
+        let snapshot: Arc<dyn JwsSigner> = self.inner.clone();
+        Box::pin(async move { snapshot })
     }
 }
 
 impl AsymmetricJwsSignerSelector for PrivateKey {
     fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
-        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
-        Box::pin(async move { signer })
+        let snapshot: Arc<dyn AsymmetricJwsSigner> = self.inner.clone();
+        Box::pin(async move { snapshot })
     }
 
     fn select_signer_by_thumbprint<'a>(
         &'a self,
         thumbprint: &'a str,
     ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
-        let matches = self.inner.thumbprint == thumbprint;
-        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
-        Box::pin(async move { matches.then_some(signer) })
+        let snapshot = (self.inner.thumbprint == thumbprint)
+            .then(|| self.inner.clone() as Arc<dyn AsymmetricJwsSigner>);
+        Box::pin(async move { snapshot })
     }
 }
 
-impl AsymmetricJwsSigner for PrivateKey {
+impl AsymmetricJwsSigner for PrivateKeyInner {
     fn public_key_jwk(&self) -> Cow<'_, jwk::PublicJwk> {
-        Cow::Borrowed(&self.inner.jwk)
+        Cow::Borrowed(&self.jwk)
     }
 }
 
-impl JwsSigner for PrivateKey {
+impl JwsSigner for PrivateKeyInner {
     fn jws_algorithm(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.inner.signing_key.jws_algorithm())
+        Cow::Borrowed(self.signing_key.jws_algorithm())
     }
 
     fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.inner.jwk.kid.as_deref().map(Cow::Borrowed)
+        self.jwk.kid.as_deref().map(Cow::Borrowed)
     }
 
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
@@ -827,7 +830,7 @@ impl JwsSigner for PrivateKey {
         }
 
         Box::pin(async move {
-            match &self.inner.signing_key {
+            match &self.signing_key {
                 Key::Es256(signing_key) => {
                     let signature: p256::ecdsa::Signature =
                         signing_key.try_sign(input).map_err(crypto_error)?;
@@ -880,7 +883,6 @@ mod tests {
 
     #[tokio::test]
     async fn pkcs8_der_yields_a_complete_signing_jwk_with_the_requested_kid() {
-        use huskarl_core::crypto::signer::{AsymmetricJwsSigner as _, JwsSigner as _};
         use p256::{ecdsa::signature::Verifier as _, elliptic_curve::Generate as _};
         use pkcs8::EncodePrivateKey as _;
 
@@ -897,21 +899,21 @@ mod tests {
         // It finalizes into a usable signer whose published kid can't diverge
         // from key_id() — single source of truth.
         let key = PrivateKey::from_jwk(private_jwk).unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("key-1"));
-        assert_eq!(key.public_key_jwk().kid.as_deref(), Some("key-1"));
+        let signer = key.select_asymmetric_signer().await;
+        assert_eq!(signer.key_id().as_deref(), Some("key-1"));
+        assert_eq!(signer.public_key_jwk().kid.as_deref(), Some("key-1"));
 
         // Gold standard: a signature from the converted key verifies under the
         // ORIGINAL key's public half, proving the DER round-tripped to the same
         // private material.
-        let signature_bytes = key.sign(b"payload").await.unwrap();
+        let signature_bytes = signer.sign(b"payload").await.unwrap();
         let signature = p256::ecdsa::Signature::from_slice(&signature_bytes).unwrap();
         let verifying_key = p256::ecdsa::VerifyingKey::from(&source);
         verifying_key.verify(b"payload", &signature).unwrap();
     }
 
-    #[test]
-    fn pkcs8_der_carries_the_fully_specified_ed25519_algorithm_into_the_jwk() {
-        use huskarl_core::crypto::signer::JwsSigner as _;
+    #[tokio::test]
+    async fn pkcs8_der_carries_the_fully_specified_ed25519_algorithm_into_the_jwk() {
         use pkcs8::EncodePrivateKey as _;
         use rand::Rng as _;
 
@@ -927,7 +929,10 @@ mod tests {
         assert_eq!(jwk.algorithm.as_deref(), Some("Ed25519"));
 
         let key = PrivateKey::from_jwk(jwk).unwrap();
-        assert_eq!(key.jws_algorithm().as_ref(), "Ed25519");
+        assert_eq!(
+            key.select_signer().await.jws_algorithm().as_ref(),
+            "Ed25519"
+        );
 
         // And the classic spelling survives the same trip.
         let classic = pkcs8_der(der.as_bytes(), AsymmetricAlgorithm::EdDsa, None).unwrap();
@@ -936,10 +941,7 @@ mod tests {
 
     #[tokio::test]
     async fn from_secret_fills_kid_from_identity_then_prefers_an_explicit_jwk_kid() {
-        use huskarl_core::{
-            crypto::signer::JwsSigner as _,
-            secrets::{ProvidedSecret, Secret as _, SecretBytes, WithIdentity},
-        };
+        use huskarl_core::secrets::{ProvidedSecret, Secret as _, SecretBytes, WithIdentity};
         use p256::elliptic_curve::Generate as _;
         use pkcs8::EncodePrivateKey as _;
 
@@ -953,19 +955,20 @@ mod tests {
         )
         .mapped(Pkcs8Der::new(AsymmetricAlgorithm::Es256));
         let key = PrivateKey::from_secret(secret).await.unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("version-42"));
+        let signer = key.select_signer().await;
+        assert_eq!(signer.key_id().as_deref(), Some("version-42"));
 
         // An explicit kid stamped onto the JWK wins over the identity.
         let secret = WithIdentity::new(ProvidedSecret::new(SecretBytes::new(der)), "version-42")
             .mapped(Pkcs8Der::new(AsymmetricAlgorithm::Es256).with_kid("explicit"));
         let key = PrivateKey::from_secret(secret).await.unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("explicit"));
+        let signer = key.select_signer().await;
+        assert_eq!(signer.key_id().as_deref(), Some("explicit"));
     }
 
     #[tokio::test]
     async fn from_secret_loads_a_jwk_json_secret_with_no_alg_or_kid_arguments() {
         use huskarl_core::{
-            crypto::signer::JwsSigner as _,
             jwk::JwkJson,
             secrets::{ProvidedSecret, Secret as _, SecretString},
         };
@@ -985,8 +988,9 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(key.key_id().as_deref(), Some("in-the-jwk"));
-        assert_eq!(key.jws_algorithm().as_ref(), "ES256");
+        let signer = key.select_signer().await;
+        assert_eq!(signer.key_id().as_deref(), Some("in-the-jwk"));
+        assert_eq!(signer.jws_algorithm().as_ref(), "ES256");
     }
 
     #[test]
@@ -1037,7 +1041,12 @@ mod tests {
             }),
         };
 
-        let error = key.sign(b"payload").await.unwrap_err();
+        let error = key
+            .select_signer()
+            .await
+            .sign(b"payload")
+            .await
+            .unwrap_err();
         assert_eq!(error.kind(), ErrorKind::Crypto);
     }
 
