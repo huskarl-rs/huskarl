@@ -47,7 +47,6 @@ use crate::{
             },
         },
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
-        observe::{OnValidate, ValidationOutcome},
     },
 };
 
@@ -66,7 +65,6 @@ pub struct IntrospectionValidator<Claims = ()> {
     http_client: Arc<dyn HttpClient>,
     dpop_binding_checker: DPoPBindingChecker,
     token_header: HeaderName,
-    on_validate: Option<Arc<dyn OnValidate>>,
     issuer: Option<String>,
     realm: Option<String>,
     resource_metadata: Option<String>,
@@ -203,10 +201,6 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// [metadata](Self::validator_metadata), so clients can discover the
         /// document (RFC 9728 §5.1).
         resource_metadata: Option<String>,
-        /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
-        ///
-        /// Use this to record metrics, emit log events, or trigger alerts.
-        on_validate: Option<Arc<dyn OnValidate>>,
     ) -> Result<Self, Error> {
         let token_introspection = TokenIntrospection::builder()
             .client_id(client_id.clone())
@@ -237,7 +231,6 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
                 required: require_dpop,
             },
             token_header,
-            on_validate,
             issuer,
             realm,
             resource_metadata,
@@ -341,25 +334,6 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         let (dpop_nonce, outcome) = self
             .validate_inner(headers, http_method, http_uri, client_cert_der)
             .await;
-
-        if let Some(cb) = &self.on_validate {
-            use crate::introspection::IntrospectionCallError;
-            let validation_outcome = match &outcome {
-                Ok(Some(_)) => ValidationOutcome::Success,
-                Ok(None) => ValidationOutcome::NoToken,
-                Err(IntrospectionValidateError::Extract { .. }) => ValidationOutcome::ExtractError,
-                Err(IntrospectionValidateError::Binding { .. }) => ValidationOutcome::BindingError,
-                Err(IntrospectionValidateError::Audience { .. }) => ValidationOutcome::InvalidToken,
-                Err(IntrospectionValidateError::Call { source, .. }) => {
-                    if matches!(source, IntrospectionCallError::TokenInactive) {
-                        ValidationOutcome::InvalidToken
-                    } else {
-                        ValidationOutcome::CallError
-                    }
-                }
-            };
-            cb.on_validate(validation_outcome);
-        }
 
         ValidationResult {
             outcome,

@@ -11,6 +11,10 @@
 //! explanation](crate::_docs::explanation::multi_issuer_routing); for a worked
 //! two-issuer example, see the [multi-issuer
 //! guide](crate::_docs::guide::multi_issuer).
+//!
+//! One [`ObservedValidator`](crate::validator::observe::ObservedValidator)
+//! around the composite observes the whole deployment per issuer — sources do
+//! not need their own wrappers.
 
 pub mod error;
 mod map;
@@ -32,7 +36,7 @@ use crate::{
         ValidationResult,
         extract::extract_token,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
-        multi_issuer::source::{FoldError, SourceValidator},
+        multi_issuer::source::{RegisteredSource, SourceValidator},
     },
 };
 
@@ -88,8 +92,14 @@ impl<C: MaybeSendSync + 'static, S: multi_issuer_validator_builder::State>
         V: AccessTokenValidator<Claims = C> + ProvideValidatorMetadata + 'static,
         V::Error: ToRfc6750Error + 'static,
     {
-        self.sources
-            .push((issuer.into(), Box::new(FoldError(validator))));
+        let issuer = issuer.into();
+        self.sources.push((
+            issuer.clone(),
+            Box::new(RegisteredSource {
+                issuer,
+                inner: validator,
+            }),
+        ));
         self
     }
 }
@@ -127,11 +137,10 @@ impl<C: MaybeSendSync + 'static> AccessTokenValidator for MultiIssuerValidator<C
             // Route on the unverified issuer; the selected validator does all
             // real verification. A missing/unparseable/unregistered issuer is
             // rejected.
-            let Some(validator) =
-                peek_issuer(token.expose_secret()).and_then(|iss| self.by_issuer.get(&iss))
-            else {
+            let iss = peek_issuer(token.expose_secret());
+            let Some(validator) = iss.as_ref().and_then(|iss| self.by_issuer.get(iss)) else {
                 return ValidationResult {
-                    outcome: Err(MultiIssuerError::UnrecognizedIssuer),
+                    outcome: Err(MultiIssuerError::UnrecognizedIssuer { iss }),
                     dpop_nonce: None,
                 };
             };

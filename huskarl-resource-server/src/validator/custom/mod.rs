@@ -37,7 +37,6 @@ use crate::{
         dpop_proof::DPoPProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
-        observe::{OnValidate, ValidationOutcome},
     },
 };
 
@@ -51,7 +50,6 @@ pub struct CustomValidator<Claims = ()> {
     authorization_server: Option<String>,
     realm: Option<String>,
     resource_metadata: Option<String>,
-    on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
 
@@ -140,10 +138,6 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// [metadata](Self::validator_metadata), so clients can discover the
         /// document (RFC 9728 §5.1).
         resource_metadata: Option<String>,
-        /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
-        ///
-        /// Use this to record metrics, emit log events, or trigger alerts.
-        on_validate: Option<Arc<dyn OnValidate>>,
     ) -> Result<Self, Error> {
         let jws_verifier = jws_verifier_factory
             .build(jwks_uri.as_ref(), jws_verifier_platform.clone())
@@ -183,7 +177,6 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
             authorization_server,
             realm,
             resource_metadata,
-            on_validate,
             _phantom: PhantomData,
         })
     }
@@ -322,8 +315,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
     /// Validates the request headers, returning a [`ValidationResult`] whose
     /// [`outcome`](super::ValidationResult::outcome) is `Ok(Some(_))` for a valid
     /// token, `Ok(None)` when no authentication was presented, or `Err(_)` when a
-    /// token was present but invalid. Any configured `on_validate` callback fires
-    /// before returning.
+    /// token was present but invalid.
     ///
     /// `http_uri` must be the absolute external target URI the client
     /// addressed, not a framework request object's origin-form path — see
@@ -336,23 +328,9 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         http_uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
     ) -> ValidationResult<Claims, ValidateHeadersError> {
-        let result = self
-            .inner
+        self.inner
             .validate_request(headers, http_method, http_uri, client_cert_der)
-            .await;
-
-        if let Some(cb) = &self.on_validate {
-            let validation_outcome = match &result.outcome {
-                Ok(Some(_)) => ValidationOutcome::Success,
-                Ok(None) => ValidationOutcome::NoToken,
-                Err(ValidateHeadersError::Extract { .. }) => ValidationOutcome::ExtractError,
-                Err(ValidateHeadersError::InvalidJwt { .. }) => ValidationOutcome::InvalidToken,
-                Err(ValidateHeadersError::Binding { .. }) => ValidationOutcome::BindingError,
-            };
-            cb.on_validate(validation_outcome);
-        }
-
-        result
+            .await
     }
 }
 

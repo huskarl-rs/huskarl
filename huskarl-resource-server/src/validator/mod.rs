@@ -8,6 +8,7 @@
 //! [`custom::CustomValidator`] for an authorization server that follows neither.
 //! See [choosing a validator](crate::_docs::explanation::choosing_a_validator)
 //! for the trade-offs, and [`multi_issuer`] to accept more than one issuer.
+//! Wrap any validator in an [`observe::ObservedValidator`] to record metrics.
 
 mod binding;
 mod common;

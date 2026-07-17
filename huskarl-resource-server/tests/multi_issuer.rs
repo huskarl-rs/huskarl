@@ -280,7 +280,10 @@ async fn rejects_unrecognized_issuer() {
         .await;
 
     let err = validate(&validator, &bearer(&token)).await.unwrap_err();
-    assert!(matches!(err, MultiIssuerError::UnrecognizedIssuer));
+    assert!(matches!(
+        err,
+        MultiIssuerError::UnrecognizedIssuer { iss: Some(ref iss) } if iss == "https://evil.example"
+    ));
 }
 
 #[tokio::test]

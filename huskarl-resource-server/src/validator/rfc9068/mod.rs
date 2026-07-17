@@ -33,7 +33,6 @@ use crate::{
         dpop_proof::DPoPProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
-        observe::{OnValidate, ValidationOutcome},
     },
 };
 
@@ -53,7 +52,6 @@ pub struct Rfc9068Validator<Claims = ()> {
     issuer: String,
     realm: Option<String>,
     resource_metadata: Option<String>,
-    on_validate: Option<Arc<dyn OnValidate>>,
     _phantom: PhantomData<Claims>,
 }
 
@@ -146,10 +144,6 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         /// [metadata](Self::validator_metadata), so clients can discover the
         /// document (RFC 9728 §5.1).
         resource_metadata: Option<String>,
-        /// Optional callback invoked after each [`validate_request`](Self::validate_request) call.
-        ///
-        /// Use this to record metrics, emit log events, or trigger alerts.
-        on_validate: Option<Arc<dyn OnValidate>>,
     ) -> Result<Self, Error> {
         let jws_verifier = jws_verifier_factory
             .build(jwks_uri.as_ref(), jws_verifier_platform.clone())
@@ -189,7 +183,6 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
             issuer,
             realm,
             resource_metadata,
-            on_validate,
             _phantom: PhantomData,
         })
     }
@@ -274,23 +267,9 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         http_uri: &http::Uri,
         client_cert_der: Option<&[u8]>,
     ) -> ValidationResult<Rfc9068AccessTokenClaims<Claims>, ValidateHeadersError> {
-        let result = self
-            .inner
+        self.inner
             .validate_request(headers, http_method, http_uri, client_cert_der)
-            .await;
-
-        if let Some(cb) = &self.on_validate {
-            let validation_outcome = match &result.outcome {
-                Ok(Some(_)) => ValidationOutcome::Success,
-                Ok(None) => ValidationOutcome::NoToken,
-                Err(ValidateHeadersError::Extract { .. }) => ValidationOutcome::ExtractError,
-                Err(ValidateHeadersError::InvalidJwt { .. }) => ValidationOutcome::InvalidToken,
-                Err(ValidateHeadersError::Binding { .. }) => ValidationOutcome::BindingError,
-            };
-            cb.on_validate(validation_outcome);
-        }
-
-        result
+            .await
     }
 }
 

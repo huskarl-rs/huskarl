@@ -11,7 +11,7 @@
 
 use std::borrow::Cow;
 
-use crate::{TokenType, core::platform::MaybeSendSync};
+use crate::{TokenType, core::platform::MaybeSendSync, validator::observe::ValidationOutcome};
 
 /// Escapes a value for safe inclusion in an HTTP quoted-string (RFC 9110 §5.6.4).
 ///
@@ -283,6 +283,41 @@ pub trait ToRfc6750Error: std::fmt::Debug + MaybeSendSync {
     /// error names the specific unmet requirement. Defaults to `None`; see
     /// [`InsufficientScope`] for the standard carrier.
     fn required_scope(&self) -> Option<String> {
+        None
+    }
+
+    /// Classifies this error into a [`ValidationOutcome`] for observation — see
+    /// [`ObservedValidator`](crate::validator::observe::ObservedValidator).
+    ///
+    /// The default derives a coarse outcome from [`token_error`](Self::token_error);
+    /// validator error types override it with a precise per-variant mapping
+    /// (which the default cannot see — e.g. expired vs otherwise-invalid, or
+    /// mTLS binding failures that classify as plain `invalid_token`).
+    fn validation_outcome(&self) -> ValidationOutcome {
+        match self.token_error() {
+            TokenValidationError::Client(TokenErrorCode::InvalidRequest) => {
+                ValidationOutcome::ExtractError
+            }
+            TokenValidationError::Client(TokenErrorCode::InvalidDPoPProof) => {
+                ValidationOutcome::BindingError
+            }
+            TokenValidationError::Client(TokenErrorCode::UseDPoPNonce) => {
+                ValidationOutcome::NonceRequired
+            }
+            TokenValidationError::Client(_) => ValidationOutcome::InvalidToken,
+            TokenValidationError::Server(_) => ValidationOutcome::CallError,
+        }
+    }
+
+    /// The issuer this validation attempt is attributed to, when the validator
+    /// knows one that is safe to use as a metrics label — e.g. the registered
+    /// issuer a [multi-issuer validator](crate::validator::multi_issuer)
+    /// routed to.
+    ///
+    /// Implementations must return only trusted, bounded values (configured or
+    /// registered issuers), never unverified token contents — an attacker could
+    /// otherwise mint unbounded label values. Defaults to `None`.
+    fn issuer(&self) -> Option<&str> {
         None
     }
 }
