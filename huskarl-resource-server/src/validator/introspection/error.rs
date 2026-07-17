@@ -6,7 +6,7 @@ use crate::{
     TokenType,
     error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
     introspection::IntrospectionCallError,
-    validator::{error::TokenBindingError, extract::TokenExtractError},
+    validator::{error::TokenBindingError, extract::TokenExtractError, observe::ValidationOutcome},
 };
 
 /// Error returned by [`super::IntrospectionValidator::validate_request`].
@@ -79,6 +79,26 @@ impl ToRfc6750Error for IntrospectionValidateError {
             Self::Audience { .. } => {
                 Some("The access token is not intended for this resource".to_string())
             }
+        }
+    }
+
+    fn validation_outcome(&self) -> ValidationOutcome {
+        match self.token_error() {
+            // Metrics must agree with the wire: a 5xx (a failed endpoint call,
+            // or a nonce checker down) is our failure, whichever check tripped
+            // it, and a nonce challenge is routine churn, not a binding failure.
+            TokenValidationError::Server(_) => return ValidationOutcome::CallError,
+            TokenValidationError::Client(TokenErrorCode::UseDPoPNonce) => {
+                return ValidationOutcome::NonceRequired;
+            }
+            TokenValidationError::Client(_) => {}
+        }
+        match self {
+            Self::Extract { .. } => ValidationOutcome::ExtractError,
+            Self::Binding { .. } => ValidationOutcome::BindingError,
+            // Post-triage, the only client-classified call failure is an
+            // inactive token — a bad token, like a bad audience.
+            Self::Audience { .. } | Self::Call { .. } => ValidationOutcome::InvalidToken,
         }
     }
 }

@@ -1,5 +1,5 @@
 //! What a registered source is, internally: the [`SourceValidator`] trait object
-//! the composite stores per issuer, and the [`FoldError`] wrapper that turns an
+//! the composite stores per issuer, and the [`RegisteredSource`] wrapper that turns an
 //! arbitrary validator into one.
 //!
 //! Since [`AccessTokenValidator`] is object-safe, the only adaptation a source
@@ -21,7 +21,7 @@ use crate::{
 /// A per-issuer entry: an access token validator producing `Claims = C` with its
 /// error folded to [`MultiIssuerError`], plus its RFC 9728 metadata.
 ///
-/// Implemented for any [`FoldError`]-wrapped source; stored as
+/// Implemented for any [`RegisteredSource`]-wrapped source; stored as
 /// `Box<dyn SourceValidator<C>>`.
 pub(super) trait SourceValidator<C>:
     AccessTokenValidator<Claims = C, Error = MultiIssuerError> + ProvideValidatorMetadata
@@ -33,11 +33,18 @@ impl<C, T> SourceValidator<C> for T where
 {
 }
 
-/// Wraps a validator, folding its error into [`MultiIssuerError::Validation`] so
-/// heterogeneous sources present one error type to the composite.
-pub(super) struct FoldError<V>(pub(super) V);
+/// Adapts a validator into a per-issuer source: folds its error into
+/// [`MultiIssuerError::Validation`] so heterogeneous sources present one error
+/// type to the composite, and carries the registered issuer to keep both
+/// outcomes attributable — folded errors name it, and successes missing the
+/// optional `iss` claim get it filled in (routing peeked exactly this value
+/// from the token's payload).
+pub(super) struct RegisteredSource<V> {
+    pub(super) issuer: String,
+    pub(super) inner: V,
+}
 
-impl<V, C> AccessTokenValidator for FoldError<V>
+impl<V, C> AccessTokenValidator for RegisteredSource<V>
 where
     V: AccessTokenValidator<Claims = C>,
     V::Error: 'static,
@@ -55,21 +62,29 @@ where
     ) -> MaybeSendBoxFuture<'a, ValidationResult<C, MultiIssuerError>> {
         Box::pin(async move {
             let result = self
-                .0
+                .inner
                 .validate_request(headers, method, uri, client_cert_der)
                 .await;
             ValidationResult {
-                outcome: result
-                    .outcome
-                    .map_err(|e| MultiIssuerError::Validation { error: Box::new(e) }),
+                outcome: match result.outcome {
+                    Ok(Some(mut validated)) => {
+                        validated.iss.get_or_insert_with(|| self.issuer.clone());
+                        Ok(Some(validated))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(MultiIssuerError::Validation {
+                        issuer: self.issuer.clone(),
+                        error: Box::new(e),
+                    }),
+                },
                 dpop_nonce: result.dpop_nonce,
             }
         })
     }
 }
 
-impl<V: ProvideValidatorMetadata> ProvideValidatorMetadata for FoldError<V> {
+impl<V: ProvideValidatorMetadata> ProvideValidatorMetadata for RegisteredSource<V> {
     fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata {
-        self.0.validator_metadata(resource)
+        self.inner.validator_metadata(resource)
     }
 }

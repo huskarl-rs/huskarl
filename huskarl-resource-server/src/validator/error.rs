@@ -11,6 +11,7 @@ use crate::{
     validator::{
         binding::{DPoPBindingError, MtlsBindingError},
         extract::TokenExtractError,
+        observe::ValidationOutcome,
     },
 };
 
@@ -163,6 +164,28 @@ impl ToRfc6750Error for ValidateHeadersError {
             Self::Extract { source } => source.error_description(),
             Self::Binding { source, .. } => source.error_description(),
             Self::InvalidJwt { source, .. } => source.error_description(),
+        }
+    }
+
+    fn validation_outcome(&self) -> ValidationOutcome {
+        match self.token_error() {
+            // Metrics must agree with the wire: a 5xx (e.g. replay store or
+            // nonce checker down) is our failure, whichever check tripped it,
+            // and a nonce challenge is routine churn, not a binding failure.
+            TokenValidationError::Server(_) => return ValidationOutcome::CallError,
+            TokenValidationError::Client(TokenErrorCode::UseDPoPNonce) => {
+                return ValidationOutcome::NonceRequired;
+            }
+            TokenValidationError::Client(_) => {}
+        }
+        match self {
+            Self::Extract { .. } => ValidationOutcome::ExtractError,
+            Self::Binding { .. } => ValidationOutcome::BindingError,
+            Self::InvalidJwt {
+                source: JwtValidationError::Expired { .. },
+                ..
+            } => ValidationOutcome::Expired,
+            Self::InvalidJwt { .. } => ValidationOutcome::InvalidToken,
         }
     }
 }
