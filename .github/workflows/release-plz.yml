@@ -24,7 +24,7 @@ jobs:
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
       - run: rustup update stable --no-self-update
       - name: Run release-plz
-        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
           command: release
         env:
@@ -44,7 +44,7 @@ jobs:
       - *checkout
       - run: rustup update stable --no-self-update
       - name: Run release-plz
-        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
           command: release-pr
         env:
