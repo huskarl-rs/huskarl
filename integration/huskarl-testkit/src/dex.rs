@@ -1,6 +1,7 @@
 //! Dex-backed [`TestProvider`]. Uses a static client from `integration/dex/config.yaml`.
 
 use async_trait::async_trait;
+use huskarl_core::secrets::SecretString;
 
 use crate::{
     provider::{Error, TestProvider},
@@ -10,7 +11,7 @@ use crate::{
 pub struct DexProvider {
     issuer: String,
     client_id: String,
-    client_secret: String,
+    client_secret: SecretString,
     redirect_uri: String,
     name: String,
 }
@@ -22,7 +23,7 @@ impl DexProvider {
         Ok(Self {
             issuer: "http://127.0.0.1:5556/dex".to_owned(),
             client_id: "huskarl-authcode".to_owned(),
-            client_secret: "huskarl-authcode-secret".to_owned(),
+            client_secret: "huskarl-authcode-secret".into(),
             redirect_uri: "http://127.0.0.1:5557/callback".to_owned(),
             name: "dex".to_owned(),
         })
