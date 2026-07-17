@@ -3,7 +3,6 @@ use std::time::Duration;
 use huskarl::{
     core::{
         client_auth::{Audience, JwtBearer},
-        crypto::signer::AsymmetricJwsSigner as _,
         dpop::DPoP,
         server_metadata::AuthorizationServerMetadata,
     },
@@ -53,7 +52,7 @@ async fn run_fapi2_plan<J: Jar + Clone + 'static>(
         PrivateKey::generate(GenerateAlgorithm::Es256, Some("server-key".to_string())).unwrap();
 
     // Extract the public JWK to register with the conformance suite as the client JWKS.
-    let client_public_jwk = client_key.public_key_jwk().into_owned();
+    let client_public_jwk = client_key.as_private_jwk().public_jwk();
     // Provide the full private JWK so the simulated AS can sign tokens.
     let server_private_jwk: huskarl::core::jwk::Jwk = server_key.as_private_jwk().into();
 

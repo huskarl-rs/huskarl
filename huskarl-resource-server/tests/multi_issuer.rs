@@ -12,7 +12,7 @@ use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
     core::{
         EndpointUrl,
-        crypto::signer::AsymmetricJwsSigner,
+        crypto::signer::JwsSignerSelector,
         jwk::{JwksSource, PublicJwks},
         jwt::Jwt,
         platform::SystemTime,
@@ -62,7 +62,7 @@ impl MockAs {
     fn start() -> Self {
         let server = MockServer::start();
         let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
-        let jwks = PublicJwks::new(vec![key.public_key_jwk().into_owned()]);
+        let jwks = PublicJwks::new(vec![key.as_private_jwk().public_jwk()]);
         server.mock(|when, then| {
             when.method(GET).path("/jwks.json");
             then.status(200)
@@ -93,7 +93,7 @@ impl MockAs {
             .expiration(SystemTime::now() + std::time::Duration::from_secs(3600))
             .claims(claims)
             .build();
-        jwt.to_jws_compact(&self.key)
+        jwt.to_jws_compact(&*self.key.select_signer().await)
             .await
             .unwrap()
             .expose_secret()

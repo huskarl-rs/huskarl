@@ -125,9 +125,10 @@ RFC 7523 §3 requires the assertion to be a JWT signed by an issuer the
 authorization server trusts. The claims identify the trusted issuer of the
 assertion (`iss`), the principal the token is for (`sub`), and the
 authorization server as the audience (`aud`); `exp` and `iat` bound its
-lifetime. Build and sign one with [`Jwt`](crate::core::jwt::Jwt) and any
-[`JwsSigner`](crate::core::crypto::signer::JwsSigner) (here, a freshly
-generated key — in practice load a long-lived key the server trusts):
+lifetime. Build and sign one with [`Jwt`](crate::core::jwt::Jwt) and a signer
+selected from any
+[`JwsSignerSelector`](crate::core::crypto::signer::JwsSignerSelector) (here, a
+freshly generated key — in practice load a long-lived key the server trusts):
 
 The [`SecretString`](crate::core::secrets::SecretString) returned by
 `to_jws_compact` can be passed straight to
@@ -138,7 +139,7 @@ The [`SecretString`](crate::core::secrets::SecretString) returned by
 ```rust
 use std::time::Duration;
 
-use huskarl::core::{jwt::Jwt, secrets::SecretString};
+use huskarl::core::{crypto::signer::JwsSignerSelector as _, jwt::Jwt, secrets::SecretString};
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 
 # async fn make_assertion() -> Result<SecretString, Box<dyn std::error::Error>> {
@@ -152,7 +153,7 @@ let jwt = Jwt::builder()
     .claims(())
     .build();
 
-let assertion = jwt.to_jws_compact(&key).await?;
+let assertion = jwt.to_jws_compact(&*key.select_signer().await).await?;
 Ok(assertion)
 # }
 ```

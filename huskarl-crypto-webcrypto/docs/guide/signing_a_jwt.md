@@ -6,11 +6,11 @@ with `huskarl-core`'s [`Jwt`](huskarl_core::jwt::Jwt) builder. Every crypto call
 is `async`, and the key never leaves `SubtleCrypto`:
 
 ```rust,no_run
-use huskarl_core::jwt::Jwt;
+use huskarl_core::{crypto::signer::JwsSignerSelector as _, jwt::Jwt};
 use huskarl_crypto_webcrypto::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let signer = PrivateKey::generate(GenerateAlgorithm::Es256, Some("key-1".to_string())).await?;
+let key = PrivateKey::generate(GenerateAlgorithm::Es256, Some("key-1".to_string())).await?;
 
 let jwt = Jwt::builder()
     .issuer("https://issuer.example")
@@ -19,8 +19,8 @@ let jwt = Jwt::builder()
     .claims(serde_json::json!({ "scope": "read write" }))
     .build();
 
-// A compact JWS string, ready for the wire.
-let compact = jwt.to_jws_compact(&signer).await?;
+// Select the signer snapshot, then produce a compact JWS string.
+let compact = jwt.to_jws_compact(&*key.select_signer().await).await?;
 # let _ = compact;
 # Ok(())
 # }

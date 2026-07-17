@@ -8,7 +8,7 @@ use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
     core::{
         EndpointUrl,
-        crypto::signer::AsymmetricJwsSigner,
+        crypto::signer::AsymmetricJwsSignerSelector,
         jwk::{JwksSource, PublicJwks},
         jwt::Jwt,
     },
@@ -21,7 +21,8 @@ async fn test_rfc9068_validator() {
 
     // 1. Generate key pair
     let private_key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
-    let public_jwk = private_key.public_key_jwk().into_owned();
+    let signer = private_key.select_asymmetric_signer().await;
+    let public_jwk = signer.public_key_jwk().into_owned();
     let jwks = PublicJwks::new(vec![public_jwk]);
 
     // 2. Mock JWKS endpoint
@@ -89,7 +90,7 @@ async fn test_rfc9068_validator() {
         })
         .build();
 
-    let token = jwt.to_jws_compact(&private_key).await.unwrap();
+    let token = jwt.to_jws_compact(&*signer).await.unwrap();
 
     // 5. Validate request
     let mut headers = http::HeaderMap::new();

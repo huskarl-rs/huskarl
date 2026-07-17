@@ -47,6 +47,8 @@ impl SymmetricAlgorithm {
     }
 }
 
+/// The shared key material behind a `SymmetricKey` — the signer snapshot
+/// `select_signer` hands out.
 #[derive(Debug)]
 struct SymmetricKeyInner {
     key: SecretBytes,
@@ -56,9 +58,10 @@ struct SymmetricKeyInner {
 
 /// An HMAC symmetric key (HS256/384/512), used to both sign and verify JWS.
 ///
-/// Implements huskarl-core's [`JwsSigner`], [`JwsVerifier`], and
-/// [`JwsSignerSelector`]. Build one with [`from_jwk`](Self::from_jwk) or
-/// [`from_secret`](Self::from_secret); cheap to clone (`Arc`-backed).
+/// Implements huskarl-core's [`JwsSignerSelector`] (selection hands out the
+/// key's shared inner [`JwsSigner`]) and [`JwsVerifier`]. Build one with
+/// [`from_jwk`](Self::from_jwk) or [`from_secret`](Self::from_secret); cheap
+/// to clone (`Arc`-backed).
 #[derive(Debug, Clone)]
 pub struct SymmetricKey {
     inner: Arc<SymmetricKeyInner>,
@@ -148,13 +151,15 @@ impl SymmetricKey {
         let jwk = output.value.with_kid_fallback(output.identity);
         Self::from_jwk(jwk.try_into()?)
     }
+}
 
+impl SymmetricKeyInner {
     // `Hmac::new_from_slice` accepts a key of any length, so it never errors.
     #[allow(clippy::expect_used)]
     fn hmac(&self, input: &[u8]) -> Vec<u8> {
-        let key_bytes = self.inner.key.expose_secret();
+        let key_bytes = self.key.expose_secret();
 
-        match self.inner.algorithm {
+        match self.algorithm {
             SymmetricAlgorithm::Hs256 => {
                 let mut key: Hmac<sha2::Sha256> = Hmac::new_from_slice(key_bytes)
                     .expect("Key length checked at construction time");
@@ -179,18 +184,33 @@ impl SymmetricKey {
 
 impl JwsSignerSelector for SymmetricKey {
     fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
-        let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
-        Box::pin(async move { signer })
+        let snapshot: Arc<dyn JwsSigner> = self.inner.clone();
+        Box::pin(async move { snapshot })
     }
 }
 
-impl JwsSigner for SymmetricKey {
+impl JwsVerifier for SymmetricKey {
+    fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
+        self.inner.key_match(key_match)
+    }
+
+    fn verify<'a>(
+        &'a self,
+        input: &'a [u8],
+        signature: &'a [u8],
+        key_match: &'a KeyMatch<'a>,
+    ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+        self.inner.verify(input, signature, key_match)
+    }
+}
+
+impl JwsSigner for SymmetricKeyInner {
     fn jws_algorithm(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.inner.algorithm.as_ref())
+        Cow::Borrowed(self.algorithm.as_ref())
     }
 
     fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.inner.key_id.as_deref().map(Cow::Borrowed)
+        self.key_id.as_deref().map(Cow::Borrowed)
     }
 
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
@@ -198,12 +218,9 @@ impl JwsSigner for SymmetricKey {
     }
 }
 
-impl JwsVerifier for SymmetricKey {
+impl JwsVerifier for SymmetricKeyInner {
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
-        key_match.strength_for(
-            &[self.inner.algorithm.as_ref()],
-            self.inner.key_id.as_deref(),
-        )
+        key_match.strength_for(&[self.algorithm.as_ref()], self.key_id.as_deref())
     }
 
     fn verify<'a>(
@@ -255,7 +272,7 @@ mod tests {
         let key = SymmetricKey::from_jwk(jwk).unwrap();
 
         let data = b"hello world";
-        let signature = key.sign(data).await.unwrap();
+        let signature = key.select_signer().await.sign(data).await.unwrap();
 
         let key_match = KeyMatch::builder().alg(algorithm).kid("sym-key-1").build();
         key.verify(data, &signature, &key_match).await.unwrap();
@@ -333,7 +350,10 @@ mod tests {
             .decode("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")
             .unwrap();
 
-        assert_eq!(key.sign(input).await.unwrap(), expected);
+        assert_eq!(
+            key.select_signer().await.sign(input).await.unwrap(),
+            expected
+        );
 
         let key_match = KeyMatch::builder().alg("HS256").build();
         key.verify(input, &expected, &key_match).await.unwrap();
@@ -349,8 +369,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("sym-1"));
-        assert_eq!(key.jws_algorithm().as_ref(), "HS256");
+        let signer = key.select_signer().await;
+        assert_eq!(signer.key_id().as_deref(), Some("sym-1"));
+        assert_eq!(signer.jws_algorithm().as_ref(), "HS256");
     }
 
     #[tokio::test]
@@ -362,7 +383,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("env-key"));
+        assert_eq!(
+            key.select_signer().await.key_id().as_deref(),
+            Some("env-key")
+        );
     }
 
     #[tokio::test]
@@ -397,8 +421,8 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Config);
     }
 
-    #[test]
-    fn oct_jwk_from_wire_yields_symmetric_variant() {
+    #[tokio::test]
+    async fn oct_jwk_from_wire_yields_symmetric_variant() {
         // The Jwk -> PrivateJwk -> SymmetricJwk path a JWKS consumer takes.
         let jwk = huskarl_core::jwk::Jwk::builder()
             .key(jwk::OctKey::builder().k(vec![1u8; 32]).build())
@@ -407,6 +431,9 @@ mod tests {
             .build();
         let private: jwk::SymmetricJwk = jwk.private_jwk().unwrap().try_into().unwrap();
         let key = SymmetricKey::from_jwk(private).unwrap();
-        assert_eq!(key.key_id().as_deref(), Some("from-set"));
+        assert_eq!(
+            key.select_signer().await.key_id().as_deref(),
+            Some("from-set")
+        );
     }
 }

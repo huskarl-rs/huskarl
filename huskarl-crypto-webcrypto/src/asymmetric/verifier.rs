@@ -432,7 +432,7 @@ impl JwsVerifier for AsymmetricPublicKey {
 #[cfg(test)]
 mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    use huskarl_core::crypto::signer::{AsymmetricJwsSigner, JwsSigner};
+    use huskarl_core::crypto::signer::{AsymmetricJwsSignerSelector as _, JwsSignerSelector as _};
     use wasm_bindgen_test::*;
 
     use super::*;
@@ -449,8 +449,12 @@ mod tests {
     /// The exported `key_ops`/`use` are left untouched: the generated key is
     /// verification-capable (see `exported_public_jwk_is_verification_capable`),
     /// so `from_jwk` accepts it unmodified.
-    fn verification_jwk(signer: &PrivateKey, alg: Option<&str>) -> jwk::PublicJwk {
-        let mut jwk = signer.public_key_jwk().into_owned();
+    async fn verification_jwk(signer: &PrivateKey, alg: Option<&str>) -> jwk::PublicJwk {
+        let mut jwk = signer
+            .select_asymmetric_signer()
+            .await
+            .public_key_jwk()
+            .into_owned();
         jwk.algorithm = alg.map(str::to_string);
         jwk
     }
@@ -464,7 +468,11 @@ mod tests {
         let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None)
             .await
             .unwrap();
-        let jwk = signer.public_key_jwk().into_owned();
+        let jwk = signer
+            .select_asymmetric_signer()
+            .await
+            .public_key_jwk()
+            .into_owned();
 
         assert!(
             jwk.key_operations
@@ -488,14 +496,14 @@ mod tests {
         let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None)
             .await
             .unwrap();
-        let mut jwk = verification_jwk(&signer, Some("ES256"));
+        let mut jwk = verification_jwk(&signer, Some("ES256")).await;
         jwk.kid = Some("key-a".to_string());
         let verifier = AsymmetricPublicKey::from_jwk(jwk)
             .await
             .expect("from_jwk should import the generated key");
 
         let input = b"kid mismatch input";
-        let signature = signer.sign(input).await.unwrap();
+        let signature = signer.select_signer().await.sign(input).await.unwrap();
         let key_match = KeyMatch::builder().alg("ES256").kid("key-b").build();
 
         let outcome = verifier.verify(input, &signature, &key_match).await;
@@ -509,12 +517,13 @@ mod tests {
     /// a real signature round-trips. Mirrors native's `roundtrip_jwk` helper.
     async fn roundtrip(algorithm: GenerateAlgorithm, jws_alg: &str) {
         let signer = PrivateKey::generate(algorithm, None).await.unwrap();
-        let verifier = AsymmetricPublicKey::from_jwk(verification_jwk(&signer, Some(jws_alg)))
-            .await
-            .expect("from_jwk should import the generated key");
+        let verifier =
+            AsymmetricPublicKey::from_jwk(verification_jwk(&signer, Some(jws_alg)).await)
+                .await
+                .expect("from_jwk should import the generated key");
 
         let input = b"webcrypto asymmetric roundtrip input";
-        let signature = signer.sign(input).await.unwrap();
+        let signature = signer.select_signer().await.sign(input).await.unwrap();
         let key_match = KeyMatch::builder().alg(jws_alg).build();
 
         let outcome = verifier.verify(input, &signature, &key_match).await;
@@ -623,7 +632,7 @@ mod tests {
         .await
         .unwrap();
 
-        let verifier = AsymmetricPublicKey::from_jwk(verification_jwk(&signer, None))
+        let verifier = AsymmetricPublicKey::from_jwk(verification_jwk(&signer, None).await)
             .await
             .expect("alg-less RSA JWK should import");
 
@@ -638,7 +647,7 @@ mod tests {
 
         // The same key really verifies a signature it produced (RS256 here).
         let input = b"alg-less rsa input";
-        let signature = signer.sign(input).await.unwrap();
+        let signature = signer.select_signer().await.sign(input).await.unwrap();
         verifier
             .verify(input, &signature, &KeyMatch::builder().alg("RS256").build())
             .await
@@ -712,7 +721,7 @@ mod tests {
         let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None)
             .await
             .unwrap();
-        let jwk = verification_jwk(&signer, Some("ES384"));
+        let jwk = verification_jwk(&signer, Some("ES384")).await;
         assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
     }
 
@@ -727,7 +736,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let jwk = verification_jwk(&signer, Some("ES256"));
+        let jwk = verification_jwk(&signer, Some("ES256")).await;
         assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
     }
 
@@ -738,12 +747,13 @@ mod tests {
         let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None)
             .await
             .unwrap();
-        let verifier = AsymmetricPublicKey::from_jwk(verification_jwk(&signer, Some("ES256")))
-            .await
-            .unwrap();
+        let verifier =
+            AsymmetricPublicKey::from_jwk(verification_jwk(&signer, Some("ES256")).await)
+                .await
+                .unwrap();
 
         let input = b"unsupported alg input";
-        let signature = signer.sign(input).await.unwrap();
+        let signature = signer.select_signer().await.sign(input).await.unwrap();
         assert!(matches!(
             verifier
                 .verify(input, &signature, &KeyMatch::builder().alg("ES384").build(),)

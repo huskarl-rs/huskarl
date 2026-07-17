@@ -41,6 +41,8 @@ use crate::{
     },
 };
 
+/// The shared key handle behind a `PrivateKey` — the signer snapshot the
+/// selectors hand out.
 #[derive(Debug)]
 struct PrivateKeyInner {
     crypto_key: CryptoKey,
@@ -49,8 +51,9 @@ struct PrivateKeyInner {
 }
 
 /// A non-exportable asymmetric private key used to create JWS signatures
-/// (ES256/384, RS/PS 256/384/512, Ed25519), implementing [`JwsSigner`] and
-/// [`AsymmetricJwsSigner`].
+/// (ES256/384, RS/PS 256/384/512, Ed25519): a [`JwsSignerSelector`] /
+/// [`AsymmetricJwsSignerSelector`] whose selection hands out the key's shared
+/// inner [`JwsSigner`].
 ///
 /// Generate one with [`generate`](Self::generate). Keys are not extractable by
 /// JavaScript; the handle is cheap to clone (`Arc`-backed).
@@ -306,40 +309,40 @@ impl From<SignError> for Error {
 
 impl JwsSignerSelector for PrivateKey {
     fn select_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn JwsSigner>> {
-        let signer: Arc<dyn JwsSigner> = Arc::new(self.clone());
-        Box::pin(async move { signer })
+        let snapshot: Arc<dyn JwsSigner> = self.inner.clone();
+        Box::pin(async move { snapshot })
     }
 }
 
 impl AsymmetricJwsSignerSelector for PrivateKey {
     fn select_asymmetric_signer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AsymmetricJwsSigner>> {
-        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
-        Box::pin(async move { signer })
+        let snapshot: Arc<dyn AsymmetricJwsSigner> = self.inner.clone();
+        Box::pin(async move { snapshot })
     }
 
     fn select_signer_by_thumbprint<'a>(
         &'a self,
         thumbprint: &'a str,
     ) -> MaybeSendBoxFuture<'a, Option<Arc<dyn AsymmetricJwsSigner>>> {
-        let matches = self.inner.public_jwk.thumbprint() == thumbprint;
-        let signer: Arc<dyn AsymmetricJwsSigner> = Arc::new(self.clone());
-        Box::pin(async move { matches.then_some(signer) })
+        let snapshot = (self.inner.public_jwk.thumbprint() == thumbprint)
+            .then(|| self.inner.clone() as Arc<dyn AsymmetricJwsSigner>);
+        Box::pin(async move { snapshot })
     }
 }
 
-impl AsymmetricJwsSigner for PrivateKey {
+impl AsymmetricJwsSigner for PrivateKeyInner {
     fn public_key_jwk(&self) -> Cow<'_, huskarl_core::jwk::PublicJwk> {
-        Cow::Borrowed(&self.inner.public_jwk)
+        Cow::Borrowed(&self.public_jwk)
     }
 }
 
-impl JwsSigner for PrivateKey {
+impl JwsSigner for PrivateKeyInner {
     fn jws_algorithm(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.inner.algorithm.name())
+        Cow::Borrowed(self.algorithm.name())
     }
 
     fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.inner.public_jwk.kid.clone().map(Cow::Owned)
+        self.public_jwk.kid.clone().map(Cow::Owned)
     }
 
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
@@ -348,8 +351,8 @@ impl JwsSigner for PrivateKey {
 
             Ok(sign_with_key(
                 &crypto.subtle(),
-                self.inner.algorithm.sign_algorithm(),
-                &self.inner.crypto_key,
+                self.algorithm.sign_algorithm(),
+                &self.crypto_key,
                 input,
             )
             .await

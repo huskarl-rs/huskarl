@@ -364,7 +364,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        crypto::{signer::AsymmetricJwsSigner, verifier::JwsVerifierPlatform},
+        crypto::{signer::JwsSignerSelector, verifier::JwsVerifierPlatform},
         jwt::Jwt,
         platform::Duration,
     };
@@ -378,7 +378,7 @@ mod tests {
     async fn signer_and_verifier() -> (PrivateKey, Arc<dyn JwsVerifier>) {
         let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
         let verifier = NativeVerifierPlatform
-            .create_verifier_from_jwk(signer.public_key_jwk().into_owned())
+            .create_verifier_from_jwk(signer.as_private_jwk().public_jwk())
             .await
             .unwrap();
         (signer, verifier)
@@ -400,7 +400,7 @@ mod tests {
             .issued_now_expires_after(Duration::from_hours(1))
             .claims(claims)
             .build()
-            .to_jws_compact(signer)
+            .to_jws_compact(&*signer.select_signer().await)
             .await
             .unwrap();
         IdToken::from(token.expose_secret())

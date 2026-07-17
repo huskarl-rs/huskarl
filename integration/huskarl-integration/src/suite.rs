@@ -8,7 +8,6 @@ use huskarl::{
     cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{
         client_auth::{Audience, ClientAuthentication, ClientSecret, JwtBearer},
-        crypto::signer::AsymmetricJwsSigner as _,
         dpop::DPoP,
         jwk::JwksSource,
         secrets::{ProvidedSecret, SecretString},
@@ -143,7 +142,7 @@ pub async fn client_credentials_flow(provider: &dyn TestProvider, features: Feat
         .maybe_signing_jwk(
             client_assertion_key
                 .as_ref()
-                .map(|k| k.public_key_jwk().into_owned()),
+                .map(|k| k.as_private_jwk().public_jwk()),
         )
         .build();
     let (client, secret) = provision_with_secret(provider, spec).await;
@@ -343,7 +342,7 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
     let spec = ClientSpec::builder()
         .features(features)
         .redirect_uris(vec![redirect_uri.clone()])
-        .maybe_signing_jwk(jar_key.as_ref().map(|k| k.public_key_jwk().into_owned()))
+        .maybe_signing_jwk(jar_key.as_ref().map(|k| k.as_private_jwk().public_jwk()))
         .build();
     let (client, secret) = provision_with_secret(provider, spec).await;
 
