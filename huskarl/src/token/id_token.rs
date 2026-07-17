@@ -252,7 +252,7 @@ impl IdTokenValidator {
             .await
             .context(JwtSnafu)?;
 
-        ensure!(validated_jwt.subject.is_some(), SubjectMissingSnafu);
+        ensure!(validated_jwt.sub.is_some(), SubjectMissingSnafu);
 
         // OIDC Core §3.1.3.7 step 11: if nonce was sent, it MUST be present and match.
         ensure!(
@@ -284,7 +284,7 @@ impl IdTokenValidator {
         // client_id, the only one we trust. (`azp` is deliberately not
         // validated — OIDC erratum #973 / PR #340 — only surfaced on the claims.)
         let untrusted_audiences: Vec<String> = validated_jwt
-            .audience
+            .aud
             .iter()
             .filter(|aud| *aud != &self.audience && !self.trusted_audiences.contains(*aud))
             .cloned()
@@ -394,9 +394,9 @@ mod tests {
     ) -> IdToken {
         let token = Jwt::builder()
             .typ("JWT")
-            .issuer(iss.to_string())
-            .audiences(audiences)
-            .maybe_subject(sub.map(str::to_string))
+            .iss(iss.to_string())
+            .aud(audiences)
+            .maybe_sub(sub.map(str::to_string))
             .issued_now_expires_after(Duration::from_hours(1))
             .claims(claims)
             .build()
@@ -435,8 +435,8 @@ mod tests {
             .validate(&token, None)
             .await
             .expect("token should validate");
-        assert_eq!(validated.subject.as_deref(), Some(SUB));
-        assert_eq!(validated.issuer.as_deref(), Some(ISS));
+        assert_eq!(validated.sub.as_deref(), Some(SUB));
+        assert_eq!(validated.iss.as_deref(), Some(ISS));
     }
 
     #[tokio::test]

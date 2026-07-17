@@ -222,11 +222,11 @@ impl TokenIntrospection {
         ensure!(introspection.active, TokenInactiveSnafu);
 
         Ok(ValidatedRequest {
-            expiration: parse_optional_timestamp("exp", introspection.exp)?,
-            issued_at: parse_optional_timestamp("iat", introspection.iat)?,
-            issuer: introspection.iss,
-            subject: introspection.sub,
-            audience: introspection.aud,
+            exp: parse_optional_timestamp("exp", introspection.exp)?,
+            iat: parse_optional_timestamp("iat", introspection.iat)?,
+            iss: introspection.iss,
+            sub: introspection.sub,
+            aud: introspection.aud,
             jti: introspection.jti,
             cnf: introspection.cnf,
             claims: introspection.claims,

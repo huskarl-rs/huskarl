@@ -70,7 +70,7 @@ pub struct IntrospectionValidator<Claims = ()> {
     issuer: Option<String>,
     realm: Option<String>,
     resource_metadata: Option<String>,
-    audience: ClaimCheck,
+    aud: ClaimCheck,
     require_mtls: bool,
     _phantom: PhantomData<Claims>,
 }
@@ -119,7 +119,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// tokens to a single resource or omits `aud` from its introspection
         /// responses.
         #[builder(into)]
-        audience: ClaimCheck,
+        aud: ClaimCheck,
         /// The client authentication strategy.
         #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
         client_auth: Arc<dyn ClientAuthentication>,
@@ -241,7 +241,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             issuer,
             realm,
             resource_metadata,
-            audience,
+            aud,
             require_mtls,
             _phantom: PhantomData,
         })
@@ -398,13 +398,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
 
         // 3. Audience check (RFC 7662 §4): an active token may still have been
         // minted for a different resource served by the same authorization server.
-        if let Err(expected) = check_audience(&self.audience, &validated.audience) {
+        if let Err(expected) = check_audience(&self.aud, &validated.aud) {
             return (
                 None,
                 Err(AudienceSnafu {
                     token_type,
                     expected,
-                    actual: validated.audience.clone(),
+                    actual: validated.aud.clone(),
                 }
                 .build()),
             );

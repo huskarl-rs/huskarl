@@ -4,8 +4,8 @@
 access tokens whose claim set does not conform to RFC 9068. Validation rules are
 configured via
 [`AccessTokenValidationRules`](crate::validator::custom::AccessTokenValidationRules)
-or through individual builder methods such as `.audience()`, `.issuer()`, and
-`.subject()`. For RFC 9068-compliant authorization servers, use the [RFC 9068
+or through individual builder methods such as `.aud()`, `.iss()`, and
+`.sub()`. For RFC 9068-compliant authorization servers, use the [RFC 9068
 guide](crate::_docs::guide::rfc9068) instead — see [choosing a
 validator](crate::_docs::explanation::choosing_a_validator).
 
@@ -44,7 +44,7 @@ let metadata = AuthorizationServerMetadata::fetch()
     .await?;
 
 let validator = CustomValidator::builder_from_metadata(&metadata)
-    .audience("api://my-resource")
+    .aud("api://my-resource")
     .jws_verifier_factory(Arc::new(
         JwksSource::builder()
             .http_client(http_client.clone())
@@ -70,7 +70,7 @@ use huskarl_resource_server::{
 
 let validator = CustomValidator::builder()
     .authorization_server("https://my-issuer")
-    .audience("api://my-resource")
+    .aud("api://my-resource")
     .jwks_uri("https://my-issuer/.well-known/jwks.json".parse()?)
     .jws_verifier_factory(Arc::new(
         JwksSource::builder()
@@ -112,7 +112,7 @@ non-absolute URI fails every DPoP validation with an integration error.
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-# let validator = CustomValidator::builder_from_metadata(&metadata).audience("api://my-resource").jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
+# let validator = CustomValidator::builder_from_metadata(&metadata).aud("api://my-resource").jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
 use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 
 let mut headers = http::HeaderMap::new();
@@ -123,7 +123,7 @@ let uri = Uri::from_static("https://api.example.com/resource");
 let result = validator.validate_request(&headers, &method, &uri, None).await;
 
 match result.outcome {
-    Ok(Some(validated)) => println!("Authenticated: subject={:?}", validated.subject),
+    Ok(Some(validated)) => println!("Authenticated: subject={:?}", validated.sub),
     Ok(None) => println!("No authentication provided"),
     Err(e) => println!("Validation failed: {e}"),
 }

@@ -337,7 +337,7 @@ impl UserInfoClient {
             serde_json::Value::Object(m) => m,
             _ => serde_json::Map::new(),
         };
-        if let Some(sub) = &validated.subject {
+        if let Some(sub) = &validated.sub {
             claims_map.insert("sub".to_owned(), serde_json::Value::String(sub.clone()));
         }
 

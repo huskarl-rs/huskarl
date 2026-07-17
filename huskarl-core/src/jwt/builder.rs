@@ -23,6 +23,7 @@ use crate::{
 /// layer: [`to_jws_compact`](Self::to_jws_compact) adds the algorithm and key
 /// ID, computes the JWS signature, and produces the final compact string.
 #[non_exhaustive]
+#[allow(clippy::should_implement_trait)] // `sub` is the JWT claim name, not arithmetic subtraction
 #[derive(Debug, Clone, Builder)]
 #[builder(
     start_fn(vis = "", name = "builder_internal"),
@@ -38,19 +39,19 @@ where
     pub typ: Cow<'a, str>,
     /// The issuer (`iss`) of the JWT.
     #[builder(into)]
-    pub issuer: Option<Cow<'a, str>>,
+    pub iss: Option<Cow<'a, str>>,
     /// The subject (`sub`) of the JWT.
     #[builder(into)]
-    pub subject: Option<Cow<'a, str>>,
+    pub sub: Option<Cow<'a, str>>,
     /// The audiences (`aud`) of the JWT.
     #[builder(default, into)]
-    pub audiences: Vec<String>,
+    pub aud: Vec<String>,
     /// The number of seconds since the epoch (`iat`) when the JWT was issued.
-    pub issued_at: Option<SystemTime>,
+    pub iat: Option<SystemTime>,
     /// The number of seconds since the epoch (`exp`) when the JWT will expire (or has expired).
-    pub expiration: Option<SystemTime>,
+    pub exp: Option<SystemTime>,
     /// The number of seconds since the epoch (`nbf`) when the JWT will (or did) become valid.
-    pub not_before: Option<SystemTime>,
+    pub nbf: Option<SystemTime>,
     /// The unique identifier (`jti`) for this JWT, can be used to avoid replay attacks.
     #[builder(required, into, default = crate::uuid::uuid_v7())]
     pub jti: Option<String>,
@@ -80,11 +81,11 @@ where
     pub fn audience(
         self,
         audience: impl Into<String>,
-    ) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetAudiences<S>>
+    ) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetAud<S>>
     where
-        S::Audiences: jwt_builder::IsUnset,
+        S::Aud: jwt_builder::IsUnset,
     {
-        self.audiences(vec![audience.into()])
+        self.aud(vec![audience.into()])
     }
 
     /// Sets the issued value for the JWT to the current time.
@@ -92,11 +93,11 @@ where
     /// # Panics
     ///
     /// This call panics if the reported time is before the epoch.
-    pub fn issued_now(self) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetIssuedAt<S>>
+    pub fn issued_now(self) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetIat<S>>
     where
-        S::IssuedAt: jwt_builder::IsUnset,
+        S::Iat: jwt_builder::IsUnset,
     {
-        self.issued_at(crate::platform::SystemTime::now())
+        self.iat(crate::platform::SystemTime::now())
     }
 
     /// Sets the issued value for the JWT to the current time, and the expiry time to the current time plus a specified duration.
@@ -107,13 +108,13 @@ where
     pub fn issued_now_expires_after(
         self,
         after: Duration,
-    ) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetExpiration<jwt_builder::SetIssuedAt<S>>>
+    ) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetExp<jwt_builder::SetIat<S>>>
     where
-        S::IssuedAt: jwt_builder::IsUnset,
-        S::Expiration: jwt_builder::IsUnset,
+        S::Iat: jwt_builder::IsUnset,
+        S::Exp: jwt_builder::IsUnset,
     {
         let now = crate::platform::SystemTime::now();
-        self.issued_at(now).expiration(now + after)
+        self.iat(now).exp(now + after)
     }
 
     /// Sets `iat`, `nbf`, and `exp` from a single captured timestamp.
@@ -131,15 +132,15 @@ where
         'a,
         ExtraHeaders,
         Claims,
-        jwt_builder::SetNotBefore<jwt_builder::SetExpiration<jwt_builder::SetIssuedAt<S>>>,
+        jwt_builder::SetNbf<jwt_builder::SetExp<jwt_builder::SetIat<S>>>,
     >
     where
-        S::IssuedAt: jwt_builder::IsUnset,
-        S::Expiration: jwt_builder::IsUnset,
-        S::NotBefore: jwt_builder::IsUnset,
+        S::Iat: jwt_builder::IsUnset,
+        S::Exp: jwt_builder::IsUnset,
+        S::Nbf: jwt_builder::IsUnset,
     {
         let now = crate::platform::SystemTime::now();
-        self.issued_at(now).expiration(now + after).not_before(now)
+        self.iat(now).exp(now + after).nbf(now)
     }
 
     /// Sets additional claims for the JWT, replacing the current claims type parameter.
@@ -229,21 +230,18 @@ where
 
         // Validate eagerly so a pre-epoch timestamp surfaces as a Time error
         // rather than a generic claims-encoding failure during serialization.
-        for t in [self.issued_at, self.expiration, self.not_before]
-            .into_iter()
-            .flatten()
-        {
+        for t in [self.iat, self.exp, self.nbf].into_iter().flatten() {
             t.duration_since(SystemTime::UNIX_EPOCH)
                 .context(TimeSnafu)?;
         }
 
         let jwt_claims = JwtClaims {
-            iss: self.issuer.as_deref().map(Cow::Borrowed),
-            sub: self.subject.as_deref().map(Cow::Borrowed),
-            aud: self.audiences.clone(),
-            iat: self.issued_at,
-            exp: self.expiration,
-            nbf: self.not_before,
+            iss: self.iss.as_deref().map(Cow::Borrowed),
+            sub: self.sub.as_deref().map(Cow::Borrowed),
+            aud: self.aud.clone(),
+            iat: self.iat,
+            exp: self.exp,
+            nbf: self.nbf,
             jti: self.jti.as_deref().map(Cow::Borrowed),
             cnf: None,
             claims: Cow::Borrowed(&self.claims),
@@ -325,12 +323,12 @@ mod tests {
         let nbf = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(999_999);
 
         let jwt = Jwt::builder()
-            .issuer("my-issuer")
-            .subject("my-subject")
-            .audiences(vec!["aud1".into(), "aud2".into()])
-            .issued_at(now)
-            .expiration(exp)
-            .not_before(nbf)
+            .iss("my-issuer")
+            .sub("my-subject")
+            .aud(vec!["aud1".into(), "aud2".into()])
+            .iat(now)
+            .exp(exp)
+            .nbf(nbf)
             .jti(Some("unique-id".to_string()))
             .claims(())
             .build();

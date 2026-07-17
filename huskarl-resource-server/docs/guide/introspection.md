@@ -68,7 +68,7 @@ let metadata = AuthorizationServerMetadata::fetch()
 let validator = IntrospectionValidator::builder_from_metadata(&metadata)
     .expect("authorization server does not support token introspection")
     .client_id("my-resource-server")
-    .audience("api://my-resource")
+    .aud("api://my-resource")
     .client_auth(ClientSecret::new(client_secret))
     .http_client(http_client.clone())
     .build()
@@ -95,7 +95,7 @@ let validator = IntrospectionValidator::builder()
     .client_id("my-resource-server")
     .issuer("https://my-issuer")
     .introspection_endpoint("https://my-issuer/oauth/introspect".parse()?)
-    .audience("api://my-resource")
+    .aud("api://my-resource")
     .client_auth(ClientSecret::new(client_secret))
     .http_client(http_client.clone())
     .build()
@@ -134,7 +134,7 @@ non-absolute URI fails every DPoP validation with an integration error.
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-# let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").audience("api://my-resource").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
+# let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").aud("api://my-resource").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
 use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 
 let mut headers = http::HeaderMap::new();
@@ -145,7 +145,7 @@ let uri = Uri::from_static("https://api.example.com/resource");
 let result = validator.validate_request(&headers, &method, &uri, None).await;
 
 match result.outcome {
-    Ok(Some(validated)) => println!("Authenticated: subject={:?}", validated.subject),
+    Ok(Some(validated)) => println!("Authenticated: subject={:?}", validated.sub),
     Ok(None) => println!("No authentication provided"),
     Err(e) => println!("Introspection failed: {e}"),
 }

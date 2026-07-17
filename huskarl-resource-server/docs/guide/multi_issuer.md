@@ -46,9 +46,9 @@ struct Principal {
 let google = CustomValidator::builder()
     .with_claims::<GoogleIdClaims>()
     .authorization_server("https://accounts.google.com")
-    .issuer(ClaimCheck::required_value("https://accounts.google.com"))
-    .audience(ClaimCheck::required_value("<your-google-oauth-client-id>"))
-    .token_type(ClaimCheck::NoCheck)
+    .iss(ClaimCheck::required_value("https://accounts.google.com"))
+    .aud(ClaimCheck::required_value("<your-google-oauth-client-id>"))
+    .typ(ClaimCheck::NoCheck)
     .require_jti(false)
     .jwks_uri("https://www.googleapis.com/oauth2/v3/certs".parse()?)
     .jws_verifier_factory(Arc::new(
@@ -60,10 +60,10 @@ let google = CustomValidator::builder()
 let okta = CustomValidator::builder()
     .with_claims::<OktaClaims>()
     .authorization_server("https://example.okta.com/oauth2/default")
-    .issuer(ClaimCheck::required_value(
+    .iss(ClaimCheck::required_value(
         "https://example.okta.com/oauth2/default",
     ))
-    .audience(ClaimCheck::required_value("api://my-resource"))
+    .aud(ClaimCheck::required_value("api://my-resource"))
     .jwks_uri("https://example.okta.com/oauth2/default/v1/keys".parse()?)
     .jws_verifier_factory(Arc::new(
         JwksSource::builder().http_client(http.clone()).build(),

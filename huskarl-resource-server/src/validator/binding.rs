@@ -575,8 +575,8 @@ mod tests {
         let selected = signer.select_asymmetric_signer().await;
         let proof = Jwt::builder()
             .typ("dpop+jwt")
-            .issued_at(now + Duration::from_secs(2))
-            .expiration(now + Duration::from_mins(1))
+            .iat(now + Duration::from_secs(2))
+            .exp(now + Duration::from_mins(1))
             .jwk(selected.public_key_jwk().into_owned())
             .claims(valid_claims())
             .build()

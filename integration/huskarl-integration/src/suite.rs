@@ -73,7 +73,7 @@ async fn jwks_validator(
     audience: &str,
 ) -> CustomValidator {
     CustomValidator::builder_from_metadata(metadata)
-        .audience(ClaimCheck::required_value(audience))
+        .aud(ClaimCheck::required_value(audience))
         .jws_verifier_factory(Arc::new(
             JwksSource::builder().http_client(http.clone()).build(),
         ))
@@ -293,7 +293,7 @@ pub async fn introspection_flow(provider: &dyn TestProvider, features: Features)
         .client_id(&client.client_id)
         .issuer(&issuer)
         .introspection_endpoint(introspection_endpoint)
-        .audience(ClaimCheck::required_value(AUDIENCE))
+        .aud(ClaimCheck::required_value(AUDIENCE))
         .client_auth(ClientSecret::new(ProvidedSecret::new(secret)))
         .http_client(http.clone())
         .build()
@@ -307,14 +307,14 @@ pub async fn introspection_flow(provider: &dyn TestProvider, features: Features)
         .expect("introspection should succeed")
         .expect("token should be present and active");
     assert!(
-        validated.subject.is_some(),
+        validated.sub.is_some(),
         "expected subject to be present, got None"
     );
-    assert_eq!(validated.issuer.as_deref(), Some(issuer.as_str()));
+    assert_eq!(validated.iss.as_deref(), Some(issuer.as_str()));
     assert!(
-        validated.audience.contains(&AUDIENCE.to_owned()),
+        validated.aud.contains(&AUDIENCE.to_owned()),
         "expected audience to contain '{AUDIENCE}', got {:?}",
-        validated.audience
+        validated.aud
     );
     assert!(validated.introspection_jwt.is_none());
 }
@@ -428,15 +428,12 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
 
     let id_token = id_token.expect("id_token present for the openid scope");
     assert!(
-        id_token.audience.contains(&client.client_id),
+        id_token.aud.contains(&client.client_id),
         "id_token aud {:?} should contain the client_id {}",
-        id_token.audience,
+        id_token.aud,
         client.client_id
     );
-    assert!(
-        id_token.subject.is_some(),
-        "id_token should carry a subject"
-    );
+    assert!(id_token.sub.is_some(), "id_token should carry a subject");
 }
 
 fn redirect_uri_port(uri: &str) -> Option<u16> {

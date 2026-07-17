@@ -225,11 +225,11 @@ impl JwtValidator {
         self.validate_jti(parsed_jwt.claims.jti.as_deref()).await?;
 
         Ok(ValidatedJwt {
-            issuer: parsed_jwt.claims.iss.map(Into::into),
-            subject: parsed_jwt.claims.sub.map(Into::into),
-            audience: parsed_jwt.claims.aud.iter().map(Into::into).collect(),
-            issued_at: parsed_jwt.claims.iat,
-            expiration: parsed_jwt.claims.exp,
+            iss: parsed_jwt.claims.iss.map(Into::into),
+            sub: parsed_jwt.claims.sub.map(Into::into),
+            aud: parsed_jwt.claims.aud.iter().map(Into::into).collect(),
+            iat: parsed_jwt.claims.iat,
+            exp: parsed_jwt.claims.exp,
             jti: parsed_jwt.claims.jti.map(Into::into),
             cnf: parsed_jwt.claims.cnf,
             claims: match parsed_jwt.claims.claims {

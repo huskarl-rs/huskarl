@@ -54,7 +54,7 @@ impl<S: JwsSignerSelector> Jar for S {
         Box::pin(async move {
             Jwt::builder()
                 .typ("oauth-authz-req+jwt")
-                .issuer(authorization_payload.client_id)
+                .iss(authorization_payload.client_id)
                 .audience(audience)
                 .issued_now_not_before_now_expires_after(Duration::from_mins(1))
                 .claims(authorization_payload)

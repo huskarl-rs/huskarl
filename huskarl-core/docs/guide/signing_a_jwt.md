@@ -25,8 +25,8 @@ use huskarl_core::jwt::Jwt;
 
 # async fn example(signer: BackendSigner) -> Result<(), huskarl_core::error::Error> {
 let jwt = Jwt::builder()
-    .issuer("https://issuer.example")
-    .subject("user-123")
+    .iss("https://issuer.example")
+    .sub("user-123")
     .audience("https://api.example")
     // Sets `iat` and `exp` from one captured timestamp.
     .issued_now_expires_after(std::time::Duration::from_secs(300))

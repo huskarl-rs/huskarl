@@ -384,7 +384,7 @@ mod tests {
         let selected_key = signing_key.select_asymmetric_signer().await;
 
         let jwt = Jwt::builder()
-            .issuer("https://as.example.com")
+            .iss("https://as.example.com")
             .audience("my-api")
             .issued_now_expires_after(std::time::Duration::from_mins(5))
             .claims(MyClaims {
@@ -406,9 +406,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(validated.issuer.as_deref(), Some("https://as.example.com"));
-        assert_eq!(validated.audience, ["my-api"]);
-        assert!(validated.expiration.is_some());
+        assert_eq!(validated.iss.as_deref(), Some("https://as.example.com"));
+        assert_eq!(validated.aud, ["my-api"]);
+        assert!(validated.exp.is_some());
     }
 
     #[test]
@@ -546,7 +546,7 @@ mod tests {
 
         // Sign with restored key
         let jwt = Jwt::builder()
-            .issuer("https://test.example.com")
+            .iss("https://test.example.com")
             .audience("test-aud")
             .issued_now_expires_after(std::time::Duration::from_mins(1))
             .claims(Claims {
@@ -575,10 +575,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            validated.issuer.as_deref(),
-            Some("https://test.example.com")
-        );
+        assert_eq!(validated.iss.as_deref(), Some("https://test.example.com"));
     }
 
     // -- PKCS#8 round-trip tests --
@@ -702,7 +699,7 @@ mod tests {
 
         // Sign with JWK key, verify with PKCS#8 key's public key
         let jwt = Jwt::builder()
-            .issuer("https://cross.example.com")
+            .iss("https://cross.example.com")
             .audience("cross-aud")
             .issued_now_expires_after(std::time::Duration::from_mins(1))
             .claims(Claims {
@@ -781,7 +778,7 @@ mod tests {
         let selected = key.select_asymmetric_signer().await;
 
         let jwt = Jwt::builder()
-            .issuer("https://test.example.com")
+            .iss("https://test.example.com")
             .audience("test-aud")
             .issued_now_expires_after(std::time::Duration::from_mins(1))
             .claims(Claims {
@@ -815,7 +812,7 @@ mod tests {
 
         // Sign with restored key
         let jwt = Jwt::builder()
-            .issuer("https://test.example.com")
+            .iss("https://test.example.com")
             .audience("test-aud")
             .issued_now_expires_after(std::time::Duration::from_mins(1))
             .claims(Claims {
@@ -844,10 +841,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            validated.issuer.as_deref(),
-            Some("https://test.example.com")
-        );
+        assert_eq!(validated.iss.as_deref(), Some("https://test.example.com"));
     }
 
     #[test]
