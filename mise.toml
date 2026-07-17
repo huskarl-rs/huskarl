@@ -81,7 +81,21 @@ arg "[baseline]" help="Baseline git ref to compare against" default="origin/main
 run = 'scripts/semver-report.sh "${usage_baseline}"'
 
 [tasks."docs:rs"]
-run = "cargo +nightly docs-rs"
+run = '''
+for crate in huskarl-core huskarl huskarl-macros huskarl-crypto-native \
+             huskarl-crypto-webcrypto huskarl-reqwest huskarl-redis \
+             huskarl-resource-server; do
+  cargo +nightly docs-rs -p "$crate"
+done
+'''
+
+[tasks."docs:test"]
+env = { RUSTDOCFLAGS = "--cfg docsrs" }
+run = """
+cargo +nightly test --doc --all-features \
+  -p huskarl-core -p huskarl -p huskarl-macros -p huskarl-crypto-native \
+  -p huskarl-reqwest -p huskarl-redis -p huskarl-resource-server
+"""
 
 [tasks."docs:readme"]
 # The workspace run only covers default-members; huskarl-crypto-webcrypto is
