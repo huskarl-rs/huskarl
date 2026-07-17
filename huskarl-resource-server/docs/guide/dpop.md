@@ -78,7 +78,7 @@ the key can validate them:
 
 ```rust
 # use std::sync::Arc;
-# use huskarl_resource_server::core::crypto::cipher::StaticAeadCipher;
+# use huskarl_resource_server::core::crypto::cipher::AeadV1Cipher;
 # use huskarl_resource_server::core::jwk::{JwksSource, OctBytes};
 # use huskarl_resource_server::core::prelude::*;
 # use huskarl_resource_server::core::secrets::{EnvVarSecret, encodings::Base64Encoding};
@@ -98,7 +98,7 @@ let validator = Rfc9068Validator::builder()
     .jwks_uri("https://my-issuer/.well-known/jwks.json".parse()?)
     .dpop_nonce_checker(
         SealedTimestampNonce::builder()
-            .sealer(StaticAeadCipher::new(nonce_key))
+            .sealer(AeadV1Cipher::new(nonce_key))
             .build(),
     )
     .jws_verifier_factory(Arc::new(

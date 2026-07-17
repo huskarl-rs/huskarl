@@ -1,12 +1,9 @@
-use std::{borrow::Cow, pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc};
 
 use crate::{
     crypto::{
         KeyMatchStrength,
-        cipher::{
-            AeadCipherSelector, AeadDecryptor, AeadEncryptor, AeadOutput, AeadSealer,
-            AeadSealerSelector, AeadUnsealer, AeadV1Cipher, CipherMatch, DecryptError,
-        },
+        cipher::{AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, CipherMatch, DecryptError},
         refreshable::Refreshable,
     },
     error::Error,
@@ -29,13 +26,11 @@ use crate::{
 /// manager) without restarting the application.
 ///
 /// For emitting, go through the selector API
-/// ([`select_cipher`](AeadCipherSelector::select_cipher) /
-/// [`select_sealer`](AeadSealerSelector::select_sealer)), which hands back a frozen
-/// snapshot. Using the type directly as an [`AeadEncryptor`] takes a fresh snapshot
-/// per call, so reading metadata and then encrypting can straddle a rotation — the
-/// hazard the selector exists to prevent (see [composing crypto
-/// strategies](crate::_docs::explanation::crypto_strategies)); the bare impl exists
-/// only for composition and erasure.
+/// ([`select_encryptor`](AeadEncryptorSelector::select_encryptor)), which hands
+/// back a frozen snapshot. The type is deliberately *not* an [`AeadEncryptor`]:
+/// reading metadata and then encrypting on a hot-swappable handle could straddle
+/// a rotation — the hazard the selector exists to prevent (see [composing crypto
+/// strategies](crate::_docs::explanation::crypto_strategies)).
 ///
 /// All clones share the same underlying state, so a refresh performed through
 /// any clone is visible to all others — a single `RefreshableCipher` can be
@@ -94,24 +89,12 @@ impl<C: std::fmt::Debug + MaybeSendSync + 'static> RefreshableCipher<C> {
     }
 }
 
-impl<C: AeadEncryptor + 'static> AeadEncryptor for RefreshableCipher<C> {
-    fn enc_algorithm(&self) -> Cow<'_, str> {
-        Cow::Owned(self.inner.load().enc_algorithm().into_owned())
-    }
-
-    fn key_id(&self) -> Option<Cow<'_, str>> {
-        self.inner
-            .load()
-            .key_id()
-            .map(|kid| Cow::Owned(kid.into_owned()))
-    }
-
-    fn encrypt<'a>(
-        &'a self,
-        plaintext: &'a [u8],
-        aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
-        Box::pin(async move { self.inner.load_full().encrypt(plaintext, aad).await })
+impl<C: AeadEncryptorSelector + 'static> AeadEncryptorSelector for RefreshableCipher<C> {
+    fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        Box::pin(async move {
+            let selector = self.inner.load_full();
+            selector.select_encryptor().await
+        })
     }
 }
 
@@ -144,53 +127,22 @@ impl<C: AeadDecryptor + 'static> AeadDecryptor for RefreshableCipher<C> {
     }
 }
 
-impl<C: AeadEncryptor + 'static> AeadCipherSelector for RefreshableCipher<C> {
-    fn select_cipher(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
-        // Hand back the current key as one frozen snapshot: reading its metadata
-        // and encrypting against it then describe and use the same key, even if a
-        // rotation lands afterwards.
-        let encryptor: Arc<dyn AeadEncryptor> = self.inner.load_full();
-        Box::pin(async move { encryptor })
-    }
-}
-
-impl<C: AeadEncryptor + 'static> AeadSealerSelector for RefreshableCipher<C> {
-    fn select_sealer(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadSealer>> {
-        // Frame the frozen snapshot as a v1 sealer. Because it is one fixed key,
-        // `key_id`/`enc_algorithm` and `seal` on the returned sealer agree even
-        // across a concurrent rotation.
-        let sealer: Arc<dyn AeadSealer> = Arc::new(AeadV1Cipher::new(self.inner.load_full()));
-        Box::pin(async move { sealer })
-    }
-}
-
-impl<C: AeadDecryptor + 'static> AeadUnsealer for RefreshableCipher<C> {
-    fn unseal<'a>(
-        &'a self,
-        cipher_match: Option<&'a CipherMatch<'a>>,
-        bundle: &'a [u8],
-        aad: &'a [u8],
-    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
-        Box::pin(async move {
-            AeadV1Cipher::new(self.inner.load_full())
-                .unseal(cipher_match, bundle, aad)
-                .await
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::{
+        borrow::Cow,
+        sync::atomic::{AtomicU32, Ordering},
+    };
 
     use super::*;
+    use crate::crypto::cipher::AeadOutput;
 
     #[derive(Debug)]
-    struct KeyedCipher {
+    struct KeyedEncryptor {
         kid: String,
     }
 
-    impl AeadEncryptor for KeyedCipher {
+    impl AeadEncryptor for KeyedEncryptor {
         fn enc_algorithm(&self) -> Cow<'_, str> {
             "mock".into()
         }
@@ -214,9 +166,29 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct KeyedCipher {
+        inner: Arc<KeyedEncryptor>,
+    }
+
+    impl KeyedCipher {
+        fn new(kid: String) -> Self {
+            Self {
+                inner: Arc::new(KeyedEncryptor { kid }),
+            }
+        }
+    }
+
+    impl AeadEncryptorSelector for KeyedCipher {
+        fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+            let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
+            Box::pin(async move { snapshot })
+        }
+    }
+
     impl AeadDecryptor for KeyedCipher {
         fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
-            m.strength_for("mock", Some(&self.kid))
+            m.strength_for("mock", Some(&self.inner.kid))
         }
 
         fn decrypt<'a>(
@@ -228,7 +200,7 @@ mod tests {
             _aad: &'a [u8],
         ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
             Box::pin(async move {
-                if tag == self.kid.as_bytes() {
+                if tag == self.inner.kid.as_bytes() {
                     Ok(ciphertext.to_vec())
                 } else {
                     Err(Error::from(crate::error::ErrorKind::Crypto).into())
@@ -244,9 +216,7 @@ mod tests {
                 let counter = Arc::clone(&counter);
                 Box::pin(async move {
                     let n = counter.fetch_add(1, Ordering::SeqCst);
-                    Ok(KeyedCipher {
-                        kid: format!("v{n}"),
-                    })
+                    Ok(KeyedCipher::new(format!("v{n}")))
                 })
             };
         RefreshableCipher::builder()
@@ -261,15 +231,18 @@ mod tests {
         let cipher = versioned_cipher().await;
         let clone = cipher.clone();
 
-        assert_eq!(cipher.key_id().as_deref(), Some("v0"));
+        let encryptor = cipher.select_encryptor().await;
+        assert_eq!(encryptor.key_id().as_deref(), Some("v0"));
         assert!(cipher.refresh().await.unwrap());
-        assert_eq!(clone.key_id().as_deref(), Some("v1"));
+        let encryptor = clone.select_encryptor().await;
+        assert_eq!(encryptor.key_id().as_deref(), Some("v1"));
     }
 
     #[tokio::test]
     async fn try_refresh_swaps_through_dyn_decryptor() {
         let cipher = versioned_cipher().await;
-        let output = cipher.encrypt(b"hello", b"").await.unwrap();
+        let encryptor = cipher.select_encryptor().await;
+        let output = encryptor.encrypt(b"hello", b"").await.unwrap();
 
         let decryptor: Arc<dyn AeadDecryptor> = Arc::new(cipher);
         decryptor
