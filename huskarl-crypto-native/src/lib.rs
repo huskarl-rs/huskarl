@@ -7,7 +7,9 @@
 //!   [`SymmetricKey`](symmetric::SymmetricKey)).
 //! - [`NativeVerifierPlatform`] builds a verifier from a public JWK; it is the
 //!   feature-gated default verifier platform for the ecosystem.
-//! - [`aead`] provides an AES-GCM AEAD cipher ([`AesGcmKey`](aead::AesGcmKey)).
+//! - [`aead`] provides two AEAD ciphers — [`AesGcmKey`](aead::AesGcmKey)
+//!   (`A128GCM`/`A192GCM`/`A256GCM`) and [`XChaChaKey`](aead::XChaChaKey)
+//!   (`XC20P`).
 //!
 //! The following JWS algorithms are available:
 //!

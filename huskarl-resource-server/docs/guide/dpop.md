@@ -83,12 +83,13 @@ the key can validate them:
 # use huskarl_resource_server::core::prelude::*;
 # use huskarl_resource_server::core::secrets::{EnvVarSecret, encodings::Base64Encoding};
 # use huskarl_resource_server::validator::{dpop_nonce::SealedTimestampNonce, rfc9068::Rfc9068Validator};
-# use huskarl_crypto_native::aead::AesGcmKey;
+# use huskarl_crypto_native::aead::XChaChaKey;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
-// A stable AEAD key, shared by every replica (32 base64 bytes).
-let nonce_key = AesGcmKey::from_secret(
-    EnvVarSecret::new("DPOP_NONCE_KEY", &Base64Encoding)?.mapped(OctBytes::new("A256GCM")),
+// A stable AEAD key, shared by every replica (32 base64 bytes). XChaCha20-
+// Poly1305 suits a long-lived, unbounded-use seal key like this one.
+let nonce_key = XChaChaKey::from_secret(
+    EnvVarSecret::new("DPOP_NONCE_KEY", &Base64Encoding)?.mapped(OctBytes::new("XC20P")),
 )
 .await?;
 

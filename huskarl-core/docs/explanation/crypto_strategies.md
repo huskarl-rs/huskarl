@@ -243,6 +243,13 @@ how quickly a rotated-in key is discovered. A resource server uses this to issue
 and check stateless `DPoP` nonces: seal the issue time into a bundle, hand it
 out, and unseal it later to verify its age without server-side storage.
 
+For such a long-lived seal key — a nonce or session-cookie key with no natural
+rotation trigger — prefer XChaCha20-Poly1305 (the native `XChaChaKey`, `XC20P`):
+its 192-bit nonce is wide enough that random selection stays collision-free at
+any practical volume, so rotation is a key-lifetime choice, not a nonce-budget
+obligation as it is under AES-GCM's 96-bit nonce. Fall back to AES-GCM only
+when the sealer must also run on WebCrypto, which has no ChaCha primitive.
+
 The sealer traits are also a *boundary*, not just a framing: they are where
 encryption can be delegated wholesale to an external service. A KMS- or
 Vault-style encrypt endpoint returns one opaque, self-describing token — there

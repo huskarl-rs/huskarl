@@ -1,17 +1,20 @@
-//! AES-GCM AEAD cipher, backed by `RustCrypto`'s `aes-gcm`.
+//! AEAD ciphers, backed by `RustCrypto`.
 //!
-//! [`AesGcmKey`] is the user-facing cipher — an
-//! [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher): an
-//! [`AeadEncryptorSelector`] handing out its shared inner [`AeadEncryptor`],
-//! plus an [`AeadDecryptor`]. Build one from a JWK with [`AesGcmKey::from_jwk`], or
-//! from a secret store with [`AesGcmKey::from_secret`] — the AES-128/192/256
-//! variant follows from the key length (16/24/32 bytes) — e.g. to back the
-//! `DPoP` nonce store. Note the per-key encryption bound in [`AesGcmKey`]'s
-//! docs when sizing key rotation.
+//! Both implement huskarl-core's
+//! [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher)
+//! ([`AeadEncryptorSelector`] + [`AeadDecryptor`]) and are built from a JWK
+//! (`from_jwk`) or a secret store (`from_secret`):
+//!
+//! - [`AesGcmKey`] — `A128GCM`/`A192GCM`/`A256GCM`, chosen by key length;
+//!   bounded encryptions per key (see its docs). Mirrored by the `WebCrypto`
+//!   backend.
+//! - [`XChaChaKey`] — `XC20P`, 256-bit key, 192-bit nonce, no per-key
+//!   encryption bound. Native-only: `WebCrypto` has no `ChaCha` primitive.
 
 use std::{array::TryFromSliceError, borrow::Cow, fmt, sync::Arc};
 
 use aes_gcm::{AeadInOut, KeyInit, aead::Generate};
+use chacha20poly1305::XChaCha20Poly1305;
 use huskarl_core::{
     Error, ErrorKind,
     crypto::{
@@ -53,8 +56,7 @@ impl NativeKey {
 /// Build one with [`from_jwk`](Self::from_jwk) or
 /// [`from_secret`](Self::from_secret); the AES-128/192/256 variant follows
 /// from the key length. Implements huskarl-core's [`AeadEncryptorSelector`]
-/// (selection hands out the key's shared inner [`AeadEncryptor`]) and
-/// [`AeadDecryptor`] — together, an
+/// and [`AeadDecryptor`] — together, an
 /// [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher).
 ///
 /// # Usage bound (NIST SP 800-38D §8.3)
@@ -191,18 +193,19 @@ impl AesGcmKey {
     }
 }
 
-/// Errors that can occur during AEAD operations.
+/// Errors that can occur during AEAD operations, shared by both native
+/// ciphers (`aes-gcm` and `chacha20poly1305` report the same [`aead::Error`]).
 #[derive(Debug, Snafu)]
-pub enum AesGcmError {
+pub enum AeadError {
     /// An error occurred when decrypting the ciphertext.
     Decrypt {
         /// The underlying error.
-        source: aes_gcm::Error,
+        source: aead::Error,
     },
     /// An error occurred when encrypting the plaintext.
     Encrypt {
         /// The underlying error.
-        source: aes_gcm::Error,
+        source: aead::Error,
     },
     /// The supplied nonce had an invalid length.
     InvalidNonce {
@@ -216,14 +219,14 @@ pub enum AesGcmError {
     },
 }
 
-impl From<AesGcmError> for Error {
-    fn from(value: AesGcmError) -> Self {
+impl From<AeadError> for Error {
+    fn from(value: AeadError) -> Self {
         Error::new(ErrorKind::Crypto, value)
     }
 }
 
-impl From<AesGcmError> for DecryptError {
-    fn from(value: AesGcmError) -> Self {
+impl From<AeadError> for DecryptError {
+    fn from(value: AeadError) -> Self {
         Error::from(value).into()
     }
 }
@@ -332,6 +335,185 @@ impl AeadDecryptor for AesGcmKeyInner {
                 ),
             }
             .context(DecryptSnafu)?;
+
+            Ok(plaintext)
+        })
+    }
+}
+
+/// The huskarl `enc` identifier for XChaCha20-Poly1305, taken from the JOSE
+/// draft `draft-amringer-jose-chacha`. Not a registered JWE `enc` value — it
+/// names the algorithm in huskarl's own sealed-bundle framing only; do not
+/// route it through a JWE path.
+const XC20P: &str = "XC20P";
+
+/// An XChaCha20-Poly1305 AEAD cipher (`RustCrypto`), doing both encryption and
+/// decryption.
+///
+/// Build one with [`from_jwk`](Self::from_jwk) or
+/// [`from_secret`](Self::from_secret); the key is always 256-bit. Implements
+/// huskarl-core's [`AeadEncryptorSelector`] and [`AeadDecryptor`] — together,
+/// an [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher).
+///
+/// # No rotation-for-nonce-safety bound
+///
+/// Each [`encrypt`](AeadEncryptor::encrypt) call draws a fresh random 192-bit
+/// nonce — wide enough to permit ~2^80 encryptions per key at the same 2^-32
+/// repeat budget behind [`AesGcmKey`]'s 2^32 bound. Rotate for key-lifetime
+/// policy, not nonce budget.
+#[derive(Debug, Clone)]
+pub struct XChaChaKey {
+    inner: Arc<XChaChaKeyInner>,
+}
+
+/// The shared key material behind an `XChaChaKey` — the encryptor snapshot
+/// `select_encryptor` hands out.
+struct XChaChaKeyInner {
+    key: XChaCha20Poly1305,
+    kid: Option<String>,
+}
+
+impl fmt::Debug for XChaChaKeyInner {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("XChaChaKeyInner")
+            .field("enc", &XC20P)
+            .field("kid", &self.kid)
+            .finish_non_exhaustive()
+    }
+}
+
+impl XChaChaKey {
+    /// Constructs a cipher from a [`jwk::SymmetricJwk`].
+    ///
+    /// The key material must be exactly 32 bytes. If the JWK carries an `alg`,
+    /// it must equal `XC20P`. The `kid` field, if present, is used as the key
+    /// ID. Holding a [`jwk::PrivateJwk`], convert with `try_into()` — the
+    /// conversion rejects asymmetric keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if the key material is not 32 bytes, or if
+    /// the JWK's `alg` is present and is not `XC20P`.
+    pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
+        if let Some(alg) = jwk.algorithm.as_deref()
+            && alg != XC20P
+        {
+            return Err(Error::from(ErrorKind::Config)
+                .with_context(format!("JWK algorithm {alg} is not {XC20P}")));
+        }
+
+        let key = XChaCha20Poly1305::new_from_slice(&jwk.key.k).map_err(|_| {
+            Error::from(ErrorKind::Config).with_context(format!(
+                "XChaCha20-Poly1305 key material must be 32 bytes, got {}",
+                jwk.key.k.len()
+            ))
+        })?;
+
+        Ok(XChaChaKey {
+            inner: Arc::new(XChaChaKeyInner { key, kid: jwk.kid }),
+        })
+    }
+
+    /// Finalizes a cipher from a secret that yields a [`jwk::PrivateJwk`].
+    ///
+    /// The same loading funnel and key-ID precedence (explicit JWK `kid` >
+    /// secret `identity` > none) as [`AesGcmKey::from_secret`]; pair with
+    /// [`jwk::OctBytes::new`]`("XC20P")` for raw key bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
+    /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
+    /// it is not a valid 32-byte key.
+    pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
+        secret: S,
+    ) -> Result<Self, Error> {
+        let output = secret.get_secret_value().await?;
+        // Explicit JWK kid > secret identity > none.
+        let jwk = output.value.with_kid_fallback(output.identity);
+        Self::from_jwk(jwk.try_into()?)
+    }
+}
+
+impl AeadEncryptorSelector for XChaChaKey {
+    fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
+        let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
+        Box::pin(async move { snapshot })
+    }
+}
+
+impl AeadDecryptor for XChaChaKey {
+    fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+        self.inner.cipher_match(m)
+    }
+
+    fn decrypt<'a>(
+        &'a self,
+        cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+        self.inner
+            .decrypt(cipher_match, nonce, ciphertext, tag, aad)
+    }
+}
+
+impl AeadEncryptor for XChaChaKeyInner {
+    fn enc_algorithm(&self) -> Cow<'_, str> {
+        Cow::Borrowed(XC20P)
+    }
+
+    fn key_id(&self) -> Option<Cow<'_, str>> {
+        self.kid.as_deref().map(Cow::Borrowed)
+    }
+
+    fn encrypt<'a>(
+        &'a self,
+        plaintext: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
+        Box::pin(async move {
+            // 24-byte XNonce; the length is inferred from the cipher below.
+            let nonce = Array::generate();
+            let mut ciphertext = plaintext.to_vec();
+
+            let tag = self
+                .key
+                .encrypt_inout_detached(&nonce, aad, ciphertext.as_mut_slice().into())
+                .context(EncryptSnafu)?;
+
+            Ok(AeadOutput {
+                nonce: nonce.into(),
+                ciphertext,
+                tag: tag.into(),
+            })
+        })
+    }
+}
+
+impl AeadDecryptor for XChaChaKeyInner {
+    fn cipher_match(&self, m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
+        m.strength_for(XC20P, self.kid.as_deref())
+    }
+
+    fn decrypt<'a>(
+        &'a self,
+        _cipher_match: Option<&'a CipherMatch<'a>>,
+        nonce: &'a [u8],
+        ciphertext: &'a [u8],
+        tag: &'a [u8],
+        aad: &'a [u8],
+    ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
+        Box::pin(async move {
+            let nonce = nonce.try_into().context(InvalidNonceSnafu)?;
+            let tag = tag.try_into().context(InvalidTagSnafu)?;
+            let mut plaintext = ciphertext.to_vec();
+
+            self.key
+                .decrypt_inout_detached(&nonce, aad, plaintext.as_mut_slice().into(), &tag)
+                .context(DecryptSnafu)?;
 
             Ok(plaintext)
         })
@@ -591,6 +773,212 @@ mod tests {
         );
 
         let key = key_from(key_bytes, None);
+        let pt = key
+            .decrypt(None, &nonce, &ciphertext, &tag, &aad)
+            .await
+            .unwrap();
+        assert_eq!(pt, expected_pt);
+    }
+
+    /// A fresh random nonce per `encrypt` is the safety premise of the 2^32
+    /// bound — two seals of the same plaintext must not reuse a nonce.
+    #[tokio::test]
+    async fn aes_gcm_nonces_differ_across_seals() {
+        let key = key_from(vec![8u8; 32], None);
+        let encryptor = key.select_encryptor().await;
+        let a = encryptor.encrypt(b"payload", b"aad").await.unwrap();
+        let b = encryptor.encrypt(b"payload", b"aad").await.unwrap();
+        assert_ne!(a.nonce, b.nonce, "each seal must draw a fresh nonce");
+        assert_ne!(
+            a.ciphertext, b.ciphertext,
+            "distinct nonces must yield distinct ciphertext"
+        );
+    }
+
+    fn xchacha_key_from(bytes: Vec<u8>, kid: Option<&str>) -> XChaChaKey {
+        let mut jwk = oct_jwk(bytes);
+        jwk.kid = kid.map(str::to_owned);
+        XChaChaKey::from_jwk(jwk).unwrap()
+    }
+
+    #[tokio::test]
+    async fn roundtrip_xc20p() {
+        let key = xchacha_key_from(vec![9u8; 32], None);
+        let encryptor = key.select_encryptor().await;
+        assert_eq!(encryptor.enc_algorithm().as_ref(), "XC20P");
+
+        let pt = b"the quick brown fox jumps over the lazy dog";
+        let aad = b"session-context";
+        let out = encryptor.encrypt(pt, aad).await.unwrap();
+
+        assert_eq!(out.nonce.len(), 24, "192-bit nonce");
+        assert_eq!(out.tag.len(), 16, "128-bit tag");
+        assert_eq!(
+            out.ciphertext.len(),
+            pt.len(),
+            "ChaCha is length-preserving"
+        );
+        assert_ne!(out.ciphertext, pt, "ciphertext must not equal plaintext");
+
+        let recovered = key
+            .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
+            .await
+            .unwrap();
+        assert_eq!(recovered, pt);
+    }
+
+    #[test]
+    fn xchacha_only_32_byte_keys() {
+        for len in [0usize, 16, 24, 31, 33, 64] {
+            let err = XChaChaKey::from_jwk(oct_jwk(vec![0u8; len])).unwrap_err();
+            assert_eq!(
+                err.kind(),
+                ErrorKind::Config,
+                "{len}-byte key must be rejected (XChaCha needs exactly 32)"
+            );
+        }
+        assert!(XChaChaKey::from_jwk(oct_jwk(vec![0u8; 32])).is_ok());
+    }
+
+    #[test]
+    fn xchacha_alg_must_be_xc20p() {
+        let mut jwk = oct_jwk(vec![0u8; 32]);
+        jwk.algorithm = Some("A256GCM".into());
+        let err = XChaChaKey::from_jwk(jwk).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
+
+        // A matching alg — and no alg at all — are both fine.
+        let mut jwk = oct_jwk(vec![0u8; 32]);
+        jwk.algorithm = Some("XC20P".into());
+        assert!(XChaChaKey::from_jwk(jwk).is_ok());
+    }
+
+    #[tokio::test]
+    async fn xchacha_kid_drives_cipher_match() {
+        use huskarl_core::crypto::KeyMatchStrength;
+
+        let key = xchacha_key_from(vec![1u8; 32], Some("v1"));
+
+        assert!(matches!(
+            key.cipher_match(&CipherMatch::builder().kid("v1").build()),
+            Some(KeyMatchStrength::ByKeyId),
+        ));
+        assert!(
+            key.cipher_match(&CipherMatch::builder().kid("v2").build())
+                .is_none(),
+            "a kid mismatch must return None, not ByAlgorithm",
+        );
+        assert!(matches!(
+            key.cipher_match(&CipherMatch::builder().build()),
+            Some(KeyMatchStrength::ByAlgorithm),
+        ));
+        assert!(
+            key.cipher_match(&CipherMatch::builder().enc("A256GCM").build())
+                .is_none(),
+            "an enc-algorithm mismatch must not match (key is XC20P)",
+        );
+    }
+
+    #[tokio::test]
+    async fn xchacha_wrong_aad_fails_to_open() {
+        let key = xchacha_key_from(vec![5u8; 32], None);
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
+        let res = key
+            .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"other")
+            .await;
+        assert!(res.is_err(), "AAD must bind: a different AAD must not open");
+    }
+
+    #[tokio::test]
+    async fn xchacha_wrong_length_nonce_rejected() {
+        let key = xchacha_key_from(vec![7u8; 32], None);
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
+        // A 12-byte (AES-GCM-sized) nonce must not be accepted by XChaCha.
+        let res = key
+            .decrypt(
+                None,
+                &out.nonce[..12],
+                &out.ciphertext,
+                &out.tag,
+                b"session",
+            )
+            .await;
+        assert!(res.is_err(), "a wrong-length nonce must be rejected");
+    }
+
+    #[tokio::test]
+    async fn xchacha_wrong_length_tag_rejected() {
+        let key = xchacha_key_from(vec![7u8; 32], None);
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
+        // Tag too short (15 bytes instead of 16).
+        let res = key
+            .decrypt(
+                None,
+                &out.nonce,
+                &out.ciphertext,
+                &out.tag[..15],
+                b"session",
+            )
+            .await;
+        assert!(res.is_err(), "a wrong-length tag must be rejected");
+    }
+
+    #[tokio::test]
+    async fn xchacha_tampered_ciphertext_fails_to_open() {
+        let key = xchacha_key_from(vec![6u8; 32], None);
+        let encryptor = key.select_encryptor().await;
+        let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
+        let mut ct = out.ciphertext.clone();
+        ct[0] ^= 0x01;
+        let res = key
+            .decrypt(None, &out.nonce, &ct, &out.tag, b"session")
+            .await;
+        assert!(
+            res.is_err(),
+            "a flipped ciphertext bit must fail the tag check"
+        );
+    }
+
+    /// The 192-bit nonce is what removes the rotation-for-nonce-safety schedule;
+    /// confirm it is actually drawn fresh per seal.
+    #[tokio::test]
+    async fn xchacha_nonces_differ_across_seals() {
+        let key = xchacha_key_from(vec![8u8; 32], None);
+        let encryptor = key.select_encryptor().await;
+        let a = encryptor.encrypt(b"payload", b"aad").await.unwrap();
+        let b = encryptor.encrypt(b"payload", b"aad").await.unwrap();
+        assert_ne!(a.nonce, b.nonce, "each seal must draw a fresh nonce");
+        assert_ne!(
+            a.ciphertext, b.ciphertext,
+            "distinct nonces must yield distinct ciphertext"
+        );
+    }
+
+    /// Known-answer test from `draft-irtf-cfrg-xchacha-03` §A.3.1 — exercises
+    /// the detached-tag decrypt path against the canonical AEAD vector.
+    #[tokio::test]
+    async fn xchacha_draft_a3_decrypt() {
+        let key_bytes = hex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f");
+        let nonce = hex("404142434445464748494a4b4c4d4e4f5051525354555657");
+        let aad = hex("50515253c0c1c2c3c4c5c6c7");
+        let ciphertext = hex(
+            "bd6d179d3e83d43b9576579493c0e939572a1700252bfaccbed2902c21396cbb\
+             731c7f1b0b4aa6440bf3a82f4eda7e39ae64c6708c54c216cb96b72e1213b452\
+             2f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff9\
+             21f9664c97637da9768812f615c68b13b52e",
+        );
+        let tag = hex("c0875924c1c7987947deafd8780acf49");
+        let expected_pt = hex(
+            "4c616469657320616e642047656e746c656d656e206f662074686520636c6173\
+             73206f66202739393a204966204920636f756c64206f6666657220796f75206f\
+             6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73\
+             637265656e20776f756c642062652069742e",
+        );
+
+        let key = xchacha_key_from(key_bytes, None);
         let pt = key
             .decrypt(None, &nonce, &ciphertext, &tag, &aad)
             .await
