@@ -34,15 +34,20 @@ pass to the accessor, and so none to accidentally mismatch.
 
 Every load path ends at a [`PrivateJwk`](huskarl_core::jwk::PrivateJwk) — a sum
 of [`Asymmetric`](huskarl_core::jwk::PrivateJwk::Asymmetric) and
-[`Symmetric`](huskarl_core::jwk::PrivateJwk::Symmetric) key material — which
-each key type's `from_secret` finalizes:
+[`Symmetric`](huskarl_core::jwk::PrivateJwk::Symmetric) key material — which a
+`from_secret` loader finalizes:
 
 ```text
 JWK JSON   ─ JwkJson   ┐              ┌─►  PrivateKey::from_secret
 PKCS#8 PEM ─ Pkcs8Pem  ├─► PrivateJwk ┼─►  SymmetricKey::from_secret
-PKCS#8 DER ─ Pkcs8Der  │              └─►  AesGcmKey::from_secret
+PKCS#8 DER ─ Pkcs8Der  │              └─►  aead::from_secret
 raw bytes  ─ OctBytes  ┘
 ```
+
+For AEAD, [`aead::from_secret`](crate::aead::from_secret) dispatches on the
+JWK's `alg` to an [`AesGcmKey`](crate::aead::AesGcmKey) or
+[`XChaChaKey`](crate::aead::XChaChaKey); their own `from_secret` constructors
+remain for binding to one cipher.
 
 Decoders are chosen by **input format**, key types by what you need — each
 funnel accepts the variant it can finalize and rejects the other with a
