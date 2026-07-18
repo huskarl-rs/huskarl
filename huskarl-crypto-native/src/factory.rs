@@ -19,9 +19,8 @@ impl JwsVerifierPlatform for NativeVerifierPlatform {
         let key = crate::asymmetric::verifier::AsymmetricPublicKey::from_jwk(jwk);
 
         Box::pin(async {
-            key.map_or(Err(CreateVerifierError::UnsupportedKey), |k| {
-                Ok(Arc::new(k) as Arc<dyn JwsVerifier>)
-            })
+            key.map(|k| Arc::new(k) as Arc<dyn JwsVerifier>)
+                .map_err(|source| CreateVerifierError::UnsupportedKey { source })
         })
     }
 

@@ -17,11 +17,10 @@ impl JwsVerifierPlatform for WebCryptoVerifierPlatform {
         jwk: jwk::PublicJwk,
     ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, CreateVerifierError>> {
         Box::pin(async {
-            let key = crate::asymmetric::verifier::AsymmetricPublicKey::from_jwk(jwk);
-            key.await
-                .map_or(Err(CreateVerifierError::UnsupportedKey), |k| {
-                    Ok(Arc::new(k) as Arc<dyn JwsVerifier>)
-                })
+            crate::asymmetric::verifier::AsymmetricPublicKey::from_jwk(jwk)
+                .await
+                .map(|k| Arc::new(k) as Arc<dyn JwsVerifier>)
+                .map_err(|source| CreateVerifierError::UnsupportedKey { source })
         })
     }
 

@@ -84,7 +84,7 @@ impl MultiKeyVerifier {
         .into_iter()
         .filter_map(|result| match result {
             Ok(v) => Some(Ok(v)),
-            Err(CreateVerifierError::UnsupportedKey) => None,
+            Err(CreateVerifierError::UnsupportedKey { .. }) => None,
             Err(e) => Some(Err(e)),
         })
         .collect::<Result<_, _>>()

@@ -170,7 +170,12 @@ mod tests {
             _jwk: PublicJwk,
         ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, CreateVerifierError>>
         {
-            Box::pin(async { Err(CreateVerifierError::UnsupportedKey) })
+            Box::pin(async {
+                Err(CreateVerifierError::UnsupportedKey {
+                    source: Error::from(ErrorKind::Config)
+                        .with_context("this platform supports no keys"),
+                })
+            })
         }
 
         fn supported_signature_algorithms(&self) -> &[&str] {
