@@ -55,15 +55,37 @@ if response.status == StatusCode::UNAUTHORIZED {
 
 Whether and when to re-send is the application's decision, not this library's —
 [`parse_challenges`](crate::authorizer::parse_challenges) exposes the server's
-stated objection for making it, as above.
-[`dpop_nonce_action`](crate::authorizer::dpop_nonce_action) classifies the
-`DPoP` nonce signals, handing you the nonce together with the advice: record
-it (RFC 9449 §8.1), and on
-[`RecordAndRetry`](crate::authorizer::DPoPNonceAction::RecordAndRetry) —
-a `use_dpop_nonce` challenge — re-send once with rebuilt headers
-(RFC 9449 §7.2). A `401` is issued before the request
-is processed, so a single re-send is normally safe even for non-idempotent
-requests.
+stated objection for making it, as above. For `DPoP`,
+[`dpop_resend_advised`](crate::authorizer::dpop_resend_advised) reports the one
+failure a re-send is sure to fix: a `use_dpop_nonce` challenge carrying a fresh
+nonce (RFC 9449 §7.2). Step 2 already recorded that nonce, so the rebuilt
+headers carry it:
+
+```rust
+# use huskarl::authorizer::{HttpAuthorizer, dpop_resend_advised};
+# use http::{HeaderMap, Method, StatusCode, Uri};
+# struct Response { status: StatusCode, headers: HeaderMap }
+# async fn send(_headers: HeaderMap) -> Response {
+#     Response { status: StatusCode::OK, headers: HeaderMap::new() }
+# }
+# async fn example(authorizer: &HttpAuthorizer) -> Result<(), Box<dyn std::error::Error>> {
+# let uri: Uri = "https://api.example.com/v1/widgets".parse()?;
+# let headers = authorizer.get_headers(&Method::GET, &uri).await?;
+# let mut response = send(headers).await;
+authorizer.process_response(&uri, &response.headers);
+
+if dpop_resend_advised(response.status, &response.headers) {
+    let headers = authorizer.get_headers(&Method::GET, &uri).await?;
+    response = send(headers).await;
+    authorizer.process_response(&uri, &response.headers);
+}
+# drop(response);
+# Ok(())
+# }
+```
+
+A `401` is issued before the request is processed, so a single re-send is
+normally safe even for non-idempotent requests.
 
 ## When the server doesn't emit a spec-correct challenge
 
