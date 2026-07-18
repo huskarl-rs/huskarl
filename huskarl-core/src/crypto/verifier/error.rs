@@ -51,7 +51,10 @@ pub enum CreateVerifierError {
     /// [`MultiKeyVerifier::from_jwks`](super::MultiKeyVerifier::from_jwks)
     /// silently skips keys that fail with this variant.
     #[snafu(display("Unsupported key"))]
-    UnsupportedKey,
+    UnsupportedKey {
+        /// Why the key cannot back a verifier.
+        source: Error,
+    },
     /// No JWKS URI was provided to the verifier factory.
     #[snafu(display("A JWKS URI is required to build a JWS verifier"))]
     MissingJwksUri,

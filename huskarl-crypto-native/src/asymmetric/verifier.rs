@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use huskarl_core::{
+    Error, ErrorKind,
     crypto::{
         KeyMatchStrength,
         verifier::{JwsVerifier, KeyMatch, VerifyError},
@@ -51,17 +52,22 @@ impl Key {
         }
     }
 
-    pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Option<Key> {
-        fn rsa_key_from_jwk(rsa_jwk: jwk::RsaPublicKey) -> Option<rsa::RsaPublicKey> {
+    pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Result<Key, Error> {
+        fn rsa_key_from_jwk(rsa_jwk: jwk::RsaPublicKey) -> Result<rsa::RsaPublicKey, Error> {
             // RFC 7518 §3.3 minimum. (RsaPublicKey::new enforces the 8192-bit max itself.)
             const MIN_RSA_BITS: u32 = 2048;
 
             let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
-            if n_boxed.bits_vartime() < MIN_RSA_BITS {
-                return None;
+            let bits = n_boxed.bits_vartime();
+            if bits < MIN_RSA_BITS {
+                return Err(Error::from(ErrorKind::Config).with_context(format!(
+                    "RSA modulus is {bits} bits, below the {MIN_RSA_BITS}-bit minimum (RFC 7518 §3.3)"
+                )));
             }
             let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e.into_boxed_slice());
-            RsaPublicKey::new(n_boxed, e_boxed).ok()
+            RsaPublicKey::new(n_boxed, e_boxed).map_err(|e| {
+                Error::new(ErrorKind::Config, e).with_context("invalid RSA public key")
+            })
         }
 
         match jwk_key {
@@ -102,8 +108,11 @@ impl Key {
                 point.extend_from_slice(&ec_public_key.y);
 
                 p256::ecdsa::VerifyingKey::from_sec1_bytes(&point)
-                    .ok()
                     .map(Self::Es256)
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Config, e)
+                            .with_context("invalid P-256 public key point")
+                    })
             }
             jwk::PublicKey::Ec(ec_public_key)
                 if alg.is_none_or(|a| a == "ES384") && ec_public_key.crv == "P-384" =>
@@ -115,22 +124,48 @@ impl Key {
                 point.extend_from_slice(&ec_public_key.y);
 
                 p384::ecdsa::VerifyingKey::from_sec1_bytes(&point)
-                    .ok()
                     .map(Self::Es384)
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Config, e)
+                            .with_context("invalid P-384 public key point")
+                    })
             }
             jwk::PublicKey::Okp(okp_public_key)
                 if alg.is_none_or(|a| ["Ed25519", "EdDSA"].contains(&a))
                     && okp_public_key.crv == "Ed25519" =>
             {
-                ed25519_dalek::VerifyingKey::from_bytes(
-                    okp_public_key.x.as_slice().try_into().ok()?,
-                )
-                .ok()
-                .map(Self::Ed25519)
+                let x: &[u8; 32] = okp_public_key.x.as_slice().try_into().map_err(|_| {
+                    Error::from(ErrorKind::Config).with_context(format!(
+                        "Ed25519 public key must be 32 bytes, got {}",
+                        okp_public_key.x.len()
+                    ))
+                })?;
+                ed25519_dalek::VerifyingKey::from_bytes(x)
+                    .map(Self::Ed25519)
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Config, e).with_context("invalid Ed25519 public key")
+                    })
             }
-            _ => None,
+            key => {
+                Err(Error::from(ErrorKind::Config).with_context(unsupported_key_context(&key, alg)))
+            }
         }
     }
+}
+
+/// Context line for a key whose `kty`/`crv`/`alg` combination has no
+/// supported verification algorithm.
+fn unsupported_key_context(key: &jwk::PublicKey, alg: Option<&str>) -> String {
+    let key_type = match key {
+        jwk::PublicKey::Rsa(_) => "kty RSA".to_string(),
+        jwk::PublicKey::Ec(ec) => format!("kty EC, crv {}", ec.crv),
+        jwk::PublicKey::Okp(okp) => format!("kty OKP, crv {}", okp.crv),
+        _ => "unrecognized kty".to_string(),
+    };
+    format!(
+        "unsupported verification key: {key_type}, alg {}",
+        alg.unwrap_or("unset")
+    )
 }
 
 #[derive(Debug)]
@@ -151,10 +186,13 @@ pub struct AsymmetricPublicKey {
 impl AsymmetricPublicKey {
     /// Creates an asymmetric public key from a public JWK.
     ///
-    /// Returns `None` if the JWK cannot be used for verification: its `use` is
-    /// not `sig`, its `key_ops` excludes `verify`, the algorithm is unsupported,
-    /// the key material fails to parse, or — for RSA — the modulus is outside the
-    /// 2048–8192 bit range (RFC 7518 §3.3 sets the 2048-bit minimum).
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if the JWK cannot be used for verification:
+    /// its `use` is not `sig`, its `key_ops` excludes `verify`, the algorithm is
+    /// unsupported, the key material fails to parse, or — for RSA — the modulus
+    /// is outside the 2048–8192 bit range (RFC 7518 §3.3 sets the 2048-bit
+    /// minimum).
     ///
     /// # Examples
     ///
@@ -174,29 +212,29 @@ impl AsymmetricPublicKey {
     ///     .expect("a freshly generated public JWK is verifiable");
     /// # Ok::<(), huskarl_core::error::Error>(())
     /// ```
-    #[must_use]
-    pub fn from_jwk(key: jwk::PublicJwk) -> Option<Self> {
+    pub fn from_jwk(key: jwk::PublicJwk) -> Result<Self, Error> {
         let kid = key.kid;
 
-        if let Some(r#use) = key.key_use
-            && r#use != KeyUse::Sign
+        if let Some(key_use) = key.key_use
+            && key_use != KeyUse::Sign
         {
-            return None;
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "JWK use must be sig for verification, got {key_use:?}"
+            )));
         }
 
         if let Some(key_ops) = &key.key_operations
             && !key_ops.contains(&KeyOperation::Verify)
         {
-            return None;
+            return Err(
+                Error::from(ErrorKind::Config).with_context("JWK key_ops does not include verify")
+            );
         }
 
-        let verifying_key = Key::new(key.key, key.algorithm.as_deref());
+        let verifying_key = Key::new(key.key, key.algorithm.as_deref())?;
 
-        verifying_key.map(|k| Self {
-            inner: Arc::new(AsymmetricPublicKeyInner {
-                verifying_key: k,
-                kid,
-            }),
+        Ok(Self {
+            inner: Arc::new(AsymmetricPublicKeyInner { verifying_key, kid }),
         })
     }
 }
@@ -307,7 +345,7 @@ impl JwsVerifier for AsymmetricPublicKey {
 #[cfg(test)]
 mod tests {
     use huskarl_core::{
-        Error,
+        Error, ErrorKind,
         crypto::signer::{
             AsymmetricJwsSigner as _, AsymmetricJwsSignerSelector as _, JwsSigner as _,
             JwsSignerSelector as _,
@@ -423,7 +461,9 @@ mod tests {
                     .build(),
             )
             .build();
-        assert!(AsymmetricPublicKey::from_jwk(jwk).is_none());
+        let err = AsymmetricPublicKey::from_jwk(jwk).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
+        assert!(err.to_string().contains("2048"), "unexpected error: {err}");
     }
 
     #[test]
@@ -438,7 +478,8 @@ mod tests {
                     .build(),
             )
             .build();
-        assert!(AsymmetricPublicKey::from_jwk(jwk).is_none());
+        let err = AsymmetricPublicKey::from_jwk(jwk).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     #[tokio::test]

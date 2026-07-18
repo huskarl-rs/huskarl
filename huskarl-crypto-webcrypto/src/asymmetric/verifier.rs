@@ -40,32 +40,37 @@ impl AsymmetricPublicKey {
     /// Creates an asymmetric public key from a public JWK, importing it through
     /// `SubtleCrypto` (hence `async`).
     ///
-    /// Returns `None` if the JWK cannot be used for verification: its `use` is
-    /// not `sig`, its `key_ops` excludes `verify`, the algorithm is unsupported,
-    /// or the key material cannot be imported.
-    #[must_use]
-    pub async fn from_jwk(key: jwk::PublicJwk) -> Option<Self> {
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Config`] if the JWK cannot be used for verification:
+    /// its `use` is not `sig`, its `key_ops` excludes `verify`, the algorithm is
+    /// unsupported, the key material cannot be imported, or — for RSA — the
+    /// modulus is outside the 2048–8192 bit range (RFC 7518 §3.3 sets the
+    /// 2048-bit minimum). Returns [`ErrorKind::Crypto`] if `WebCrypto` itself is
+    /// unavailable.
+    pub async fn from_jwk(key: jwk::PublicJwk) -> Result<Self, Error> {
         let kid = key.kid.clone();
 
-        if let Some(r#use) = key.key_use
-            && r#use != KeyUse::Sign
+        if let Some(key_use) = key.key_use
+            && key_use != KeyUse::Sign
         {
-            return None;
+            return Err(Error::from(ErrorKind::Config).with_context(format!(
+                "JWK use must be sig for verification, got {key_use:?}"
+            )));
         }
 
         if let Some(key_ops) = &key.key_operations
             && !key_ops.contains(&KeyOperation::Verify)
         {
-            return None;
+            return Err(
+                Error::from(ErrorKind::Config).with_context("JWK key_ops does not include verify")
+            );
         }
 
-        let verifying_key = Key::new(key).await;
+        let verifying_key = Key::new(key).await?;
 
-        verifying_key.map(|k| Self {
-            inner: Arc::new(AsymmetricPublicKeyInner {
-                verifying_key: k,
-                kid,
-            }),
+        Ok(Self {
+            inner: Arc::new(AsymmetricPublicKeyInner { verifying_key, kid }),
         })
     }
 }
@@ -117,11 +122,32 @@ fn rsa_modulus_bits(n: &[u8]) -> u32 {
     }
 }
 
+/// Context line for a key whose `kty`/`crv`/`alg` combination has no
+/// supported verification algorithm.
+fn unsupported_key_context(key: &jwk::PublicKey, alg: Option<&str>) -> String {
+    let key_type = match key {
+        jwk::PublicKey::Rsa(_) => "kty RSA".to_string(),
+        jwk::PublicKey::Ec(ec) => format!("kty EC, crv {}", ec.crv),
+        jwk::PublicKey::Okp(okp) => format!("kty OKP, crv {}", okp.crv),
+        _ => "unrecognized kty".to_string(),
+    };
+    format!(
+        "unsupported verification key: {key_type}, alg {}",
+        alg.unwrap_or("unset")
+    )
+}
+
 /// Min: RFC 7518 §3.3 floor. Max: `DoS` guard on attacker-supplied JWKs (importKey enforces neither).
-fn rsa_modulus_in_range(rsa_key: &jwk::RsaPublicKey) -> bool {
+fn check_rsa_modulus(rsa_key: &jwk::RsaPublicKey) -> Result<(), Error> {
     const MIN_RSA_BITS: u32 = 2048;
     const MAX_RSA_BITS: u32 = 8192;
-    (MIN_RSA_BITS..=MAX_RSA_BITS).contains(&rsa_modulus_bits(&rsa_key.n))
+    let bits = rsa_modulus_bits(&rsa_key.n);
+    if !(MIN_RSA_BITS..=MAX_RSA_BITS).contains(&bits) {
+        return Err(Error::from(ErrorKind::Config).with_context(format!(
+            "RSA modulus is {bits} bits, outside the {MIN_RSA_BITS}–{MAX_RSA_BITS} bit range (RFC 7518 §3.3)"
+        )));
+    }
+    Ok(())
 }
 
 async fn create_rsa_key(
@@ -129,7 +155,7 @@ async fn create_rsa_key(
     alg_name: &str,
     hash: &str,
     jwk_key: &jwk::PublicJwk,
-) -> Option<CryptoKey> {
+) -> Result<CryptoKey, Error> {
     import_key(
         &crypto.subtle(),
         jwk_key,
@@ -140,14 +166,17 @@ async fn create_rsa_key(
         &[KeyUsage::Verify],
     )
     .await
-    .ok()
+    .map_err(|e| {
+        Error::new(ErrorKind::Config, e)
+            .with_context(format!("failed to import {alg_name}/{hash} public key"))
+    })
 }
 
 async fn create_ec_key(
     crypto: &Crypto,
     named_curve: &str,
     jwk_key: &jwk::PublicJwk,
-) -> Option<CryptoKey> {
+) -> Result<CryptoKey, Error> {
     import_key(
         &crypto.subtle(),
         jwk_key,
@@ -158,7 +187,10 @@ async fn create_ec_key(
         &[KeyUsage::Verify],
     )
     .await
-    .ok()
+    .map_err(|e| {
+        Error::new(ErrorKind::Config, e)
+            .with_context(format!("failed to import {named_curve} public key"))
+    })
 }
 
 /// Union of [`Key::supported_algorithms`] across all variants.
@@ -182,81 +214,57 @@ impl Key {
         }
     }
 
-    async fn new(jwk: jwk::PublicJwk) -> Option<Key> {
-        let crypto = get_crypto().ok()?;
+    async fn new(jwk: jwk::PublicJwk) -> Result<Key, Error> {
+        let crypto = get_crypto().map_err(|e| {
+            Error::new(ErrorKind::Crypto, e).with_context("WebCrypto is unavailable")
+        })?;
 
         match &jwk.key {
             jwk::PublicKey::Ec(ec_public_key)
                 if jwk.algorithm.as_ref().is_none_or(|a| a == "ES256")
                     && ec_public_key.crv == "P-256" =>
             {
-                Some(Key::Es256(create_ec_key(&crypto, "P-256", &jwk).await?))
+                Ok(Key::Es256(create_ec_key(&crypto, "P-256", &jwk).await?))
             }
             jwk::PublicKey::Ec(ec_public_key)
                 if jwk.algorithm.as_ref().is_none_or(|a| a == "ES384")
                     && ec_public_key.crv == "P-384" =>
             {
-                Some(Key::Es384(create_ec_key(&crypto, "P-384", &jwk).await?))
+                Ok(Key::Es384(create_ec_key(&crypto, "P-384", &jwk).await?))
             }
-            jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.is_none() && rsa_modulus_in_range(rsa_key) =>
-            {
-                Some(Key::Rsa {
-                    rs256: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk).await?,
-                    rs384: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-384", &jwk).await?,
-                    rs512: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-512", &jwk).await?,
-                    ps256: create_rsa_key(&crypto, "RSA-PSS", "SHA-256", &jwk).await?,
-                    ps384: create_rsa_key(&crypto, "RSA-PSS", "SHA-384", &jwk).await?,
-                    ps512: create_rsa_key(&crypto, "RSA-PSS", "SHA-512", &jwk).await?,
-                })
-            }
-            jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS256")
-                    && rsa_modulus_in_range(rsa_key) =>
-            {
-                Some(Key::Rs256(
-                    create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk).await?,
-                ))
-            }
-            jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS384")
-                    && rsa_modulus_in_range(rsa_key) =>
-            {
-                Some(Key::Rs384(
-                    create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-384", &jwk).await?,
-                ))
-            }
-            jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "RS512")
-                    && rsa_modulus_in_range(rsa_key) =>
-            {
-                Some(Key::Rs512(
-                    create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-512", &jwk).await?,
-                ))
-            }
-            jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS256")
-                    && rsa_modulus_in_range(rsa_key) =>
-            {
-                Some(Key::Ps256(
-                    create_rsa_key(&crypto, "RSA-PSS", "SHA-256", &jwk).await?,
-                ))
-            }
-            jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS384")
-                    && rsa_modulus_in_range(rsa_key) =>
-            {
-                Some(Key::Ps384(
-                    create_rsa_key(&crypto, "RSA-PSS", "SHA-384", &jwk).await?,
-                ))
-            }
-            jwk::PublicKey::Rsa(rsa_key)
-                if jwk.algorithm.as_ref().is_some_and(|alg| alg == "PS512")
-                    && rsa_modulus_in_range(rsa_key) =>
-            {
-                Some(Key::Ps512(
-                    create_rsa_key(&crypto, "RSA-PSS", "SHA-512", &jwk).await?,
-                ))
+            jwk::PublicKey::Rsa(rsa_key) => {
+                // `alg` → import params + `Key` variant; no `alg` imports all six.
+                type RsaImport = (&'static str, &'static str, fn(CryptoKey) -> Key);
+                let selected: Option<RsaImport> = match jwk.algorithm.as_deref() {
+                    None => None,
+                    Some("RS256") => Some(("RSASSA-PKCS1-v1_5", "SHA-256", Key::Rs256)),
+                    Some("RS384") => Some(("RSASSA-PKCS1-v1_5", "SHA-384", Key::Rs384)),
+                    Some("RS512") => Some(("RSASSA-PKCS1-v1_5", "SHA-512", Key::Rs512)),
+                    Some("PS256") => Some(("RSA-PSS", "SHA-256", Key::Ps256)),
+                    Some("PS384") => Some(("RSA-PSS", "SHA-384", Key::Ps384)),
+                    Some("PS512") => Some(("RSA-PSS", "SHA-512", Key::Ps512)),
+                    Some(alg) => {
+                        return Err(Error::from(ErrorKind::Config)
+                            .with_context(unsupported_key_context(&jwk.key, Some(alg))));
+                    }
+                };
+                check_rsa_modulus(rsa_key)?;
+                match selected {
+                    Some((name, hash, variant)) => {
+                        Ok(variant(create_rsa_key(&crypto, name, hash, &jwk).await?))
+                    }
+                    None => Ok(Key::Rsa {
+                        rs256: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-256", &jwk)
+                            .await?,
+                        rs384: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-384", &jwk)
+                            .await?,
+                        rs512: create_rsa_key(&crypto, "RSASSA-PKCS1-v1_5", "SHA-512", &jwk)
+                            .await?,
+                        ps256: create_rsa_key(&crypto, "RSA-PSS", "SHA-256", &jwk).await?,
+                        ps384: create_rsa_key(&crypto, "RSA-PSS", "SHA-384", &jwk).await?,
+                        ps512: create_rsa_key(&crypto, "RSA-PSS", "SHA-512", &jwk).await?,
+                    }),
+                }
             }
             jwk::PublicKey::Okp(_)
                 if jwk
@@ -264,7 +272,7 @@ impl Key {
                     .as_ref()
                     .is_none_or(|alg| alg == "EdDSA" || alg == "Ed25519") =>
             {
-                Some(Key::Ed25519(
+                Ok(Key::Ed25519(
                     import_key(
                         &crypto.subtle(),
                         &jwk,
@@ -272,10 +280,14 @@ impl Key {
                         &[KeyUsage::Verify],
                     )
                     .await
-                    .ok()?,
+                    .map_err(|e| {
+                        Error::new(ErrorKind::Config, e)
+                            .with_context("failed to import Ed25519 public key")
+                    })?,
                 ))
             }
-            _ => None,
+            key => Err(Error::from(ErrorKind::Config)
+                .with_context(unsupported_key_context(key, jwk.algorithm.as_deref()))),
         }
     }
 
@@ -482,7 +494,7 @@ mod tests {
             jwk.key_operations,
         );
         assert!(
-            AsymmetricPublicKey::from_jwk(jwk).await.is_some(),
+            AsymmetricPublicKey::from_jwk(jwk).await.is_ok(),
             "the unmodified exported public JWK must import as a verifier",
         );
     }
@@ -669,7 +681,9 @@ mod tests {
                     .build(),
             )
             .build();
-        assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
+        let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
+        assert!(err.to_string().contains("2048"), "unexpected error: {err}");
 
         // The same undersized key is also rejected when it carries no `alg`
         // (the all-RSA import arm).
@@ -681,7 +695,7 @@ mod tests {
                     .build(),
             )
             .build();
-        assert!(AsymmetricPublicKey::from_jwk(jwk_no_alg).await.is_none());
+        assert!(AsymmetricPublicKey::from_jwk(jwk_no_alg).await.is_err());
     }
 
     /// Above the 8192-bit ceiling: rejected before any `SubtleCrypto` import.
@@ -697,7 +711,8 @@ mod tests {
                     .build(),
             )
             .build();
-        assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
+        let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     /// Significant bits of a big-endian modulus, skipping leading zero bytes.
@@ -722,7 +737,8 @@ mod tests {
             .await
             .unwrap();
         let jwk = verification_jwk(&signer, Some("ES384")).await;
-        assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
+        let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     /// An RSA key labelled with an EC algorithm matches no [`Key::new`] arm.
@@ -737,7 +753,8 @@ mod tests {
         .await
         .unwrap();
         let jwk = verification_jwk(&signer, Some("ES256")).await;
-        assert!(AsymmetricPublicKey::from_jwk(jwk).await.is_none());
+        let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     /// Verifying against an algorithm the key does not support hits the
