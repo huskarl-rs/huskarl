@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::{
-    authorizer::{DPoPNonceAction, dpop_nonce_action},
+    authorizer::{dpop_resend_advised, extract_dpop_nonce},
     core::{
         EndpointUrl, Error, ErrorKind,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
@@ -255,18 +255,12 @@ impl UserInfoClient {
 
             // Servers may rotate the nonce on any response (RFC 9449 §8.1);
             // a use_dpop_nonce challenge earns one re-send (RFC 9449 §7.2).
-            match dpop_nonce_action(status, &response_headers) {
-                DPoPNonceAction::RecordAndRetry(nonce) => {
-                    self.dpop.update_nonce(endpoint.as_uri(), nonce);
-                    if !retried {
-                        retried = true;
-                        continue;
-                    }
-                }
-                DPoPNonceAction::Record(nonce) => {
-                    self.dpop.update_nonce(endpoint.as_uri(), nonce);
-                }
-                DPoPNonceAction::None => {}
+            if let Some(nonce) = extract_dpop_nonce(&response_headers) {
+                self.dpop.update_nonce(endpoint.as_uri(), nonce);
+            }
+            if !retried && dpop_resend_advised(status, &response_headers) {
+                retried = true;
+                continue;
             }
 
             if !status.is_success() {

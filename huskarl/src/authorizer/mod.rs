@@ -215,37 +215,20 @@ pub fn extract_dpop_nonce(headers: &HeaderMap) -> Option<String> {
         .map(std::borrow::ToOwned::to_owned)
 }
 
-/// The action a response's `DPoP` nonce signals call for, from
-/// [`dpop_nonce_action`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DPoPNonceAction {
-    /// No nonce signals.
-    None,
-    /// Record the rotated nonce for the next proof (RFC 9449 §8.1).
-    Record(String),
-    /// Record the nonce, then re-send the request once with rebuilt
-    /// headers carrying it (RFC 9449 §7.2).
-    RecordAndRetry(String),
-}
-
-/// Classifies a response's `DPoP` nonce signals: a `DPoP-Nonce` header calls
-/// for recording (RFC 9449 §8.1), and additionally for one re-send when it
-/// arrives on a `401` with a `use_dpop_nonce` challenge (RFC 9449 §7.2).
+/// Reports whether a response is the one `DPoP` failure a re-send can fix: a
+/// `401` with a `use_dpop_nonce` challenge that carries a fresh `DPoP-Nonce`
+/// header (RFC 9449 §7.2). A challenge without the fresh nonce yields `false`
+/// — a re-send cannot succeed.
 ///
-/// A challenge without a `DPoP-Nonce` header yields
-/// [`DPoPNonceAction::None`]: with no fresh nonce, a re-send cannot succeed.
+/// Record the nonce first — [`HttpAuthorizer::process_response`] or
+/// [`HttpAuthorizer::set_nonce`] — so the rebuilt proof carries it. This is
+/// only the `DPoP` fact, not the whole resend decision; see the [module
+/// docs](self) for the request loop.
 #[must_use]
-pub fn dpop_nonce_action(status: StatusCode, headers: &HeaderMap) -> DPoPNonceAction {
-    match extract_dpop_nonce(headers) {
-        None => DPoPNonceAction::None,
-        Some(nonce)
-            if status == StatusCode::UNAUTHORIZED
-                && challenge::challenge_has_error(headers, "use_dpop_nonce") =>
-        {
-            DPoPNonceAction::RecordAndRetry(nonce)
-        }
-        Some(nonce) => DPoPNonceAction::Record(nonce),
-    }
+pub fn dpop_resend_advised(status: StatusCode, headers: &HeaderMap) -> bool {
+    status == StatusCode::UNAUTHORIZED
+        && challenge::challenge_has_error(headers, "use_dpop_nonce")
+        && extract_dpop_nonce(headers).is_some()
 }
 
 #[cfg(test)]
@@ -364,43 +347,38 @@ mod tests {
     #[case::challenge_on_401(
         StatusCode::UNAUTHORIZED,
         &[("www-authenticate", NONCE_CHALLENGE), ("dpop-nonce", "fresh")],
-        DPoPNonceAction::RecordAndRetry("fresh".into())
+        true
     )]
     // A nonce header alone (§8.1 rotation) is bookkeeping, not a challenge —
     // and a fresh nonce cannot fix a different failure like invalid_token.
-    #[case::rotation_on_success(
-        StatusCode::OK,
-        &[("dpop-nonce", "rotated")],
-        DPoPNonceAction::Record("rotated".into())
-    )]
-    #[case::rotation_on_bare_401(
-        StatusCode::UNAUTHORIZED,
-        &[("dpop-nonce", "rotated")],
-        DPoPNonceAction::Record("rotated".into())
-    )]
+    #[case::rotation_on_success(StatusCode::OK, &[("dpop-nonce", "rotated")], false)]
+    #[case::rotation_on_bare_401(StatusCode::UNAUTHORIZED, &[("dpop-nonce", "rotated")], false)]
     #[case::rotation_on_invalid_token(
         StatusCode::UNAUTHORIZED,
         &[("www-authenticate", r#"DPoP error="invalid_token""#), ("dpop-nonce", "rotated")],
-        DPoPNonceAction::Record("rotated".into())
+        false
     )]
     #[case::challenge_on_non_401(
         StatusCode::OK,
         &[("www-authenticate", NONCE_CHALLENGE), ("dpop-nonce", "fresh")],
-        DPoPNonceAction::Record("fresh".into())
+        false
     )]
     // No fresh nonce to re-send with: a retry cannot succeed.
     #[case::challenge_without_nonce(
         StatusCode::UNAUTHORIZED,
         &[("www-authenticate", NONCE_CHALLENGE)],
-        DPoPNonceAction::None
+        false
     )]
-    #[case::no_signals(StatusCode::OK, &[], DPoPNonceAction::None)]
-    fn dpop_nonce_action_classifies(
+    #[case::no_signals(StatusCode::OK, &[], false)]
+    fn dpop_resend_advised_classifies(
         #[case] status: StatusCode,
         #[case] header_pairs: &[(&str, &str)],
-        #[case] expected: DPoPNonceAction,
+        #[case] expected: bool,
     ) {
-        assert_eq!(dpop_nonce_action(status, &headers(header_pairs)), expected);
+        assert_eq!(
+            dpop_resend_advised(status, &headers(header_pairs)),
+            expected
+        );
     }
 
     #[test]
