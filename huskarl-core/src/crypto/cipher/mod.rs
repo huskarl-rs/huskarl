@@ -3,6 +3,8 @@
 mod error;
 #[cfg(feature = "metrics")]
 mod metrics_decryptor;
+#[cfg(feature = "metrics")]
+mod metrics_encryptor;
 mod multi;
 mod refreshable;
 mod retrying;
@@ -14,6 +16,8 @@ use bon::Builder;
 pub use error::{DecryptError, UnsealError};
 #[cfg(feature = "metrics")]
 pub use metrics_decryptor::MetricsAeadDecryptor;
+#[cfg(feature = "metrics")]
+pub use metrics_encryptor::MetricsAeadEncryptorSelector;
 pub use multi::{MultiKeyCipher, MultiKeyDecryptor};
 pub use refreshable::RefreshableCipher;
 pub use retrying::RetryingDecryptor;

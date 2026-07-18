@@ -40,6 +40,18 @@ use crate::{
 /// trigger a key refresh. When candidates were attempted and all failed, the
 /// last real failure is returned (non-retryable preferred over retryable),
 /// matching the verifier's dispatch discipline.
+#[cfg_attr(
+    feature = "metrics",
+    doc = r"
+# Observability
+
+Each entry can carry its own
+[`MetricsAeadDecryptor`](crate::crypto::cipher::MetricsAeadDecryptor) with a
+per-key `name` — see its
+[per-key rotation metrics](crate::crypto::cipher::MetricsAeadDecryptor#per-key-rotation-metrics)
+example.
+"
+)]
 #[derive(Debug)]
 pub struct MultiKeyDecryptor {
     decryptors: Vec<Arc<dyn AeadDecryptor>>,
