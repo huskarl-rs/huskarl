@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 
 use crate::{
+    authorizer::{DPoPNonceAction, dpop_nonce_action},
     core::{
         EndpointUrl, Error, ErrorKind,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
@@ -252,16 +253,20 @@ impl UserInfoClient {
             let response_headers = response.headers;
             let body = response.body;
 
-            // Retry once if the server challenges with a DPoP nonce (RFC 9449 §7.2).
-            if !retried
-                && status == StatusCode::UNAUTHORIZED
-                && let Some(nonce) = response_headers
-                    .get("DPoP-Nonce")
-                    .and_then(|v| v.to_str().ok())
-            {
-                self.dpop.update_nonce(endpoint.as_uri(), nonce.to_string());
-                retried = true;
-                continue;
+            // Servers may rotate the nonce on any response (RFC 9449 §8.1);
+            // a use_dpop_nonce challenge earns one re-send (RFC 9449 §7.2).
+            match dpop_nonce_action(status, &response_headers) {
+                DPoPNonceAction::RecordAndRetry(nonce) => {
+                    self.dpop.update_nonce(endpoint.as_uri(), nonce);
+                    if !retried {
+                        retried = true;
+                        continue;
+                    }
+                }
+                DPoPNonceAction::Record(nonce) => {
+                    self.dpop.update_nonce(endpoint.as_uri(), nonce);
+                }
+                DPoPNonceAction::None => {}
             }
 
             if !status.is_success() {
@@ -485,16 +490,26 @@ mod tests {
         token::BearerAccessToken,
     };
 
-    /// Mock HTTP client that returns a preconfigured response.
+    /// Mock HTTP client that serves preconfigured responses in order.
     struct MockHttpClient {
-        response: std::sync::Mutex<Option<HttpResponse>>,
+        responses: std::sync::Mutex<std::collections::VecDeque<HttpResponse>>,
+        calls: std::sync::atomic::AtomicUsize,
     }
 
     impl MockHttpClient {
         fn new(response: HttpResponse) -> Self {
+            Self::sequence(vec![response])
+        }
+
+        fn sequence(responses: Vec<HttpResponse>) -> Self {
             Self {
-                response: std::sync::Mutex::new(Some(response)),
+                responses: std::sync::Mutex::new(responses.into()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
             }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::Relaxed)
         }
     }
 
@@ -504,12 +519,14 @@ mod tests {
             _request: http::Request<Bytes>,
             _idempotency: Idempotency,
         ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let response = self
-                .response
+                .responses
                 .lock()
                 .unwrap()
-                .take()
-                .expect("MockHttpClient can only be called once");
+                .pop_front()
+                .expect("MockHttpClient ran out of responses");
             Box::pin(async move { Ok(response) })
         }
     }
@@ -759,6 +776,82 @@ mod tests {
         assert_eq!(addr.region.as_deref(), Some("CA"));
         assert_eq!(addr.postal_code.as_deref(), Some("90210"));
         assert_eq!(addr.country.as_deref(), Some("US"));
+    }
+
+    fn nonce_challenge_response() -> HttpResponse {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::WWW_AUTHENTICATE,
+            HeaderValue::from_static(r#"DPoP error="use_dpop_nonce""#),
+        );
+        headers.insert("DPoP-Nonce", HeaderValue::from_static("fresh-nonce"));
+        HttpResponse {
+            status: StatusCode::UNAUTHORIZED,
+            headers,
+            body: Bytes::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn nonce_challenge_retries_once() {
+        let body = serde_json::json!({"sub": "user1"});
+        let http = MockHttpClient::sequence(vec![
+            nonce_challenge_response(),
+            HttpResponse {
+                status: StatusCode::OK,
+                headers: json_headers(),
+                body: Bytes::from(serde_json::to_vec(&body).unwrap()),
+            },
+        ]);
+
+        let result = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap();
+
+        assert_eq!(result.sub, "user1");
+        assert_eq!(http.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn second_nonce_challenge_returns_the_error() {
+        let http =
+            MockHttpClient::sequence(vec![nonce_challenge_response(), nonce_challenge_response()]);
+
+        let err = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::BadStatus { status, .. } if *status == StatusCode::UNAUTHORIZED
+        ));
+        assert_eq!(http.calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn nonce_header_without_challenge_does_not_retry() {
+        // A plain 401 rotating the nonce (RFC 9449 §8.1) rejected the token
+        // itself; a fresh nonce cannot fix it, so no re-send.
+        let mut headers = HeaderMap::new();
+        headers.insert("DPoP-Nonce", HeaderValue::from_static("rotated"));
+        let http = MockHttpClient::sequence(vec![HttpResponse {
+            status: StatusCode::UNAUTHORIZED,
+            headers,
+            body: Bytes::new(),
+        }]);
+
+        let err = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::BadStatus { .. }
+        ));
+        assert_eq!(http.calls(), 1);
     }
 
     #[tokio::test]

@@ -55,7 +55,13 @@ if response.status == StatusCode::UNAUTHORIZED {
 
 Whether and when to re-send is the application's decision, not this library's —
 [`parse_challenges`](crate::authorizer::parse_challenges) exposes the server's
-stated objection for making it, as above. A `401` is issued before the request
+stated objection for making it, as above.
+[`dpop_nonce_action`](crate::authorizer::dpop_nonce_action) classifies the
+`DPoP` nonce signals, handing you the nonce together with the advice: record
+it (RFC 9449 §8.1), and on
+[`RecordAndRetry`](crate::authorizer::DPoPNonceAction::RecordAndRetry) —
+a `use_dpop_nonce` challenge — re-send once with rebuilt headers
+(RFC 9449 §7.2). A `401` is issued before the request
 is processed, so a single re-send is normally safe even for non-idempotent
 requests.
 

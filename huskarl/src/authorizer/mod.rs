@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use bon::Builder;
 pub use challenge::{Challenge, ChallengePayload, parse_challenges};
-use http::{HeaderMap, HeaderName, HeaderValue, Method, Uri, header::AUTHORIZATION};
+use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header::AUTHORIZATION};
 
 use crate::{
     cache::TokenCache,
@@ -215,6 +215,39 @@ pub fn extract_dpop_nonce(headers: &HeaderMap) -> Option<String> {
         .map(std::borrow::ToOwned::to_owned)
 }
 
+/// The action a response's `DPoP` nonce signals call for, from
+/// [`dpop_nonce_action`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DPoPNonceAction {
+    /// No nonce signals.
+    None,
+    /// Record the rotated nonce for the next proof (RFC 9449 §8.1).
+    Record(String),
+    /// Record the nonce, then re-send the request once with rebuilt
+    /// headers carrying it (RFC 9449 §7.2).
+    RecordAndRetry(String),
+}
+
+/// Classifies a response's `DPoP` nonce signals: a `DPoP-Nonce` header calls
+/// for recording (RFC 9449 §8.1), and additionally for one re-send when it
+/// arrives on a `401` with a `use_dpop_nonce` challenge (RFC 9449 §7.2).
+///
+/// A challenge without a `DPoP-Nonce` header yields
+/// [`DPoPNonceAction::None`]: with no fresh nonce, a re-send cannot succeed.
+#[must_use]
+pub fn dpop_nonce_action(status: StatusCode, headers: &HeaderMap) -> DPoPNonceAction {
+    match extract_dpop_nonce(headers) {
+        None => DPoPNonceAction::None,
+        Some(nonce)
+            if status == StatusCode::UNAUTHORIZED
+                && challenge::challenge_has_error(headers, "use_dpop_nonce") =>
+        {
+            DPoPNonceAction::RecordAndRetry(nonce)
+        }
+        Some(nonce) => DPoPNonceAction::Record(nonce),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -323,6 +356,51 @@ mod tests {
         // And a response with no relevant headers at all.
         authorizer.process_response(&uri(), &headers(&[]));
         assert!(!invalidated.load(Ordering::Relaxed));
+    }
+
+    const NONCE_CHALLENGE: &str = r#"DPoP error="use_dpop_nonce""#;
+
+    #[rstest::rstest]
+    #[case::challenge_on_401(
+        StatusCode::UNAUTHORIZED,
+        &[("www-authenticate", NONCE_CHALLENGE), ("dpop-nonce", "fresh")],
+        DPoPNonceAction::RecordAndRetry("fresh".into())
+    )]
+    // A nonce header alone (§8.1 rotation) is bookkeeping, not a challenge —
+    // and a fresh nonce cannot fix a different failure like invalid_token.
+    #[case::rotation_on_success(
+        StatusCode::OK,
+        &[("dpop-nonce", "rotated")],
+        DPoPNonceAction::Record("rotated".into())
+    )]
+    #[case::rotation_on_bare_401(
+        StatusCode::UNAUTHORIZED,
+        &[("dpop-nonce", "rotated")],
+        DPoPNonceAction::Record("rotated".into())
+    )]
+    #[case::rotation_on_invalid_token(
+        StatusCode::UNAUTHORIZED,
+        &[("www-authenticate", r#"DPoP error="invalid_token""#), ("dpop-nonce", "rotated")],
+        DPoPNonceAction::Record("rotated".into())
+    )]
+    #[case::challenge_on_non_401(
+        StatusCode::OK,
+        &[("www-authenticate", NONCE_CHALLENGE), ("dpop-nonce", "fresh")],
+        DPoPNonceAction::Record("fresh".into())
+    )]
+    // No fresh nonce to re-send with: a retry cannot succeed.
+    #[case::challenge_without_nonce(
+        StatusCode::UNAUTHORIZED,
+        &[("www-authenticate", NONCE_CHALLENGE)],
+        DPoPNonceAction::None
+    )]
+    #[case::no_signals(StatusCode::OK, &[], DPoPNonceAction::None)]
+    fn dpop_nonce_action_classifies(
+        #[case] status: StatusCode,
+        #[case] header_pairs: &[(&str, &str)],
+        #[case] expected: DPoPNonceAction,
+    ) {
+        assert_eq!(dpop_nonce_action(status, &headers(header_pairs)), expected);
     }
 
     #[test]

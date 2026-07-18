@@ -87,10 +87,8 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             response.headers.get(CONTENT_TYPE).cloned()
         };
 
-        if let Some(nonce) = response.headers.get("DPoP-Nonce")
-            && let Ok(nonce_str) = nonce.to_str()
-        {
-            self.dpop.update_nonce(nonce_str.to_string());
+        if let Some(nonce) = crate::authorizer::extract_dpop_nonce(&response.headers) {
+            self.dpop.update_nonce(nonce);
         }
 
         parse_oauth2_response(response.status, content_type, &response.body)
