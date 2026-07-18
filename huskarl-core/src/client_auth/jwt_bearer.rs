@@ -215,7 +215,7 @@ mod tests {
         }
     }
 
-    fn extract_form_str(form: &[(&'static str, FormValue<'_>)], key: &str) -> String {
+    fn extract_form_str(form: &[(&str, FormValue<'_>)], key: &str) -> String {
         form.iter().find(|(k, _)| *k == key).map_or_else(
             || unreachable!("key {key} not found in form params"),
             |(_, v)| match v {

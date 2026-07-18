@@ -118,7 +118,7 @@ pub struct AuthenticationParams<'a> {
     /// Additional headers to include in the request.
     pub headers: Option<HeaderMap>,
     /// Additional form parameters to include in the request body.
-    pub form_params: Option<Vec<(&'static str, FormValue<'a>)>>,
+    pub form_params: Option<Vec<(&'a str, FormValue<'a>)>>,
 }
 
 #[cfg(test)]
