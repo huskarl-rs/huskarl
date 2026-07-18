@@ -26,7 +26,7 @@ mod types;
 
 pub mod pkce;
 
-pub use error::{BuildError, CompleteError};
+pub use error::{BuildError, CompleteError, ParseCallbackError};
 pub use grant::{
     AuthorizationCodeGrant, AuthorizationCodeGrantBuilder, AuthorizationCodeGrantParameters,
 };
@@ -41,4 +41,4 @@ pub use jar::{Jar, NoJar};
 pub use loopback::{
     CallbackRenderer, CallbackResponse, ErrorContext, LoopbackError, SuccessContext, bind_loopback,
 };
-pub use types::{CompleteInput, PendingState, StartInput, StartOutput};
+pub use types::{CompleteInput, CompleteInputBuilder, PendingState, StartInput, StartOutput};

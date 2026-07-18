@@ -17,7 +17,10 @@ use url::Url;
 
 use crate::{
     core::{Error, jwt::validator::ValidatedJwt},
-    grant::{authorization_code::CompleteInput, core::TokenResponse},
+    grant::{
+        authorization_code::{CompleteInput, ParseCallbackError},
+        core::TokenResponse,
+    },
     token::id_token::IdTokenClaims,
 };
 
@@ -432,45 +435,21 @@ async fn read_request_path_inner(stream: &mut TcpStream) -> Result<Option<String
 }
 
 fn parse_callback_params(path_and_query: &str) -> Result<CompleteInput, LoopbackError> {
-    /// The authorization-response parameters delivered to the redirect URI
-    /// (RFC 6749 §4.1.2 / §4.1.2.1, plus the RFC 9207 `iss`). Unknown
-    /// parameters are ignored; a repeated single-valued parameter is rejected.
-    #[derive(serde::Deserialize)]
-    struct CallbackParams {
-        code: Option<String>,
-        state: Option<String>,
-        error: Option<String>,
-        error_description: Option<String>,
-        iss: Option<String>,
-    }
-
-    // The callback parameters are the query component. For `response_mode=form_post`
+    // The parser takes the query after the first `?`. For `response_mode=form_post`
     // the body is folded in as a query string upstream, so this handles both.
-    let query = path_and_query.split_once('?').map_or("", |(_, q)| q);
-
-    let params: CallbackParams =
-        crate::core::oauth_form::from_str(query).context(InvalidCallbackParametersSnafu)?;
-
-    // An OAuth error response takes precedence (RFC 6749 §4.1.2.1).
-    if let Some(error) = params.error {
-        return Err(LoopbackError::OAuthError {
+    path_and_query.parse().map_err(|e| match e {
+        ParseCallbackError::OAuthError {
             error,
-            error_description: params.error_description,
-        });
-    }
-
-    let code = params
-        .code
-        .ok_or(LoopbackError::MissingParameter { param: "code" })?;
-    let state = params
-        .state
-        .ok_or(LoopbackError::MissingParameter { param: "state" })?;
-
-    Ok(CompleteInput::builder()
-        .code(code)
-        .state(state)
-        .maybe_iss(params.iss)
-        .build())
+            error_description,
+        } => LoopbackError::OAuthError {
+            error,
+            error_description,
+        },
+        ParseCallbackError::InvalidParameters { source } => {
+            LoopbackError::InvalidCallbackParameters { source }
+        }
+        ParseCallbackError::MissingParameter { param } => LoopbackError::MissingParameter { param },
+    })
 }
 
 async fn send_redirect(stream: &mut TcpStream, location: &str) -> Result<(), std::io::Error> {

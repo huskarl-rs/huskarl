@@ -166,6 +166,12 @@ pub struct StartOutput {
 }
 
 /// The information needed to complete an authorization code flow.
+///
+/// Parse the callback URL or query string via [`FromStr`](std::str::FromStr)
+/// to capture `code`, `state`, and the RFC 9207 `iss`;
+/// [`builder_from_callback`](Self::builder_from_callback) also lets `resource`
+/// be set. When building by hand, include `iss` — it is required when the
+/// server advertises RFC 9207 support.
 #[derive(Debug, Clone, Builder)]
 pub struct CompleteInput {
     #[builder(into)]
@@ -175,6 +181,85 @@ pub struct CompleteInput {
     #[builder(into)]
     pub(super) iss: Option<String>,
     pub(super) resource: Option<Vec<String>>,
+}
+
+impl CompleteInput {
+    /// Parses the authorization-response parameters (RFC 6749 §4.1.2, plus
+    /// the RFC 9207 `iss`) into a seeded builder, so fields the callback
+    /// cannot carry — the RFC 8707
+    /// [`resource`](CompleteInputBuilder::resource) indicators — can be set
+    /// before building.
+    ///
+    /// Accepts the full callback URL, just its query, or a
+    /// `response_mode=form_post` body. Unknown parameters are ignored; a
+    /// repeated single-valued parameter is rejected.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the parameters cannot be parsed, `code` or `state` is
+    /// missing, or the callback is an OAuth error response
+    /// ([`OAuthError`](super::ParseCallbackError::OAuthError)).
+    pub fn builder_from_callback(
+        callback: &str,
+    ) -> Result<
+        CompleteInputBuilder<
+            complete_input_builder::SetState<
+                complete_input_builder::SetIss<complete_input_builder::SetCode>,
+            >,
+        >,
+        super::ParseCallbackError,
+    > {
+        use snafu::ResultExt as _;
+
+        use super::error::{InvalidParametersSnafu, ParseCallbackError};
+
+        #[derive(Deserialize)]
+        struct CallbackParams {
+            code: Option<String>,
+            state: Option<String>,
+            error: Option<String>,
+            error_description: Option<String>,
+            iss: Option<String>,
+        }
+
+        // Everything up to the first `?` is the URL/path part; a later raw
+        // `?` is query data (RFC 3986) and stays. A trailing fragment is cut
+        // — raw `#` cannot appear inside a query, so this is lossless.
+        let query = callback.split_once('?').map_or(callback, |(_, q)| q);
+        let query = query.split_once('#').map_or(query, |(q, _)| q);
+        let params: CallbackParams =
+            crate::core::oauth_form::from_str(query).context(InvalidParametersSnafu)?;
+
+        // An OAuth error response takes precedence (RFC 6749 §4.1.2.1).
+        if let Some(error) = params.error {
+            return Err(ParseCallbackError::OAuthError {
+                error,
+                error_description: params.error_description,
+            });
+        }
+
+        let code = params
+            .code
+            .ok_or(ParseCallbackError::MissingParameter { param: "code" })?;
+        let state = params
+            .state
+            .ok_or(ParseCallbackError::MissingParameter { param: "state" })?;
+
+        Ok(Self::builder()
+            .code(code)
+            .maybe_iss(params.iss)
+            .state(state))
+    }
+}
+
+impl std::str::FromStr for CompleteInput {
+    type Err = super::ParseCallbackError;
+
+    /// Equivalent to [`builder_from_callback`](Self::builder_from_callback)
+    /// followed by `build()`.
+    fn from_str(query: &str) -> Result<Self, Self::Err> {
+        Ok(Self::builder_from_callback(query)?.build())
+    }
 }
 
 /// The information needed to be stored from the initial flow setup, for use in the callback.
@@ -240,6 +325,8 @@ pub(super) fn generate_random_value() -> String {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -284,6 +371,70 @@ mod tests {
         }"#;
         let state: PendingState = serde_json::from_str(old).unwrap();
         assert_eq!(state.nonce.as_deref(), Some("n"));
+    }
+
+    // The URL part before the first `?` is discarded and the fragment cut.
+    #[rstest]
+    #[case::query_with_iss(
+        "code=abc&state=xyz&iss=https%3A%2F%2Fissuer.example.com",
+        Some("https://issuer.example.com")
+    )]
+    #[case::leading_question_mark("?code=abc&state=xyz", None)]
+    #[case::full_url_with_fragment("https://app.example.com/cb?code=abc&state=xyz#fragment", None)]
+    fn complete_input_parses_accepted_shapes(#[case] input: &str, #[case] iss: Option<&str>) {
+        let parsed: CompleteInput = input.parse().unwrap();
+        assert_eq!(parsed.code, "abc");
+        assert_eq!(parsed.state, "xyz");
+        assert_eq!(parsed.iss.as_deref(), iss);
+    }
+
+    #[test]
+    fn complete_input_builder_from_callback_carries_resource() {
+        let input = CompleteInput::builder_from_callback("code=abc&state=xyz")
+            .unwrap()
+            .resource(bon::vec!["https://api.example.com"])
+            .build();
+        assert_eq!(input.code, "abc");
+        assert_eq!(
+            input.resource,
+            Some(vec!["https://api.example.com".to_owned()])
+        );
+    }
+
+    #[test]
+    fn complete_input_parse_error_response_takes_precedence() {
+        let err = "code=abc&state=xyz&error=access_denied&error_description=user+denied"
+            .parse::<CompleteInput>()
+            .unwrap_err();
+        assert!(matches!(
+            &err,
+            super::super::ParseCallbackError::OAuthError { error, error_description }
+                if error == "access_denied" && error_description.as_deref() == Some("user denied")
+        ));
+    }
+
+    #[rstest]
+    #[case::missing_code("state=xyz", "code")]
+    #[case::missing_state("code=abc", "state")]
+    fn complete_input_parse_missing_parameter_rejected(#[case] input: &str, #[case] missing: &str) {
+        let err = input.parse::<CompleteInput>().unwrap_err();
+        assert!(matches!(
+            &err,
+            super::super::ParseCallbackError::MissingParameter { param } if *param == missing
+        ));
+    }
+
+    #[test]
+    fn complete_input_parse_duplicate_parameter_rejected() {
+        // A repeated single-valued parameter is rejected (RFC 6749 §3.1),
+        // rather than silently taking one value.
+        let err = "code=abc&state=xyz&state=zzz"
+            .parse::<CompleteInput>()
+            .unwrap_err();
+        assert!(matches!(
+            &err,
+            super::super::ParseCallbackError::InvalidParameters { .. }
+        ));
     }
 
     #[test]

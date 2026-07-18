@@ -40,6 +40,39 @@ pub enum CompleteError {
     IdTokenIssuerNotConfigured,
 }
 
+/// An error parsing authorization-callback parameters into a
+/// [`CompleteInput`](super::CompleteInput).
+///
+/// The `OAuthError` variant is control flow for login UIs (e.g. the user
+/// denied access); the rest carry the underlying failure.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(super)))]
+#[non_exhaustive]
+pub enum ParseCallbackError {
+    /// The authorization server returned an error response instead of a code
+    /// (RFC 6749 §4.1.2.1).
+    #[snafu(display("Authorization server returned error: {error}"))]
+    OAuthError {
+        /// The `error` field in the `OAuth2` error response.
+        error: String,
+        /// The `error_description` field in the `OAuth2` error response.
+        error_description: Option<String>,
+    },
+    /// The callback parameters could not be parsed (malformed query, or a
+    /// single-valued parameter that appeared more than once — RFC 6749 §3.1).
+    #[snafu(display("Failed to parse callback parameters: {source}"))]
+    InvalidParameters {
+        /// The underlying parse error.
+        source: crate::core::oauth_form::Error,
+    },
+    /// A required parameter was missing from the callback.
+    #[snafu(display("Missing required parameter: {param}"))]
+    MissingParameter {
+        /// The missing parameter name.
+        param: &'static str,
+    },
+}
+
 /// An error that occurs when building an [`AuthorizationCodeGrant`](super::AuthorizationCodeGrant).
 ///
 /// Carried as the source of [`ErrorKind::Config`](crate::core::ErrorKind::Config)
