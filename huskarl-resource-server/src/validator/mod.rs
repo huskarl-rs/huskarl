@@ -13,7 +13,6 @@
 mod binding;
 mod common;
 pub mod custom;
-pub mod dpop_nonce;
 pub mod dpop_proof;
 pub mod error;
 pub mod extract;

@@ -12,12 +12,11 @@ use crate::{
     TokenType,
     core::{
         Error,
-        dpop::{hash_access_token_for_dpop, normalize_uri_for_dpop},
+        dpop::{DPoPNonceChecker, NonceCheck, hash_access_token_for_dpop, normalize_uri_for_dpop},
         jwt::ConfirmationClaim,
         secrets::SecretString,
     },
     validator::{
-        dpop_nonce::{DPoPNonceChecker, NonceCheck},
         dpop_proof::{DPoPProofError, DPoPProofValidator, ValidatedDPoPProof},
         error::{
             DPoPBindingSnafu, DPoPHeaderNotStringSnafu, DPoPRequiredForBoundTokenSnafu,

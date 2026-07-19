@@ -18,6 +18,7 @@ use crate::{
     core::{
         EndpointUrl, Error,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+        dpop::DPoPNonceChecker,
         jwt::{
             JtiUniquenessChecker,
             validator::{ClaimCheck, JwtValidator},
@@ -29,7 +30,6 @@ use crate::{
         ValidationResult,
         binding::DPoPBindingChecker,
         common::ValidatorInner,
-        dpop_nonce::DPoPNonceChecker,
         dpop_proof::DPoPProofValidator,
         error::ValidateHeadersError,
         metadata::{ProvideValidatorMetadata, ValidatorMetadata},
