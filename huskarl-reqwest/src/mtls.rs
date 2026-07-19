@@ -17,34 +17,66 @@ use huskarl_core::{
     platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
 
-/// The result of applying an [`MtlsProvider`] to a [`reqwest::ClientBuilder`].
-pub struct MtlsApplyOutput {
-    /// The builder with mTLS configured.
-    pub builder: reqwest::ClientBuilder,
-    /// The identity that was applied, if any. `None` for [`NoMtls`].
-    ///
-    /// Stored by [`crate::ReqwestClient`] so the identity can be reused when
-    /// building additional clients with different root certificates.
+/// A [`reqwest::ClientBuilder`] with an [`MtlsProvider`]'s configuration
+/// applied, as returned from [`MtlsProvider::apply`].
+///
+/// Construct with [`ConfiguredBuilder::new`]; providers that installed an
+/// identity record it with [`with_identity`](ConfiguredBuilder::with_identity).
+pub struct ConfiguredBuilder {
+    pub(crate) builder: reqwest::ClientBuilder,
+    /// The identity that was applied, if any. Stored by
+    /// [`crate::ReqwestClient`] so the identity can be reused when building
+    /// additional clients with different root certificates.
     #[cfg(all(
         not(target_arch = "wasm32"),
         any(feature = "rustls-tls", feature = "native-tls")
     ))]
-    pub identity: Option<reqwest::Identity>,
+    pub(crate) identity: Option<reqwest::Identity>,
+}
+
+impl ConfiguredBuilder {
+    /// Wraps the configured builder, with no identity recorded.
+    #[must_use]
+    pub fn new(builder: reqwest::ClientBuilder) -> Self {
+        Self {
+            builder,
+            #[cfg(all(
+                not(target_arch = "wasm32"),
+                any(feature = "rustls-tls", feature = "native-tls")
+            ))]
+            identity: None,
+        }
+    }
+
+    /// Records the identity the provider applied, so
+    /// [`ReqwestClient::identity`](crate::ReqwestClient::identity) can expose
+    /// it for reuse.
+    ///
+    /// Requires the `rustls-tls` or `native-tls` feature.
+    #[cfg(all(
+        not(target_arch = "wasm32"),
+        any(feature = "rustls-tls", feature = "native-tls")
+    ))]
+    #[must_use]
+    pub fn with_identity(mut self, identity: reqwest::Identity) -> Self {
+        self.identity = Some(identity);
+        self
+    }
 }
 
 /// Trait for configuring mTLS on a `reqwest::ClientBuilder`.
 ///
-/// This trait is dyn-capable: implement it on your provider type and write
-/// the method body as `Box::pin(async move { ... })`. Secret-fetch failures
-/// should be propagated as-is (they are already classified); identity-parse
-/// failures should be classified as
-/// [`ErrorKind::Config`](huskarl_core::ErrorKind).
+/// This trait is dyn-capable: implement it on your provider type, write the
+/// method body as `Box::pin(async move { ... })`, and return the configured
+/// builder via [`ConfiguredBuilder::new`]. Secret-fetch failures should be
+/// propagated as-is (they are already classified); identity-parse failures
+/// should be classified as [`ErrorKind::Config`](huskarl_core::ErrorKind).
 pub trait MtlsProvider: MaybeSendSync {
     /// Applies the mTLS configuration to the provided builder.
     fn apply(
         &self,
         builder: reqwest::ClientBuilder,
-    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>>;
+    ) -> MaybeSendBoxFuture<'_, Result<ConfiguredBuilder, Error>>;
 
     /// Returns true if this provider configures mTLS.
     fn uses_mtls(&self) -> bool;
@@ -58,17 +90,8 @@ impl MtlsProvider for NoMtls {
     fn apply(
         &self,
         builder: reqwest::ClientBuilder,
-    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
-        Box::pin(async move {
-            Ok(MtlsApplyOutput {
-                builder,
-                #[cfg(all(
-                    not(target_arch = "wasm32"),
-                    any(feature = "rustls-tls", feature = "native-tls")
-                ))]
-                identity: None,
-            })
-        })
+    ) -> MaybeSendBoxFuture<'_, Result<ConfiguredBuilder, Error>> {
+        Box::pin(async move { Ok(ConfiguredBuilder::new(builder)) })
     }
 
     fn uses_mtls(&self) -> bool {
@@ -100,7 +123,7 @@ impl<S: Secret<Output = SecretString>> MtlsProvider for MtlsPem<S> {
     fn apply(
         &self,
         builder: reqwest::ClientBuilder,
-    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
+    ) -> MaybeSendBoxFuture<'_, Result<ConfiguredBuilder, Error>> {
         Box::pin(async move {
             let secret_output = self
                 .secret
@@ -110,10 +133,7 @@ impl<S: Secret<Output = SecretString>> MtlsProvider for MtlsPem<S> {
             let identity =
                 reqwest::Identity::from_pem(secret_output.value.expose_secret().as_bytes())
                     .map_err(parse_identity_error)?;
-            Ok(MtlsApplyOutput {
-                builder: builder.identity(identity.clone()),
-                identity: Some(identity),
-            })
+            Ok(ConfiguredBuilder::new(builder.identity(identity.clone())).with_identity(identity))
         })
     }
 
@@ -148,7 +168,7 @@ impl<D: Secret<Output = SecretBytes>, P: Secret<Output = SecretString>> MtlsProv
     fn apply(
         &self,
         builder: reqwest::ClientBuilder,
-    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
+    ) -> MaybeSendBoxFuture<'_, Result<ConfiguredBuilder, Error>> {
         Box::pin(async move {
             let der = self
                 .der
@@ -165,10 +185,7 @@ impl<D: Secret<Output = SecretBytes>, P: Secret<Output = SecretString>> MtlsProv
                 password.value.expose_secret(),
             )
             .map_err(parse_identity_error)?;
-            Ok(MtlsApplyOutput {
-                builder: builder.identity(identity.clone()),
-                identity: Some(identity),
-            })
+            Ok(ConfiguredBuilder::new(builder.identity(identity.clone())).with_identity(identity))
         })
     }
 
@@ -205,7 +222,7 @@ impl<K: Secret<Output = SecretString>> MtlsProvider for MtlsPkcs8Pem<K> {
     fn apply(
         &self,
         builder: reqwest::ClientBuilder,
-    ) -> MaybeSendBoxFuture<'_, Result<MtlsApplyOutput, Error>> {
+    ) -> MaybeSendBoxFuture<'_, Result<ConfiguredBuilder, Error>> {
         Box::pin(async move {
             let key = self
                 .key
@@ -217,10 +234,7 @@ impl<K: Secret<Output = SecretString>> MtlsProvider for MtlsPkcs8Pem<K> {
                 key.value.expose_secret().as_bytes(),
             )
             .map_err(parse_identity_error)?;
-            Ok(MtlsApplyOutput {
-                builder: builder.identity(identity.clone()),
-                identity: Some(identity),
-            })
+            Ok(ConfiguredBuilder::new(builder.identity(identity.clone())).with_identity(identity))
         })
     }
 
