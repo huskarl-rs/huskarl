@@ -137,6 +137,13 @@ impl StartInput {
     pub fn scope(scope: Vec<String>) -> Self {
         Self::builder().scope(scope).build()
     }
+
+    /// Whether the requested scope contains `openid`.
+    pub(super) fn requests_openid(&self) -> bool {
+        self.scope
+            .as_deref()
+            .is_some_and(|s| s.iter().any(|scope| scope == "openid"))
+    }
 }
 
 impl<S: start_input_builder::IsComplete> StartInputBuilder<S> {
@@ -290,6 +297,11 @@ pub struct PendingState {
     pub nonce: Option<String>,
     /// The thumbprint of the `DPoP` key bound to the request.
     pub dpop_jkt: Option<String>,
+    /// Whether the requested scope contained `openid`; completion then
+    /// requires an ID token (OIDC Core 1.0 §3.1.3.3). `false` for states
+    /// persisted before this field existed.
+    #[serde(default)]
+    pub openid_requested: bool,
 }
 
 // `PendingState` is designed to be persisted to a session store and is
@@ -307,6 +319,7 @@ impl std::fmt::Debug for PendingState {
             .field("state", &"[REDACTED]")
             .field("nonce", &self.nonce.as_ref().map(|_| "[REDACTED]"))
             .field("dpop_jkt", &self.dpop_jkt)
+            .field("openid_requested", &self.openid_requested)
             .finish()
     }
 }
@@ -445,6 +458,7 @@ mod tests {
             state: "csrf-state-value".to_owned(),
             nonce: Some("id-token-nonce".to_owned()),
             dpop_jkt: Some("jkt-thumbprint".to_owned()),
+            openid_requested: true,
         };
 
         let debug = format!("{state:?}");

@@ -86,7 +86,13 @@ impl TokenResponse {
         self.refresh_token.as_ref()
     }
 
-    /// Returns the ID token from the token response.
+    /// Returns the ID token from the token response, as received.
+    ///
+    /// The library validates it only on the authorization-code callback path
+    /// — use the validated form returned by
+    /// [`complete_oidc`](crate::grant::authorization_code::AuthorizationCodeGrant::complete_oidc)
+    /// there. On every other grant (refresh, device, token exchange) this is
+    /// untrusted wire data: validate it before use.
     #[must_use]
     pub fn id_token(&self) -> Option<&IdToken> {
         self.raw.id_token.as_ref()
