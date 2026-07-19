@@ -32,7 +32,8 @@ and explanation in a `_docs` module:
   authenticates to an authorization server (client secret, private-key JWT, or
   none).
 - **`DPoP`** — [`dpop`] provides proof-of-possession binding for the
-  authorization-server and resource-server flows.
+  authorization-server and resource-server flows, plus server-side nonce
+  issuance and validation.
 - **HTTP** — [`http`] defines the [`HttpClient`](http::HttpClient) seam that
   decouples the ecosystem from any specific HTTP implementation.
 - **Authorization-server metadata** — [`server_metadata`] models RFC 8414 /

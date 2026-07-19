@@ -3,10 +3,13 @@
 //! Provides traits for creating `DPoP` proofs that bind tokens to a specific
 //! client key pair. Separate traits handle the authorization server flow
 //! (token acquisition with nonce management) and resource server flow
-//! (proof creation bound to an access token).
+//! (proof creation bound to an access token). The server side of nonce
+//! management lives here too: [`DPoPNonceChecker`] issues and validates the
+//! nonces (RFC 9449 §8) that proofs must echo.
 
 mod implementation;
 mod no_dpop;
+mod nonce;
 mod sealed;
 
 use std::sync::Arc;
@@ -17,6 +20,7 @@ pub use implementation::{
     normalize_uri_for_dpop,
 };
 pub use no_dpop::{DPoPNotConfigured, NoDPoP};
+pub use nonce::{DPoPNonceChecker, NonceCheck, SealedTimestampNonce, SealedTimestampNonceBuilder};
 
 use crate::{
     error::Error,

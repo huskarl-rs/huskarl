@@ -1,18 +1,20 @@
 //! Server-side `DPoP` nonce enforcement (RFC 9449 §8).
 //!
 //! A `DPoP` nonce is a server-chosen value the client must echo in its next
-//! proof, letting the resource server control proof freshness and limit replay.
-//! Implement [`DPoPNonceChecker`] to issue and validate nonces, or use the
-//! batteries-included [`SealedTimestampNonce`], which encodes the issue time in
-//! an AEAD-sealed token and so needs no server-side state.
+//! proof, letting the server control proof freshness and limit replay. Both
+//! server roles issue them: an authorization server at the token endpoint
+//! (§8) and a resource server on protected resources (§8.2). Implement
+//! [`DPoPNonceChecker`] to issue and validate nonces, or use the
+//! batteries-included [`SealedTimestampNonce`], which encodes the issue time
+//! in an AEAD-sealed token and so needs no server-side state.
 
 use std::sync::Arc;
 
 use bon::Builder;
 
-use crate::core::{
-    Error,
+use crate::{
     crypto::cipher::AeadSealerUnsealer,
+    error::{Error, ErrorKind},
     platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime},
 };
 
@@ -84,10 +86,10 @@ pub struct SealedTimestampNonce {
     /// The AEAD sealer/unsealer for nonce timestamps — one object that seals on
     /// the way out and unseals on the way in.
     ///
-    /// Wrap an [`AeadCipher`](crate::core::crypto::cipher::AeadCipher) (a key,
+    /// Wrap an [`AeadCipher`](crate::crypto::cipher::AeadCipher) (a key,
     /// or a rotating stack such as
-    /// [`ScheduledRefreshCipher`](crate::core::crypto::cipher::ScheduledRefreshCipher))
-    /// in [`AeadV1Cipher`](crate::core::crypto::cipher::AeadV1Cipher); an
+    /// [`ScheduledRefreshCipher`](crate::crypto::cipher::ScheduledRefreshCipher))
+    /// in [`AeadV1Cipher`](crate::crypto::cipher::AeadV1Cipher); an
     /// externally-managed sealer (e.g. a KMS encrypt endpoint) can implement
     /// the traits directly.
     #[builder(with = |sealer: impl AeadSealerUnsealer + 'static| Arc::new(sealer) as Arc<dyn AeadSealerUnsealer>)]
@@ -111,7 +113,7 @@ impl SealedTimestampNonce {
         use base64::prelude::*;
         let current_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|e| Error::new(crate::core::ErrorKind::DPoP, e))?
+            .map_err(|e| Error::new(ErrorKind::DPoP, e))?
             .as_secs()
             .to_be_bytes();
         // `seal` freezes one key snapshot per nonce, even under rotation. The
@@ -169,7 +171,7 @@ mod tests {
     use base64::prelude::*;
 
     use super::*;
-    use crate::core::crypto::{
+    use crate::crypto::{
         KeyMatchStrength,
         cipher::{
             AeadEncryptor, AeadOutput, AeadSealer as _, AeadV1Cipher, CipherMatch, DecryptError,
@@ -195,7 +197,7 @@ mod tests {
         }
     }
 
-    impl crate::core::crypto::cipher::AeadEncryptor for MockEncryptor {
+    impl crate::crypto::cipher::AeadEncryptor for MockEncryptor {
         fn enc_algorithm(&self) -> Cow<'_, str> {
             "mock".into()
         }
@@ -219,14 +221,14 @@ mod tests {
         }
     }
 
-    impl crate::core::crypto::cipher::AeadEncryptorSelector for MockCipher {
+    impl crate::crypto::cipher::AeadEncryptorSelector for MockCipher {
         fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
             let snapshot: Arc<dyn AeadEncryptor> = self.inner.clone();
             Box::pin(async move { snapshot })
         }
     }
 
-    impl crate::core::crypto::cipher::AeadDecryptor for MockCipher {
+    impl crate::crypto::cipher::AeadDecryptor for MockCipher {
         fn cipher_match(&self, _m: &CipherMatch<'_>) -> Option<KeyMatchStrength> {
             Some(KeyMatchStrength::ByAlgorithm)
         }

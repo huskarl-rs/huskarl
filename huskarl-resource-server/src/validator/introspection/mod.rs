@@ -27,6 +27,7 @@ use crate::{
         EndpointUrl, Error,
         client_auth::ClientAuthentication,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+        dpop::DPoPNonceChecker,
         http::HttpClient,
         jwk::JwksSource,
         jwt::{JtiUniquenessChecker, validator::ClaimCheck},
@@ -37,7 +38,6 @@ use crate::{
     validator::{
         AccessTokenValidator, ValidatedRequest, ValidationResult,
         binding::{DPoPBindingChecker, check_token_binding},
-        dpop_nonce::DPoPNonceChecker,
         dpop_proof::DPoPProofValidator,
         extract::extract_token,
         introspection::{

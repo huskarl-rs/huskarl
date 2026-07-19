@@ -70,9 +70,9 @@ challenge in `WWW-Authenticate` responses.
 Proof `iat` freshness limits replay to a window of the *client's* clock. A
 server-issued nonce (RFC 9449 §8) closes that: proofs must echo a value your
 server chose recently. Enable it with a
-[`DpopNonceChecker`](crate::validator::dpop_nonce::DPoPNonceChecker); the
+[`DPoPNonceChecker`](crate::core::dpop::DPoPNonceChecker); the
 batteries-included
-[`SealedTimestampNonce`](crate::validator::dpop_nonce::SealedTimestampNonce)
+[`SealedTimestampNonce`](crate::core::dpop::SealedTimestampNonce)
 needs no storage — nonces are AEAD-sealed timestamps, so any replica holding
 the key can validate them:
 
@@ -82,7 +82,8 @@ the key can validate them:
 # use huskarl_resource_server::core::jwk::{JwksSource, OctBytes};
 # use huskarl_resource_server::core::prelude::*;
 # use huskarl_resource_server::core::secrets::{EnvVarSecret, encodings::Base64Encoding};
-# use huskarl_resource_server::validator::{dpop_nonce::SealedTimestampNonce, rfc9068::Rfc9068Validator};
+# use huskarl_resource_server::core::dpop::SealedTimestampNonce;
+# use huskarl_resource_server::validator::rfc9068::Rfc9068Validator;
 # use huskarl_crypto_native::aead::XChaChaKey;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
