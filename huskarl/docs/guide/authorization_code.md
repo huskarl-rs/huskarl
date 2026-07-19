@@ -126,6 +126,25 @@ RFC 9207 support in its metadata — as conforming servers do — makes the
 parameter mandatory, and completion fails with `MissingIssuer` if it is
 dropped.
 
+## OpenID Connect flows
+
+Requesting the `openid` scope makes the flow an OIDC authentication: the
+grant sends a `nonce`, requires ID-token validation to be configured (a
+`jws_verifier_factory` and an issuer) before `start()` will proceed, and
+rejects a token response without an ID token (OIDC Core 1.0 §3.1.3.3) —
+unless the server narrowed `openid` out of the granted scope. Use
+`complete_oidc()` instead of `complete()` to receive the validated ID token
+alongside the token response.
+
+The `oidc` builder setting overrides this inference for non-standard
+servers. `oidc(false)` treats `openid` as an ordinary OAuth scope — for
+pure-OAuth servers whose scope merely happens to use that name. An ID
+token the server returns anyway is still validated. `oidc(true)` applies
+OIDC semantics regardless of scope — for servers that issue ID tokens on
+their own rules — and a missing ID token is then an error even if the
+granted scope omits `openid`. Since `oidc(true)` declares every flow OIDC,
+the validation-capability check moves from `start()` to grant build time.
+
 ## 4b. Alternative for CLI tools: complete using the loopback server
 
 For command-line tools, `complete_on_loopback` handles the callback automatically

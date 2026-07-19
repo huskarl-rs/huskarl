@@ -23,7 +23,7 @@ use crate::{
             AuthorizationCodeGrantParameters,
             error::{
                 IdTokenIssuerNotConfiguredSnafu, IdTokenVerifierNotConfiguredSnafu,
-                IssuerMismatchSnafu, MissingIssuerSnafu, StateMismatchSnafu,
+                IssuerMismatchSnafu, MissingIdTokenSnafu, MissingIssuerSnafu, StateMismatchSnafu,
             },
             grant::AuthorizationCodeGrant,
             par,
@@ -135,6 +135,25 @@ impl AuthorizationCodeGrant {
     ///
     /// May return an error if the configuration is invalid, or the PAR endpoint returns an error.
     pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
+        // An OIDC flow must end in ID-token validation (OIDC Core 1.0
+        // §3.1.3.3), so a grant that can never validate one fails here,
+        // before the user is redirected to the authorization server.
+        let is_oidc = self.oidc.unwrap_or_else(|| start_input.requests_openid());
+        if is_oidc {
+            if self.jws_verifier.is_none() {
+                return Err(Error::new(
+                    ErrorKind::Config,
+                    super::error::OidcVerifierNotConfiguredSnafu.build(),
+                ));
+            }
+            if self.issuer.is_none() {
+                return Err(Error::new(
+                    ErrorKind::Config,
+                    super::error::OidcIssuerNotConfiguredSnafu.build(),
+                ));
+            }
+        }
+
         let supports_method = |method: &str| {
             self.code_challenge_methods_supported
                 .iter()
@@ -156,8 +175,13 @@ impl AuthorizationCodeGrant {
 
         let dpop_jkt = self.dpop.get_current_thumbprint().await;
 
-        let payload =
-            build_authorization_payload(self, &start_input, pkce.as_ref(), dpop_jkt.clone());
+        let payload = build_authorization_payload(
+            self,
+            &start_input,
+            pkce.as_ref(),
+            dpop_jkt.clone(),
+            is_oidc,
+        );
 
         let request_object = self
             .request_object(payload.clone())
@@ -185,6 +209,9 @@ impl AuthorizationCodeGrant {
             pending_state: PendingState {
                 redirect_uri: self.redirect_uri.clone(),
                 pkce_verifier: pkce.map(|p| p.verifier),
+                // The raw scope fact, not `is_oidc`: completion re-resolves
+                // against the grant's `oidc` override.
+                openid_requested: start_input.requests_openid(),
                 state: start_input.state,
                 nonce: nonce_sent.then_some(start_input.nonce),
                 dpop_jkt,
@@ -308,13 +335,16 @@ impl AuthorizationCodeGrant {
 
     /// Attempts to complete the authorization code flow, returning both the token response and the validated ID token.
     ///
+    /// The ID token is `Some` — validated — whenever the flow is OIDC (see
+    /// the `oidc` builder setting); `None` means the flow was not OIDC, or
+    /// the server narrowed `openid` out of the granted scope.
+    ///
     /// # Errors
     ///
     /// Returns an error if one is returned when sending a message to the token endpoint,
-    /// a check failed against the callback parameters, or if a received ID token could not be validated.
-    ///
-    /// Note that if an ID token is returned by the authorization server, this indicates that an
-    /// OIDC flow was requested in the authorization request, and the ID token will be validated.
+    /// a check failed against the callback parameters, a received ID token could not be
+    /// validated, or an OIDC flow's token response carried no ID token
+    /// ([`MissingIdToken`](super::CompleteError::MissingIdToken)).
     pub async fn complete_oidc(
         &self,
         pending_state: &PendingState,
@@ -389,6 +419,21 @@ impl AuthorizationCodeGrant {
 
             Ok((token, Some(verified_token)))
         } else {
+            // OIDC Core 1.0 §3.1.3.3: the token response must carry an ID
+            // token when `openid` is granted. Granted scope defaults to the
+            // requested scope when the response omits it (RFC 6749 §5.1), so
+            // an absent `scope` is not a narrowing signal; a forced
+            // `oidc(true)` grant skips the narrowing excuse entirely.
+            let expected = self.oidc.unwrap_or(pending_state.openid_requested);
+            let narrowed = self.oidc.is_none()
+                && token
+                    .raw_token_response()
+                    .scope
+                    .as_deref()
+                    .is_some_and(|granted| granted.split(' ').all(|s| s != "openid"));
+            if expected && !narrowed {
+                return Err(complete_error(MissingIdTokenSnafu.build()));
+            }
             Ok((token, None))
         }
     }
@@ -399,6 +444,7 @@ fn build_authorization_payload<'a>(
     start_input: &'a StartInput,
     pkce: Option<&'a Pkce>,
     dpop_jkt: Option<String>,
+    is_oidc: bool,
 ) -> AuthorizationPayloadWithClientId<'a> {
     AuthorizationPayloadWithClientId {
         client_id: &grant.client_id,
@@ -411,19 +457,14 @@ fn build_authorization_payload<'a>(
             code_challenge_method: pkce.map(|p| p.method),
             dpop_jkt,
             // `nonce` is an OIDC parameter (OIDC Core 1.0 §3.1.2.1), so by
-            // default it is gated on the `openid` scope: OIDC flows get it (binding
-            // any returned ID token), pure-OAuth servers that strictly reject
-            // unknown parameters do not. `send_oidc_nonce` forces either way.
-            nonce: {
-                let is_oidc = start_input
-                    .scope
-                    .as_deref()
-                    .is_some_and(|s| s.iter().any(|scope| scope == "openid"));
-                grant
-                    .send_oidc_nonce
-                    .unwrap_or(is_oidc)
-                    .then_some(start_input.nonce.as_str())
-            },
+            // default it follows the flow's OIDC-ness: OIDC flows get it
+            // (binding any returned ID token), pure-OAuth servers that
+            // strictly reject unknown parameters do not. `send_oidc_nonce`
+            // forces the wire parameter either way.
+            nonce: grant
+                .send_oidc_nonce
+                .unwrap_or(is_oidc)
+                .then_some(start_input.nonce.as_str()),
             display: start_input.display.as_ref(),
             prompt: start_input.prompt.as_ref(),
             max_age: start_input.max_age.map(|d| d.as_secs()),
@@ -490,11 +531,57 @@ mod tests {
 
     async fn start_url(grant: &Grant) -> String {
         grant
-            .start(StartInput::scope(bon::vec!["openid"]))
+            .start(StartInput::scope(bon::vec!["profile"]))
             .await
             .unwrap()
             .authorization_url
             .to_string()
+    }
+
+    /// A verifier that is present but never invoked — for flows that only
+    /// need ID-token validation to be *configured*.
+    #[derive(Debug)]
+    struct StubVerifier;
+
+    impl crate::core::crypto::verifier::JwsVerifier for StubVerifier {
+        fn key_match(
+            &self,
+            _key_match: &crate::core::crypto::verifier::KeyMatch<'_>,
+        ) -> Option<crate::core::crypto::KeyMatchStrength> {
+            None
+        }
+
+        fn verify<'a>(
+            &'a self,
+            _input: &'a [u8],
+            _signature: &'a [u8],
+            _key_match: &'a crate::core::crypto::verifier::KeyMatch<'a>,
+        ) -> MaybeSendBoxFuture<'a, Result<(), crate::core::crypto::verifier::VerifyError>>
+        {
+            unreachable!("stub verifier must not be invoked")
+        }
+    }
+
+    /// Marks the grant OIDC-capable (verifier + issuer) without real crypto.
+    fn make_oidc_capable(grant: &mut Grant) {
+        grant.jws_verifier = Some(std::sync::Arc::new(StubVerifier));
+        grant.issuer = Some("https://as.example.com".to_string());
+    }
+
+    /// Builds [`StubVerifier`] — for exercising the builder's own OIDC checks.
+    struct StubVerifierFactory;
+
+    impl crate::core::crypto::verifier::JwsVerifierFactory for StubVerifierFactory {
+        fn build(
+            &self,
+            _jwks_uri: Option<&EndpointUrl>,
+            _platform: std::sync::Arc<dyn crate::core::crypto::verifier::JwsVerifierPlatform>,
+        ) -> MaybeSendBoxFuture<
+            'static,
+            Result<std::sync::Arc<dyn crate::core::crypto::verifier::JwsVerifier>, Error>,
+        > {
+            Box::pin(async { Ok(std::sync::Arc::new(StubVerifier) as _) })
+        }
     }
 
     /// Serves one canned PAR response, for exercising the PAR delivery path.
@@ -535,7 +622,7 @@ mod tests {
 
         let before = SystemTime::now();
         let output = grant
-            .start(StartInput::scope(bon::vec!["openid"]))
+            .start(StartInput::scope(bon::vec!["profile"]))
             .await
             .unwrap();
         let expires_at = output.expires_at.expect("PAR delivery sets an expiry");
@@ -563,7 +650,7 @@ mod tests {
             .unwrap();
 
         let output = grant
-            .start(StartInput::scope(bon::vec!["openid"]))
+            .start(StartInput::scope(bon::vec!["profile"]))
             .await
             .unwrap();
         assert_eq!(output.expires_at, None);
@@ -631,6 +718,146 @@ mod tests {
     /// legitimately issued without a nonce claim validates.
     #[tokio::test]
     async fn nonce_persisted_only_when_sent() {
+        let mut grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+        make_oidc_capable(&mut grant);
+
+        let openid = grant
+            .start(StartInput::scope(bon::vec!["openid"]))
+            .await
+            .unwrap();
+        assert!(
+            openid.pending_state.nonce.is_some(),
+            "openid scope sends the nonce, so it must be persisted"
+        );
+        assert!(
+            openid.pending_state.openid_requested,
+            "openid scope must be recorded for completion-side enforcement"
+        );
+
+        let plain = grant
+            .start(StartInput::scope(bon::vec!["profile"]))
+            .await
+            .unwrap();
+        assert!(
+            plain.pending_state.nonce.is_none(),
+            "no openid scope: nonce not sent, so none persisted for completion"
+        );
+        assert!(!plain.pending_state.openid_requested);
+    }
+
+    /// `oidc(false)`: `openid` is an ordinary scope — no nonce, no verifier
+    /// needed at start; the pending state still records the raw scope fact.
+    #[tokio::test]
+    async fn oidc_false_treats_openid_as_ordinary_scope() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .oidc(false)
+            .build()
+            .await
+            .unwrap();
+
+        let output = grant
+            .start(StartInput::scope(bon::vec!["openid"]))
+            .await
+            .unwrap();
+        assert!(output.pending_state.nonce.is_none());
+        assert!(output.pending_state.openid_requested);
+    }
+
+    /// `oidc(true)`: OIDC semantics without `openid` in the scope — the
+    /// nonce is sent and the pending state records the raw scope fact.
+    #[tokio::test]
+    async fn oidc_true_forces_oidc_semantics_on_plain_scope() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .oidc(true)
+            .issuer("https://as.example.com")
+            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .build()
+            .await
+            .unwrap();
+
+        let output = grant
+            .start(StartInput::scope(bon::vec!["profile"]))
+            .await
+            .unwrap();
+        assert!(output.pending_state.nonce.is_some());
+        assert!(!output.pending_state.openid_requested);
+    }
+
+    /// `oidc(true)` declares every flow OIDC, so a grant that could never
+    /// validate an ID token fails at build time, not at start.
+    #[tokio::test]
+    async fn oidc_true_without_verifier_fails_the_build() {
+        let result = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .oidc(true)
+            .build()
+            .await;
+
+        let err = result
+            .err()
+            .expect("oidc(true) without a verifier must not build");
+        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
+        assert!(
+            format!("{err:?}").contains("OidcRequiresVerifier"),
+            "got {err:?}"
+        );
+    }
+
+    /// Same build-time check for the issuer once a verifier is present.
+    #[tokio::test]
+    async fn oidc_true_without_issuer_fails_the_build() {
+        let result = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .oidc(true)
+            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .build()
+            .await;
+
+        let err = result
+            .err()
+            .expect("oidc(true) without an issuer must not build");
+        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
+        assert!(
+            format!("{err:?}").contains("OidcRequiresIssuer"),
+            "got {err:?}"
+        );
+    }
+
+    /// An OIDC flow that could never validate its required ID token (OIDC
+    /// Core 1.0 §3.1.3.3) fails at start, before the user is redirected.
+    #[tokio::test]
+    async fn oidc_start_without_verifier_fails_fast() {
         let grant = AuthorizationCodeGrant::builder()
             .client_id("client")
             .http_client(NoHttp)
@@ -642,22 +869,40 @@ mod tests {
             .await
             .unwrap();
 
-        let openid = grant
+        let err = grant
             .start(StartInput::scope(bon::vec!["openid"]))
             .await
-            .unwrap();
+            .expect_err("openid scope without a JWS verifier must not start");
+        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
         assert!(
-            openid.pending_state.nonce.is_some(),
-            "openid scope sends the nonce, so it must be persisted"
+            format!("{err:?}").contains("OidcVerifierNotConfigured"),
+            "got {err:?}"
         );
+    }
 
-        let plain = grant
-            .start(StartInput::scope(bon::vec!["profile"]))
+    /// Same fail-fast for a missing issuer once a verifier is present.
+    #[tokio::test]
+    async fn oidc_start_without_issuer_fails_fast() {
+        let mut grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
             .await
             .unwrap();
+        grant.jws_verifier = Some(std::sync::Arc::new(StubVerifier));
+
+        let err = grant
+            .start(StartInput::scope(bon::vec!["openid"]))
+            .await
+            .expect_err("openid scope without an issuer must not start");
+        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
         assert!(
-            plain.pending_state.nonce.is_none(),
-            "no openid scope: nonce not sent, so none persisted for completion"
+            format!("{err:?}").contains("OidcIssuerNotConfigured"),
+            "got {err:?}"
         );
     }
 
@@ -677,7 +922,7 @@ mod tests {
             .unwrap();
 
         let start_input = StartInput::builder()
-            .scope(bon::vec!["openid"])
+            .scope(bon::vec!["payments"])
             .authorization_details(vec![
                 AuthorizationDetail::builder("payment_initiation")
                     .with("actions", serde_json::json!(["initiate"]))
@@ -859,7 +1104,7 @@ mod tests {
         let result = grant
             .start(
                 StartInput::builder()
-                    .scope(bon::vec!["openid"])
+                    .scope(bon::vec!["profile"])
                     .id_token_hint(crate::token::IdToken::from("a".repeat(70 * 1024)))
                     .build(),
             )
@@ -868,6 +1113,118 @@ mod tests {
             matches!(result, Err(ref err) if err.kind() == ErrorKind::Config),
             "oversized authorization URL should fail with a Config error"
         );
+    }
+
+    /// Serves one canned token-endpoint response.
+    struct TokenHttp {
+        body: &'static str,
+    }
+
+    impl HttpClient for TokenHttp {
+        fn execute(
+            &self,
+            _request: http::Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            let body = Bytes::from_static(self.body.as_bytes());
+            Box::pin(async move {
+                Ok(HttpResponse {
+                    status: http::StatusCode::OK,
+                    headers: http::HeaderMap::new(),
+                    body,
+                })
+            })
+        }
+    }
+
+    async fn completing_grant(oidc: Option<bool>, body: &'static str) -> Grant {
+        AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(TokenHttp { body })
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .maybe_oidc(oidc)
+            .issuer("https://as.example.com")
+            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn pending(openid_requested: bool) -> PendingState {
+        PendingState {
+            redirect_uri: "http://127.0.0.1/cb".to_string(),
+            pkce_verifier: None,
+            state: "st".to_string(),
+            nonce: None,
+            dpop_jkt: None,
+            openid_requested,
+        }
+    }
+
+    fn complete_input() -> CompleteInput {
+        CompleteInput::builder().code("code").state("st").build()
+    }
+
+    /// OIDC Core 1.0 §3.1.3.3: an `openid` grant's token response must carry
+    /// an ID token — unless the server narrowed `openid` out of the granted
+    /// scope (RFC 6749 §3.3), or the grant opted out of OIDC semantics.
+    /// `oidc(true)` skips the narrowing excuse.
+    #[rstest::rstest]
+    #[case::openid_no_scope_echoed(
+        None,
+        true,
+        r#"{"access_token":"t","token_type":"bearer"}"#,
+        true
+    )]
+    #[case::openid_scope_echoed(
+        None,
+        true,
+        r#"{"access_token":"t","token_type":"bearer","scope":"openid profile"}"#,
+        true
+    )]
+    #[case::openid_narrowed_away(
+        None,
+        true,
+        r#"{"access_token":"t","token_type":"bearer","scope":"profile"}"#,
+        false
+    )]
+    #[case::not_an_oidc_flow(None, false, r#"{"access_token":"t","token_type":"bearer"}"#, false)]
+    #[case::forced_oidc_ignores_narrowing(
+        Some(true),
+        false,
+        r#"{"access_token":"t","token_type":"bearer","scope":"profile"}"#,
+        true
+    )]
+    #[case::forced_non_oidc(
+        Some(false),
+        true,
+        r#"{"access_token":"t","token_type":"bearer"}"#,
+        false
+    )]
+    #[tokio::test]
+    async fn missing_id_token_enforcement(
+        #[case] oidc: Option<bool>,
+        #[case] openid_requested: bool,
+        #[case] body: &'static str,
+        #[case] expect_error: bool,
+    ) {
+        let grant = completing_grant(oidc, body).await;
+
+        let result = grant
+            .complete_oidc(&pending(openid_requested), complete_input())
+            .await;
+
+        if expect_error {
+            let err = result.expect_err("missing ID token must be rejected");
+            assert_eq!(err.kind(), crate::core::ErrorKind::Protocol, "got {err:?}");
+            assert!(format!("{err:?}").contains("MissingIdToken"), "got {err:?}");
+        } else {
+            let (_, id_token) = result.expect("completion must succeed");
+            assert!(id_token.is_none());
+        }
     }
 
     #[tokio::test]

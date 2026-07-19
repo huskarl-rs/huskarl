@@ -92,8 +92,12 @@ pub struct AuthorizationCodeGrant {
     /// Whether PKCE (RFC 7636) is disabled; see the `new` builder.
     pub(super) disable_pkce: bool,
 
-    /// Whether to send the OIDC `nonce` parameter; `None` follows the request
-    /// scope (sent only when `openid` is requested). See the `new` builder.
+    /// Whether flows on this grant follow OIDC semantics; `None` infers from
+    /// the request scope containing `openid`. See the `new` builder.
+    pub(super) oidc: Option<bool>,
+
+    /// Whether to send the OIDC `nonce` parameter; `None` follows the grant's
+    /// OIDC-ness (see `oidc`). See the `new` builder.
     pub(super) send_oidc_nonce: Option<bool>,
 
     /// Set to true to prefer PAR when available.
@@ -131,9 +135,10 @@ impl AuthorizationCodeGrant {
     ///
     /// Returns an error if a `jws_verifier_factory` is supplied without a
     /// `jws_verifier_platform`, if building the JWS verifier from `jwks_uri`
-    /// fails, or if `require_pushed_authorization_requests` is set without a
+    /// fails, if `require_pushed_authorization_requests` is set without a
     /// `pushed_authorization_request_endpoint` (honoring the requirement would
-    /// be impossible, and ignoring it would silently downgrade PAR).
+    /// be impossible, and ignoring it would silently downgrade PAR), or if
+    /// `oidc(true)` is set without a JWS verifier or issuer.
     #[builder(on(String, into))]
     pub async fn new(
         /// The client ID.
@@ -194,15 +199,20 @@ impl AuthorizationCodeGrant {
         /// rejects requests containing PKCE parameters.
         #[builder(default)]
         disable_pkce: bool,
+        /// Overrides OIDC semantics, inferred by default from the request
+        /// scope containing `openid`. An OIDC flow sends a `nonce`, requires
+        /// ID-token validation to be configured at
+        /// [`start`](AuthorizationCodeGrant::start), and requires an ID token
+        /// in the token response (OIDC Core 1.0 §3.1.3.3) unless the server
+        /// narrows `openid` out of the granted scope. `false`: `openid` is an
+        /// ordinary scope (an ID token returned anyway is still validated).
+        /// `true`: OIDC regardless of scope, and granted-scope narrowing no
+        /// longer excuses a missing ID token.
+        oidc: Option<bool>,
         /// Controls whether the OIDC `nonce` parameter (OIDC Core 1.0 §3.1.2.1)
-        /// is sent in the authorization request.
-        ///
-        /// `nonce` is an `OpenID` Connect parameter — it binds an ID token to the
-        /// request. By default (`None`) it is sent only when the request scope
-        /// contains `openid`, so OIDC flows get it and pure-OAuth servers (such
-        /// as those that strictly reject unknown parameters) do not. Set
-        /// `Some(true)`/`Some(false)` to force it on or off regardless of scope.
-        #[builder(required, default)]
+        /// is sent in the authorization request. By default it follows the
+        /// grant's OIDC-ness (see `oidc`); `true`/`false` force the wire
+        /// parameter on or off without affecting ID-token semantics.
         send_oidc_nonce: Option<bool>,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
         /// Restricts accepted ID token signature algorithms to this set: the
@@ -280,6 +290,24 @@ impl AuthorizationCodeGrant {
             ));
         }
 
+        // `oidc(true)` declares every flow OIDC, so a grant that could never
+        // validate the required ID token (OIDC Core 1.0 §3.1.3.3) fails
+        // here; inferred (scope-based) flows are checked at `start`.
+        if oidc == Some(true) {
+            if jws_verifier.is_none() {
+                return Err(Error::new(
+                    ErrorKind::Config,
+                    super::error::OidcRequiresVerifierSnafu.build(),
+                ));
+            }
+            if issuer.is_none() {
+                return Err(Error::new(
+                    ErrorKind::Config,
+                    super::error::OidcRequiresIssuerSnafu.build(),
+                ));
+            }
+        }
+
         Ok(AuthorizationCodeGrant {
             client_id,
             http_client,
@@ -298,6 +326,7 @@ impl AuthorizationCodeGrant {
             code_challenge_methods_supported,
             redirect_uri,
             disable_pkce,
+            oidc,
             send_oidc_nonce,
             prefer_pushed_authorization_requests,
             allowed_id_token_signed_response_algs,

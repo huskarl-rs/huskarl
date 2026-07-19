@@ -26,7 +26,7 @@ mod types;
 
 pub mod pkce;
 
-pub use error::{BuildError, CompleteError, ParseCallbackError};
+pub use error::{BuildError, CompleteError, ParseCallbackError, StartError};
 pub use grant::{
     AuthorizationCodeGrant, AuthorizationCodeGrantBuilder, AuthorizationCodeGrantParameters,
 };

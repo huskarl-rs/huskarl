@@ -27,10 +27,10 @@ pub enum CompleteError {
         "Authorization server claims to support issuer identification but no issuer returned."
     ))]
     MissingIssuer,
-    /// The token response included an ID token but no JWS verifier was configured on the grant.
+    /// The token response included an ID token but the grant cannot validate it.
     #[snafu(display(
-        "ID token received but grant has no JWS verifier configured; \
-         call `.jws_verifier_factory(...)` on the builder to enable ID token validation"
+        "ID token received but the grant cannot validate it; \
+         supply `jws_verifier_factory` on the builder"
     ))]
     IdTokenVerifierNotConfigured,
     /// The token response included an ID token but no issuer was configured on the grant.
@@ -38,6 +38,34 @@ pub enum CompleteError {
         "ID token received but grant has no issuer configured; provide an issuer via server metadata or builder"
     ))]
     IdTokenIssuerNotConfigured,
+    /// `openid` was granted but the token response carried no ID token.
+    #[snafu(display(
+        "openid scope granted but token response contained no ID token (OIDC Core 1.0 §3.1.3.3)"
+    ))]
+    MissingIdToken,
+}
+
+/// Source vocabulary for authorization-code start failures.
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(super)))]
+#[non_exhaustive]
+pub enum StartError {
+    /// An OIDC flow was started but the grant cannot validate ID tokens.
+    #[snafu(display(
+        "OIDC flow started (scope contains `openid`) but no `jws_verifier_factory` was \
+         supplied, so the required ID token (OIDC Core 1.0 §3.1.3.3) could never be \
+         validated; supply one on the builder, or set `oidc(false)` if `openid` is an \
+         ordinary scope on this server"
+    ))]
+    OidcVerifierNotConfigured,
+    /// An OIDC flow was started but the grant has no issuer configured.
+    #[snafu(display(
+        "OIDC flow started (scope contains `openid`) but the grant has no issuer \
+         configured, so the required ID token (OIDC Core 1.0 §3.1.3.3) could never be \
+         validated; provide an issuer via server metadata or builder, or `.oidc(false)` \
+         if `openid` is an ordinary scope on this server"
+    ))]
+    OidcIssuerNotConfigured,
 }
 
 /// An error parsing authorization-callback parameters into a
@@ -96,4 +124,16 @@ pub enum BuildError {
          PAR (RFC 9126 §5) to a plain authorization request"
     ))]
     RequiredParEndpointMissing,
+    /// `oidc(true)` was set but the grant cannot validate ID tokens.
+    #[snafu(display(
+        "oidc(true) was set but no `jws_verifier_factory` was supplied, \
+         so ID tokens could never be validated"
+    ))]
+    OidcRequiresVerifier,
+    /// `oidc(true)` was set but no issuer is configured.
+    #[snafu(display(
+        "oidc(true) was set but no issuer is configured; \
+         provide one via server metadata or builder"
+    ))]
+    OidcRequiresIssuer,
 }
