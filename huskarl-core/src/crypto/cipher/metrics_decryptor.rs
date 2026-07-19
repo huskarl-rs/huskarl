@@ -35,11 +35,45 @@ use crate::{
 /// monitoring — elevated rates may indicate key rotation in progress or
 /// tampered input. The [`CipherMatch`] `enc`/`kid` values are deliberately
 /// **not** used as labels: they can be attacker-supplied (JWE headers, cookie
-/// attributes), and unbounded label values degrade metrics backends.
+/// attributes), and unbounded label values degrade metrics backends. Per-key
+/// metrics keyed by your registered kids are still available — see
+/// [Per-key rotation metrics](#per-key-rotation-metrics) and, for the encrypt
+/// side,
+/// [`MetricsAeadEncryptorSelector`](crate::crypto::cipher::MetricsAeadEncryptorSelector).
 ///
 /// Note that `not_refreshed` covers "no refresh warranted", "blocked by
 /// policy", and "refresh failed" alike — the [`try_refresh`](AeadDecryptor::try_refresh)
 /// contract does not distinguish them.
+///
+/// # Per-key rotation metrics
+///
+/// Each [`MultiKeyDecryptor`](crate::crypto::cipher::MultiKeyDecryptor) entry
+/// can carry its own wrapper with a per-key `name`. The `success` series shows
+/// which key opens live traffic — when the retired key's successes reach zero,
+/// it is safe to remove. Try-all probing records an `error` on each wrong key,
+/// so only `success` is a clean per-key signal.
+///
+/// ```rust,no_run
+/// # use std::sync::Arc;
+/// # use huskarl_core::crypto::cipher::{AeadDecryptor, MetricsAeadDecryptor, MultiKeyDecryptor};
+/// # fn keys() -> (Arc<dyn AeadDecryptor>, Arc<dyn AeadDecryptor>) { unimplemented!() }
+/// # let (current_key, retired_key) = keys();
+/// let decryptor = MultiKeyDecryptor::new(vec![
+///     Arc::new(
+///         MetricsAeadDecryptor::builder()
+///             .inner(current_key)
+///             .name("session-cookie/2026-07")
+///             .build(),
+///     ),
+///     Arc::new(
+///         MetricsAeadDecryptor::builder()
+///             .inner(retired_key)
+///             .name("session-cookie/2026-01")
+///             .build(),
+///     ),
+/// ]);
+/// # let _ = decryptor;
+/// ```
 ///
 /// # Example
 ///
