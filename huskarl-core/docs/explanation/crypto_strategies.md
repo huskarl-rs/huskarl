@@ -226,13 +226,14 @@ selector trait: each [`seal`](crate::crypto::cipher::AeadSealer::seal) selects
 one frozen encryptor snapshot internally and runs the whole encrypt-then-frame
 sequence against it, so a rotation cannot land between choosing the key and
 using it — the read-header-then-sign hazard, closed off inside the one call.
-The price is opacity: a sealer exposes no `key_id`, so *which* key sealed a
-bundle cannot be observed or recorded alongside it — fitting, since the bundle
-carries no `kid` either. The inbound path leans on the AEAD tag instead: a
-multi-key unsealer tries its candidate keys, and a wrong key is a clean
-authentication failure, never a wrong plaintext.
-[`unseal`](crate::crypto::cipher::AeadUnsealer::unseal) still takes the same
-match criteria as decryption, for a caller that knows the key some other way.
+Key identity crosses the seam as a value: `seal` returns the bundle together
+with the `kid` of the key that sealed it, read off that same frozen snapshot,
+and [`unseal`](crate::crypto::cipher::AeadUnsealer::unseal) takes it back for
+direct key dispatch. Stored beside the bundle, the kid makes "which key
+protects this record" a metadata query; discarded, a multi-key unsealer tries
+its candidates, and the AEAD tag makes a wrong key a clean authentication
+failure, never a wrong plaintext. A kid only selects a key — an untrusted
+value can at worst cause a miss — and the bundle itself stays kid-free.
 
 Because a raw key is already a selector, `AeadV1Cipher::new(key)` is the whole
 fixed-key story. For a rotating key, put a
@@ -257,8 +258,10 @@ is no nonce/ciphertext/tag decomposition to expose, so such a service cannot
 implement [`AeadEncryptor`](crate::crypto::cipher::AeadEncryptor) at all — but
 it implements [`AeadSealer`](crate::crypto::cipher::AeadSealer) /
 [`AeadUnsealer`](crate::crypto::cipher::AeadUnsealer) naturally, handling
-rotation on its own side. Consumers bound on the sealer traits accept either
-world unchanged.
+rotation on its own side. It reports whatever key identity its service does —
+a KMS response often names the exact key version — or `None`; its tokens name
+their key internally either way, so unsealing may ignore the hint. Consumers
+bound on the sealer traits accept either world unchanged.
 
 ## The three operations, compared
 

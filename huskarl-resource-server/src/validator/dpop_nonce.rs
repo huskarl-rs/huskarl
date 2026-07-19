@@ -114,9 +114,11 @@ impl SealedTimestampNonce {
             .map_err(|e| Error::new(crate::core::ErrorKind::DPoP, e))?
             .as_secs()
             .to_be_bytes();
-        // `seal` freezes one key snapshot per nonce, even under rotation.
-        let sealed_bytes = self.sealer.seal(&current_time, &self.aad).await?;
-        Ok(BASE64_URL_SAFE_NO_PAD.encode(sealed_bytes))
+        // `seal` freezes one key snapshot per nonce, even under rotation. The
+        // kid is dropped: a nonce is opaque to the client that echoes it back,
+        // so unsealing relies on try-all instead.
+        let sealed = self.sealer.seal(&current_time, &self.aad).await?;
+        Ok(BASE64_URL_SAFE_NO_PAD.encode(sealed.bundle))
     }
 
     async fn nonce_age_secs(&self, nonce: Option<&str>) -> Option<u64> {
@@ -124,7 +126,7 @@ impl SealedTimestampNonce {
         let nonce_bytes = BASE64_URL_SAFE_NO_PAD.decode(nonce?).ok()?;
         let unsealed_bytes = self
             .sealer
-            .unseal(None, &nonce_bytes, &self.aad)
+            .unseal(&nonce_bytes, &self.aad, None)
             .await
             .ok()?;
         let timestamp_bytes = <[u8; 8]>::try_from(unsealed_bytes).ok()?;
@@ -259,7 +261,7 @@ mod tests {
             .seal(&issued_at.to_be_bytes(), &checker.aad)
             .await
             .unwrap();
-        BASE64_URL_SAFE_NO_PAD.encode(sealed)
+        BASE64_URL_SAFE_NO_PAD.encode(sealed.bundle)
     }
 
     #[tokio::test]

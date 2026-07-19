@@ -254,7 +254,9 @@ mod tests {
         Error,
         crypto::{
             KeyMatchStrength::*,
-            cipher::{AeadOutput, AeadSealer, AeadSealerUnsealer, AeadUnsealer, AeadV1Cipher},
+            cipher::{
+                AeadOutput, AeadSealer, AeadSealerUnsealer, AeadUnsealer, AeadV1Cipher, SealOutput,
+            },
         },
         error::ErrorKind,
     };
@@ -626,12 +628,20 @@ mod tests {
     #[tokio::test]
     async fn rotated_cookie_keys_seal_new_and_unseal_old() {
         // A cookie minted with v1 before the rotation, and one minted with a
-        // since-retired key v0 that is no longer carried.
-        let old_v1 = AeadV1Cipher::new(KeyedCookieCipher::new("v1"))
+        // since-retired key v0 that is no longer carried. Each seal reports
+        // the kid of the key that sealed, for the caller to store.
+        let SealOutput {
+            bundle: old_v1,
+            kid: old_v1_kid,
+        } = AeadV1Cipher::new(KeyedCookieCipher::new("v1"))
             .seal(b"session", b"aad")
             .await
             .unwrap();
-        let retired_v0 = AeadV1Cipher::new(KeyedCookieCipher::new("v0"))
+        assert_eq!(old_v1_kid.as_deref(), Some("v1"));
+        let SealOutput {
+            bundle: retired_v0,
+            kid: retired_v0_kid,
+        } = AeadV1Cipher::new(KeyedCookieCipher::new("v0"))
             .seal(b"session", b"aad")
             .await
             .unwrap();
@@ -647,28 +657,45 @@ mod tests {
             )));
 
         // New cookies are sealed with the current primary (v2)...
-        let new_cookie = cookies.seal(b"session", b"aad").await.unwrap();
+        let SealOutput {
+            bundle: new_cookie,
+            kid: new_kid,
+        } = cookies.seal(b"session", b"aad").await.unwrap();
+        assert_eq!(new_kid.as_deref(), Some("v2"));
         assert_eq!(
             &new_cookie[new_cookie.len() - 2..],
             b"v2",
             "new cookies are sealed with the primary key"
         );
 
-        // ...and every key still in the set opens the cookies it sealed, with no
-        // out-of-band kid — the bundle carries none, so the decryptor tries keys
-        // in turn until one authenticates.
+        // ...a stored kid dispatches straight to the key that sealed...
         assert_eq!(
-            cookies.unseal(None, &new_cookie, b"aad").await.unwrap(),
+            cookies
+                .unseal(&old_v1, b"aad", old_v1_kid.as_deref())
+                .await
+                .unwrap(),
+            b"session"
+        );
+        // ...and with no kid the decryptor tries keys in turn until one
+        // authenticates — the bundle itself carries none.
+        assert_eq!(
+            cookies.unseal(&new_cookie, b"aad", None).await.unwrap(),
             b"session"
         );
         assert_eq!(
-            cookies.unseal(None, &old_v1, b"aad").await.unwrap(),
+            cookies.unseal(&old_v1, b"aad", None).await.unwrap(),
             b"session"
         );
 
-        // The retired key's cookie no longer opens once its key leaves the set.
+        // The retired key's cookie no longer opens once its key leaves the
+        // set — its stored kid matches nothing, and try-all authenticates
+        // nothing.
         cookies
-            .unseal(None, &retired_v0, b"aad")
+            .unseal(&retired_v0, b"aad", retired_v0_kid.as_deref())
+            .await
+            .expect_err("a dropped key's kid matches no candidate");
+        cookies
+            .unseal(&retired_v0, b"aad", None)
             .await
             .expect_err("a key dropped from the set can no longer unseal");
     }
