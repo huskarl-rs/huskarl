@@ -18,6 +18,7 @@ use crate::{
     core::{
         EndpointUrl, Error,
         client_auth::ClientAuthentication,
+        crypto::signer::AsymmetricJwsSignerSelector,
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         platform::MaybeSendBoxFuture,
@@ -37,7 +38,7 @@ use crate::{
 ///
 /// See the [module documentation][crate::grant::token_exchange] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
-#[derive(Builder)]
+#[derive(Clone, Builder)]
 #[builder(on(String, into))]
 pub struct TokenExchangeGrant {
     /// The client ID. Optional: omit it for an unidentified client (RFC 8693 §2
@@ -84,6 +85,27 @@ pub struct TokenExchangeGrant {
     /// form auth for client secrets.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
+}
+
+impl TokenExchangeGrant {
+    /// Binds a per-session `DPoP` key, returning a grant that signs with it.
+    ///
+    /// Derived grants share the grant's server-scoped `DPoP` nonce, so one
+    /// grant per authorization server serves every session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the configured `DPoP` is
+    /// [`SessionKeyedDPoP`](crate::core::dpop::SessionKeyedDPoP).
+    pub fn with_session_dpop_key(
+        &self,
+        key: impl AsymmetricJwsSignerSelector + 'static,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            dpop: self.dpop.with_session_key(Arc::new(key))?,
+            ..self.clone()
+        })
+    }
 }
 
 impl core::fmt::Debug for TokenExchangeGrant {
@@ -429,4 +451,90 @@ pub struct TokenExchangeGrantForm {
     subject_token_type: SecurityTokenType,
     actor_token: Option<SecretString>,
     actor_token_type: Option<SecurityTokenType>,
+}
+
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
+mod session_dpop_tests {
+    use std::sync::LazyLock;
+
+    use httpmock::MockServer;
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+    use huskarl_reqwest::ReqwestClient;
+    use serde_json::json;
+
+    use super::{
+        SecurityToken, SecurityTokenType, TokenExchangeGrant, TokenExchangeGrantParameters,
+    };
+    use crate::{
+        core::{client_auth::NoAuth, dpop::SessionKeyedDPoP},
+        grant::core::OAuth2ExchangeGrant,
+        token::AccessToken,
+    };
+
+    static MOCK_SERVER: LazyLock<MockServer> = LazyLock::new(MockServer::start);
+
+    fn http_client() -> ReqwestClient {
+        reqwest::Client::new().into()
+    }
+
+    /// One grant per authorization server; a per-session grant derived from it
+    /// signs the token proof with that session's key.
+    #[tokio::test]
+    async fn exchange_with_session_dpop_key() {
+        use httpmock::prelude::*;
+
+        let grant = TokenExchangeGrant::builder()
+            .token_endpoint(
+                MOCK_SERVER
+                    .url("/session_dpop/token_exchange/token")
+                    .parse()
+                    .unwrap(),
+            )
+            .client_id("client")
+            .http_client(http_client())
+            .client_auth(NoAuth)
+            .dpop(SessionKeyedDPoP::new())
+            .build()
+            .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+            .unwrap();
+
+        let mock = MOCK_SERVER
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/session_dpop/token_exchange/token")
+                    .header_exists("DPoP")
+                    .form_urlencoded_tuple(
+                        "grant_type",
+                        "urn:ietf:params:oauth:grant-type:token-exchange",
+                    );
+                then.status(200)
+                    .header("Content-Type", "application/json")
+                    .json_body(json!({
+                        "access_token": "access_token",
+                        "token_type": "DPoP",
+                        "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                    }));
+            })
+            .await;
+
+        let response = grant
+            .exchange(
+                TokenExchangeGrantParameters::builder()
+                    .subject(
+                        SecurityToken::builder()
+                            .token("subject-token")
+                            .token_type(SecurityTokenType::AccessToken)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .await;
+
+        mock.assert();
+        assert!(matches!(
+            response.unwrap().access_token(),
+            AccessToken::DPoP(_)
+        ));
+    }
 }

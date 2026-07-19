@@ -15,8 +15,9 @@ use serde::Serialize;
 
 use crate::{
     core::{
-        EndpointUrl,
+        EndpointUrl, Error,
         client_auth::ClientAuthentication,
+        crypto::signer::AsymmetricJwsSignerSelector,
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         secrets::SecretString,
@@ -75,6 +76,27 @@ pub struct RefreshGrant {
     /// form auth for client secrets.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
+}
+
+impl RefreshGrant {
+    /// Binds a per-session `DPoP` key, returning a grant that signs with it.
+    ///
+    /// Derived grants share the grant's server-scoped `DPoP` nonce, so one
+    /// grant per authorization server serves every session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the configured `DPoP` is
+    /// [`SessionKeyedDPoP`](crate::core::dpop::SessionKeyedDPoP).
+    pub fn with_session_dpop_key(
+        &self,
+        key: impl AsymmetricJwsSignerSelector + 'static,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            dpop: self.dpop.with_session_key(Arc::new(key))?,
+            ..self.clone()
+        })
+    }
 }
 
 impl core::fmt::Debug for RefreshGrant {
@@ -218,5 +240,97 @@ mod tests {
             !encoded.contains(','),
             "resource values should not be comma-joined: {encoded}"
         );
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_family = "wasm"))]
+mod session_keyed_dpop_tests {
+    use std::sync::LazyLock;
+
+    use httpmock::MockServer;
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+    use huskarl_reqwest::ReqwestClient;
+    use serde_json::json;
+
+    use crate::{
+        core::{ErrorKind, client_auth::NoAuth, dpop::SessionKeyedDPoP, secrets::SecretString},
+        grant::{
+            core::OAuth2ExchangeGrant,
+            refresh::{RefreshGrant, RefreshGrantParameters},
+        },
+        token::{AccessToken, RefreshToken},
+    };
+
+    static MOCK_SERVER: LazyLock<MockServer> = LazyLock::new(MockServer::start);
+
+    fn http_client() -> ReqwestClient {
+        reqwest::Client::new().into()
+    }
+
+    /// One grant per authorization server; a per-session grant derived from it
+    /// drives a real `DPoP`-signed refresh request.
+    #[tokio::test]
+    async fn session_bound_grant_signs_dpop_proof() {
+        use httpmock::prelude::*;
+
+        let grant = RefreshGrant::builder()
+            .token_endpoint(MOCK_SERVER.url("/session_keyed/token").parse().unwrap())
+            .client_id("client")
+            .http_client(http_client())
+            .client_auth(NoAuth)
+            .dpop(SessionKeyedDPoP::new())
+            .build();
+
+        let mock = MOCK_SERVER
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/session_keyed/token")
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .header_exists("DPoP")
+                    .form_urlencoded_tuple("grant_type", "refresh_token")
+                    .form_urlencoded_tuple("refresh_token", "the-refresh-token");
+                then.status(200)
+                    .header("Content-Type", "application/json")
+                    .json_body(json!({
+                        "access_token": "access_token",
+                        "token_type": "DPoP",
+                    }));
+            })
+            .await;
+
+        let response = grant
+            .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+            .unwrap()
+            .exchange(
+                RefreshGrantParameters::builder()
+                    .refresh_token(RefreshToken::new(
+                        SecretString::new("the-refresh-token"),
+                        None,
+                    ))
+                    .build(),
+            )
+            .await;
+
+        mock.assert();
+        let response = response.unwrap();
+        assert!(matches!(response.access_token(), AccessToken::DPoP(_)));
+    }
+
+    /// Binding a per-session key onto a grant that is not session-keyed (here
+    /// the default `NoDPoP`) fails at binding time, before any request.
+    #[tokio::test]
+    async fn session_key_without_session_keyed_dpop_is_rejected() {
+        let grant = RefreshGrant::builder()
+            .token_endpoint(MOCK_SERVER.url("/never_called/token").parse().unwrap())
+            .client_id("client")
+            .http_client(http_client())
+            .client_auth(NoAuth)
+            .build();
+
+        let err = grant
+            .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+            .expect_err("binding a session key onto a NoDPoP grant must error");
+        assert_eq!(err.kind(), ErrorKind::DPoP);
     }
 }

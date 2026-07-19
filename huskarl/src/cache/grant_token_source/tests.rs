@@ -856,3 +856,62 @@ async fn open_breaker_does_not_mask_retryable_refresh() {
         matches!(e, GetTokenError::RefreshFailed { .. })
     });
 }
+
+/// A session-bound grant powers the whole source chain: the internally-built
+/// refresh request signs with the session key (via `to_refresh_grant`), and
+/// the source's resource-server `DPoP` proves against the issued token — the
+/// two things an unbound `SessionKeyedDPoP` template cannot do.
+#[cfg(not(target_family = "wasm"))]
+#[tokio::test]
+async fn session_bound_grant_powers_source_dpop_and_refresh() {
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+    use crate::{core::dpop::SessionKeyedDPoP, grant::refresh::RefreshGrant, token::AccessToken};
+
+    let http = MockHttpClient::default();
+    let grant = RefreshGrant::builder()
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .client_id("client")
+        .http_client(http.clone())
+        .client_auth(NoAuth)
+        .dpop(SessionKeyedDPoP::new())
+        .build()
+        .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+        .unwrap();
+
+    let store = SharedRefreshStore::default();
+    store.set(&refresh_token("the-rt")).await.unwrap();
+    let source = GrantTokenSource::builder()
+        .grant(grant)
+        .grant_parameters(NoSource)
+        .refresh_store(store)
+        .build();
+
+    // Refresh path: the DPoP proof on the token request comes from the bound
+    // session key; with no key bound this call fails before any HTTP.
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"at","token_type":"DPoP"}"#,
+    );
+    let token = source.token().await.unwrap();
+    let AccessToken::DPoP(at) = token.access_token() else {
+        panic!("expected a DPoP-bound access token");
+    };
+
+    // Resource-server path: the captured proof object holds the session key,
+    // and its proof thumbprint-matches the token's jkt.
+    let proof = source
+        .resource_server_dpop()
+        .proof(
+            &http::Method::GET,
+            &"https://rs.example.com/resource".parse().unwrap(),
+            at.token(),
+            at.jkt(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        proof.is_some(),
+        "session-bound RS DPoP must produce a proof"
+    );
+}

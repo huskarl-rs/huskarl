@@ -14,6 +14,7 @@ use crate::{
     core::{
         EndpointUrl, Error, ErrorKind,
         client_auth::AuthenticationContext,
+        dpop::AuthorizationServerDPoP,
         jwt::validator::ValidatedJwt,
         platform::{Duration, SystemTime},
         secrets::SecretString,
@@ -382,6 +383,19 @@ impl AuthorizationCodeGrant {
             }
         }
 
+        // The grant's DPoP key must match the key bound at authorization time
+        // (its thumbprint is the persisted `dpop_jkt`) — catches a wrong session
+        // key bound via `with_session_dpop_key` after the key round-tripped
+        // through the caller's session store, before the code is spent.
+        if pending_state.dpop_jkt.is_some()
+            && self.dpop.get_current_thumbprint().await != pending_state.dpop_jkt
+        {
+            return Err(Error::from(ErrorKind::DPoP).with_context(
+                "the grant's DPoP key does not match the key bound at authorization time \
+                 (dpop_jkt); bind the same session key used at start",
+            ));
+        }
+
         let token = self
             .exchange(AuthorizationCodeGrantParameters {
                 dpop_jkt: pending_state.dpop_jkt.clone(),
@@ -501,17 +515,21 @@ fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Resul
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use bytes::Bytes;
 
     use super::*;
     use crate::{
         core::{
             client_auth::NoAuth,
+            dpop::SessionKeyedDPoP,
             http::{HttpClient, HttpResponse, Idempotency},
             platform::MaybeSendBoxFuture,
             server_metadata::AuthorizationServerMetadata,
         },
-        grant::authorization_code::types::StartInput,
+        grant::authorization_code::types::{CompleteInput, StartInput},
+        token::AccessToken,
     };
 
     /// `start()` with direct delivery performs no HTTP; this client asserts that.
@@ -603,6 +621,157 @@ mod tests {
                 })
             })
         }
+    }
+
+    /// Records each request's path and whether it carried a `DPoP` header,
+    /// serving canned PAR and token responses.
+    #[derive(Clone, Default)]
+    struct RecordingHttp {
+        seen: Arc<Mutex<Vec<(String, bool)>>>,
+    }
+
+    impl HttpClient for RecordingHttp {
+        fn execute(
+            &self,
+            request: http::Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            let path = request.uri().path().to_string();
+            let has_dpop = request.headers().contains_key("DPoP");
+            self.seen.lock().unwrap().push((path.clone(), has_dpop));
+
+            let (status, body) = if path.ends_with("/par") {
+                (
+                    http::StatusCode::CREATED,
+                    Bytes::from_static(
+                        br#"{"request_uri":"urn:ietf:params:oauth:request_uri:abc","expires_in":90}"#,
+                    ),
+                )
+            } else {
+                (
+                    http::StatusCode::OK,
+                    Bytes::from_static(br#"{"access_token":"at","token_type":"DPoP"}"#),
+                )
+            };
+            Box::pin(async move {
+                Ok(HttpResponse {
+                    status,
+                    headers: http::HeaderMap::new(),
+                    body,
+                })
+            })
+        }
+    }
+
+    async fn session_keyed_par_grant(http: RecordingHttp) -> Grant {
+        AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(http)
+            .client_auth(NoAuth)
+            .dpop(SessionKeyedDPoP::new())
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .pushed_authorization_request_endpoint("https://as.example.com/par".parse().unwrap())
+            .prefer_pushed_authorization_requests(true)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap()
+    }
+
+    /// One grant per authorization server; a per-session grant derived at each
+    /// leg (simulating the key round-tripping through the caller's session
+    /// store) signs the PAR request and the token exchange with the same key.
+    #[tokio::test]
+    async fn session_key_signs_par_and_token() {
+        use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+        let http = RecordingHttp::default();
+        let grant = session_keyed_par_grant(http.clone()).await;
+        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+
+        let output = grant
+            .with_session_dpop_key(key.clone())
+            .unwrap()
+            .start(StartInput::scope(bon::vec!["api"]))
+            .await
+            .unwrap();
+
+        let token = grant
+            .with_session_dpop_key(key)
+            .unwrap()
+            .complete(
+                &output.pending_state,
+                CompleteInput::builder()
+                    .code("the-code")
+                    .state(output.pending_state.state.clone())
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        assert!(matches!(token.access_token(), AccessToken::DPoP(_)));
+
+        let seen = http.seen.lock().unwrap();
+        assert!(
+            seen.iter().any(|(p, dpop)| p.ends_with("/par") && *dpop),
+            "PAR request should carry a DPoP proof: {seen:?}"
+        );
+        assert!(
+            seen.iter().any(|(p, dpop)| p.ends_with("/token") && *dpop),
+            "token request should carry a DPoP proof: {seen:?}"
+        );
+    }
+
+    /// A different key bound at completion than the one bound at PAR time is
+    /// rejected before the token request goes out.
+    #[tokio::test]
+    async fn mismatched_session_key_at_complete_is_rejected() {
+        use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+        let http = RecordingHttp::default();
+        let grant = session_keyed_par_grant(http.clone()).await;
+
+        let output = grant
+            .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+            .unwrap()
+            .start(StartInput::scope(bon::vec!["api"]))
+            .await
+            .unwrap();
+
+        let result = grant
+            .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+            .unwrap()
+            .complete(
+                &output.pending_state,
+                CompleteInput::builder()
+                    .code("the-code")
+                    .state(output.pending_state.state.clone())
+                    .build(),
+            )
+            .await;
+
+        let err = result.expect_err("mismatched DPoP key must be rejected");
+        assert_eq!(err.kind(), ErrorKind::DPoP);
+        let seen = http.seen.lock().unwrap();
+        assert!(
+            !seen.iter().any(|(p, _)| p.ends_with("/token")),
+            "no token request should be made on mismatch: {seen:?}"
+        );
+    }
+
+    /// The unbound session-keyed template itself refuses to run a flow: PAR
+    /// proof signing fails until a session key is bound.
+    #[tokio::test]
+    async fn unbound_session_template_rejects_start() {
+        let http = RecordingHttp::default();
+        let grant = session_keyed_par_grant(http.clone()).await;
+
+        let err = grant
+            .start(StartInput::scope(bon::vec!["api"]))
+            .await
+            .expect_err("unbound SessionKeyedDPoP must not sign a PAR request");
+        assert_eq!(err.kind(), ErrorKind::DPoP);
     }
 
     #[tokio::test]

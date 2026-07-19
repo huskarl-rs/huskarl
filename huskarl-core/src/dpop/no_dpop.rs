@@ -4,6 +4,7 @@ use http::{Method, Uri};
 use snafu::Snafu;
 
 use crate::{
+    crypto::signer::AsymmetricJwsSignerSelector,
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
     error::{Error, ErrorKind},
     platform::MaybeSendBoxFuture,
@@ -45,6 +46,17 @@ impl AuthorizationServerDPoP for NoDPoP {
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         Arc::new(NoDPoP)
+    }
+
+    fn with_session_key(
+        &self,
+        _signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
+        // DPoP is disabled here; a per-session key needs SessionKeyedDPoP.
+        Err(Error::from(ErrorKind::DPoP).with_context(
+            "a per-session DPoP key was bound, but DPoP is not enabled on this grant; \
+             configure it with SessionKeyedDPoP",
+        ))
     }
 }
 

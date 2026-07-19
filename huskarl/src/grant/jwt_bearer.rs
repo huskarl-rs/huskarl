@@ -19,6 +19,7 @@ use crate::{
     core::{
         EndpointUrl, Error,
         client_auth::ClientAuthentication,
+        crypto::signer::AsymmetricJwsSignerSelector,
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         platform::MaybeSendBoxFuture,
@@ -39,7 +40,7 @@ use crate::{
 ///
 /// See the [module documentation][crate::grant::jwt_bearer] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
-#[derive(Builder)]
+#[derive(Clone, Builder)]
 #[builder(on(String, into))]
 pub struct JwtBearerGrant {
     /// The client ID. Optional: omit it for an unidentified client (the
@@ -87,6 +88,27 @@ pub struct JwtBearerGrant {
     /// form auth for client secrets.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
+}
+
+impl JwtBearerGrant {
+    /// Binds a per-session `DPoP` key, returning a grant that signs with it.
+    ///
+    /// Derived grants share the grant's server-scoped `DPoP` nonce, so one
+    /// grant per authorization server serves every session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error unless the configured `DPoP` is
+    /// [`SessionKeyedDPoP`](crate::core::dpop::SessionKeyedDPoP).
+    pub fn with_session_dpop_key(
+        &self,
+        key: impl AsymmetricJwsSignerSelector + 'static,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            dpop: self.dpop.with_session_key(Arc::new(key))?,
+            ..self.clone()
+        })
+    }
 }
 
 impl core::fmt::Debug for JwtBearerGrant {
@@ -223,7 +245,11 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        core::{client_auth::NoAuth, dpop::DPoP, secrets::SecretString},
+        core::{
+            client_auth::NoAuth,
+            dpop::{DPoP, SessionKeyedDPoP},
+            secrets::SecretString,
+        },
         grant::jwt_bearer::{JwtBearerGrant, JwtBearerGrantParameters},
         token::AccessToken,
     };
@@ -232,6 +258,62 @@ mod tests {
 
     fn http_client() -> ReqwestClient {
         reqwest::Client::new().into()
+    }
+
+    /// One grant per authorization server; a per-session grant derived from it
+    /// signs the token proof with that session's key.
+    #[tokio::test]
+    async fn test_exchange_with_session_dpop_key() {
+        use httpmock::prelude::*;
+
+        use crate::prelude::*;
+
+        let grant = JwtBearerGrant::builder()
+            .token_endpoint(
+                MOCK_SERVER
+                    .url("/session_dpop/jwt_bearer/token")
+                    .parse()
+                    .unwrap(),
+            )
+            .client_id("client")
+            .http_client(http_client())
+            .client_auth(NoAuth)
+            .dpop(SessionKeyedDPoP::new())
+            .build()
+            .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+            .unwrap();
+
+        let mock = MOCK_SERVER
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/session_dpop/jwt_bearer/token")
+                    .header_exists("DPoP")
+                    .form_urlencoded_tuple(
+                        "grant_type",
+                        "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    );
+                then.status(200)
+                    .header("Content-Type", "application/json")
+                    .json_body(json!({
+                        "access_token": "access_token",
+                        "token_type": "DPoP",
+                    }));
+            })
+            .await;
+
+        let response = grant
+            .exchange(
+                JwtBearerGrantParameters::builder()
+                    .assertion("the.signed.assertion")
+                    .build(),
+            )
+            .await;
+
+        mock.assert();
+        assert!(matches!(
+            response.unwrap().access_token(),
+            AccessToken::DPoP(_)
+        ));
     }
 
     #[test]
