@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.9.1...huskarl-resource-server-v0.10.0) - 2026-07-19
+
+### Added
+
+- *(core)* [**breaking**] Move server-side DPoP nonce checking into core ([#245](https://github.com/huskarl-rs/huskarl/pull/245))
+- *(crypto)* [**breaking**] Add back kid (optional string) for seal kid matching. ([#241](https://github.com/huskarl-rs/huskarl/pull/241))
+- *(crypto-native)* Add XChaCha20-Poly1305 AEAD cipher ([#238](https://github.com/huskarl-rs/huskarl/pull/238))
+- *(resource-server)* [**breaking**] Make validator metrics a decorator. ([#232](https://github.com/huskarl-rs/huskarl/pull/232))
+- *(crypto)* [**breaking**] Separate selectors from signers for JWS signers ([#229](https://github.com/huskarl-rs/huskarl/pull/229))
+- *(crypto)* [**breaking**] Implement selector for AES-GCM key, split off sealing traits. ([#225](https://github.com/huskarl-rs/huskarl/pull/225))
+
+### Other
+
+- *(jwt)* [**breaking**] Unify claim naming on serialized name, builders and struct fields. ([#230](https://github.com/huskarl-rs/huskarl/pull/230))
+
 ## [0.9.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.9.0...huskarl-resource-server-v0.9.1) - 2026-07-10
 
 ### Fixed

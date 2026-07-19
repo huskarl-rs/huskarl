@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.9.2...huskarl-v0.10.0) - 2026-07-19
+
+### Added
+
+- *(dpop)* [**breaking**] Support per-session DPoP keys via grant-level binding. ([#248](https://github.com/huskarl-rs/huskarl/pull/248))
+- *(client)* [**breaking**] Require ID token when openid scope requested. ([#244](https://github.com/huskarl-rs/huskarl/pull/244))
+- *(client)* Add function to make client decision on DPoP nonce. ([#236](https://github.com/huskarl-rs/huskarl/pull/236))
+- *(client)* Extract callback query parsing into `CompleteInput`. ([#233](https://github.com/huskarl-rs/huskarl/pull/233))
+- *(crypto)* [**breaking**] Separate selectors from signers for JWS signers ([#229](https://github.com/huskarl-rs/huskarl/pull/229))
+
+### Other
+
+- *(client)* Collapse dpop_nonce_action into a dpop_resend_advised predicate. ([#237](https://github.com/huskarl-rs/huskarl/pull/237))
+- *(jwt)* [**breaking**] Unify claim naming on serialized name, builders and struct fields. ([#230](https://github.com/huskarl-rs/huskarl/pull/230))
+
 ## [0.9.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.9.1...huskarl-v0.9.2) - 2026-07-16
 
 ### Fixed
