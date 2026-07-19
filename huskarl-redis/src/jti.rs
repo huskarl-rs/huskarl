@@ -34,8 +34,8 @@ pub struct RedisJtiUniquenessChecker<C> {
     connection: C,
     /// How long a seen JTI is remembered. See the type docs for sizing.
     ttl: Duration,
-    /// Key prefix; give each checker sharing a Redis database its own prefix.
-    #[builder(into, default = String::from("jti:"))]
+    /// Key prefix; give each checker sharing a Redis database its own prefix (e.g. `jti:`).
+    #[builder(into)]
     key_prefix: String,
 }
 
@@ -117,6 +117,7 @@ mod tests {
         let checker = RedisJtiUniquenessChecker::builder()
             .connection(mock)
             .ttl(Duration::from_mins(5))
+            .key_prefix("jti:")
             .build();
 
         assert_eq!(checker.check_and_mark_seen(JTI).await.unwrap(), seen);
@@ -148,6 +149,7 @@ mod tests {
         let checker = RedisJtiUniquenessChecker::builder()
             .connection(mock)
             .ttl(Duration::from_mins(5))
+            .key_prefix("jti:")
             .build();
 
         let err = checker.check_and_mark_seen(JTI).await.unwrap_err();
