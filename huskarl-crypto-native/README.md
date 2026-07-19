@@ -22,7 +22,10 @@ signing and verification, plus AEAD encryption.
   [`SymmetricKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/symmetric/struct.SymmetricKey.html)).
 - [`NativeVerifierPlatform`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/factory/struct.NativeVerifierPlatform.html) builds a verifier from a public JWK; it is the
   feature-gated default verifier platform for the ecosystem.
-- [`aead`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/) provides an AES-GCM AEAD cipher ([`AesGcmKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/struct.AesGcmKey.html)).
+- [`aead`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/) provides two AEAD ciphers — [`AesGcmKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/struct.AesGcmKey.html)
+  (`A128GCM`/`A192GCM`/`A256GCM`) and [`XChaChaKey`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/struct.XChaChaKey.html)
+  (`XC20P`) — plus [`aead::from_jwk`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/aead/fn.from_jwk.html), which selects between them by the
+  JWK’s `alg`.
 
 The following JWS algorithms are available:
 

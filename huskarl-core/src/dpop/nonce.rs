@@ -92,6 +92,11 @@ pub struct SealedTimestampNonce {
     /// in [`AeadV1Cipher`](crate::crypto::cipher::AeadV1Cipher); an
     /// externally-managed sealer (e.g. a KMS encrypt endpoint) can implement
     /// the traits directly.
+    ///
+    /// The nonce key is long-lived with no natural rotation trigger — prefer a
+    /// wide-nonce cipher (XChaCha20-Poly1305, `XC20P`) over AES-GCM's 2^32
+    /// per-key encryption budget; see [composing crypto
+    /// strategies](crate::_docs::explanation::crypto_strategies).
     #[builder(with = |sealer: impl AeadSealerUnsealer + 'static| Arc::new(sealer) as Arc<dyn AeadSealerUnsealer>)]
     sealer: Arc<dyn AeadSealerUnsealer>,
     /// The maximum age of a valid nonce. Defaults to 1 hour.

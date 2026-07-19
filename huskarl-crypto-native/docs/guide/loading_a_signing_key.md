@@ -136,5 +136,6 @@ let key = SymmetricKey::from_secret(raw.mapped(OctBytes::new("HS256"))).await?;
 # }
 ```
 
-The AES-GCM cipher ([`AesGcmKey`](crate::aead::AesGcmKey)) loads the same way,
-with an `A128GCM`/`A192GCM`/`A256GCM` algorithm label matching its key length.
+The AEAD ciphers load the same way: [`AesGcmKey`](crate::aead::AesGcmKey) with
+an `A128GCM`/`A192GCM`/`A256GCM` algorithm label matching its key length,
+[`XChaChaKey`](crate::aead::XChaChaKey) with `XC20P` and a 32-byte key.
