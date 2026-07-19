@@ -33,14 +33,14 @@ default-members = [
 exclude = ["huskarl-core/fuzz"]
 
 [workspace.dependencies]
-huskarl = { version = "0.9", path = "./huskarl" }
-huskarl-core = { version = "0.8", path = "./huskarl-core" }
+huskarl = { version = "0.10", path = "./huskarl" }
+huskarl-core = { version = "0.9", path = "./huskarl-core" }
 huskarl-macros = { version = "0.3", path = "./huskarl-macros" }
-huskarl-redis = { version = "0.1", path = "./huskarl-redis" }
-huskarl-reqwest = { version = "0.7", path = "./huskarl-reqwest" }
-huskarl-crypto-native = { version = "0.9", path = "./huskarl-crypto-native" }
-huskarl-crypto-webcrypto = { version = "0.9", path = "./huskarl-crypto-webcrypto" }
-huskarl-resource-server = { version = "0.9", path = "./huskarl-resource-server" }
+huskarl-redis = { version = "0.2", path = "./huskarl-redis" }
+huskarl-reqwest = { version = "0.8", path = "./huskarl-reqwest" }
+huskarl-crypto-native = { version = "0.10", path = "./huskarl-crypto-native" }
+huskarl-crypto-webcrypto = { version = "0.10", path = "./huskarl-crypto-webcrypto" }
+huskarl-resource-server = { version = "0.10", path = "./huskarl-resource-server" }
 
 bon = { version = "3.9", default-features = false, features = [
   "alloc",

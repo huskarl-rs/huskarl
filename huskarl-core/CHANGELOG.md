@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.8.1...huskarl-core-v0.9.0) - 2026-07-19
+
+### Added
+
+- *(dpop)* [**breaking**] Support per-session DPoP keys via grant-level binding. ([#248](https://github.com/huskarl-rs/huskarl/pull/248))
+- *(core)* [**breaking**] Move server-side DPoP nonce checking into core ([#245](https://github.com/huskarl-rs/huskarl/pull/245))
+- *(crypto)* [**breaking**] Add back kid (optional string) for seal kid matching. ([#241](https://github.com/huskarl-rs/huskarl/pull/241))
+- *(core)* Add metrics decorator for encryption. ([#240](https://github.com/huskarl-rs/huskarl/pull/240))
+- *(crypto-native)* Add XChaCha20-Poly1305 AEAD cipher ([#238](https://github.com/huskarl-rs/huskarl/pull/238))
+- *(auth)* Loosen lifetime requirements of oauth2 form keys. ([#235](https://github.com/huskarl-rs/huskarl/pull/235))
+- *(crypto)* [**breaking**] Return diagnostic errors from AsymmetricPublicKey::from_jwk ([#234](https://github.com/huskarl-rs/huskarl/pull/234))
+- *(crypto)* [**breaking**] Implement selector for AES-GCM key, split off sealing traits. ([#225](https://github.com/huskarl-rs/huskarl/pull/225))
+
+### Other
+
+- Add a few more references to XChaCha20-Poly1305. ([#246](https://github.com/huskarl-rs/huskarl/pull/246))
+- *(crypto)* Move base signer/verifier traits into the base module. ([#231](https://github.com/huskarl-rs/huskarl/pull/231))
+- *(jwt)* [**breaking**] Unify claim naming on serialized name, builders and struct fields. ([#230](https://github.com/huskarl-rs/huskarl/pull/230))
+
 ## [0.8.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.8.0...huskarl-core-v0.8.1) - 2026-07-10
 
 ### Added
