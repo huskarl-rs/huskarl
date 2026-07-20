@@ -52,9 +52,10 @@ use crate::{
 /// # Example
 ///
 /// ```rust,no_run
-/// # use huskarl_core::crypto::cipher::{AeadV1Cipher, MetricsAeadEncryptorSelector};
+/// # use huskarl_core::crypto::cipher::MetricsAeadEncryptorSelector;
+/// # use huskarl_core::crypto::seal::AeadV1Sealer;
 /// # let my_cipher = (); // your inner `AeadCipher` / `AeadEncryptorSelector`
-/// let sealer = AeadV1Cipher::new(
+/// let sealer = AeadV1Sealer::new(
 ///     MetricsAeadEncryptorSelector::builder()
 ///         .inner(my_cipher)
 ///         .name("session-cookie")

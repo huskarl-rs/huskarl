@@ -254,9 +254,8 @@ mod tests {
         Error,
         crypto::{
             KeyMatchStrength::*,
-            cipher::{
-                AeadOutput, AeadSealer, AeadSealerUnsealer, AeadUnsealer, AeadV1Cipher, SealOutput,
-            },
+            cipher::AeadOutput,
+            seal::{AeadSealer, AeadSealerUnsealer, AeadUnsealer, AeadV1Sealer, SealOutput},
         },
         error::ErrorKind,
     };
@@ -620,7 +619,7 @@ mod tests {
         }
     }
 
-    /// The rotated-cookie-keys shape: one `AeadV1Cipher<MultiKeyCipher>` seals
+    /// The rotated-cookie-keys shape: one `AeadV1Sealer<MultiKeyCipher>` seals
     /// every new cookie with the current primary key while still unsealing cookies
     /// sealed by any key left in the decryptor set — and a key dropped from the set
     /// can no longer open its old cookies. Erased to `Arc<dyn AeadSealerUnsealer>`,
@@ -633,7 +632,7 @@ mod tests {
         let SealOutput {
             bundle: old_v1,
             kid: old_v1_kid,
-        } = AeadV1Cipher::new(KeyedCookieCipher::new("v1"))
+        } = AeadV1Sealer::new(KeyedCookieCipher::new("v1"))
             .seal(b"session", b"aad")
             .await
             .unwrap();
@@ -641,14 +640,14 @@ mod tests {
         let SealOutput {
             bundle: retired_v0,
             kid: retired_v0_kid,
-        } = AeadV1Cipher::new(KeyedCookieCipher::new("v0"))
+        } = AeadV1Sealer::new(KeyedCookieCipher::new("v0"))
             .seal(b"session", b"aad")
             .await
             .unwrap();
 
         // After rotation: seal with v2, still decrypt v2 and v1 (v0 dropped).
         let cookies: Arc<dyn AeadSealerUnsealer> =
-            Arc::new(AeadV1Cipher::new(MultiKeyCipher::new(
+            Arc::new(AeadV1Sealer::new(MultiKeyCipher::new(
                 KeyedCookieCipher::new("v2"),
                 MultiKeyDecryptor::new(vec![
                     Arc::new(KeyedCookieCipher::new("v2")) as Arc<dyn AeadDecryptor>,
