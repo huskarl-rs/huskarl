@@ -393,8 +393,8 @@ impl AeadDecryptor for AesGcmKeyInner {
 
 /// The huskarl `enc` identifier for XChaCha20-Poly1305, taken from the JOSE
 /// draft `draft-amringer-jose-chacha`. Not a registered JWE `enc` value — it
-/// names the algorithm in huskarl's own sealed-bundle framing only; do not
-/// route it through a JWE path.
+/// labels the algorithm for huskarl-internal AEAD selection only; do not route
+/// it through a JWE path.
 const XC20P: &str = "XC20P";
 
 /// An XChaCha20-Poly1305 AEAD cipher (`RustCrypto`), doing both encryption and
@@ -691,14 +691,14 @@ mod tests {
         let key = AesGcmKey::from_secret(
             TestSecret {
                 bytes: vec![4u8; 32],
-                identity: Some("cookie-key-2026".into()),
+                identity: Some("key-2026".into()),
             }
             .mapped(huskarl_core::jwk::OctBytes::new("A256GCM")),
         )
         .await
         .unwrap();
         let encryptor = key.select_encryptor().await;
-        assert_eq!(encryptor.key_id().as_deref(), Some("cookie-key-2026"));
+        assert_eq!(encryptor.key_id().as_deref(), Some("key-2026"));
     }
 
     #[tokio::test]
@@ -748,18 +748,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrong_aad_fails_to_open() {
+    async fn wrong_aad_fails_to_decrypt() {
         let key = key_from(vec![5u8; 32], None);
         let encryptor = key.select_encryptor().await;
         let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
         let res = key
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"other")
             .await;
-        assert!(res.is_err(), "AAD must bind: a different AAD must not open");
+        assert!(
+            res.is_err(),
+            "AAD must bind: a different AAD must not decrypt"
+        );
     }
 
     #[tokio::test]
-    async fn tampered_ciphertext_fails_to_open() {
+    async fn tampered_ciphertext_fails_to_decrypt() {
         let key = key_from(vec![6u8; 32], None);
         let encryptor = key.select_encryptor().await;
         let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
@@ -831,14 +834,14 @@ mod tests {
     }
 
     /// A fresh random nonce per `encrypt` is the safety premise of the 2^32
-    /// bound — two seals of the same plaintext must not reuse a nonce.
+    /// bound — two encryptions of the same plaintext must not reuse a nonce.
     #[tokio::test]
-    async fn aes_gcm_nonces_differ_across_seals() {
+    async fn aes_gcm_nonces_differ_across_encryptions() {
         let key = key_from(vec![8u8; 32], None);
         let encryptor = key.select_encryptor().await;
         let a = encryptor.encrypt(b"payload", b"aad").await.unwrap();
         let b = encryptor.encrypt(b"payload", b"aad").await.unwrap();
-        assert_ne!(a.nonce, b.nonce, "each seal must draw a fresh nonce");
+        assert_ne!(a.nonce, b.nonce, "each encryption must draw a fresh nonce");
         assert_ne!(
             a.ciphertext, b.ciphertext,
             "distinct nonces must yield distinct ciphertext"
@@ -930,14 +933,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn xchacha_wrong_aad_fails_to_open() {
+    async fn xchacha_wrong_aad_fails_to_decrypt() {
         let key = xchacha_key_from(vec![5u8; 32], None);
         let encryptor = key.select_encryptor().await;
         let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
         let res = key
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, b"other")
             .await;
-        assert!(res.is_err(), "AAD must bind: a different AAD must not open");
+        assert!(
+            res.is_err(),
+            "AAD must bind: a different AAD must not decrypt"
+        );
     }
 
     #[tokio::test]
@@ -977,7 +983,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn xchacha_tampered_ciphertext_fails_to_open() {
+    async fn xchacha_tampered_ciphertext_fails_to_decrypt() {
         let key = xchacha_key_from(vec![6u8; 32], None);
         let encryptor = key.select_encryptor().await;
         let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
@@ -993,14 +999,14 @@ mod tests {
     }
 
     /// The 192-bit nonce is what removes the rotation-for-nonce-safety schedule;
-    /// confirm it is actually drawn fresh per seal.
+    /// confirm it is actually drawn fresh per encryption.
     #[tokio::test]
-    async fn xchacha_nonces_differ_across_seals() {
+    async fn xchacha_nonces_differ_across_encryptions() {
         let key = xchacha_key_from(vec![8u8; 32], None);
         let encryptor = key.select_encryptor().await;
         let a = encryptor.encrypt(b"payload", b"aad").await.unwrap();
         let b = encryptor.encrypt(b"payload", b"aad").await.unwrap();
-        assert_ne!(a.nonce, b.nonce, "each seal must draw a fresh nonce");
+        assert_ne!(a.nonce, b.nonce, "each encryption must draw a fresh nonce");
         assert_ne!(
             a.ciphertext, b.ciphertext,
             "distinct nonces must yield distinct ciphertext"

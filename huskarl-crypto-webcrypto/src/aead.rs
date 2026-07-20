@@ -1,4 +1,4 @@
-//! AES-GCM AEAD over the WebCrypto/SubtleCrypto API (e.g. for cookie sealing).
+//! AES-GCM AEAD over the WebCrypto/SubtleCrypto API.
 //!
 //! [`AesGcmKey`] is the AES-128/192/256-GCM cipher implementing huskarl-core's
 //! [`AeadEncryptorSelector`] (handing out its shared inner [`AeadEncryptor`])
@@ -61,16 +61,15 @@ impl std::fmt::Debug for Inner {
 /// Implements [`AeadEncryptorSelector`] (handing out its shared inner
 /// [`AeadEncryptor`]) + [`AeadDecryptor`] — and therefore
 /// [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher) by blanket impl — so
-/// it can seal `huskarl-login`'s session and login-state cookies on platforms
-/// whose only available crypto is `WebCrypto`: Cloudflare Workers, browsers,
-/// Deno Deploy. It is the symmetric counterpart to [`crate::asymmetric`]'s
-/// signer/verifier.
+/// it provides symmetric AEAD content encryption on platforms whose only
+/// available crypto is `WebCrypto`: Cloudflare Workers, browsers, Deno Deploy.
+/// It is the symmetric counterpart to [`crate::asymmetric`]'s signer/verifier.
 ///
-/// Wrap it the same way as any other [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher):
-/// `AeadV1Sealer::new(key)` for the bundle envelope, and the reload wrappers
+/// It composes like any other [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher):
+/// the reload wrappers
 /// ([`RetryingDecryptor`](huskarl_core::crypto::cipher::RetryingDecryptor),
-/// [`MultiKeyCipher`](huskarl_core::crypto::cipher::MultiKeyCipher)) compose
-/// over it for hot key rotation.
+/// [`MultiKeyCipher`](huskarl_core::crypto::cipher::MultiKeyCipher)) stack over
+/// it for hot key rotation.
 ///
 /// All operations are `async` because `SubtleCrypto` is async-only; the nonce
 /// is drawn from the platform CSPRNG (`crypto.getRandomValues`), so this type
@@ -187,9 +186,9 @@ impl AesGcmKey {
     /// The AES-128/192/256 variant follows from the key length (16/24/32
     /// bytes). If the JWK carries an `alg`, it must agree with the
     /// length-selected variant (`A128GCM`/`A192GCM`/`A256GCM`). The `kid`
-    /// field, if present, is used as the key ID — which `huskarl-login`
-    /// writes into the kid sidecar cookie so rotation/refresh-on-miss can
-    /// target the right key. Holding a [`jwk::PrivateJwk`], convert with
+    /// field, if present, is used as the key ID, which the decryption side
+    /// matches on (via `cipher_match`) so multi-key rotation can target the
+    /// right key. Holding a [`jwk::PrivateJwk`], convert with
     /// `try_into()` — the conversion rejects asymmetric keys.
     ///
     /// # Errors
@@ -318,7 +317,7 @@ impl AeadEncryptor for Inner {
         Box::pin(async move {
             let crypto = get_crypto().context(OpCryptoSnafu)?;
 
-            // Fresh 96-bit nonce from the platform CSPRNG, per seal.
+            // Fresh 96-bit nonce from the platform CSPRNG, per encryption.
             let mut nonce = [0u8; NONCE_LEN];
             crypto
                 .get_random_values_with_u8_array(&mut nonce)
@@ -334,8 +333,10 @@ impl AeadEncryptor for Inner {
             .await
             .context(AwaitSnafu)?;
 
-            // WebCrypto returns ciphertext || tag; split the trailing tag off so
-            // the bundle layer (`AeadV1Sealer`) can frame nonce/ciphertext/tag.
+            // WebCrypto returns ciphertext || tag concatenated; split the
+            // trailing tag off so `encrypt` returns the separate nonce,
+            // ciphertext, and tag fields the `AeadEncryptor`/`AeadOutput`
+            // contract requires.
             let combined = Uint8Array::new(&result).to_vec();
             if combined.len() < TAG_LEN {
                 return Err(OpError::ShortCiphertext.into());
@@ -367,7 +368,7 @@ impl AeadDecryptor for AesGcmKey {
             let crypto = get_crypto().context(OpCryptoSnafu)?;
             let params = aes_gcm_params(nonce, aad).context(ParamsSnafu)?;
 
-            // WebCrypto's open expects ciphertext || tag; re-join the detached tag.
+            // WebCrypto's decrypt expects ciphertext || tag; re-join the detached tag.
             let mut combined = Vec::with_capacity(ciphertext.len() + tag.len());
             combined.extend_from_slice(ciphertext);
             combined.extend_from_slice(tag);
@@ -490,7 +491,7 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn seal_then_open_roundtrips() {
+    async fn encrypt_then_decrypt_roundtrips() {
         let key = key_256().await;
         let aad = b"session";
         let pt = b"the quick brown fox jumps over the lazy dog";
@@ -513,17 +514,20 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn nonces_differ_across_seals() {
+    async fn nonces_differ_across_encryptions() {
         let key = key_256().await;
         let encryptor = key.select_encryptor().await;
         let a = encryptor.encrypt(b"x", b"aad").await.unwrap();
         let b = encryptor.encrypt(b"x", b"aad").await.unwrap();
-        assert_ne!(a.nonce, b.nonce, "each seal must draw a fresh CSPRNG nonce");
+        assert_ne!(
+            a.nonce, b.nonce,
+            "each encryption must draw a fresh CSPRNG nonce"
+        );
     }
 
     #[wasm_bindgen_test]
-    async fn wrong_aad_fails_to_open() {
-        // The AAD binding is what domain-separates session vs login-state cookies.
+    async fn wrong_aad_fails_to_decrypt() {
+        // The AAD binding domain-separates otherwise-identical inputs.
         let key = key_256().await;
         let encryptor = key.select_encryptor().await;
         let out = encryptor.encrypt(b"payload", b"session").await.unwrap();
@@ -534,7 +538,7 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn tampered_ciphertext_fails_to_open() {
+    async fn tampered_ciphertext_fails_to_decrypt() {
         let key = key_256().await;
         let encryptor = key.select_encryptor().await;
         let mut out = encryptor
@@ -552,7 +556,7 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
-    async fn other_key_cannot_open() {
+    async fn other_key_cannot_decrypt() {
         let a = key_from(vec![7u8; 32], None).await;
         let b = key_from(vec![9u8; 32], None).await;
         let encryptor = a.select_encryptor().await;
@@ -562,7 +566,7 @@ mod tests {
             .await;
         assert!(
             res.is_err(),
-            "a foreign key must not authenticate the bundle"
+            "a foreign key must not authenticate the ciphertext"
         );
     }
 
@@ -582,8 +586,8 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn enc_algorithm_reflects_key_size() {
-        // The reported `enc` is what `AeadV1Sealer` writes into the envelope and
-        // what `cipher_match` keys on, so each AES size must label itself.
+        // `enc_algorithm` is what `cipher_match` keys on to select a decryption
+        // key, so each AES size must label itself.
         for (len, enc) in [(16usize, "A128GCM"), (24, "A192GCM"), (32, "A256GCM")] {
             let key = key_from(vec![3u8; len], None).await;
             let encryptor = key.select_encryptor().await;
@@ -685,7 +689,7 @@ mod tests {
         assert_eq!(encryptor.enc_algorithm().as_ref(), "A256GCM");
         assert_eq!(encryptor.key_id().as_deref(), Some("startup"));
 
-        // It seals and opens like any other key.
+        // It encrypts and decrypts like any other key.
         let aad = b"session";
         let out = encryptor
             .encrypt(b"provisioned payload", aad)
@@ -700,12 +704,12 @@ mod tests {
         // And it shares the wire format with a from_secret key over the same
         // material — i.e. from_crypto_key really imported the same key.
         let twin = key_from(bytes, None).await;
-        let opened = twin
+        let decrypted = twin
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
             .await
             .unwrap();
         assert_eq!(
-            opened,
+            decrypted,
             b"provisioned payload".to_vec(),
             "the same key material must interop",
         );
@@ -731,16 +735,17 @@ mod tests {
     // ── Interop with the pure-Rust `aes-gcm` cipher ───────────────────────
     //
     // Confirms both implementations agree on the AES-256-GCM wire format
-    // (96-bit nonce, ciphertext, 128-bit *detached* tag, AAD), so a cookie
-    // sealed on one runtime opens on the other — e.g. a deployment migrating
-    // between the native and WebCrypto cipher, or running both side by side.
+    // (96-bit nonce, ciphertext, 128-bit *detached* tag, AAD), so a value
+    // encrypted on one runtime decrypts on the other — e.g. a deployment
+    // migrating between the native and WebCrypto cipher, or running both side
+    // by side.
 
     fn native_key(bytes: Vec<u8>) -> NativeAesGcmKey {
         NativeAesGcmKey::from_jwk(oct_jwk(bytes, None)).unwrap()
     }
 
     #[wasm_bindgen_test]
-    async fn webcrypto_seal_opens_under_native() {
+    async fn webcrypto_ciphertext_decrypts_under_native() {
         let bytes = vec![5u8; 32];
         let web = key_from(bytes.clone(), None).await;
         let native = native_key(bytes);
@@ -755,18 +760,18 @@ mod tests {
         assert_eq!(
             recovered,
             b"interop payload".to_vec(),
-            "a WebCrypto-sealed bundle must open under the native cipher",
+            "a WebCrypto ciphertext must decrypt under the native cipher",
         );
     }
 
     #[wasm_bindgen_test]
-    async fn native_seal_opens_under_webcrypto() {
+    async fn native_ciphertext_decrypts_under_webcrypto() {
         let bytes = vec![5u8; 32];
         let web = key_from(bytes.clone(), None).await;
         let native = native_key(bytes);
         let aad = b"session";
 
-        // Native sealing draws its nonce from getrandom — needs the wasm_js
+        // Native encryption draws its nonce from getrandom — needs the wasm_js
         // backend cfg at build time (see the dev-dependency comment).
         let encryptor = native.select_encryptor().await;
         let out = encryptor.encrypt(b"interop payload", aad).await.unwrap();
@@ -777,7 +782,7 @@ mod tests {
         assert_eq!(
             recovered,
             b"interop payload".to_vec(),
-            "a native-sealed bundle must open under the WebCrypto cipher",
+            "a native ciphertext must decrypt under the WebCrypto cipher",
         );
     }
 
@@ -809,7 +814,7 @@ mod tests {
         assert_eq!(web_encryptor.enc_algorithm().as_ref(), "A192GCM");
         assert_eq!(native_encryptor.enc_algorithm().as_ref(), "A192GCM");
 
-        // WebCrypto seals → native opens.
+        // WebCrypto encrypts → native decrypts.
         let out = web_encryptor.encrypt(b"aes192 payload", aad).await.unwrap();
         let recovered = native
             .decrypt(None, &out.nonce, &out.ciphertext, &out.tag, aad)
@@ -817,7 +822,7 @@ mod tests {
             .unwrap();
         assert_eq!(recovered, b"aes192 payload".to_vec());
 
-        // Native seals → WebCrypto opens.
+        // Native encrypts → WebCrypto decrypts.
         let out = native_encryptor
             .encrypt(b"aes192 payload", aad)
             .await
