@@ -73,6 +73,13 @@ echo
 echo "HTML report: huskarl-core/fuzz/coverage/${usage_target?}/index.html"
 '''
 
+[tasks."semver:check"]
+description = "Report whether the branch is semver-affecting per crate, flagging commit types that understate a breaking change"
+usage = '''
+arg "[baseline]" help="Baseline git ref to compare against" default="origin/main"
+'''
+run = 'scripts/semver-report.sh "${usage_baseline}"'
+
 [tasks."docs:rs"]
 run = "cargo +nightly docs-rs"
 
