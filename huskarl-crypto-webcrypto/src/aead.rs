@@ -67,7 +67,7 @@ impl std::fmt::Debug for Inner {
 /// signer/verifier.
 ///
 /// Wrap it the same way as any other [`AeadCipher`](huskarl_core::crypto::cipher::AeadCipher):
-/// `AeadV1Cipher::new(key)` for the bundle envelope, and the reload wrappers
+/// `AeadV1Sealer::new(key)` for the bundle envelope, and the reload wrappers
 /// ([`RetryingDecryptor`](huskarl_core::crypto::cipher::RetryingDecryptor),
 /// [`MultiKeyCipher`](huskarl_core::crypto::cipher::MultiKeyCipher)) compose
 /// over it for hot key rotation.
@@ -335,7 +335,7 @@ impl AeadEncryptor for Inner {
             .context(AwaitSnafu)?;
 
             // WebCrypto returns ciphertext || tag; split the trailing tag off so
-            // the bundle layer (`AeadV1Cipher`) can frame nonce/ciphertext/tag.
+            // the bundle layer (`AeadV1Sealer`) can frame nonce/ciphertext/tag.
             let combined = Uint8Array::new(&result).to_vec();
             if combined.len() < TAG_LEN {
                 return Err(OpError::ShortCiphertext.into());
@@ -582,7 +582,7 @@ mod tests {
 
     #[wasm_bindgen_test]
     async fn enc_algorithm_reflects_key_size() {
-        // The reported `enc` is what `AeadV1Cipher` writes into the envelope and
+        // The reported `enc` is what `AeadV1Sealer` writes into the envelope and
         // what `cipher_match` keys on, so each AES size must label itself.
         for (len, enc) in [(16usize, "A128GCM"), (24, "A192GCM"), (32, "A256GCM")] {
             let key = key_from(vec![3u8; len], None).await;

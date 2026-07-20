@@ -6,7 +6,8 @@
 //!
 //! This module holds the signing ([`signer`]), verification ([`verifier`]), and
 //! encryption ([`cipher`]) traits, plus the shared key-matching types
-//! ([`KeyMatchStrength`]). Concrete implementations live in platform crates.
+//! ([`KeyMatchStrength`]); [`seal`] is a convenience layer over [`cipher`] for
+//! self-contained bundles. Concrete implementations live in platform crates.
 //!
 //! Each base trait comes with a family of composable wrappers (multi-key,
 //! refreshable, scheduled-refresh, retrying) that decorate it without changing
@@ -15,6 +16,7 @@
 
 pub mod cipher;
 pub(crate) mod refreshable;
+pub mod seal;
 pub mod signer;
 pub mod verifier;
 

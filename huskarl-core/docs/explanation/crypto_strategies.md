@@ -204,12 +204,22 @@ reload on an explicit rotation event.
 
 ## Sealing: self-contained bundles
 
-Encryption has one more layer for values that must travel on their own —
-encrypted cookies, stateless tokens — where the nonce and tag have to ride along
-with the ciphertext. [`AeadSealer`](crate::crypto::cipher::AeadSealer) and
-[`AeadUnsealer`](crate::crypto::cipher::AeadUnsealer) describe that operation:
+The [`cipher`](crate::crypto::cipher) traits are the flexible base: they expose
+the AEAD operation in its `(nonce, ciphertext, tag)` parts, which is exactly what
+a scheme like JWE needs — it places each part in its own header/segment. Most
+callers, though, don't want to manage those parts; they just need to encrypt a
+value, store or send it, and decrypt it later. [`seal`](crate::crypto::seal) is
+that convenience layer, built *on* `cipher`: it packs the parts into one opaque,
+self-contained bundle. The trade is deliberate — the bundle framing is
+huskarl's own, so sealing is the wrong tool for JWE (whose framing is fixed by
+spec); reach past it to the `cipher` traits there.
+
+Sealing suits values that must travel on their own — encrypted cookies, stateless
+tokens — where the nonce and tag must be carried alongside the ciphertext.
+[`AeadSealer`](crate::crypto::seal::AeadSealer) and
+[`AeadUnsealer`](crate::crypto::seal::AeadUnsealer) describe that operation:
 sealing packs one opaque byte string, unsealing re-opens it.
-[`AeadV1Cipher`](crate::crypto::cipher::AeadV1Cipher) is the local
+[`AeadV1Sealer`](crate::crypto::seal::AeadV1Sealer) is the local
 implementation, framing an AEAD operation as a versioned, self-describing bundle
 (`[0x01 || nonce_len || tag_len || nonce || ciphertext || tag]`) over any inner
 key stack. Its impls are capability-conditional: an
@@ -217,25 +227,25 @@ key stack. Its impls are capability-conditional: an
 yields a sealer; an [`AeadDecryptor`](crate::crypto::cipher::AeadDecryptor) — a
 retired rotation key that can still open old bundles, say — yields an unsealer;
 and an inner with both, an [`AeadCipher`](crate::crypto::cipher::AeadCipher),
-yields an [`AeadSealerUnsealer`](crate::crypto::cipher::AeadSealerUnsealer), the
+yields an [`AeadSealerUnsealer`](crate::crypto::seal::AeadSealerUnsealer), the
 combined trait that erases to one `Arc<dyn AeadSealerUnsealer>` carrying both
 directions.
 
 Sealing is an **outbound** operation, but unlike signing it needs no separate
-selector trait: each [`seal`](crate::crypto::cipher::AeadSealer::seal) selects
+selector trait: each [`seal`](crate::crypto::seal::AeadSealer::seal) selects
 one frozen encryptor snapshot internally and runs the whole encrypt-then-frame
 sequence against it, so a rotation cannot land between choosing the key and
 using it — the read-header-then-sign hazard, closed off inside the one call.
 Key identity crosses the seam as a value: `seal` returns the bundle together
 with the `kid` of the key that sealed it, read off that same frozen snapshot,
-and [`unseal`](crate::crypto::cipher::AeadUnsealer::unseal) takes it back for
+and [`unseal`](crate::crypto::seal::AeadUnsealer::unseal) takes it back for
 direct key dispatch. Stored beside the bundle, the kid makes "which key
 protects this record" a metadata query; discarded, a multi-key unsealer tries
 its candidates, and the AEAD tag makes a wrong key a clean authentication
 failure, never a wrong plaintext. A kid only selects a key — an untrusted
 value can at worst cause a miss — and the bundle itself stays kid-free.
 
-Because a raw key is already a selector, `AeadV1Cipher::new(key)` is the whole
+Because a raw key is already a selector, `AeadV1Sealer::new(key)` is the whole
 fixed-key story. For a rotating key, put a
 [`ScheduledRefreshCipher`](crate::crypto::cipher::ScheduledRefreshCipher) (or
 [`RefreshableCipher`](crate::crypto::cipher::RefreshableCipher)) inside instead,
@@ -256,8 +266,8 @@ encryption can be delegated wholesale to an external service. A KMS- or
 Vault-style encrypt endpoint returns one opaque, self-describing token — there
 is no nonce/ciphertext/tag decomposition to expose, so such a service cannot
 implement [`AeadEncryptor`](crate::crypto::cipher::AeadEncryptor) at all — but
-it implements [`AeadSealer`](crate::crypto::cipher::AeadSealer) /
-[`AeadUnsealer`](crate::crypto::cipher::AeadUnsealer) naturally, handling
+it implements [`AeadSealer`](crate::crypto::seal::AeadSealer) /
+[`AeadUnsealer`](crate::crypto::seal::AeadUnsealer) naturally, handling
 rotation on its own side. It reports whatever key identity its service does —
 a KMS response often names the exact key version — or `None`; its tokens name
 their key internally either way, so unsealing may ignore the hint. Consumers

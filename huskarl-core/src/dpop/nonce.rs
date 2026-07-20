@@ -13,7 +13,7 @@ use std::sync::Arc;
 use bon::Builder;
 
 use crate::{
-    crypto::cipher::AeadSealerUnsealer,
+    crypto::seal::AeadSealerUnsealer,
     error::{Error, ErrorKind},
     platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime},
 };
@@ -89,7 +89,7 @@ pub struct SealedTimestampNonce {
     /// Wrap an [`AeadCipher`](crate::crypto::cipher::AeadCipher) (a key,
     /// or a rotating stack such as
     /// [`ScheduledRefreshCipher`](crate::crypto::cipher::ScheduledRefreshCipher))
-    /// in [`AeadV1Cipher`](crate::crypto::cipher::AeadV1Cipher); an
+    /// in [`AeadV1Sealer`](crate::crypto::seal::AeadV1Sealer); an
     /// externally-managed sealer (e.g. a KMS encrypt endpoint) can implement
     /// the traits directly.
     ///
@@ -178,9 +178,8 @@ mod tests {
     use super::*;
     use crate::crypto::{
         KeyMatchStrength,
-        cipher::{
-            AeadEncryptor, AeadOutput, AeadSealer as _, AeadV1Cipher, CipherMatch, DecryptError,
-        },
+        cipher::{AeadEncryptor, AeadOutput, CipherMatch, DecryptError},
+        seal::{AeadSealer as _, AeadV1Sealer},
     };
 
     #[derive(Debug)]
@@ -252,7 +251,7 @@ mod tests {
 
     fn checker() -> SealedTimestampNonce {
         SealedTimestampNonce::builder()
-            .sealer(AeadV1Cipher::new(MockCipher::new()))
+            .sealer(AeadV1Sealer::new(MockCipher::new()))
             .build()
     }
 
