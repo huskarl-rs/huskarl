@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.10.0...huskarl-v0.10.1) - 2026-07-20
+
+### Added
+
+- Get local Cargo dev-deps by path reference. ([#251](https://github.com/huskarl-rs/huskarl/pull/251))
+
 ## [0.10.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.9.2...huskarl-v0.10.0) - 2026-07-19
 
 ### Added
