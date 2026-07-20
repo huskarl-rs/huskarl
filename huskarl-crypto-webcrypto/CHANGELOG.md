@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-webcrypto-v0.10.0...huskarl-crypto-webcrypto-v0.10.1) - 2026-07-20
+
+### Other
+
+- *(crypto)* AEAD impls should avoid referring to sealing ([#252](https://github.com/huskarl-rs/huskarl/pull/252))
+- *(crypto)* Split sealing into its own module. ([#249](https://github.com/huskarl-rs/huskarl/pull/249))
+
 ## [0.10.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-webcrypto-v0.9.0...huskarl-crypto-webcrypto-v0.10.0) - 2026-07-19
 
 ### Added
