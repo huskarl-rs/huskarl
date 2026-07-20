@@ -83,15 +83,15 @@ doc-scrape-examples = true
 
 [dev-dependencies]
 huskarl = { path = ".", default-features = true }
-huskarl-crypto-native = { workspace = true }
-huskarl-resource-server = { workspace = true }
+huskarl-crypto-native = { path = "../huskarl-crypto-native" }
+huskarl-resource-server = { path = "../huskarl-resource-server" }
 
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 huskarl = { path = ".", features = ["authorization-flow-loopback"] }
-huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
+huskarl-reqwest = { path = "../huskarl-reqwest", features = ["rustls-tls"] }
 rstest = { version = "0.26", default-features = false }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util", "time"] }
 reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
