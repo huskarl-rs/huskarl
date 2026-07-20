@@ -10,7 +10,12 @@ jobs:
   semver:
     name: Semver report
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'huskarl-rs' }}
+    # Skip the release-plz PR: it only bumps versions/changelogs (no API change),
+    # its commit is `chore: release`, and release-plz already runs its own
+    # cargo-semver-checks to compute those bumps.
+    if: >-
+      ${{ github.repository_owner == 'huskarl-rs'
+          && !startsWith(github.head_ref, 'release-plz-') }}
     permissions:
       contents: read
       pull-requests: write
