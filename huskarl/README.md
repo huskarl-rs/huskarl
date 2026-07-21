@@ -40,7 +40,8 @@ suite](https://openid.net/certification/). It passes the `OpenID Connect` Core
 *Basic client* certification plan, plus the **FAPI 2.0 Security Profile** and
 **Message Signing** client plans — these adding `private_key_jwt` client
 authentication, `DPoP` sender-constrained tokens, and signed authorization
-requests (JAR). The grants are additionally run end-to-end against real
+requests and responses (JAR and JARM). The grants are additionally run
+end-to-end against real
 authorization servers — Keycloak, Dex, `node-oidc-provider`, and Okta — in CI.
 See the [repository](https://github.com/huskarl-rs/huskarl) for the full provider
 matrix and conformance plans.

@@ -56,6 +56,42 @@ pub enum CompleteError {
         "openid scope granted but token response contained no ID token (OIDC Core 1.0 §3.1.3.3)"
     ))]
     MissingIdToken,
+    /// A JARM response mode was requested but the callback carried plain
+    /// parameters — a possible downgrade to an unsigned response.
+    #[snafu(display(
+        "a JWT-secured authorization response (JARM) was requested but the callback \
+         carried plain parameters; refusing the unsigned response"
+    ))]
+    MissingJarmResponse,
+    /// The callback carried a JARM `response` JWT but none was requested.
+    #[snafu(display(
+        "callback carried a JARM `response` JWT but no JWT-secured response mode was requested"
+    ))]
+    UnexpectedJarmResponse,
+    /// The JARM response JWT failed validation.
+    #[snafu(display("JARM response JWT validation failed: {source}"))]
+    JarmValidation {
+        /// The underlying validation error.
+        source: crate::core::jwt::validator::JwtValidationError,
+    },
+    /// A validated JARM response carried neither an error nor this parameter.
+    #[snafu(display("JARM response is missing the `{param}` claim"))]
+    JarmMissingParameter {
+        /// The missing parameter name.
+        param: &'static str,
+    },
+    /// A JARM response was received but the grant cannot validate it.
+    #[snafu(display(
+        "JARM response received but the grant cannot validate it; \
+         supply `jws_verifier_factory` on the builder"
+    ))]
+    JarmVerifierNotConfigured,
+    /// A JARM response was received but no issuer is configured on the grant.
+    #[snafu(display(
+        "JARM response received but grant has no issuer configured; \
+         provide an issuer via server metadata or builder"
+    ))]
+    JarmIssuerNotConfigured,
 }
 
 /// Source vocabulary for authorization-code start failures.
@@ -140,4 +176,16 @@ pub enum BuildError {
          provide one via server metadata or builder"
     ))]
     OidcRequiresIssuer,
+    /// A JWT-secured response mode was set but the grant cannot validate JARM responses.
+    #[snafu(display(
+        "a JWT-secured response_mode was set but no `jws_verifier_factory` was \
+         supplied, so the JARM responses could never be validated"
+    ))]
+    JarmRequiresVerifier,
+    /// A JWT-secured response mode was set but no issuer is configured.
+    #[snafu(display(
+        "a JWT-secured response_mode was set but no issuer is configured; \
+         provide one via server metadata or builder"
+    ))]
+    JarmRequiresIssuer,
 }

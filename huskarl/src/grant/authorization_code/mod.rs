@@ -42,6 +42,6 @@ pub use loopback::{
     CallbackRenderer, CallbackResponse, ErrorContext, LoopbackError, SuccessContext, bind_loopback,
 };
 pub use types::{
-    CompleteInput, CompleteInputBuilder, CompleteInputCallbackBuilder, PendingState, StartInput,
-    StartOutput,
+    CompleteInput, CompleteInputBuilder, CompleteInputCallbackBuilder, PendingState, ResponseMode,
+    StartInput, StartOutput,
 };

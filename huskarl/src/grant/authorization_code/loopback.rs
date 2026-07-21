@@ -582,7 +582,10 @@ mod tests {
             http::{HttpClient, HttpResponse, Idempotency},
             platform::MaybeSendBoxFuture,
         },
-        grant::authorization_code::{AuthorizationCodeGrant, PendingState, types::CallbackPayload},
+        grant::authorization_code::{
+            AuthorizationCodeGrant, PendingState,
+            types::{AuthorizationResponse, CallbackPayload},
+        },
         token::{AccessToken, id_token::IdTokenClaims},
     };
 
@@ -623,6 +626,7 @@ mod tests {
             nonce: None,
             dpop_jkt: None,
             openid_requested: false,
+            response_mode: None,
         }
     }
 
@@ -736,8 +740,10 @@ mod tests {
                 "http://127.0.0.1/callback",
                 None,
                 async |input| {
-                    let CallbackPayload::Success { iss, .. } = &input.payload else {
-                        panic!("expected a success payload, got {:?}", input.payload)
+                    let CallbackPayload::Plain(AuthorizationResponse::Success { iss, .. }) =
+                        &input.payload
+                    else {
+                        panic!("expected a plain success payload, got {:?}", input.payload)
                     };
                     assert_eq!(iss.as_deref(), Some("https://issuer.example.com"));
                     Ok(ok_token_response())
@@ -918,8 +924,11 @@ mod tests {
                 "http://127.0.0.1/callback",
                 None,
                 async |input| {
-                    let CallbackPayload::Success { code, state, .. } = &input.payload else {
-                        panic!("expected a success payload, got {:?}", input.payload)
+                    let CallbackPayload::Plain(AuthorizationResponse::Success {
+                        code, state, ..
+                    }) = &input.payload
+                    else {
+                        panic!("expected a plain success payload, got {:?}", input.payload)
                     };
                     assert_eq!(code, "abc");
                     assert_eq!(state, "xyz");

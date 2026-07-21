@@ -148,6 +148,60 @@ their own rules — and a missing ID token is then an error even if the
 granted scope omits `openid`. Since `oidc(true)` declares every flow OIDC,
 the validation-capability check moves from `start()` to grant build time.
 
+## Signed authorization responses (JARM)
+
+Set `response_mode` to ask the server to return the authorization response as
+a signed JWT ([JARM](https://openid.net/specs/oauth-v2-jarm.html)), so the
+callback parameters cannot be tampered with in transit:
+
+```rust
+use std::sync::Arc;
+
+use huskarl::{
+    core::{client_auth::NoAuth, jwk::JwksSource, server_metadata::AuthorizationServerMetadata},
+    grant::authorization_code::{AuthorizationCodeGrant, ResponseMode},
+};
+# async fn setup_jarm_grant(
+#     metadata: &AuthorizationServerMetadata,
+# ) -> Result<(), Box<dyn std::error::Error>> {
+# let client = huskarl_reqwest::ReqwestClient::builder().build().await?;
+
+let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(metadata)
+    .expect("server does not support authorization code grant")
+    .client_id("client_id")
+    .http_client(client.clone())
+    .client_auth(NoAuth)
+    .redirect_uri("https://my-app/callback")
+    .response_mode(ResponseMode::QueryJwt)
+    .jws_verifier_factory(Arc::new(JwksSource::builder().http_client(client).build()))
+    .build()
+    .await?;
+# Ok(())
+# }
+```
+
+The rest of the flow is unchanged: parse the callback and call `complete()` as
+above. Completion verifies the JWT's signature, issuer, audience, and expiry
+before any other check, then runs the usual `state` and `iss` checks on the
+verified parameters. A JARM error response is likewise verified before it
+surfaces.
+
+Because the client now requires every callback to be a JWT, a JWT-secured
+`response_mode` requires ID-token-style validation to be configured — a
+`jws_verifier_factory` and an issuer — and the grant fails to build without
+them.
+
+Completion enforces the mode in both directions. A plain callback for a flow
+that requested JARM is rejected (`MissingJarmResponse`), since honoring it
+would let an attacker strip the signature; a `response` JWT
+arriving on a flow that did not request JARM is rejected as
+`UnexpectedJarmResponse`. This is why the requested mode is recorded in
+`PendingState` — persist it along with the rest.
+
+`builder_from_metadata` seeds `allowed_authorization_signed_response_algs`
+from the server's `authorization_signing_alg_values_supported`, pinning the
+accepted signature algorithms. Encrypted JARM responses are not yet supported.
+
 ## 4b. Alternative for CLI tools: complete using the loopback server
 
 For command-line tools, `complete_on_loopback` handles the callback automatically

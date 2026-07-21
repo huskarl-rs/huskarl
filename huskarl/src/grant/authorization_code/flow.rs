@@ -1,5 +1,5 @@
 use http::Uri;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
 #[cfg(all(
@@ -15,7 +15,7 @@ use crate::{
         EndpointUrl, Error, ErrorKind,
         client_auth::AuthenticationContext,
         dpop::AuthorizationServerDPoP,
-        jwt::validator::ValidatedJwt,
+        jwt::validator::{JwtValidator, ValidatedJwt},
         platform::{Duration, SystemTime},
         secrets::SecretString,
     },
@@ -24,14 +24,17 @@ use crate::{
             AuthorizationCodeGrantParameters,
             error::{
                 CompleteError, IdTokenIssuerNotConfiguredSnafu, IdTokenVerifierNotConfiguredSnafu,
-                IssuerMismatchSnafu, MissingIdTokenSnafu, MissingIssuerSnafu, StateMismatchSnafu,
+                IssuerMismatchSnafu, JarmIssuerNotConfiguredSnafu, JarmMissingParameterSnafu,
+                JarmVerifierNotConfiguredSnafu, MissingIdTokenSnafu, MissingIssuerSnafu,
+                MissingJarmResponseSnafu, StateMismatchSnafu, UnexpectedJarmResponseSnafu,
             },
             grant::AuthorizationCodeGrant,
             par,
             pkce::Pkce,
             types::{
-                AuthorizationPayload, AuthorizationPayloadWithClientId, CallbackPayload,
-                CompleteInput, PendingState, StartInput, StartOutput,
+                AuthorizationPayload, AuthorizationPayloadWithClientId, AuthorizationResponse,
+                CallbackPayload, CompleteInput, PendingState, ResponseMode, StartInput,
+                StartOutput,
             },
         },
         core::{OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry, join_space},
@@ -223,6 +226,7 @@ impl AuthorizationCodeGrant {
         // Persist the nonce exactly when the parameter went out: the
         // completion side skips the nonce check when none was sent.
         let nonce_sent = payload.rest.nonce.is_some();
+        let response_mode = payload.rest.response_mode;
 
         Ok(StartOutput {
             authorization_url,
@@ -236,6 +240,7 @@ impl AuthorizationCodeGrant {
                 state: start_input.state,
                 nonce: nonce_sent.then_some(start_input.nonce),
                 dpop_jkt,
+                response_mode,
             },
         })
     }
@@ -375,14 +380,20 @@ impl AuthorizationCodeGrant {
         pending_state: &PendingState,
         complete_input: CompleteInput,
     ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error> {
+        // Fold the callback into a single response shape (JARM verified, then
+        // plain params) so every check below runs the same way on both.
+        let response = self
+            .normalize_callback(pending_state, complete_input.payload)
+            .await?;
+
         // An error response surfaces here, not at parse time, so it is state-
         // checked too: an unsolicited one is CSRF, not a denied login.
-        let (code, iss) = match complete_input.payload {
-            CallbackPayload::Success { code, state, iss } => {
+        let (code, iss) = match response {
+            AuthorizationResponse::Success { code, state, iss } => {
                 check_state(pending_state, Some(&state))?;
                 (code, iss)
             }
-            CallbackPayload::Error {
+            AuthorizationResponse::Error {
                 error,
                 error_description,
                 state,
@@ -488,6 +499,87 @@ impl AuthorizationCodeGrant {
             Ok((token, None))
         }
     }
+
+    /// Folds a callback payload into the single [`AuthorizationResponse`] shape
+    /// every later check runs on — the state check and error surfacing then
+    /// have no third shape to consider.
+    ///
+    /// Verifies a JARM JWT before folding it in, and enforces the shape
+    /// recorded at start in both directions: a plain callback when JARM was
+    /// requested is a signature-stripping downgrade; an unrequested JARM JWT
+    /// is unverifiable.
+    async fn normalize_callback(
+        &self,
+        pending_state: &PendingState,
+        payload: CallbackPayload,
+    ) -> Result<AuthorizationResponse, Error> {
+        let jarm_expected = pending_state
+            .response_mode
+            .is_some_and(ResponseMode::is_jwt_secured);
+
+        match (payload, jarm_expected) {
+            (CallbackPayload::Jarm { response }, true) => self.validate_jarm(&response).await,
+            (CallbackPayload::Plain(response), false) => Ok(response),
+            (CallbackPayload::Jarm { .. }, false) => {
+                Err(complete_error(UnexpectedJarmResponseSnafu.build()))
+            }
+            (CallbackPayload::Plain(_), true) => {
+                Err(complete_error(MissingJarmResponseSnafu.build()))
+            }
+        }
+    }
+
+    /// Verifies a JARM response JWT (JARM §2.4: signature, `iss`, `aud`,
+    /// `exp`) and folds its claims into an [`AuthorizationResponse`].
+    async fn validate_jarm(&self, response: &str) -> Result<AuthorizationResponse, Error> {
+        /// The authorization-response parameters as JWT claims (JARM §2.1).
+        #[derive(Debug, Clone, Deserialize)]
+        struct JarmClaims {
+            code: Option<String>,
+            state: Option<String>,
+            error: Option<String>,
+            error_description: Option<String>,
+        }
+
+        let verifier = self
+            .jws_verifier
+            .clone()
+            .ok_or_else(|| complete_error(JarmVerifierNotConfiguredSnafu.build()))?;
+        let issuer = self
+            .issuer
+            .as_deref()
+            .ok_or_else(|| complete_error(JarmIssuerNotConfiguredSnafu.build()))?;
+
+        let validator = JwtValidator::builder()
+            .verifier(verifier)
+            .iss(issuer.to_owned())
+            .aud(self.client_id.clone())
+            .require_exp(true)
+            .maybe_allowed_algorithms(self.allowed_authorization_signed_response_algs.clone())
+            .build();
+
+        let validated: ValidatedJwt<JarmClaims> = validator
+            .validate(response)
+            .await
+            .map_err(|source| complete_error(CompleteError::JarmValidation { source }))?;
+
+        let claims = validated.claims;
+        if let Some(error) = claims.error {
+            return Ok(AuthorizationResponse::Error {
+                error,
+                error_description: claims.error_description,
+                state: claims.state,
+            });
+        }
+        let param = |value: Option<String>, param: &'static str| {
+            value.ok_or_else(|| complete_error(JarmMissingParameterSnafu { param }.build()))
+        };
+        Ok(AuthorizationResponse::Success {
+            code: param(claims.code, "code")?,
+            state: param(claims.state, "state")?,
+            iss: validated.iss,
+        })
+    }
 }
 
 fn build_authorization_payload<'a>(
@@ -516,6 +608,7 @@ fn build_authorization_payload<'a>(
                 .send_oidc_nonce
                 .unwrap_or(is_oidc)
                 .then_some(start_input.nonce.as_str()),
+            response_mode: grant.response_mode,
             display: start_input.display.as_ref(),
             prompt: start_input.prompt.as_ref(),
             max_age: start_input.max_age.map(|d| d.as_secs()),
@@ -566,7 +659,7 @@ mod tests {
             platform::MaybeSendBoxFuture,
             server_metadata::AuthorizationServerMetadata,
         },
-        grant::authorization_code::types::{CompleteInput, StartInput},
+        grant::authorization_code::types::{CompleteInput, ResponseMode, StartInput},
         token::AccessToken,
     };
 
@@ -1368,6 +1461,7 @@ mod tests {
             nonce: None,
             dpop_jkt: None,
             openid_requested,
+            response_mode: None,
         }
     }
 
@@ -1475,6 +1569,366 @@ mod tests {
             ),
             "got {err:?}"
         );
+    }
+
+    /// A completing grant with a real ES256 verifier wired for JARM, plus the
+    /// signer minting its response JWTs.
+    async fn jarm_grant(
+        body: &'static str,
+    ) -> (Grant, huskarl_crypto_native::asymmetric::signer::PrivateKey) {
+        use huskarl_crypto_native::{
+            NativeVerifierPlatform,
+            asymmetric::signer::{GenerateAlgorithm, PrivateKey},
+        };
+
+        use crate::core::crypto::verifier::JwsVerifierPlatform as _;
+
+        let signer = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+        let verifier = NativeVerifierPlatform
+            .create_verifier_from_jwk(signer.as_private_jwk().public_jwk())
+            .await
+            .unwrap();
+
+        let mut grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(TokenHttp { body })
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+        grant.jws_verifier = Some(verifier);
+        grant.issuer = Some("https://as.example.com".to_string());
+        (grant, signer)
+    }
+
+    /// Signs a JARM response JWT with the given `iss`/`aud` and claim body.
+    async fn mint_jarm(
+        signer: &huskarl_crypto_native::asymmetric::signer::PrivateKey,
+        iss: &str,
+        aud: &str,
+        claims: serde_json::Value,
+    ) -> String {
+        use crate::core::crypto::signer::JwsSignerSelector as _;
+
+        crate::core::jwt::Jwt::builder()
+            .iss(iss.to_string())
+            .aud(vec![aud.to_string()])
+            .issued_now_expires_after(Duration::from_mins(5))
+            .claims(claims)
+            .build()
+            .to_jws_compact(&*signer.select_signer().await)
+            .await
+            .unwrap()
+            .expose_secret()
+            .to_string()
+    }
+
+    fn pending_jarm() -> PendingState {
+        PendingState {
+            response_mode: Some(ResponseMode::QueryJwt),
+            ..pending(false)
+        }
+    }
+
+    #[tokio::test]
+    async fn jarm_response_completes() {
+        let (grant, signer) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+        let jarm = mint_jarm(
+            &signer,
+            "https://as.example.com",
+            "client",
+            serde_json::json!({"code": "the-code", "state": "st"}),
+        )
+        .await;
+
+        let input: CompleteInput = format!("response={jarm}").parse().unwrap();
+        grant
+            .complete_oidc(&pending_jarm(), input)
+            .await
+            .expect("a valid JARM response must complete");
+    }
+
+    /// A JARM error response is verified and state-checked before the OAuth
+    /// error surfaces — the fold makes it bind to the flow like any callback.
+    #[tokio::test]
+    async fn jarm_error_response_surfaces_oauth_error() {
+        let (grant, signer) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+        let jarm = mint_jarm(
+            &signer,
+            "https://as.example.com",
+            "client",
+            serde_json::json!({"error": "access_denied", "error_description": "user denied", "state": "st"}),
+        )
+        .await;
+
+        let input: CompleteInput = format!("response={jarm}").parse().unwrap();
+        let err = grant
+            .complete_oidc(&pending_jarm(), input)
+            .await
+            .expect_err("a JARM error response must not complete");
+        assert_eq!(err.oauth_error_code(), Some("access_denied"));
+    }
+
+    /// The state check runs on the folded JARM parameters.
+    #[tokio::test]
+    async fn jarm_state_mismatch_rejected() {
+        let (grant, signer) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+        let jarm = mint_jarm(
+            &signer,
+            "https://as.example.com",
+            "client",
+            serde_json::json!({"code": "the-code", "state": "not-st"}),
+        )
+        .await;
+
+        let input: CompleteInput = format!("response={jarm}").parse().unwrap();
+        let err = grant
+            .complete_oidc(&pending_jarm(), input)
+            .await
+            .expect_err("a JARM state mismatch must be rejected");
+        assert!(format!("{err:?}").contains("StateMismatch"), "got {err:?}");
+    }
+
+    /// The state check binds a JARM error to the flow too: one that omits
+    /// `state` is rejected before its OAuth error is reported.
+    #[tokio::test]
+    async fn jarm_error_without_state_rejected() {
+        let (grant, signer) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+        let jarm = mint_jarm(
+            &signer,
+            "https://as.example.com",
+            "client",
+            serde_json::json!({"error": "access_denied"}),
+        )
+        .await;
+
+        let input: CompleteInput = format!("response={jarm}").parse().unwrap();
+        let err = grant
+            .complete_oidc(&pending_jarm(), input)
+            .await
+            .expect_err("a JARM error without state must be rejected");
+        assert_eq!(err.oauth_error_code(), None, "got {err:?}");
+        assert!(format!("{err:?}").contains("StateMismatch"), "got {err:?}");
+    }
+
+    /// Requesting JARM and receiving plain parameters — including a forged
+    /// unsigned error — is a downgrade and must be rejected before any other
+    /// handling.
+    #[rstest::rstest]
+    #[case::plain_success("code=abc&state=st")]
+    #[case::forged_plain_error("error=access_denied")]
+    #[tokio::test]
+    async fn plain_callback_when_jarm_expected_rejected(#[case] callback: &str) {
+        let (grant, _) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+
+        let err = grant
+            .complete_oidc(&pending_jarm(), callback.parse().unwrap())
+            .await
+            .expect_err("plain parameters must not satisfy a JARM flow");
+        assert!(
+            format!("{err:?}").contains("MissingJarmResponse"),
+            "got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrequested_jarm_response_rejected() {
+        let (grant, signer) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+        let jarm = mint_jarm(
+            &signer,
+            "https://as.example.com",
+            "client",
+            serde_json::json!({"code": "the-code", "state": "st"}),
+        )
+        .await;
+
+        let input: CompleteInput = format!("response={jarm}").parse().unwrap();
+        let err = grant
+            .complete_oidc(&pending(false), input)
+            .await
+            .expect_err("an unrequested JARM response must be rejected");
+        assert!(
+            format!("{err:?}").contains("UnexpectedJarmResponse"),
+            "got {err:?}"
+        );
+    }
+
+    /// `aud` must be this client (JARM §2.4) — the mix-up defense.
+    #[tokio::test]
+    async fn jarm_wrong_audience_rejected() {
+        let (grant, signer) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+        let jarm = mint_jarm(
+            &signer,
+            "https://as.example.com",
+            "other-client",
+            serde_json::json!({"code": "the-code", "state": "st"}),
+        )
+        .await;
+
+        let input: CompleteInput = format!("response={jarm}").parse().unwrap();
+        let err = grant
+            .complete_oidc(&pending_jarm(), input)
+            .await
+            .expect_err("a JARM response for another client must be rejected");
+        assert!(format!("{err:?}").contains("JarmValidation"), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn jarm_alg_outside_allowlist_rejected() {
+        let (mut grant, signer) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
+        grant.allowed_authorization_signed_response_algs =
+            Some(["PS256".to_string()].into_iter().collect());
+        let jarm = mint_jarm(
+            &signer,
+            "https://as.example.com",
+            "client",
+            serde_json::json!({"code": "the-code", "state": "st"}),
+        )
+        .await;
+
+        let input: CompleteInput = format!("response={jarm}").parse().unwrap();
+        let err = grant
+            .complete_oidc(&pending_jarm(), input)
+            .await
+            .expect_err("an ES256 JARM response must be rejected by a PS256 allowlist");
+        assert!(format!("{err:?}").contains("JarmValidation"), "got {err:?}");
+    }
+
+    /// A JWT-secured response mode without the means to validate JARM
+    /// responses fails at build time, mirroring the `oidc(true)` checks.
+    #[rstest::rstest]
+    #[case::no_verifier(false, "JarmRequiresVerifier")]
+    #[case::no_issuer(true, "JarmRequiresIssuer")]
+    #[tokio::test]
+    async fn jarm_mode_requires_validation_config(
+        #[case] with_verifier: bool,
+        #[case] expected: &str,
+    ) {
+        let builder = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .response_mode(ResponseMode::QueryJwt);
+        let result = if with_verifier {
+            builder
+                .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+                .build()
+                .await
+        } else {
+            builder.build().await
+        };
+
+        let err = result
+            .err()
+            .expect("jarm mode without config must not build");
+        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
+        assert!(format!("{err:?}").contains(expected), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn jarm_algs_default_from_metadata_dropping_none() {
+        let metadata: AuthorizationServerMetadata = serde_json::from_value(serde_json::json!({
+            "issuer": "https://as.example.com",
+            "authorization_endpoint": "https://as.example.com/authorize",
+            "token_endpoint": "https://as.example.com/token",
+            "response_types_supported": ["code"],
+            "authorization_signing_alg_values_supported": ["PS256", "ES256", "none"],
+        }))
+        .unwrap();
+
+        let grant: Grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
+            .unwrap()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let algs = grant
+            .allowed_authorization_signed_response_algs
+            .expect("allowlist defaulted from metadata");
+        assert!(algs.contains("PS256"), "{algs:?}");
+        assert!(algs.contains("ES256"), "{algs:?}");
+        assert!(
+            !algs.contains("none"),
+            "insecure `none` must be dropped: {algs:?}"
+        );
+    }
+
+    /// The `response_mode` knob is sent on the authorization request under its
+    /// wire name and is persisted on the pending state.
+    #[rstest::rstest]
+    #[case::query(ResponseMode::Query, "query")]
+    #[case::form_post(ResponseMode::FormPost, "form_post")]
+    #[case::query_jwt(ResponseMode::QueryJwt, "query.jwt")]
+    #[case::form_post_jwt(ResponseMode::FormPostJwt, "form_post.jwt")]
+    #[case::jwt(ResponseMode::Jwt, "jwt")]
+    #[tokio::test]
+    async fn response_mode_sent_and_persisted(#[case] mode: ResponseMode, #[case] wire: &str) {
+        // JWT-secured modes must be able to validate the response they ask
+        // for, so those grants need a verifier and issuer to build at all.
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .response_mode(mode)
+            .issuer("https://as.example.com")
+            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .build()
+            .await
+            .unwrap();
+
+        let output = grant
+            .start(StartInput::scope(bon::vec!["profile"]))
+            .await
+            .unwrap();
+        let url = output.authorization_url.to_string();
+        // Boundary-anchored so `query` does not falsely match `query.jwt`.
+        let pair = format!("response_mode={wire}");
+        assert!(
+            url.contains(&format!("{pair}&")) || url.ends_with(&pair),
+            "{url}"
+        );
+        assert_eq!(output.pending_state.response_mode, Some(mode));
+    }
+
+    #[tokio::test]
+    async fn response_mode_omitted_by_default() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        let output = grant
+            .start(StartInput::scope(bon::vec!["profile"]))
+            .await
+            .unwrap();
+        assert!(
+            !output
+                .authorization_url
+                .to_string()
+                .contains("response_mode"),
+            "{}",
+            output.authorization_url
+        );
+        assert_eq!(output.pending_state.response_mode, None);
     }
 
     #[tokio::test]

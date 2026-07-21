@@ -46,7 +46,8 @@ and explanation in a `_docs` module:
   authenticates to an authorization server (client secret, private-key JWT, or
   none).
 - **`DPoP`** — [`dpop`](https://docs.rs/huskarl-core/latest/huskarl_core/dpop/) provides proof-of-possession binding for the
-  authorization-server and resource-server flows.
+  authorization-server and resource-server flows, plus server-side nonce
+  issuance and validation.
 - **HTTP** — [`http`](https://docs.rs/huskarl-core/latest/huskarl_core/http/) defines the [`HttpClient`](https://docs.rs/huskarl-core/latest/huskarl_core/http/trait.HttpClient.html) seam that
   decouples the ecosystem from any specific HTTP implementation.
 - **Authorization-server metadata** — [`server_metadata`](https://docs.rs/huskarl-core/latest/huskarl_core/server_metadata/) models RFC 8414 /
