@@ -6,11 +6,24 @@ use snafu::Snafu;
 /// errors returned by
 /// [`complete`](super::AuthorizationCodeGrant::complete) /
 /// [`complete_oidc`](super::AuthorizationCodeGrant::complete_oidc) — match on
-/// the error kind rather than downcasting to this type.
+/// the error kind, and read an `OAuthError`'s members off the wrapping
+/// [`Error`](crate::core::Error), rather than downcasting to this type.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 #[non_exhaustive]
 pub enum CompleteError {
+    /// The callback was an OAuth error response (RFC 6749 §4.1.2.1) — e.g.
+    /// the user denied access.
+    ///
+    /// Only a response bound to the flow reaches this variant; an unsolicited
+    /// one is [`StateMismatch`](Self::StateMismatch).
+    #[snafu(display("Authorization server returned error: {error}"))]
+    OAuthError {
+        /// The `error` field in the `OAuth2` error response.
+        error: String,
+        /// The `error_description` field in the `OAuth2` error response.
+        error_description: Option<String>,
+    },
     /// There was a mismatch between the required and returned issuer values.
     #[snafu(display("Issuer mismatch: original = {}, callback = {}", original, callback))]
     IssuerMismatch {
@@ -71,21 +84,12 @@ pub enum StartError {
 /// An error parsing authorization-callback parameters into a
 /// [`CompleteInput`](super::CompleteInput).
 ///
-/// The `OAuthError` variant is control flow for login UIs (e.g. the user
-/// denied access); the rest carry the underlying failure.
+/// An OAuth error response is not a parse failure: it parses, and completion
+/// surfaces it as [`CompleteError::OAuthError`].
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 #[non_exhaustive]
 pub enum ParseCallbackError {
-    /// The authorization server returned an error response instead of a code
-    /// (RFC 6749 §4.1.2.1).
-    #[snafu(display("Authorization server returned error: {error}"))]
-    OAuthError {
-        /// The `error` field in the `OAuth2` error response.
-        error: String,
-        /// The `error_description` field in the `OAuth2` error response.
-        error_description: Option<String>,
-    },
     /// The callback parameters could not be parsed (malformed query, or a
     /// single-valued parameter that appeared more than once — RFC 6749 §3.1).
     #[snafu(display("Failed to parse callback parameters: {source}"))]

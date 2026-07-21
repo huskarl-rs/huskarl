@@ -92,7 +92,10 @@ let pending_state = start_output.pending_state;
 When the authorization server redirects back to your application, parse the
 callback URL (or just its query string) into a `CompleteInput` and pass it to
 `complete()`. Parsing captures `code`, `state`, and the RFC 9207 `iss`
-parameter, and rejects OAuth error responses (e.g. the user denied access).
+parameter. An OAuth error response (e.g. the user denied access) also parses;
+`complete()` state-checks it like any other callback, then surfaces it with the
+server's `oauth_error_code()` and `oauth_error_description()`. An unsolicited
+error response is rejected as a state mismatch, not reported as a denied login.
 
 ```rust
 use huskarl::{

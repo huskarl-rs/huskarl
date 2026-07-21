@@ -23,15 +23,15 @@ use crate::{
         authorization_code::{
             AuthorizationCodeGrantParameters,
             error::{
-                IdTokenIssuerNotConfiguredSnafu, IdTokenVerifierNotConfiguredSnafu,
+                CompleteError, IdTokenIssuerNotConfiguredSnafu, IdTokenVerifierNotConfiguredSnafu,
                 IssuerMismatchSnafu, MissingIdTokenSnafu, MissingIssuerSnafu, StateMismatchSnafu,
             },
             grant::AuthorizationCodeGrant,
             par,
             pkce::Pkce,
             types::{
-                AuthorizationPayload, AuthorizationPayloadWithClientId, CompleteInput,
-                PendingState, StartInput, StartOutput,
+                AuthorizationPayload, AuthorizationPayloadWithClientId, CallbackPayload,
+                CompleteInput, PendingState, StartInput, StartOutput,
             },
         },
         core::{OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry, join_space},
@@ -42,6 +42,26 @@ use crate::{
 /// Wraps a completion-check failure as a protocol error.
 fn complete_error(source: super::error::CompleteError) -> Error {
     Error::new(ErrorKind::Protocol, source)
+}
+
+/// Constant-time `state` check — one layer of CSRF protection.
+///
+/// An absent one fails: RFC 6749 §4.1.2.1 requires `state` on any response to a
+/// request that carried it, and forbids redirecting at all when it could not.
+fn check_state(pending_state: &PendingState, callback_state: Option<&str>) -> Result<(), Error> {
+    let matched = callback_state.is_some_and(|state| {
+        pending_state
+            .state
+            .as_bytes()
+            .ct_eq(state.as_bytes())
+            .into()
+    });
+
+    if matched {
+        Ok(())
+    } else {
+        Err(complete_error(StateMismatchSnafu.build()))
+    }
 }
 
 impl AuthorizationCodeGrant {
@@ -321,9 +341,11 @@ impl AuthorizationCodeGrant {
     ///
     /// # Errors
     ///
-    /// Returns an error if the token request fails, a callback parameter check
-    /// fails, or a returned ID token fails validation (see
-    /// [`complete_oidc`](Self::complete_oidc) for the ID-token semantics).
+    /// Returns an error if the callback was an OAuth error response
+    /// ([`OAuthError`](super::CompleteError::OAuthError)), the token request
+    /// fails, a callback parameter check fails, or a returned ID token fails
+    /// validation (see [`complete_oidc`](Self::complete_oidc) for the
+    /// ID-token semantics).
     pub async fn complete(
         &self,
         pending_state: &PendingState,
@@ -342,30 +364,45 @@ impl AuthorizationCodeGrant {
     ///
     /// # Errors
     ///
-    /// Returns an error if one is returned when sending a message to the token endpoint,
-    /// a check failed against the callback parameters, a received ID token could not be
-    /// validated, or an OIDC flow's token response carried no ID token
+    /// Returns an error if the callback was an OAuth error response
+    /// ([`OAuthError`](super::CompleteError::OAuthError)), one is returned
+    /// when sending a message to the token endpoint, a check failed against
+    /// the callback parameters, a received ID token could not be validated,
+    /// or an OIDC flow's token response carried no ID token
     /// ([`MissingIdToken`](super::CompleteError::MissingIdToken)).
     pub async fn complete_oidc(
         &self,
         pending_state: &PendingState,
         complete_input: CompleteInput,
     ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error> {
-        // Required state check (one layer of CSRF protection).
-        if pending_state
-            .state
-            .as_bytes()
-            .ct_ne(complete_input.state.as_bytes())
-            .into()
-        {
-            return Err(complete_error(StateMismatchSnafu.build()));
-        }
+        // An error response surfaces here, not at parse time, so it is state-
+        // checked too: an unsolicited one is CSRF, not a denied login.
+        let (code, iss) = match complete_input.payload {
+            CallbackPayload::Success { code, state, iss } => {
+                check_state(pending_state, Some(&state))?;
+                (code, iss)
+            }
+            CallbackPayload::Error {
+                error,
+                error_description,
+                state,
+            } => {
+                check_state(pending_state, state.as_deref())?;
+
+                let (oauth_code, oauth_description) = (error.clone(), error_description.clone());
+                return Err(complete_error(CompleteError::OAuthError {
+                    error,
+                    error_description,
+                })
+                .with_oauth_error(oauth_code, oauth_description));
+            }
+        };
 
         // RFC 9207 - check issuer match.
         if self.authorization_response_iss_parameter_supported
             && let Some(config_issuer) = self.issuer.as_deref()
         {
-            if let Some(issuer) = complete_input.iss {
+            if let Some(issuer) = iss {
                 // The issuer is public, not a secret, so a constant-time
                 // comparison is not required here (unlike `state` above).
                 if issuer.as_bytes() != config_issuer.as_bytes() {
@@ -399,7 +436,7 @@ impl AuthorizationCodeGrant {
         let token = self
             .exchange(AuthorizationCodeGrantParameters {
                 dpop_jkt: pending_state.dpop_jkt.clone(),
-                code: complete_input.code,
+                code,
                 pkce_verifier: pending_state.pkce_verifier.clone(),
                 resource: complete_input.resource,
             })
@@ -518,6 +555,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use bytes::Bytes;
+    use rstest::rstest;
 
     use super::*;
     use crate::{
@@ -1394,6 +1432,49 @@ mod tests {
             let (_, id_token) = result.expect("completion must succeed");
             assert!(id_token.is_none());
         }
+    }
+
+    /// A state-matched OAuth error response surfaces from completion carrying
+    /// the server's code and description.
+    #[tokio::test]
+    async fn error_payload_surfaces_from_complete() {
+        let grant = completing_grant(None, r#"{"access_token":"t","token_type":"bearer"}"#).await;
+
+        let input: CompleteInput = "error=access_denied&error_description=user+denied&state=st"
+            .parse()
+            .unwrap();
+        let err = grant
+            .complete_oidc(&pending(false), input)
+            .await
+            .expect_err("an error payload must not complete");
+        assert_eq!(err.kind(), crate::core::ErrorKind::Protocol, "got {err:?}");
+        assert_eq!(err.oauth_error_code(), Some("access_denied"));
+        assert_eq!(err.oauth_error_description(), Some("user denied"));
+    }
+
+    /// An error response that is not bound to the pending state is CSRF, not a
+    /// denied login: it is rejected before the OAuth code is reported.
+    #[rstest]
+    #[case::mismatched_state("error=access_denied&state=other")]
+    #[case::absent_state("error=access_denied")]
+    #[tokio::test]
+    async fn unsolicited_error_payload_is_rejected_as_state_mismatch(#[case] callback: &str) {
+        use std::error::Error as _;
+
+        let grant = completing_grant(None, r#"{"access_token":"t","token_type":"bearer"}"#).await;
+
+        let err = grant
+            .complete_oidc(&pending(false), callback.parse().unwrap())
+            .await
+            .expect_err("an unbound error payload must not complete");
+        assert_eq!(err.oauth_error_code(), None, "got {err:?}");
+        assert!(
+            matches!(
+                err.source().and_then(<dyn std::error::Error>::downcast_ref),
+                Some(CompleteError::StateMismatch)
+            ),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
