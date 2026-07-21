@@ -63,23 +63,17 @@ getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] 
 gloo-timers = { version = "0.4", default-features = false, features = ["futures"] }
 web-time = { version = "1", default-features = false }
 
-# The examples use dev-dependencies, so rustdoc skips scraping them unless we
-# opt in explicitly. docs.rs scrapes examples, so this surfaces them as usage
-# examples on the items they exercise (and silences the scrape warning).
 [[example]]
 name = "authorization_code"
 required-features = ["authorization-flow-loopback"]
-doc-scrape-examples = true
 
 [[example]]
 name = "basic_dpop"
 required-features = ["authorization-flow-loopback"]
-doc-scrape-examples = true
 
 [[example]]
 name = "client_credentials"
 required-features = ["authorization-flow-loopback"]
-doc-scrape-examples = true
 
 [dev-dependencies]
 huskarl = { path = ".", default-features = true }
