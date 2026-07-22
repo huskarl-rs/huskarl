@@ -187,6 +187,7 @@ fn map_error_response(status: StatusCode, body: &[u8]) -> Error {
         });
     };
 
+    let oauth_description = description.clone();
     let variant = match error.as_str() {
         "invalid_redirect_uri" => RegistrationError::InvalidRedirectUri { description },
         "invalid_client_metadata" => RegistrationError::InvalidClientMetadata { description },
@@ -199,7 +200,7 @@ fn map_error_response(status: StatusCode, body: &[u8]) -> Error {
             description,
         },
     };
-    registration_error(variant).with_oauth_error_code(error)
+    registration_error(variant).with_oauth_error(error, oauth_description)
 }
 
 #[cfg(test)]
