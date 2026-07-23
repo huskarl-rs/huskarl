@@ -1,4 +1,4 @@
-use bon::Builder;
+use bon::{Builder, bon};
 use rand::TryRng as _;
 use serde::{Deserialize, Serialize};
 
@@ -172,6 +172,25 @@ pub struct StartOutput {
     pub pending_state: PendingState,
 }
 
+/// What the authorization callback carried: the RFC 6749 §4.1.2 success
+/// parameters or the §4.1.2.1 error parameters.
+#[derive(Debug, Clone)]
+pub(super) enum CallbackPayload {
+    /// The success parameters, plus the RFC 9207 `iss`.
+    Success {
+        code: String,
+        state: String,
+        iss: Option<String>,
+    },
+    /// An OAuth error response (e.g. the user denied access). `state` mirrors
+    /// the wire, where it can be absent; completion rejects that.
+    Error {
+        error: String,
+        error_description: Option<String>,
+        state: Option<String>,
+    },
+}
+
 /// The information needed to complete an authorization code flow.
 ///
 /// Parse the callback URL or query string via [`FromStr`](std::str::FromStr)
@@ -179,23 +198,51 @@ pub struct StartOutput {
 /// [`builder_from_callback`](Self::builder_from_callback) also lets `resource`
 /// be set. When building by hand, include `iss` — it is required when the
 /// server advertises RFC 9207 support.
-#[derive(Debug, Clone, Builder)]
+///
+/// An OAuth error response also parses; completion checks its `state` like any
+/// other callback, then surfaces it as
+/// [`CompleteError::OAuthError`](super::CompleteError::OAuthError).
+#[derive(Debug, Clone)]
 pub struct CompleteInput {
-    #[builder(into)]
-    pub(super) code: String,
-    #[builder(into)]
-    pub(super) state: String,
-    #[builder(into)]
-    pub(super) iss: Option<String>,
+    pub(super) payload: CallbackPayload,
     pub(super) resource: Option<Vec<String>>,
 }
 
+#[bon]
 impl CompleteInput {
+    /// By-hand construction from already-extracted success parameters (e.g.
+    /// framework-typed query parameters).
+    #[builder]
+    pub fn new(
+        #[builder(into)] code: String,
+        #[builder(into)] state: String,
+        #[builder(into)] iss: Option<String>,
+        resource: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            payload: CallbackPayload::Success { code, state, iss },
+            resource,
+        }
+    }
+
+    /// Seeded from a parsed callback; the payload is fixed — only fields the
+    /// callback cannot carry are settable.
+    #[builder(start_fn(name = seeded, vis = ""), finish_fn(name = build, vis = "pub"), builder_type(vis = "pub", doc {
+        /// Builder returned by [`CompleteInput::builder_from_callback`]: the
+        /// parsed payload is fixed; only `resource` can be set before `build()`.
+    }))]
+    fn callback(
+        #[builder(start_fn)] payload: CallbackPayload,
+        #[builder(setters(vis = "pub"))] resource: Option<Vec<String>>,
+    ) -> Self {
+        Self { payload, resource }
+    }
+
     /// Parses the authorization-response parameters (RFC 6749 §4.1.2, plus
     /// the RFC 9207 `iss`) into a seeded builder, so fields the callback
     /// cannot carry — the RFC 8707
-    /// [`resource`](CompleteInputBuilder::resource) indicators — can be set
-    /// before building.
+    /// [`resource`](CompleteInputCallbackBuilder::resource) indicators — can
+    /// be set before building.
     ///
     /// Accepts the full callback URL, just its query, or a
     /// `response_mode=form_post` body. Unknown parameters are ignored; a
@@ -203,19 +250,11 @@ impl CompleteInput {
     ///
     /// # Errors
     ///
-    /// Fails when the parameters cannot be parsed, `code` or `state` is
-    /// missing, or the callback is an OAuth error response
-    /// ([`OAuthError`](super::ParseCallbackError::OAuthError)).
+    /// Fails when the parameters cannot be parsed, or `code` or `state` is
+    /// missing from a non-error response.
     pub fn builder_from_callback(
         callback: &str,
-    ) -> Result<
-        CompleteInputBuilder<
-            complete_input_builder::SetState<
-                complete_input_builder::SetIss<complete_input_builder::SetCode>,
-            >,
-        >,
-        super::ParseCallbackError,
-    > {
+    ) -> Result<CompleteInputCallbackBuilder, super::ParseCallbackError> {
         use snafu::ResultExt as _;
 
         use super::error::{InvalidParametersSnafu, ParseCallbackError};
@@ -237,25 +276,27 @@ impl CompleteInput {
         let params: CallbackParams =
             crate::core::oauth_form::from_str(query).context(InvalidParametersSnafu)?;
 
-        // An OAuth error response takes precedence (RFC 6749 §4.1.2.1).
-        if let Some(error) = params.error {
-            return Err(ParseCallbackError::OAuthError {
+        // An OAuth error response takes precedence (RFC 6749 §4.1.2.1):
+        // `error` and `code` are mutually exclusive on the wire.
+        let payload = if let Some(error) = params.error {
+            CallbackPayload::Error {
                 error,
                 error_description: params.error_description,
-            });
-        }
+                state: params.state,
+            }
+        } else {
+            CallbackPayload::Success {
+                code: params
+                    .code
+                    .ok_or(ParseCallbackError::MissingParameter { param: "code" })?,
+                state: params
+                    .state
+                    .ok_or(ParseCallbackError::MissingParameter { param: "state" })?,
+                iss: params.iss,
+            }
+        };
 
-        let code = params
-            .code
-            .ok_or(ParseCallbackError::MissingParameter { param: "code" })?;
-        let state = params
-            .state
-            .ok_or(ParseCallbackError::MissingParameter { param: "state" })?;
-
-        Ok(Self::builder()
-            .code(code)
-            .maybe_iss(params.iss)
-            .state(state))
+        Ok(Self::seeded(payload))
     }
 }
 
@@ -386,6 +427,16 @@ mod tests {
         assert_eq!(state.nonce.as_deref(), Some("n"));
     }
 
+    /// Asserts the payload is a success shape and returns its parts.
+    fn success_parts(input: &CompleteInput) -> (&str, &str, Option<&str>) {
+        match &input.payload {
+            CallbackPayload::Success { code, state, iss } => (code, state, iss.as_deref()),
+            other @ CallbackPayload::Error { .. } => {
+                panic!("expected a success payload, got {other:?}")
+            }
+        }
+    }
+
     // The URL part before the first `?` is discarded and the fragment cut.
     #[rstest]
     #[case::query_with_iss(
@@ -396,9 +447,7 @@ mod tests {
     #[case::full_url_with_fragment("https://app.example.com/cb?code=abc&state=xyz#fragment", None)]
     fn complete_input_parses_accepted_shapes(#[case] input: &str, #[case] iss: Option<&str>) {
         let parsed: CompleteInput = input.parse().unwrap();
-        assert_eq!(parsed.code, "abc");
-        assert_eq!(parsed.state, "xyz");
-        assert_eq!(parsed.iss.as_deref(), iss);
+        assert_eq!(success_parts(&parsed), ("abc", "xyz", iss));
     }
 
     #[test]
@@ -407,7 +456,7 @@ mod tests {
             .unwrap()
             .resource(bon::vec!["https://api.example.com"])
             .build();
-        assert_eq!(input.code, "abc");
+        assert_eq!(success_parts(&input).0, "abc");
         assert_eq!(
             input.resource,
             Some(vec!["https://api.example.com".to_owned()])
@@ -415,15 +464,39 @@ mod tests {
     }
 
     #[test]
+    fn complete_input_builder_produces_success_payload() {
+        let input = CompleteInput::builder()
+            .code("abc")
+            .state("xyz")
+            .iss("https://issuer.example.com")
+            .build();
+        assert_eq!(
+            success_parts(&input),
+            ("abc", "xyz", Some("https://issuer.example.com"))
+        );
+        assert!(input.resource.is_none());
+    }
+
+    /// An OAuth error response parses successfully (surfacing happens at
+    /// completion), and takes precedence over any success parameters
+    /// (RFC 6749 §4.1.2.1).
+    #[test]
     fn complete_input_parse_error_response_takes_precedence() {
-        let err = "code=abc&state=xyz&error=access_denied&error_description=user+denied"
+        let parsed = "code=abc&state=xyz&error=access_denied&error_description=user+denied"
             .parse::<CompleteInput>()
-            .unwrap_err();
-        assert!(matches!(
-            &err,
-            super::super::ParseCallbackError::OAuthError { error, error_description }
-                if error == "access_denied" && error_description.as_deref() == Some("user denied")
-        ));
+            .unwrap();
+        assert!(
+            matches!(
+                &parsed.payload,
+                // `state` is kept so completion can bind the error to the flow.
+                CallbackPayload::Error { error, error_description, state }
+                    if error == "access_denied"
+                        && error_description.as_deref() == Some("user denied")
+                        && state.as_deref() == Some("xyz")
+            ),
+            "got {:?}",
+            parsed.payload
+        );
     }
 
     #[rstest]

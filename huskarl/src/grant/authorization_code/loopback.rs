@@ -18,7 +18,7 @@ use url::Url;
 use crate::{
     core::{Error, jwt::validator::ValidatedJwt},
     grant::{
-        authorization_code::{CompleteInput, ParseCallbackError},
+        authorization_code::{CompleteError, CompleteInput, ParseCallbackError},
         core::TokenResponse,
     },
     token::id_token::IdTokenClaims,
@@ -300,7 +300,7 @@ async fn complete_on_loopback_oidc_with_timeouts(
                 break Err(e);
             }
         };
-        let result = complete(complete_input).await.context(CompleteSnafu);
+        let result = complete(complete_input).await.map_err(map_complete_error);
 
         // Redirect to a clean URL so the authorization code and state
         // are not left in the browser's address bar or history.
@@ -438,18 +438,29 @@ fn parse_callback_params(path_and_query: &str) -> Result<CompleteInput, Loopback
     // The parser takes the query after the first `?`. For `response_mode=form_post`
     // the body is folded in as a query string upstream, so this handles both.
     path_and_query.parse().map_err(|e| match e {
-        ParseCallbackError::OAuthError {
-            error,
-            error_description,
-        } => LoopbackError::OAuthError {
-            error,
-            error_description,
-        },
         ParseCallbackError::InvalidParameters { source } => {
             LoopbackError::InvalidCallbackParameters { source }
         }
         ParseCallbackError::MissingParameter { param } => LoopbackError::MissingParameter { param },
     })
+}
+
+/// An AS error response surfaces from `complete` (after its checks run);
+/// recover it as the `OAuthError` control-flow variant for the error page.
+fn map_complete_error(source: Error) -> LoopbackError {
+    use std::error::Error as _;
+
+    if let Some(CompleteError::OAuthError {
+        error,
+        error_description,
+    }) = source.source().and_then(|s| s.downcast_ref())
+    {
+        return LoopbackError::OAuthError {
+            error: error.clone(),
+            error_description: error_description.clone(),
+        };
+    }
+    LoopbackError::Complete { source }
 }
 
 async fn send_redirect(stream: &mut TcpStream, location: &str) -> Result<(), std::io::Error> {
@@ -561,10 +572,59 @@ pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
     all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
 ))]
 mod tests {
+    use bytes::Bytes;
     use tokio::net::TcpStream;
 
     use super::*;
-    use crate::token::{AccessToken, id_token::IdTokenClaims};
+    use crate::{
+        core::{
+            client_auth::NoAuth,
+            http::{HttpClient, HttpResponse, Idempotency},
+            platform::MaybeSendBoxFuture,
+        },
+        grant::authorization_code::{AuthorizationCodeGrant, PendingState, types::CallbackPayload},
+        token::{AccessToken, id_token::IdTokenClaims},
+    };
+
+    /// The error path short-circuits before the token request.
+    struct UnusedHttp;
+
+    impl HttpClient for UnusedHttp {
+        fn execute(
+            &self,
+            _request: http::Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            panic!("an error callback must not reach the token endpoint")
+        }
+    }
+
+    /// Drives the real
+    /// [`complete_oidc`](AuthorizationCodeGrant::complete_oidc), so the error
+    /// mapping is tested against what completion actually produces.
+    async fn error_path_grant() -> AuthorizationCodeGrant {
+        AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(UnusedHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/callback")
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn error_path_pending_state() -> PendingState {
+        PendingState {
+            redirect_uri: "http://127.0.0.1/callback".to_owned(),
+            pkce_verifier: None,
+            state: "xyz".to_owned(),
+            nonce: None,
+            dpop_jkt: None,
+            openid_requested: false,
+        }
+    }
 
     fn ok_token_response() -> (TokenResponse, Option<ValidatedJwt<IdTokenClaims>>) {
         (
@@ -676,7 +736,10 @@ mod tests {
                 "http://127.0.0.1/callback",
                 None,
                 async |input| {
-                    assert_eq!(input.iss.as_deref(), Some("https://issuer.example.com"));
+                    let CallbackPayload::Success { iss, .. } = &input.payload else {
+                        panic!("expected a success payload, got {:?}", input.payload)
+                    };
+                    assert_eq!(iss.as_deref(), Some("https://issuer.example.com"));
                     Ok(ok_token_response())
                 },
             )
@@ -697,21 +760,31 @@ mod tests {
         ));
     }
 
+    /// A state-bound error response reaches the error page as the `OAuthError`
+    /// control-flow variant.
     #[tokio::test]
     async fn test_oauth_error_callback() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let grant = error_path_grant().await;
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
-                Ok(ok_token_response())
-            })
+            complete_on_loopback_oidc(
+                &listener,
+                "http://127.0.0.1/callback",
+                None,
+                async |input| {
+                    grant
+                        .complete_oidc(&error_path_pending_state(), input)
+                        .await
+                },
+            )
             .await
         });
 
         send_http_request(
             addr,
-            "GET /callback?error=access_denied&error_description=user+denied HTTP/1.1",
+            "GET /callback?error=access_denied&error_description=user+denied&state=xyz HTTP/1.1",
         )
         .await;
         // Send the failure follow-up so the server can render the error page
@@ -719,7 +792,45 @@ mod tests {
 
         let err = handle.await.unwrap().unwrap_err();
         assert!(
-            matches!(&err, LoopbackError::OAuthError { error, .. } if error == "access_denied")
+            matches!(&err, LoopbackError::OAuthError { error, error_description }
+                if error == "access_denied" && error_description.as_deref() == Some("user denied")),
+            "got {err:?}"
+        );
+    }
+
+    /// An unsolicited error response fails completion's state check, so it must
+    /// not be dressed up as the `OAuthError` control-flow variant.
+    #[tokio::test]
+    async fn test_unsolicited_oauth_error_callback_is_not_control_flow() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let grant = error_path_grant().await;
+
+        let handle = tokio::spawn(async move {
+            complete_on_loopback_oidc(
+                &listener,
+                "http://127.0.0.1/callback",
+                None,
+                async |input| {
+                    grant
+                        .complete_oidc(&error_path_pending_state(), input)
+                        .await
+                },
+            )
+            .await
+        });
+
+        send_http_request(
+            addr,
+            "GET /callback?error=access_denied&state=forged HTTP/1.1",
+        )
+        .await;
+        send_http_request(addr, "GET /failure HTTP/1.1").await;
+
+        let err = handle.await.unwrap().unwrap_err();
+        assert!(
+            matches!(&err, LoopbackError::Complete { .. }),
+            "got {err:?}"
         );
     }
 
@@ -807,8 +918,11 @@ mod tests {
                 "http://127.0.0.1/callback",
                 None,
                 async |input| {
-                    assert_eq!(input.code, "abc");
-                    assert_eq!(input.state, "xyz");
+                    let CallbackPayload::Success { code, state, .. } = &input.payload else {
+                        panic!("expected a success payload, got {:?}", input.payload)
+                    };
+                    assert_eq!(code, "abc");
+                    assert_eq!(state, "xyz");
                     Ok(ok_token_response())
                 },
             )
