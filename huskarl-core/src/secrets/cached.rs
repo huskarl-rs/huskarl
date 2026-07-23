@@ -5,13 +5,13 @@ use bon::bon;
 
 use crate::{
     error::Error,
-    platform::{Duration, MaybeSendBoxFuture, SystemTime},
+    platform::{Duration, Instant, MaybeSendBoxFuture},
     secrets::{Secret, SecretOutput},
 };
 
 struct CachedEntry<T: Clone> {
     output: SecretOutput<T>,
-    cached_at: SystemTime,
+    cached_at: Instant,
 }
 
 struct CachedSecretInner<S: Secret> {
@@ -25,8 +25,14 @@ struct CachedSecretInner<S: Secret> {
 ///
 /// The cached value is returned on subsequent calls until it expires (if a TTL
 /// is configured) or is explicitly invalidated via [`CachedSecret::invalidate`].
+/// Expiry is measured against a monotonic clock, unaffected by wall-clock
+/// adjustments.
 ///
 /// All clones of a `CachedSecret` share the same underlying cache.
+///
+/// Reloads fail closed: once the TTL has elapsed, an access whose reload fails
+/// returns the error rather than serving the stale value. Reloads are
+/// serialized by an internal lock, so concurrent waiters trigger one reload.
 #[derive(Clone)]
 pub struct CachedSecret<S: Secret> {
     inner: Arc<CachedSecretInner<S>>,
@@ -68,7 +74,7 @@ impl<S: Secret> CachedSecret<S> {
         let output = self.inner.secret.get_secret_value().await?;
         self.inner.cached.store(Some(Arc::new(CachedEntry {
             output: output.clone(),
-            cached_at: SystemTime::now(),
+            cached_at: Instant::now(),
         })));
         Ok(output)
     }
@@ -79,7 +85,9 @@ impl<S: Secret> CachedSecret<S> {
     }
 
     fn is_expired(entry: &CachedEntry<S::Output>, ttl: Duration) -> bool {
-        SystemTime::now() >= entry.cached_at + ttl
+        Instant::now()
+            .checked_duration_since(entry.cached_at)
+            .is_some_and(|elapsed| elapsed >= ttl)
     }
 
     fn is_valid(entry: &CachedEntry<S::Output>, ttl: Option<Duration>) -> bool {
@@ -180,6 +188,58 @@ mod tests {
 
         let val2 = cached_secret.get_secret_value().await.unwrap();
         assert_eq!(val2.value.expose_secret(), "secret-1"); // TTL elapsed, reloaded
+    }
+
+    /// Succeeds on the first fetch, fails afterwards.
+    #[derive(Clone)]
+    struct FailingSecret {
+        counter: Arc<AtomicUsize>,
+    }
+
+    impl Secret for FailingSecret {
+        type Output = SecretString;
+
+        fn get_secret_value(
+            &self,
+        ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
+            Box::pin(async move {
+                let count = self.counter.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    Ok(SecretOutput {
+                        value: SecretString::new("initial"),
+                        identity: None,
+                    })
+                } else {
+                    Err(Error::from(crate::error::ErrorKind::Transport {
+                        retryable: true,
+                    }))
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_entry_with_failing_source_fails_closed() {
+        let failing = FailingSecret {
+            counter: Arc::new(AtomicUsize::new(0)),
+        };
+        let cached = CachedSecret::builder()
+            .secret(failing)
+            .ttl(Duration::from_millis(10))
+            .build();
+
+        let val = cached.get_secret_value().await.unwrap();
+        assert_eq!(val.value.expose_secret(), "initial");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // The entry is expired and the source now fails: the error propagates
+        // rather than serving the stale "initial" value.
+        let err = cached.get_secret_value().await.unwrap_err();
+        assert!(err.is_retryable());
+        // And the next access retries the source again rather than caching
+        // the failure.
+        cached.get_secret_value().await.unwrap_err();
     }
 
     #[rstest]
