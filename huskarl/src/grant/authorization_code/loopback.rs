@@ -46,12 +46,18 @@ pub enum LoopbackError {
         source: std::io::Error,
     },
     /// Authorization server returned error.
-    #[snafu(display("Authorization server returned error: {error}"))]
+    #[snafu(display(
+        "Authorization server returned error: {error}{}",
+        error_uri.as_ref().map(|uri| format!(" (see {uri})")).unwrap_or_default()
+    ))]
+    #[non_exhaustive]
     OAuthError {
         /// The `error` field in the `OAuth2` error response.
         error: String,
         /// The `error_description` field in the `OAuth2` error response.
         error_description: Option<String>,
+        /// The `error_uri` field in the `OAuth2` error response.
+        error_uri: Option<String>,
     },
     /// The callback parameters could not be parsed (malformed query, or a
     /// single-valued parameter that appeared more than once — RFC 6749 §3.1).
@@ -99,6 +105,7 @@ pub struct SuccessContext {
 #[non_exhaustive]
 pub enum ErrorContext {
     /// The authorization server returned an OAuth error response (e.g. `access_denied`).
+    #[non_exhaustive]
     OAuthError {
         /// The port the loopback server is listening on.
         port: u16,
@@ -106,6 +113,8 @@ pub enum ErrorContext {
         error: String,
         /// The optional human-readable error description.
         description: Option<String>,
+        /// The optional `error_uri` documenting the error.
+        error_uri: Option<String>,
     },
     /// Token exchange or another internal operation failed.
     InternalError {
@@ -174,18 +183,25 @@ fn error_query_string(ctx: &ErrorContext) -> String {
         error: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
         error_description: Option<&'a str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error_uri: Option<&'a str>,
     }
 
     let params = match ctx {
         ErrorContext::OAuthError {
-            error, description, ..
+            error,
+            description,
+            error_uri,
+            ..
         } => Params {
             error,
             error_description: description.as_deref(),
+            error_uri: error_uri.as_deref(),
         },
         ErrorContext::InternalError { message, .. } => Params {
             error: "server_error",
             error_description: Some(message),
+            error_uri: None,
         },
     };
 
@@ -197,10 +213,12 @@ fn to_error_context(port: u16, err: &LoopbackError) -> ErrorContext {
         LoopbackError::OAuthError {
             error,
             error_description,
+            error_uri,
         } => ErrorContext::OAuthError {
             port,
             error: error.clone(),
             description: error_description.clone(),
+            error_uri: error_uri.clone(),
         },
         _ => ErrorContext::InternalError {
             port,
@@ -443,11 +461,13 @@ fn map_complete_error(source: Error) -> LoopbackError {
     if let Some(CompleteError::OAuthError {
         error,
         error_description,
+        error_uri,
     }) = source.source().and_then(|s| s.downcast_ref())
     {
         return LoopbackError::OAuthError {
             error: error.clone(),
             error_description: error_description.clone(),
+            error_uri: error_uri.clone(),
         };
     }
     LoopbackError::Complete { source }
@@ -776,7 +796,8 @@ mod tests {
 
         send_http_request(
             addr,
-            "GET /callback?error=access_denied&error_description=user+denied&state=xyz HTTP/1.1",
+            "GET /callback?error=access_denied&error_description=user+denied\
+             &error_uri=https%3A%2F%2Fas.example.com%2Fdoc&state=xyz HTTP/1.1",
         )
         .await;
         // Send the failure follow-up so the server can render the error page
@@ -784,8 +805,10 @@ mod tests {
 
         let err = handle.await.unwrap().unwrap_err();
         assert!(
-            matches!(&err, LoopbackError::OAuthError { error, error_description }
-                if error == "access_denied" && error_description.as_deref() == Some("user denied")),
+            matches!(&err, LoopbackError::OAuthError { error, error_description, error_uri }
+                if error == "access_denied"
+                    && error_description.as_deref() == Some("user denied")
+                    && error_uri.as_deref() == Some("https://as.example.com/doc")),
             "got {err:?}"
         );
     }

@@ -37,7 +37,7 @@ use crate::{
                 StartInput, StartOutput,
             },
         },
-        core::{OAuth2ExchangeGrant, form::with_dpop_nonce_retry, join_space},
+        core::{OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry, join_space},
     },
     token::id_token::IdTokenValidator,
 };
@@ -344,6 +344,7 @@ impl AuthorizationCodeGrant {
             AuthorizationResponse::Error {
                 error,
                 error_description,
+                error_uri,
                 state,
             } => {
                 check_state(pending_state, state.as_deref())?;
@@ -352,6 +353,7 @@ impl AuthorizationCodeGrant {
                 return Err(complete_error(CompleteError::OAuthError {
                     error,
                     error_description,
+                    error_uri,
                 })
                 .with_oauth_error(oauth_code, oauth_description));
             }
@@ -401,6 +403,17 @@ impl AuthorizationCodeGrant {
             })
             .await?;
 
+        self.finalize_id_token(pending_state, token).await
+    }
+
+    /// Validates the token response's ID token when present, or enforces the
+    /// OIDC "ID token required" rule when it is absent, folding either outcome
+    /// into a [`CompleteOutput`].
+    async fn finalize_id_token(
+        &self,
+        pending_state: &PendingState,
+        token: TokenResponse,
+    ) -> Result<CompleteOutput, Error> {
         if let Some(id_token) = &token.id_token() {
             let verifier = self
                 .jws_verifier
@@ -493,6 +506,7 @@ impl AuthorizationCodeGrant {
             state: Option<String>,
             error: Option<String>,
             error_description: Option<String>,
+            error_uri: Option<String>,
         }
 
         let verifier = self
@@ -522,6 +536,7 @@ impl AuthorizationCodeGrant {
             return Ok(AuthorizationResponse::Error {
                 error,
                 error_description: claims.error_description,
+                error_uri: claims.error_uri,
                 state: claims.state,
             });
         }
@@ -1491,7 +1506,8 @@ mod tests {
     async fn error_payload_surfaces_from_complete() {
         let grant = completing_grant(None, r#"{"access_token":"t","token_type":"bearer"}"#).await;
 
-        let input: CompleteInput = "error=access_denied&error_description=user+denied&state=st"
+        let input: CompleteInput = "error=access_denied&error_description=user+denied\
+                                    &error_uri=https%3A%2F%2Fas.example.com%2Fdoc&state=st"
             .parse()
             .unwrap();
         let err = grant
@@ -1501,6 +1517,15 @@ mod tests {
         assert_eq!(err.kind(), crate::core::ErrorKind::Protocol, "got {err:?}");
         assert_eq!(err.oauth_error_code(), Some("access_denied"));
         assert_eq!(err.oauth_error_description(), Some("user denied"));
+
+        let source: &CompleteError = std::error::Error::source(&err)
+            .and_then(|s| s.downcast_ref())
+            .expect("source is a CompleteError");
+        assert!(
+            matches!(source, CompleteError::OAuthError { error_uri, .. }
+                if error_uri.as_deref() == Some("https://as.example.com/doc")),
+            "got {source:?}"
+        );
     }
 
     /// An error response that is not bound to the pending state is CSRF, not a
