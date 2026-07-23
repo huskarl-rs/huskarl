@@ -3,8 +3,9 @@ use rand::TryRng as _;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core::{AuthorizationDetail, platform::Duration},
-    token::IdToken,
+    core::{AuthorizationDetail, jwt::validator::ValidatedJwt, platform::Duration},
+    grant::core::TokenResponse,
+    token::{IdToken, id_token::IdTokenClaims},
 };
 
 /// The authorization-request parameters sent to the authorization endpoint
@@ -206,6 +207,23 @@ pub struct StartOutput {
     pub expires_at: Option<crate::core::platform::SystemTime>,
     /// State that must be persisted until the callback completes.
     pub pending_state: PendingState,
+}
+
+/// The result of completing an authorization code flow: the token endpoint
+/// response, plus the validated ID token when the flow was OIDC.
+///
+/// Returned by
+/// [`complete`](crate::grant::authorization_code::AuthorizationCodeGrant::complete)
+/// and its loopback variant.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct CompleteOutput {
+    /// The token endpoint response.
+    pub token_response: TokenResponse,
+    /// The validated ID token — `Some` whenever the flow is OIDC (see
+    /// [`complete`](crate::grant::authorization_code::AuthorizationCodeGrant::complete)),
+    /// `None` otherwise.
+    pub id_token: Option<ValidatedJwt<IdTokenClaims>>,
 }
 
 /// An authorization response in its final form: the RFC 6749 §4.1.2 success

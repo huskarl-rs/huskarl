@@ -5,7 +5,7 @@ use snafu::Snafu;
 /// Carried as the source of [`ErrorKind::Protocol`](crate::core::ErrorKind::Protocol)
 /// errors returned by
 /// [`complete`](super::AuthorizationCodeGrant::complete) /
-/// [`complete_oidc`](super::AuthorizationCodeGrant::complete_oidc) — match on
+/// [`complete`](super::AuthorizationCodeGrant::complete) — match on
 /// the error kind, and read an `OAuthError`'s members off the wrapping
 /// [`Error`](crate::core::Error), rather than downcasting to this type.
 #[derive(Debug, Snafu)]

@@ -16,12 +16,8 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    core::{Error, jwt::validator::ValidatedJwt},
-    grant::{
-        authorization_code::{CompleteError, CompleteInput, ParseCallbackError},
-        core::TokenResponse,
-    },
-    token::id_token::IdTokenClaims,
+    core::Error,
+    grant::authorization_code::{CompleteError, CompleteInput, CompleteOutput, ParseCallbackError},
 };
 
 /// Errors that can occur when handling the authorization code callback with the loopback implementation.
@@ -231,16 +227,13 @@ const RESULT_PAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 /// Waits for the authorization callback on `listener`, completes the flow
 /// via `complete`, and serves a result page to the browser.
-pub async fn complete_on_loopback_oidc(
+pub async fn complete_on_loopback(
     listener: &TcpListener,
     redirect_uri: &str,
     renderer: Option<CallbackRenderer>,
-    complete: impl AsyncFnOnce(
-        CompleteInput,
-    )
-        -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error>,
-) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), LoopbackError> {
-    complete_on_loopback_oidc_with_timeouts(
+    complete: impl AsyncFnOnce(CompleteInput) -> Result<CompleteOutput, Error>,
+) -> Result<CompleteOutput, LoopbackError> {
+    complete_on_loopback_with_timeouts(
         listener,
         redirect_uri,
         renderer,
@@ -251,17 +244,14 @@ pub async fn complete_on_loopback_oidc(
     .await
 }
 
-async fn complete_on_loopback_oidc_with_timeouts(
+async fn complete_on_loopback_with_timeouts(
     listener: &TcpListener,
     redirect_uri: &str,
     renderer: Option<CallbackRenderer>,
     read_timeout: std::time::Duration,
     result_page_timeout: std::time::Duration,
-    complete: impl AsyncFnOnce(
-        CompleteInput,
-    )
-        -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error>,
-) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), LoopbackError> {
+    complete: impl AsyncFnOnce(CompleteInput) -> Result<CompleteOutput, Error>,
+) -> Result<CompleteOutput, LoopbackError> {
     let port = listener.local_addr().map_or(0, |a| a.port());
 
     let expected_path = Url::parse(redirect_uri)
@@ -586,7 +576,7 @@ mod tests {
             AuthorizationCodeGrant, PendingState,
             types::{AuthorizationResponse, CallbackPayload},
         },
-        token::{AccessToken, id_token::IdTokenClaims},
+        token::AccessToken,
     };
 
     /// The error path short-circuits before the token request.
@@ -603,7 +593,7 @@ mod tests {
     }
 
     /// Drives the real
-    /// [`complete_oidc`](AuthorizationCodeGrant::complete_oidc), so the error
+    /// [`complete`](AuthorizationCodeGrant::complete), so the error
     /// mapping is tested against what completion actually produces.
     async fn error_path_grant() -> AuthorizationCodeGrant {
         AuthorizationCodeGrant::builder()
@@ -630,16 +620,16 @@ mod tests {
         }
     }
 
-    fn ok_token_response() -> (TokenResponse, Option<ValidatedJwt<IdTokenClaims>>) {
-        (
-            crate::grant::core::token_response::RawTokenResponse::builder()
+    fn ok_token_response() -> CompleteOutput {
+        CompleteOutput {
+            token_response: crate::grant::core::token_response::RawTokenResponse::builder()
                 .access_token(crate::core::secrets::SecretString::new("test-token"))
                 .token_type("Bearer")
                 .build()
                 .into_token_response(None, crate::core::platform::SystemTime::now())
                 .unwrap(),
-            None,
-        )
+            id_token: None,
+        }
     }
 
     async fn send_http_request(addr: std::net::SocketAddr, request_line: &str) {
@@ -666,7 +656,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(
+            complete_on_loopback(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -680,17 +670,17 @@ mod tests {
         // Send the success follow-up
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, id_token) = handle.await.unwrap().unwrap();
+        let output = handle.await.unwrap().unwrap();
 
         assert!(matches!(
-            token_response.access_token(),
+            output.token_response.access_token(),
             AccessToken::Bearer(_)
         ));
         assert_eq!(
-            token_response.access_token().token().expose_secret(),
+            output.token_response.access_token().token().expose_secret(),
             "test-token"
         );
-        assert!(id_token.is_none());
+        assert!(output.id_token.is_none());
     }
 
     /// Regression: a connection torn down with RST mid-read (a browser
@@ -703,7 +693,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(
+            complete_on_loopback(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -722,7 +712,7 @@ mod tests {
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
@@ -735,7 +725,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(
+            complete_on_loopback(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -759,7 +749,7 @@ mod tests {
         .await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert!(matches!(
             token_response.access_token(),
             AccessToken::Bearer(_)
@@ -775,15 +765,11 @@ mod tests {
         let grant = error_path_grant().await;
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(
+            complete_on_loopback(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
-                async |input| {
-                    grant
-                        .complete_oidc(&error_path_pending_state(), input)
-                        .await
-                },
+                async |input| grant.complete(&error_path_pending_state(), input).await,
             )
             .await
         });
@@ -813,15 +799,11 @@ mod tests {
         let grant = error_path_grant().await;
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(
+            complete_on_loopback(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
-                async |input| {
-                    grant
-                        .complete_oidc(&error_path_pending_state(), input)
-                        .await
-                },
+                async |input| grant.complete(&error_path_pending_state(), input).await,
             )
             .await
         });
@@ -846,7 +828,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+            complete_on_loopback(&listener, "http://127.0.0.1/callback", None, async |_| {
                 Ok(ok_token_response())
             })
             .await
@@ -869,7 +851,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+            complete_on_loopback(&listener, "http://127.0.0.1/callback", None, async |_| {
                 Ok(ok_token_response())
             })
             .await
@@ -893,7 +875,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+            complete_on_loopback(&listener, "http://127.0.0.1/callback", None, async |_| {
                 Ok(ok_token_response())
             })
             .await
@@ -906,7 +888,7 @@ mod tests {
         // Follow-up success page
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
@@ -919,7 +901,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(
+            complete_on_loopback(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -951,7 +933,7 @@ mod tests {
         send_raw_request(addr, &raw).await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
@@ -964,7 +946,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc_with_timeouts(
+            complete_on_loopback_with_timeouts(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -982,7 +964,7 @@ mod tests {
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
@@ -996,7 +978,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc_with_timeouts(
+            complete_on_loopback_with_timeouts(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
@@ -1012,7 +994,7 @@ mod tests {
         // completed result must still be returned after the bounded wait.
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
@@ -1025,7 +1007,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+            complete_on_loopback(&listener, "http://127.0.0.1/callback", None, async |_| {
                 Ok(ok_token_response())
             })
             .await
@@ -1041,7 +1023,7 @@ mod tests {
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
@@ -1054,7 +1036,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
 
         let handle = tokio::spawn(async move {
-            complete_on_loopback_oidc(&listener, "http://127.0.0.1/callback", None, async |_| {
+            complete_on_loopback(&listener, "http://127.0.0.1/callback", None, async |_| {
                 Ok(ok_token_response())
             })
             .await
@@ -1073,7 +1055,7 @@ mod tests {
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
 
-        let (token_response, _) = handle.await.unwrap().unwrap();
+        let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"

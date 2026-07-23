@@ -410,7 +410,7 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
     // Run login and loopback completion concurrently so a login error surfaces
     // immediately instead of blocking on the accept loop until timeout.
     let auth_fut = provider.authenticate(&authorization_url);
-    let complete_fut = grant.complete_on_loopback_oidc(&listener, &pending_state, None);
+    let complete_fut = grant.complete_on_loopback(&listener, &pending_state, None);
     tokio::pin!(auth_fut, complete_fut);
 
     let token_and_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -424,7 +424,7 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
     })
     .await
     .expect("auth-code flow timed out — login likely did not reach the loopback callback");
-    let (_token_response, id_token) = token_and_id.expect("complete auth-code flow");
+    let id_token = token_and_id.expect("complete auth-code flow").id_token;
 
     let id_token = id_token.expect("id_token present for the openid scope");
     assert!(
