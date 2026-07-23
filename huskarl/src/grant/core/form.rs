@@ -137,6 +137,7 @@ fn parse_oauth2_error_response(
     match serde_json::from_slice::<OAuth2ErrorBody>(body) {
         Ok(error_body) => {
             let code = error_body.error.clone();
+            let description = error_body.error_description.clone();
             // 5xx is a server fault, not a verdict on the credential (RFC 6749
             // §5.2 requires 4xx): don't discard a valid RT on a stray code.
             let kind = if status.is_server_error() {
@@ -159,7 +160,7 @@ fn parse_oauth2_error_response(
                     content_type,
                 },
             )
-            .with_oauth_error_code(code)
+            .with_oauth_error(code, description)
         }
         Err(source) => {
             let kind = if status.is_server_error() {

@@ -35,6 +35,7 @@ pub struct Error {
     kind: ErrorKind,
     context: Option<String>,
     oauth_error_code: Option<String>,
+    oauth_error_description: Option<String>,
     source: Option<BoxedSource>,
 }
 
@@ -115,6 +116,7 @@ impl Error {
             kind,
             context: None,
             oauth_error_code: None,
+            oauth_error_description: None,
             source: Some(source.into()),
         }
     }
@@ -134,11 +136,19 @@ impl Error {
         self
     }
 
-    /// Attach the raw OAuth error code returned by the server (see
+    /// Attach the OAuth error response the server returned (see
     /// [`oauth_error_code`](Self::oauth_error_code) for the codes this covers).
+    ///
+    /// Both members are set together — a description only means anything as a
+    /// gloss on its code.
     #[must_use]
-    pub fn with_oauth_error_code(mut self, code: impl Into<String>) -> Self {
+    pub fn with_oauth_error(
+        mut self,
+        code: impl Into<String>,
+        description: Option<String>,
+    ) -> Self {
         self.oauth_error_code = Some(code.into());
+        self.oauth_error_description = description;
         self
     }
 
@@ -162,6 +172,16 @@ impl Error {
     #[must_use]
     pub fn oauth_error_code(&self) -> Option<&str> {
         self.oauth_error_code.as_deref()
+    }
+
+    /// The server's human-readable `error_description`, if it sent one
+    /// alongside the [`oauth_error_code`](Self::oauth_error_code).
+    ///
+    /// Server-controlled free text for developers (RFC 6749 §4.1.2.1): log it,
+    /// but do not match on it, and escape it before rendering it in a page.
+    #[must_use]
+    pub fn oauth_error_description(&self) -> Option<&str> {
+        self.oauth_error_description.as_deref()
     }
 
     /// If true, the failure is transient and the same call may succeed if
@@ -193,6 +213,7 @@ impl From<ErrorKind> for Error {
             kind,
             context: None,
             oauth_error_code: None,
+            oauth_error_description: None,
             source: None,
         }
     }
@@ -256,7 +277,7 @@ mod tests {
     #[test]
     fn kind_and_oauth_code_are_preserved() {
         let err =
-            Error::new(ErrorKind::InvalidGrant, Underlying).with_oauth_error_code("invalid_grant");
+            Error::new(ErrorKind::InvalidGrant, Underlying).with_oauth_error("invalid_grant", None);
         assert_eq!(err.kind(), ErrorKind::InvalidGrant);
         assert_eq!(err.oauth_error_code(), Some("invalid_grant"));
         assert!(!err.is_retryable());
@@ -277,6 +298,19 @@ mod tests {
 
         let sourceless = Error::from(ErrorKind::Config);
         assert!(std::error::Error::source(&sourceless).is_none());
+    }
+
+    /// A code is always attached; its description is optional.
+    #[test]
+    fn oauth_error_description_accompanies_the_code() {
+        let err = Error::from(ErrorKind::InvalidGrant)
+            .with_oauth_error("invalid_grant", Some("refresh token expired".to_owned()));
+        assert_eq!(err.oauth_error_code(), Some("invalid_grant"));
+        assert_eq!(err.oauth_error_description(), Some("refresh token expired"));
+
+        let no_description =
+            Error::from(ErrorKind::InvalidGrant).with_oauth_error("invalid_grant", None);
+        assert_eq!(no_description.oauth_error_description(), None);
     }
 
     #[test]
@@ -302,7 +336,7 @@ mod tests {
 
     #[test]
     fn display_includes_oauth_code() {
-        let err = Error::from(ErrorKind::InvalidGrant).with_oauth_error_code("invalid_grant");
+        let err = Error::from(ErrorKind::InvalidGrant).with_oauth_error("invalid_grant", None);
         assert_eq!(
             err.to_string(),
             "the grant is no longer valid (oauth error code: invalid_grant)"
