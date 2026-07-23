@@ -7,11 +7,11 @@ use crate::{
 };
 
 /// The registered JWS `alg` identifiers (RFC 7518 §3.1, plus `EdDSA` from
-/// RFC 8037 and `ES256K` from RFC 8812), used to bound the cardinality of the
-/// `alg` metrics label.
+/// RFC 8037, its fully-specified `Ed25519`/`Ed448` variants, and `ES256K` from
+/// RFC 8812), used to bound the cardinality of the `alg` metrics label.
 const KNOWN_JWS_ALGORITHMS: &[&str] = &[
     "HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "ES256K",
-    "PS256", "PS384", "PS512", "EdDSA", "none",
+    "PS256", "PS384", "PS512", "EdDSA", "Ed25519", "Ed448", "none",
 ];
 
 /// Maps a JWS header `alg` to a bounded metrics label: a recognised algorithm
@@ -48,6 +48,10 @@ fn alg_label(alg: &str) -> &'static str {
 /// | `name`    | user-provided                                                                | Identifies this verifier instance        |
 /// | `alg`     | registered JWS alg (`RS256`, `ES256`, …) or `other`                          | Algorithm from the JWS header            |
 /// | `outcome` | `success`, `no_matching_key`, `ambiguous_key`, `signature_mismatch`, `error` | Verification result                      |
+///
+/// The `alg` label is bounded to the JWA registry set: the header value is
+/// attacker-supplied, and any value outside the registry is recorded as
+/// `other` to prevent metric cardinality explosion.
 ///
 /// `huskarl.jws.refresh`:
 ///
@@ -173,7 +177,7 @@ mod tests {
     #[test]
     fn known_algorithms_pass_through() {
         for alg in [
-            "HS256", "RS256", "ES256", "ES256K", "PS512", "EdDSA", "none",
+            "HS256", "RS256", "ES256", "ES256K", "PS512", "EdDSA", "Ed25519", "Ed448", "none",
         ] {
             assert_eq!(alg_label(alg), alg);
         }
