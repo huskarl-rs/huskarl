@@ -34,6 +34,7 @@ let checker: Arc<dyn JtiUniquenessChecker> = Arc::new(
         .connection(connection)
         // Must cover the validator's acceptance window plus clock leeway.
         .ttl(Duration::from_mins(5))
+        .key_prefix("jti:")
         .build(),
 );
 ```

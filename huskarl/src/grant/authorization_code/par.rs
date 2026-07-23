@@ -148,6 +148,7 @@ mod tests {
             code_challenge_method: None,
             dpop_jkt: None,
             nonce: Some("nonce-1"),
+            response_mode: None,
             display: None,
             prompt: None,
             max_age: None,

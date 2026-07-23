@@ -15,7 +15,10 @@ use crate::{
         http::HttpClient,
     },
     grant::{
-        authorization_code::jar::{Jar, NoJar},
+        authorization_code::{
+            jar::{Jar, NoJar},
+            types::ResponseMode,
+        },
         core::OAuth2ExchangeGrant,
         refresh,
     },
@@ -103,12 +106,20 @@ pub struct AuthorizationCodeGrant {
     /// OIDC-ness (see `oidc`). See the `new` builder.
     pub(super) send_oidc_nonce: Option<bool>,
 
+    /// The `response_mode` sent on authorization requests; `None` omits the
+    /// parameter. See the `new` builder.
+    pub(super) response_mode: Option<ResponseMode>,
+
     /// Set to true to prefer PAR when available.
     pub(super) prefer_pushed_authorization_requests: bool,
 
     /// If set, restricts accepted ID token signature algorithms; see the `new`
     /// builder.
     pub(super) allowed_id_token_signed_response_algs: Option<HashSet<String>>,
+
+    /// If set, restricts accepted JARM response signature algorithms; see the
+    /// `new` builder.
+    pub(super) allowed_authorization_signed_response_algs: Option<HashSet<String>>,
 }
 
 impl AuthorizationCodeGrant {
@@ -239,6 +250,10 @@ impl AuthorizationCodeGrant {
         /// grant's OIDC-ness (see `oidc`); `true`/`false` force the wire
         /// parameter on or off without affecting ID-token semantics.
         send_oidc_nonce: Option<bool>,
+        /// The `response_mode` authorization-request parameter
+        /// ([`ResponseMode`]). `None` (the default) omits it, leaving the
+        /// server's default for the flow — `query` for the code flow.
+        response_mode: Option<ResponseMode>,
         #[builder(default = true)] prefer_pushed_authorization_requests: bool,
         /// Restricts accepted ID token signature algorithms to this set: the
         /// [`IdTokenValidator`](crate::token::id_token::IdTokenValidator) rejects
@@ -248,8 +263,8 @@ impl AuthorizationCodeGrant {
         ///
         /// [`builder_from_metadata`](Self::builder_from_metadata) seeds it from
         /// the server's `id_token_signing_alg_values_supported` (OIDC Discovery
-        /// 1.0 §3), minus the insecure `none` (which is rejected unconditionally
-        /// regardless). The plain [`builder`](Self::builder) leaves it unset,
+        /// 1.0 §3), minus the insecure `none` (which is rejected
+        /// unconditionally). The plain [`builder`](Self::builder) leaves it unset,
         /// accepting any algorithm the verifier supports.
         #[from_metadata(
             with = |m: &crate::core::server_metadata::AuthorizationServerMetadata| m
@@ -265,6 +280,28 @@ impl AuthorizationCodeGrant {
             maybe
         )]
         allowed_id_token_signed_response_algs: Option<HashSet<String>>,
+        /// Restricts accepted JARM response signature algorithms to this set
+        /// (see `response_mode`); any `alg` outside it is rejected.
+        ///
+        /// [`builder_from_metadata`](Self::builder_from_metadata) seeds it from
+        /// the server's `authorization_signing_alg_values_supported` (JARM
+        /// §4), minus the insecure `none` (which is rejected
+        /// unconditionally). The plain [`builder`](Self::builder) leaves it unset,
+        /// accepting any algorithm the verifier supports.
+        #[from_metadata(
+            with = |m: &crate::core::server_metadata::AuthorizationServerMetadata| m
+                .authorization_signing_alg_values_supported
+                .as_ref()
+                .map(|algs| {
+                    algs.iter()
+                        .filter(|a| *a != "none")
+                        .cloned()
+                        .collect::<HashSet<String>>()
+                })
+                .filter(|algs| !algs.is_empty()),
+            maybe
+        )]
+        allowed_authorization_signed_response_algs: Option<HashSet<String>>,
         #[cfg(not(feature = "default-jws-verifier-platform"))] jws_verifier_platform: Option<
             Arc<dyn JwsVerifierPlatform>,
         >,
@@ -333,6 +370,23 @@ impl AuthorizationCodeGrant {
             }
         }
 
+        // A JWT-secured response mode makes every callback a JARM JWT, so a
+        // grant that could never validate one fails here.
+        if response_mode.is_some_and(ResponseMode::is_jwt_secured) {
+            if jws_verifier.is_none() {
+                return Err(Error::new(
+                    ErrorKind::Config,
+                    super::error::JarmRequiresVerifierSnafu.build(),
+                ));
+            }
+            if issuer.is_none() {
+                return Err(Error::new(
+                    ErrorKind::Config,
+                    super::error::JarmRequiresIssuerSnafu.build(),
+                ));
+            }
+        }
+
         Ok(AuthorizationCodeGrant {
             client_id,
             http_client,
@@ -353,8 +407,10 @@ impl AuthorizationCodeGrant {
             disable_pkce,
             oidc,
             send_oidc_nonce,
+            response_mode,
             prefer_pushed_authorization_requests,
             allowed_id_token_signed_response_algs,
+            allowed_authorization_signed_response_algs,
         })
     }
 }

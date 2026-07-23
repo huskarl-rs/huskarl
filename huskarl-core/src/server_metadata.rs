@@ -138,6 +138,13 @@ pub struct AuthorizationServerMetadata {
     #[serde(default)]
     #[builder(default)]
     pub authorization_response_iss_parameter_supported: bool,
+    /// Array containing a list of the JWS "alg" values supported for signed
+    /// authorization responses (JARM §4).
+    ///
+    /// JWT Secured Authorization Response Mode for OAuth 2.0 (JARM); the
+    /// authorization code grant seeds its
+    /// `allowed_authorization_signed_response_algs` from it.
+    pub authorization_signing_alg_values_supported: Option<Vec<String>>,
     /// The URL of the `OpenID` Connect userinfo endpoint.
     ///
     /// `OpenID` Connect Core 1.0

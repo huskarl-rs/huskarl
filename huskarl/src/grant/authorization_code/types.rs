@@ -26,6 +26,8 @@ pub struct AuthorizationPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) nonce: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) response_mode: Option<ResponseMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) display: Option<&'a Display>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) prompt: Option<&'a Prompt>,
@@ -96,6 +98,40 @@ pub struct StartInput {
     pub(super) login_hint: Option<String>,
     /// Requested Authentication Context Class Reference values.
     pub(super) acr_values: Option<Vec<String>>,
+}
+
+/// The `response_mode` authorization-request parameter ([OAuth 2.0 Multiple
+/// Response Type Encoding Practices](https://openid.net/specs/oauth-v2-multiple-response-types-1_0.html)
+/// §2.1; `form_post` is [OAuth 2.0 Form Post Response
+/// Mode](https://openid.net/specs/oauth-v2-form-post-response-mode-1_0.html);
+/// the `*.jwt` modes are [JARM](https://openid.net/specs/oauth-v2-jarm.html)
+/// §2.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum ResponseMode {
+    /// Response parameters in the redirect query (the code-flow default).
+    #[serde(rename = "query")]
+    Query,
+    /// Response parameters posted as a form body to the redirect URI.
+    #[serde(rename = "form_post")]
+    FormPost,
+    /// JWT-secured response in the redirect query (JARM).
+    #[serde(rename = "query.jwt")]
+    QueryJwt,
+    /// JWT-secured response posted as a form body (JARM).
+    #[serde(rename = "form_post.jwt")]
+    FormPostJwt,
+    /// JWT-secured response in the flow's default transport (JARM).
+    #[serde(rename = "jwt")]
+    Jwt,
+}
+
+impl ResponseMode {
+    /// Whether this mode returns a JWT-secured authorization response (JARM).
+    #[must_use]
+    pub fn is_jwt_secured(self) -> bool {
+        matches!(self, Self::QueryJwt | Self::FormPostJwt | Self::Jwt)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -172,10 +208,13 @@ pub struct StartOutput {
     pub pending_state: PendingState,
 }
 
-/// What the authorization callback carried: the RFC 6749 §4.1.2 success
+/// An authorization response in its final form: the RFC 6749 §4.1.2 success
 /// parameters or the §4.1.2.1 error parameters.
+///
+/// A JARM response folds into this once verified, so the completion checks
+/// have no third shape to consider.
 #[derive(Debug, Clone)]
-pub(super) enum CallbackPayload {
+pub(super) enum AuthorizationResponse {
     /// The success parameters, plus the RFC 9207 `iss`.
     Success {
         code: String,
@@ -189,6 +228,15 @@ pub(super) enum CallbackPayload {
         error_description: Option<String>,
         state: Option<String>,
     },
+}
+
+/// What the authorization callback carried, before any verification.
+#[derive(Debug, Clone)]
+pub(super) enum CallbackPayload {
+    /// Response parameters read straight off the callback.
+    Plain(AuthorizationResponse),
+    /// A JWT-secured authorization response (JARM §2.1), still to be verified.
+    Jarm { response: String },
 }
 
 /// The information needed to complete an authorization code flow.
@@ -220,7 +268,7 @@ impl CompleteInput {
         resource: Option<Vec<String>>,
     ) -> Self {
         Self {
-            payload: CallbackPayload::Success { code, state, iss },
+            payload: CallbackPayload::Plain(AuthorizationResponse::Success { code, state, iss }),
             resource,
         }
     }
@@ -266,6 +314,7 @@ impl CompleteInput {
             error: Option<String>,
             error_description: Option<String>,
             iss: Option<String>,
+            response: Option<String>,
         }
 
         // Everything up to the first `?` is the URL/path part; a later raw
@@ -276,16 +325,20 @@ impl CompleteInput {
         let params: CallbackParams =
             crate::core::oauth_form::from_str(query).context(InvalidParametersSnafu)?;
 
-        // An OAuth error response takes precedence (RFC 6749 §4.1.2.1):
-        // `error` and `code` are mutually exclusive on the wire.
-        let payload = if let Some(error) = params.error {
-            CallbackPayload::Error {
+        // A JARM `response` JWT carries the whole authorization response
+        // (JARM §2.1), so it wins outright; then an OAuth error response
+        // takes precedence (RFC 6749 §4.1.2.1) — `error` and `code` are
+        // mutually exclusive on the wire.
+        let payload = if let Some(response) = params.response {
+            CallbackPayload::Jarm { response }
+        } else if let Some(error) = params.error {
+            CallbackPayload::Plain(AuthorizationResponse::Error {
                 error,
                 error_description: params.error_description,
                 state: params.state,
-            }
+            })
         } else {
-            CallbackPayload::Success {
+            CallbackPayload::Plain(AuthorizationResponse::Success {
                 code: params
                     .code
                     .ok_or(ParseCallbackError::MissingParameter { param: "code" })?,
@@ -293,7 +346,7 @@ impl CompleteInput {
                     .state
                     .ok_or(ParseCallbackError::MissingParameter { param: "state" })?,
                 iss: params.iss,
-            }
+            })
         };
 
         Ok(Self::seeded(payload))
@@ -343,6 +396,11 @@ pub struct PendingState {
     /// persisted before this field existed.
     #[serde(default)]
     pub openid_requested: bool,
+    /// The `response_mode` sent to the authorization endpoint. `None` when no
+    /// parameter was sent (including states persisted before this field
+    /// existed).
+    #[serde(default)]
+    pub response_mode: Option<ResponseMode>,
 }
 
 // `PendingState` is designed to be persisted to a session store and is
@@ -361,6 +419,7 @@ impl std::fmt::Debug for PendingState {
             .field("nonce", &self.nonce.as_ref().map(|_| "[REDACTED]"))
             .field("dpop_jkt", &self.dpop_jkt)
             .field("openid_requested", &self.openid_requested)
+            .field("response_mode", &self.response_mode)
             .finish()
     }
 }
@@ -394,6 +453,7 @@ mod tests {
             code_challenge_method: None,
             dpop_jkt: None,
             nonce: None,
+            response_mode: None,
             display: None,
             prompt: None,
             max_age: Some(300),
@@ -427,13 +487,31 @@ mod tests {
         assert_eq!(state.nonce.as_deref(), Some("n"));
     }
 
-    /// Asserts the payload is a success shape and returns its parts.
+    #[test]
+    fn pending_state_response_mode_round_trips() {
+        let state = PendingState {
+            redirect_uri: "http://127.0.0.1/cb".to_owned(),
+            pkce_verifier: None,
+            state: "s".to_owned(),
+            nonce: None,
+            dpop_jkt: None,
+            openid_requested: false,
+            response_mode: Some(ResponseMode::QueryJwt),
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(json.contains(r#""response_mode":"query.jwt""#), "{json}");
+        let back: PendingState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.response_mode, Some(ResponseMode::QueryJwt));
+    }
+
+    /// Asserts the payload is a plain success response and returns its parts.
+    #[track_caller]
     fn success_parts(input: &CompleteInput) -> (&str, &str, Option<&str>) {
         match &input.payload {
-            CallbackPayload::Success { code, state, iss } => (code, state, iss.as_deref()),
-            other @ CallbackPayload::Error { .. } => {
-                panic!("expected a success payload, got {other:?}")
+            CallbackPayload::Plain(AuthorizationResponse::Success { code, state, iss }) => {
+                (code, state, iss.as_deref())
             }
+            other => panic!("expected a plain success payload, got {other:?}"),
         }
     }
 
@@ -489,7 +567,7 @@ mod tests {
             matches!(
                 &parsed.payload,
                 // `state` is kept so completion can bind the error to the flow.
-                CallbackPayload::Error { error, error_description, state }
+                CallbackPayload::Plain(AuthorizationResponse::Error { error, error_description, state })
                     if error == "access_denied"
                         && error_description.as_deref() == Some("user denied")
                         && state.as_deref() == Some("xyz")
@@ -497,6 +575,19 @@ mod tests {
             "got {:?}",
             parsed.payload
         );
+    }
+
+    /// A JARM `response` JWT parses into its own payload shape, unverified,
+    /// and wins over any plain parameters alongside it (JARM §2.1).
+    #[test]
+    fn complete_input_parses_jarm_response() {
+        let parsed: CompleteInput = "code=abc&state=xyz&response=header.body.sig"
+            .parse()
+            .unwrap();
+        assert!(matches!(
+            &parsed.payload,
+            CallbackPayload::Jarm { response } if response == "header.body.sig"
+        ));
     }
 
     #[rstest]
@@ -532,6 +623,7 @@ mod tests {
             nonce: Some("id-token-nonce".to_owned()),
             dpop_jkt: Some("jkt-thumbprint".to_owned()),
             openid_requested: true,
+            response_mode: Some(ResponseMode::QueryJwt),
         };
 
         let debug = format!("{state:?}");

@@ -207,18 +207,20 @@ linked above.
 
 ## Supported specifications
 
-### Core framework
+### IETF
+
+#### Core framework
 
 - RFC 6749 - OAuth 2.0 Authorization Framework
 - RFC 6750 - Bearer Token Usage
 
-### Token management
+#### Token management
 
 - RFC 7009 - Token Revocation
 - RFC 7662 - Token Introspection
 - RFC 9701 - JWT Response for Token Introspection
 
-### JWT / cryptography
+#### JWT / cryptography
 
 - RFC 7515 - JSON Web Signature (JWS)
 - RFC 7517 - JSON Web Key (JWK)
@@ -228,7 +230,7 @@ linked above.
 - RFC 7523 - JWT Profile for Client Authentication and Authorization Grants
 - RFC 7800 - Proof-of-Possession Key Semantics for JWTs
 
-### Security extensions
+#### Security extensions
 
 - RFC 7636 - PKCE
 - RFC 8705 - mTLS Client Auth & Certificate-Bound Tokens
@@ -237,25 +239,37 @@ linked above.
 - RFC 9126 - Pushed Authorization Requests (PAR)
 - RFC 9449 - DPoP
 
-### Authorization flows
+#### Authorization flows
 
 - RFC 8252 - OAuth 2.0 for Native Apps
 - RFC 8628 - Device Authorization Grant
 - RFC 8693 - Token Exchange
 
-### Discovery & metadata
+#### Discovery & metadata
 
 - RFC 8414 - Authorization Server Metadata
 - RFC 9068 - JWT Profile for OAuth 2.0 Access Tokens
 - RFC 9207 - Authorization Server Issuer Identification
 
-### Client lifecycle
+#### Client lifecycle
 
 - RFC 7591 - Dynamic Client Registration
 
-### OpenID Connect
+### OpenID Foundation
+
+#### Authentication
 
 - OpenID Connect Core 1.0
+
+#### Discovery & metadata
+
+- OpenID Connect Discovery 1.0
+
+#### Response modes
+
+- OAuth 2.0 Multiple Response Type Encoding Practices
+- OAuth 2.0 Form Post Response Mode
+- JWT Secured Authorization Response Mode (JARM)
 
 ## Status
 
