@@ -1,6 +1,6 @@
 use base64::{Engine, prelude::BASE64_URL_SAFE_NO_PAD};
 use serde::Deserialize;
-use snafu::{ensure, prelude::*};
+use snafu::prelude::*;
 
 use crate::jwt::structure::{JwtClaims, JwtHeader};
 
@@ -54,18 +54,25 @@ pub fn parse_compact_jws<
 >(
     token: &str,
 ) -> Result<ParsedJws<H, C>, JwsParseError> {
-    let parts = token.split('.').collect::<Vec<_>>();
+    // `splitn(4, ..)` bounds the work done on hostile input: a token of N
+    // dots is rejected after at most four iterator steps, with no
+    // proportional allocation.
+    let mut parts = token.splitn(4, '.');
+    let (Some(header_b64), Some(claims_b64), Some(signature_b64), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return InvalidFormatSnafu.fail();
+    };
 
-    ensure!(parts.len() == 3, InvalidFormatSnafu);
-    let signing_input = format!("{}.{}", parts[0], parts[1]).as_bytes().to_vec();
+    let signing_input = format!("{header_b64}.{claims_b64}").into_bytes();
     let header = BASE64_URL_SAFE_NO_PAD
-        .decode(parts[0])
+        .decode(header_b64)
         .context(Base64Snafu)?;
     let claims = BASE64_URL_SAFE_NO_PAD
-        .decode(parts[1])
+        .decode(claims_b64)
         .context(Base64Snafu)?;
     let signature = BASE64_URL_SAFE_NO_PAD
-        .decode(parts[2])
+        .decode(signature_b64)
         .context(Base64Snafu)?;
 
     Ok(ParsedJws {
@@ -117,5 +124,36 @@ mod tests {
         assert_eq!(jws.claims.nbf, None);
         assert_eq!(jws.claims.jti, None);
         assert_eq!(jws.claims.claims, Cow::Owned(TestClaims { is_root: true }));
+    }
+
+    fn parse_err(token: &str) -> super::JwsParseError {
+        match parse_compact_jws::<(), ()>(token) {
+            Ok(_) => unreachable!("expected parse failure"),
+            Err(e) => e,
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_part_counts() {
+        assert!(matches!(
+            parse_err("a.b"),
+            super::JwsParseError::InvalidFormat
+        ));
+        assert!(matches!(
+            parse_err("a.b.c.d"),
+            super::JwsParseError::InvalidFormat
+        ));
+        assert!(matches!(parse_err(""), super::JwsParseError::InvalidFormat));
+    }
+
+    #[test]
+    fn rejects_dot_flood_without_amplification() {
+        // A hostile token of only separators must be rejected up front; with
+        // splitn the parser inspects at most four parts regardless of length.
+        let hostile = ".".repeat(1_000_000);
+        assert!(matches!(
+            parse_err(&hostile),
+            super::JwsParseError::InvalidFormat
+        ));
     }
 }
