@@ -7,18 +7,17 @@
 //! named at their use sites, so they are imported explicitly instead; traits
 //! you *implement* (rather than call) are excluded too.
 //!
-//! What the prelude currently enables:
-//!
-//! - [`Secret`](crate::secrets::Secret) — `.get_secret_value()`, `.map(…)` on
-//!   secret sources.
-//! - [`AuthorizationServerDPoP`](crate::dpop::AuthorizationServerDPoP) /
-//!   [`ResourceServerDPoP`](crate::dpop::ResourceServerDPoP) —
-//!   `.to_resource_server_dpop()` and `.proof(…)` on `DPoP` values.
-//!
 //! Downstream crates re-export this from their own preludes (e.g.
 //! `huskarl::prelude`), so importing the outermost prelude is enough.
 
 pub use crate::{
+    crypto::cipher::{AeadDecryptor as _, AeadEncryptor as _, AeadEncryptorSelector as _},
+    crypto::seal::{AeadSealer as _, AeadUnsealer as _},
+    crypto::signer::{
+        AsymmetricJwsSigner as _, AsymmetricJwsSignerSelector as _, JwsSigner as _,
+        JwsSignerSelector as _,
+    },
+    crypto::verifier::{JwsVerifier as _, JwsVerifierFactory as _, JwsVerifierPlatform as _},
     dpop::{AuthorizationServerDPoP as _, ResourceServerDPoP as _},
     secrets::Secret as _,
 };
