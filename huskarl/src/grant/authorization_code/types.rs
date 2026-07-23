@@ -244,6 +244,7 @@ pub(super) enum AuthorizationResponse {
     Error {
         error: String,
         error_description: Option<String>,
+        error_uri: Option<String>,
         state: Option<String>,
     },
 }
@@ -331,6 +332,7 @@ impl CompleteInput {
             state: Option<String>,
             error: Option<String>,
             error_description: Option<String>,
+            error_uri: Option<String>,
             iss: Option<String>,
             response: Option<String>,
         }
@@ -353,6 +355,7 @@ impl CompleteInput {
             CallbackPayload::Plain(AuthorizationResponse::Error {
                 error,
                 error_description: params.error_description,
+                error_uri: params.error_uri,
                 state: params.state,
             })
         } else {
@@ -578,16 +581,18 @@ mod tests {
     /// (RFC 6749 §4.1.2.1).
     #[test]
     fn complete_input_parse_error_response_takes_precedence() {
-        let parsed = "code=abc&state=xyz&error=access_denied&error_description=user+denied"
+        let parsed = "code=abc&state=xyz&error=access_denied&error_description=user+denied\
+                      &error_uri=https%3A%2F%2Fas.example.com%2Fdoc"
             .parse::<CompleteInput>()
             .unwrap();
         assert!(
             matches!(
                 &parsed.payload,
                 // `state` is kept so completion can bind the error to the flow.
-                CallbackPayload::Plain(AuthorizationResponse::Error { error, error_description, state })
+                CallbackPayload::Plain(AuthorizationResponse::Error { error, error_description, error_uri, state })
                     if error == "access_denied"
                         && error_description.as_deref() == Some("user denied")
+                        && error_uri.as_deref() == Some("https://as.example.com/doc")
                         && state.as_deref() == Some("xyz")
             ),
             "got {:?}",

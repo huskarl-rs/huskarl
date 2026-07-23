@@ -17,12 +17,18 @@ pub enum CompleteError {
     ///
     /// Only a response bound to the flow reaches this variant; an unsolicited
     /// one is [`StateMismatch`](Self::StateMismatch).
-    #[snafu(display("Authorization server returned error: {error}"))]
+    #[snafu(display(
+        "Authorization server returned error: {error}{}",
+        error_uri.as_ref().map(|uri| format!(" (see {uri})")).unwrap_or_default()
+    ))]
+    #[non_exhaustive]
     OAuthError {
         /// The `error` field in the `OAuth2` error response.
         error: String,
         /// The `error_description` field in the `OAuth2` error response.
         error_description: Option<String>,
+        /// The `error_uri` field in the `OAuth2` error response.
+        error_uri: Option<String>,
     },
     /// There was a mismatch between the required and returned issuer values.
     #[snafu(display("Issuer mismatch: original = {}, callback = {}", original, callback))]
