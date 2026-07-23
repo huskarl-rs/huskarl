@@ -269,7 +269,8 @@ pub async fn run_auth_code_flow_with_listener<
                 Err(e) => Err(format!("browser navigation failed: {e}")),
             }
         }
-    }?;
+    }?
+    .token_response;
 
     // Prime the source so get_headers() immediately returns the fresh token.
     source

@@ -112,8 +112,8 @@ use huskarl::{
 // ("code=..&state=..&iss=..").
 let complete_input: CompleteInput = callback_url.parse()?;
 
-let response = grant.complete(pending_state, complete_input).await?;
-let token: &AccessToken = response.access_token();
+let completed = grant.complete(pending_state, complete_input).await?;
+let token: &AccessToken = completed.token_response.access_token();
 # Ok(())
 # }
 ```
@@ -135,9 +135,9 @@ Requesting the `openid` scope makes the flow an OIDC authentication: the
 grant sends a `nonce`, requires ID-token validation to be configured (a
 `jws_verifier_factory` and an issuer) before `start()` will proceed, and
 rejects a token response without an ID token (OIDC Core 1.0 §3.1.3.3) —
-unless the server narrowed `openid` out of the granted scope. Use
-`complete_oidc()` instead of `complete()` to receive the validated ID token
-alongside the token response.
+unless the server narrowed `openid` out of the granted scope. `complete()`
+returns the validated ID token on `CompleteOutput::id_token` alongside the
+token response whenever the flow is OIDC.
 
 The `oidc` builder setting overrides this inference for non-standard
 servers. `oidc(false)` treats `openid` as an ordinary OAuth scope — for

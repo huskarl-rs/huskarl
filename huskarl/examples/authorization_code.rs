@@ -69,12 +69,12 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     println!("Open this URL in your browser:\n{}", authorization_url);
 
-    let (token_response, id_token) = grant
-        .complete_on_loopback_oidc(&listener, &pending_state, None)
+    let completed = grant
+        .complete_on_loopback(&listener, &pending_state, None)
         .await
         .whatever_context("Getting token failed")?;
 
-    println!("ID token: {:?}", id_token);
+    println!("ID token: {:?}", completed.id_token);
 
     // Hand the token response from the authorization code exchange to the
     // source; it serves the token and refreshes it automatically. DPoP proof
@@ -85,7 +85,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .refresh_store(InMemoryRefreshTokenStore::default())
         .build();
     source
-        .prime(token_response)
+        .prime(completed.token_response)
         .await
         .whatever_context("Failed to prime the token source")?;
 

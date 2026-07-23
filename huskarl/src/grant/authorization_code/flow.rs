@@ -33,13 +33,13 @@ use crate::{
             pkce::Pkce,
             types::{
                 AuthorizationPayload, AuthorizationPayloadWithClientId, AuthorizationResponse,
-                CallbackPayload, CompleteInput, PendingState, ResponseMode, StartInput,
-                StartOutput,
+                CallbackPayload, CompleteInput, CompleteOutput, PendingState, ResponseMode,
+                StartInput, StartOutput,
             },
         },
-        core::{OAuth2ExchangeGrant, TokenResponse, form::with_dpop_nonce_retry, join_space},
+        core::{OAuth2ExchangeGrant, form::with_dpop_nonce_retry, join_space},
     },
-    token::id_token::{IdTokenClaims, IdTokenValidator},
+    token::id_token::IdTokenValidator,
 };
 
 /// Wraps a completion-check failure as a protocol error.
@@ -69,18 +69,19 @@ fn check_state(pending_state: &PendingState, callback_state: Option<&str>) -> Re
 
 impl AuthorizationCodeGrant {
     /// Completes the authorization code flow on `listener`, returning the token
-    /// response.
+    /// response and, for an OIDC flow, the validated ID token.
     ///
     /// Runs a minimal HTTP server on `listener` to receive the redirect callback
-    /// at the redirect URI — handy for command-line tools. To also recover the
-    /// validated ID token, use
-    /// [`complete_on_loopback_oidc`](Self::complete_on_loopback_oidc).
+    /// at the redirect URI — handy for command-line tools. See [`complete`] for
+    /// the ID-token semantics carried on [`CompleteOutput`].
+    ///
+    /// [`complete`]: Self::complete
     ///
     /// # Errors
     ///
-    /// Errors if a callback URL cannot be parsed, the HTTP exchange or callback
-    /// handling fails, the token request fails, or a returned ID token fails
-    /// validation (see [`complete_oidc`](Self::complete_oidc)).
+    /// Returns a [`LoopbackError`] if the callback server fails, a callback URL
+    /// cannot be parsed, the authorization server returns an error response, or
+    /// the token (and ID token) exchange fails.
     #[cfg(all(
         feature = "authorization-flow-loopback",
         any(
@@ -93,42 +94,12 @@ impl AuthorizationCodeGrant {
         listener: &tokio::net::TcpListener,
         pending_state: &PendingState,
         renderer: Option<loopback::CallbackRenderer>,
-    ) -> Result<TokenResponse, LoopbackError> {
-        self.complete_on_loopback_oidc(listener, pending_state, renderer)
-            .await
-            .map(|v| v.0)
-    }
-
-    /// Completes the authorization code flow on `listener`, returning the token
-    /// response together with the validated ID token when the flow was an OIDC
-    /// flow.
-    ///
-    /// Like [`complete_on_loopback`](Self::complete_on_loopback), but also yields
-    /// the validated ID token. Same minimal callback server and the same errors.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`LoopbackError`] if the callback server fails, the
-    /// authorization server returns an error response, or the token (and ID
-    /// token) exchange fails.
-    #[cfg(all(
-        feature = "authorization-flow-loopback",
-        any(
-            not(target_family = "wasm"),
-            all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
-        )
-    ))]
-    pub async fn complete_on_loopback_oidc(
-        &self,
-        listener: &tokio::net::TcpListener,
-        pending_state: &PendingState,
-        renderer: Option<loopback::CallbackRenderer>,
-    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), LoopbackError> {
-        loopback::complete_on_loopback_oidc(
+    ) -> Result<CompleteOutput, LoopbackError> {
+        loopback::complete_on_loopback(
             listener,
             &pending_state.redirect_uri,
             renderer,
-            async |complete_input| self.complete_oidc(pending_state, complete_input).await,
+            async |complete_input| self.complete(pending_state, complete_input).await,
         )
         .await
     }
@@ -339,47 +310,24 @@ impl AuthorizationCodeGrant {
     }
 
     /// Attempts to complete the authorization code flow, returning the token
-    /// response.
+    /// response and, for an OIDC flow, the validated ID token.
     ///
-    /// To also recover the validated ID token, use
-    /// [`complete_oidc`](Self::complete_oidc).
+    /// [`CompleteOutput::id_token`] is `Some` — validated — whenever the flow
+    /// is OIDC (see the `oidc` builder setting); `None` means the flow was not
+    /// OIDC, or the server narrowed `openid` out of the granted scope.
     ///
     /// # Errors
     ///
     /// Returns an error if the callback was an OAuth error response
     /// ([`OAuthError`](super::CompleteError::OAuthError)), the token request
-    /// fails, a callback parameter check fails, or a returned ID token fails
-    /// validation (see [`complete_oidc`](Self::complete_oidc) for the
-    /// ID-token semantics).
+    /// failed, a check failed against the callback parameters, a received ID
+    /// token could not be validated, or an OIDC flow's token response carried
+    /// no ID token ([`MissingIdToken`](super::CompleteError::MissingIdToken)).
     pub async fn complete(
         &self,
         pending_state: &PendingState,
         complete_input: CompleteInput,
-    ) -> Result<TokenResponse, Error> {
-        self.complete_oidc(pending_state, complete_input)
-            .await
-            .map(|(token_response, _)| token_response)
-    }
-
-    /// Attempts to complete the authorization code flow, returning both the token response and the validated ID token.
-    ///
-    /// The ID token is `Some` — validated — whenever the flow is OIDC (see
-    /// the `oidc` builder setting); `None` means the flow was not OIDC, or
-    /// the server narrowed `openid` out of the granted scope.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the callback was an OAuth error response
-    /// ([`OAuthError`](super::CompleteError::OAuthError)), one is returned
-    /// when sending a message to the token endpoint, a check failed against
-    /// the callback parameters, a received ID token could not be validated,
-    /// or an OIDC flow's token response carried no ID token
-    /// ([`MissingIdToken`](super::CompleteError::MissingIdToken)).
-    pub async fn complete_oidc(
-        &self,
-        pending_state: &PendingState,
-        complete_input: CompleteInput,
-    ) -> Result<(TokenResponse, Option<ValidatedJwt<IdTokenClaims>>), Error> {
+    ) -> Result<CompleteOutput, Error> {
         // Fold the callback into a single response shape (JARM verified, then
         // plain params) so every check below runs the same way on both.
         let response = self
@@ -479,7 +427,10 @@ impl AuthorizationCodeGrant {
                     Error::new(ErrorKind::Protocol, e).with_context("validating ID token")
                 })?;
 
-            Ok((token, Some(verified_token)))
+            Ok(CompleteOutput {
+                token_response: token,
+                id_token: Some(verified_token),
+            })
         } else {
             // OIDC Core 1.0 §3.1.3.3: the token response must carry an ID
             // token when `openid` is granted. Granted scope defaults to the
@@ -496,7 +447,10 @@ impl AuthorizationCodeGrant {
             if expected && !narrowed {
                 return Err(complete_error(MissingIdTokenSnafu.build()));
             }
-            Ok((token, None))
+            Ok(CompleteOutput {
+                token_response: token,
+                id_token: None,
+            })
         }
     }
 
@@ -828,7 +782,7 @@ mod tests {
             .await
             .unwrap();
 
-        let token = grant
+        let completed = grant
             .with_session_dpop_key(key)
             .unwrap()
             .complete(
@@ -841,7 +795,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(matches!(token.access_token(), AccessToken::DPoP(_)));
+        assert!(matches!(
+            completed.token_response.access_token(),
+            AccessToken::DPoP(_)
+        ));
 
         let seen = http.seen.lock().unwrap();
         assert!(
@@ -1515,7 +1472,7 @@ mod tests {
         let grant = completing_grant(oidc, body).await;
 
         let result = grant
-            .complete_oidc(&pending(openid_requested), complete_input())
+            .complete(&pending(openid_requested), complete_input())
             .await;
 
         if expect_error {
@@ -1523,8 +1480,8 @@ mod tests {
             assert_eq!(err.kind(), crate::core::ErrorKind::Protocol, "got {err:?}");
             assert!(format!("{err:?}").contains("MissingIdToken"), "got {err:?}");
         } else {
-            let (_, id_token) = result.expect("completion must succeed");
-            assert!(id_token.is_none());
+            let output = result.expect("completion must succeed");
+            assert!(output.id_token.is_none());
         }
     }
 
@@ -1538,7 +1495,7 @@ mod tests {
             .parse()
             .unwrap();
         let err = grant
-            .complete_oidc(&pending(false), input)
+            .complete(&pending(false), input)
             .await
             .expect_err("an error payload must not complete");
         assert_eq!(err.kind(), crate::core::ErrorKind::Protocol, "got {err:?}");
@@ -1558,7 +1515,7 @@ mod tests {
         let grant = completing_grant(None, r#"{"access_token":"t","token_type":"bearer"}"#).await;
 
         let err = grant
-            .complete_oidc(&pending(false), callback.parse().unwrap())
+            .complete(&pending(false), callback.parse().unwrap())
             .await
             .expect_err("an unbound error payload must not complete");
         assert_eq!(err.oauth_error_code(), None, "got {err:?}");
@@ -1646,7 +1603,7 @@ mod tests {
 
         let input: CompleteInput = format!("response={jarm}").parse().unwrap();
         grant
-            .complete_oidc(&pending_jarm(), input)
+            .complete(&pending_jarm(), input)
             .await
             .expect("a valid JARM response must complete");
     }
@@ -1666,7 +1623,7 @@ mod tests {
 
         let input: CompleteInput = format!("response={jarm}").parse().unwrap();
         let err = grant
-            .complete_oidc(&pending_jarm(), input)
+            .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM error response must not complete");
         assert_eq!(err.oauth_error_code(), Some("access_denied"));
@@ -1686,7 +1643,7 @@ mod tests {
 
         let input: CompleteInput = format!("response={jarm}").parse().unwrap();
         let err = grant
-            .complete_oidc(&pending_jarm(), input)
+            .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM state mismatch must be rejected");
         assert!(format!("{err:?}").contains("StateMismatch"), "got {err:?}");
@@ -1707,7 +1664,7 @@ mod tests {
 
         let input: CompleteInput = format!("response={jarm}").parse().unwrap();
         let err = grant
-            .complete_oidc(&pending_jarm(), input)
+            .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM error without state must be rejected");
         assert_eq!(err.oauth_error_code(), None, "got {err:?}");
@@ -1725,7 +1682,7 @@ mod tests {
         let (grant, _) = jarm_grant(r#"{"access_token":"t","token_type":"bearer"}"#).await;
 
         let err = grant
-            .complete_oidc(&pending_jarm(), callback.parse().unwrap())
+            .complete(&pending_jarm(), callback.parse().unwrap())
             .await
             .expect_err("plain parameters must not satisfy a JARM flow");
         assert!(
@@ -1747,7 +1704,7 @@ mod tests {
 
         let input: CompleteInput = format!("response={jarm}").parse().unwrap();
         let err = grant
-            .complete_oidc(&pending(false), input)
+            .complete(&pending(false), input)
             .await
             .expect_err("an unrequested JARM response must be rejected");
         assert!(
@@ -1770,7 +1727,7 @@ mod tests {
 
         let input: CompleteInput = format!("response={jarm}").parse().unwrap();
         let err = grant
-            .complete_oidc(&pending_jarm(), input)
+            .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM response for another client must be rejected");
         assert!(format!("{err:?}").contains("JarmValidation"), "got {err:?}");
@@ -1791,7 +1748,7 @@ mod tests {
 
         let input: CompleteInput = format!("response={jarm}").parse().unwrap();
         let err = grant
-            .complete_oidc(&pending_jarm(), input)
+            .complete(&pending_jarm(), input)
             .await
             .expect_err("an ES256 JARM response must be rejected by a PS256 allowlist");
         assert!(format!("{err:?}").contains("JarmValidation"), "got {err:?}");

@@ -90,7 +90,7 @@ impl TokenResponse {
     ///
     /// The library validates it only on the authorization-code callback path
     /// — use the validated form returned by
-    /// [`complete_oidc`](crate::grant::authorization_code::AuthorizationCodeGrant::complete_oidc)
+    /// [`complete`](crate::grant::authorization_code::AuthorizationCodeGrant::complete)
     /// there. On every other grant (refresh, device, token exchange) this is
     /// untrusted wire data: validate it before use.
     #[must_use]
