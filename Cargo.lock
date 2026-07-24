@@ -1295,6 +1295,7 @@ dependencies = [
  "sha2",
  "snafu",
  "strum",
+ "subtle",
  "tempfile",
  "tokio",
  "url",

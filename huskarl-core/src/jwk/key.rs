@@ -1,5 +1,7 @@
 //! JWK wire-format key types, including optional private parameters (RFC 7518).
 
+use subtle::ConstantTimeEq as _;
+
 use super::*;
 
 /// Additional prime factor info for multi-prime RSA keys (RFC 7518 §6.3.2.7).
@@ -305,13 +307,21 @@ where
 /// Used for HMAC signing and symmetric encryption (e.g., `A128KW`).
 /// Has no public key equivalent — purely secret material.
 #[non_exhaustive]
-#[derive(Serialize, Deserialize, Builder, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Builder, Clone)]
 #[builder(derive(Into))]
 pub struct OctKey {
     /// The key value.
     #[builder(with = <_>::from_iter)]
     #[serde(with = "base64url")]
     pub k: Vec<u8>,
+}
+
+/// `k` is raw secret material — a derived `==` would short-circuit on the first
+/// differing byte. Length is not secret and is compared directly.
+impl PartialEq for OctKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.k.ct_eq(&other.k).into()
+    }
 }
 
 impl std::fmt::Debug for OctKey {
