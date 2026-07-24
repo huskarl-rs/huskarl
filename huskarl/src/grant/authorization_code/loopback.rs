@@ -565,15 +565,37 @@ fn get_status_text(status: u16) -> &'static str {
 /// # Errors
 ///
 /// Returns an error if the function was unable to bind to the requested port
-/// on either IPv4 or IPv6 localhost.
+/// on either IPv4 or IPv6 localhost. A port that is already in use, or that the
+/// process may not bind, is reported as-is rather than retried on the other
+/// family — see below.
 pub async fn bind_loopback(port: u16) -> std::io::Result<TcpListener> {
-    // Try IPv4 first (more commonly supported), fall back to IPv6
-    let listener = match TcpListener::bind(format!("127.0.0.1:{port}")).await {
-        Ok(l) => l,
-        Err(_) => TcpListener::bind(format!("[::1]:{port}")).await?,
-    };
+    // Try IPv4 first (more commonly supported), fall back to IPv6 — but only
+    // when the IPv4 attempt failed for a reason IPv6 might not share.
+    //
+    // Falling back on *any* error is unsafe here: the redirect URI is fixed
+    // before this call, so switching family silently guarantees the callback
+    // never arrives. Worse, on `EADDRINUSE` something else already holds the
+    // IPv4 port — so if the redirect URI names `localhost` (or the browser
+    // prefers IPv4), that other process receives the callback, authorization
+    // code included. Surface the error and let the caller pick another port.
+    match TcpListener::bind(format!("127.0.0.1:{port}")).await {
+        Ok(listener) => Ok(listener),
+        Err(err) if port_is_unusable(&err) => Err(err),
+        Err(_) => TcpListener::bind(format!("[::1]:{port}")).await,
+    }
+}
 
-    Ok(listener)
+/// Whether an IPv4 bind failure is about the *port* rather than the address
+/// family — the port being taken or forbidden would fail the same way on IPv6,
+/// so retrying there only hides the problem behind a wrong-family listener.
+///
+/// Deliberately a denylist: any other failure (no IPv4 stack, address not
+/// assignable) keeps the original fallback behaviour.
+fn port_is_unusable(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+    )
 }
 
 #[cfg(test)]
@@ -1090,5 +1112,37 @@ mod tests {
         let listener = bind_loopback(0).await.unwrap();
         let addr = listener.local_addr().unwrap();
         assert_ne!(addr.port(), 0);
+    }
+
+    // An occupied IPv4 port must surface as an error, not quietly become an
+    // IPv6 listener: the caller's redirect URI is already fixed, and whatever
+    // holds the IPv4 port would receive the callback (and the code) instead.
+    #[tokio::test]
+    async fn bind_loopback_reports_a_port_already_in_use() {
+        let squatter = bind_loopback(0).await.unwrap();
+        let port = squatter.local_addr().unwrap().port();
+        // Only meaningful if the first bind took IPv4, which is the preferred
+        // family; on an IPv6-only host there is nothing to contend for.
+        if !squatter.local_addr().unwrap().is_ipv4() {
+            return;
+        }
+
+        let err = bind_loopback(port)
+            .await
+            .expect_err("the port is held by `squatter`");
+        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
+    }
+
+    #[test]
+    fn only_port_level_failures_suppress_the_ipv6_fallback() {
+        use std::io::{Error, ErrorKind};
+
+        // These would fail identically on IPv6 — retrying there hides the cause.
+        assert!(port_is_unusable(&Error::from(ErrorKind::AddrInUse)));
+        assert!(port_is_unusable(&Error::from(ErrorKind::PermissionDenied)));
+
+        // "No usable IPv4 here" — the case the fallback exists for.
+        assert!(!port_is_unusable(&Error::from(ErrorKind::AddrNotAvailable)));
+        assert!(!port_is_unusable(&Error::from(ErrorKind::Unsupported)));
     }
 }
