@@ -93,7 +93,7 @@ pub struct AuthorizationCodeGrant {
 
     // -- User-supplied grant-specific fields --
     /// A redirect URL registered with the authorization server.
-    pub(super) redirect_uri: String,
+    pub redirect_uri: String,
 
     /// Whether PKCE (RFC 7636) is disabled; see the `new` builder.
     pub(super) disable_pkce: bool,
