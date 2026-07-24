@@ -106,8 +106,9 @@ impl ClientRegistration {
             HeaderValue::from_static("application/json"),
         );
         if let Some(token) = &self.initial_access_token {
-            let value = HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
+            let mut value = HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
                 .map_err(|source| registration_error(RegistrationError::AuthHeader { source }))?;
+            value.set_sensitive(true);
             parts.headers.insert(header::AUTHORIZATION, value);
         }
         let request = http::Request::from_parts(parts, Bytes::from(body));
