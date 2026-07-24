@@ -287,13 +287,61 @@ fn test_jwks_to_public_filters_oct() {
     assert_eq!(public_jwks.keys[1].kid.as_deref(), Some("2011-04-29"));
 }
 
+// The RFC 7638 §3.1 worked example, over the RFC 7517 Appendix A.1 RSA key
+// (the same key this file already parses above). A known answer is the only
+// thing that pins the canonical form: the exact member set, their lexicographic
+// order, and the absence of whitespace. Note the input deliberately carries
+// `alg` and `kid` — §3.1 requires them to be excluded from the hash, so their
+// presence is part of what the vector checks.
+#[test]
+fn test_thumbprint_rfc7638_known_answer() {
+    let jwk: PublicJwk = serde_json::from_str(
+        r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","alg":"RS256","kid":"2011-04-29"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        jwk.thumbprint(),
+        "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"
+    );
+}
+
+// RFC 8037 §A.3 worked example, covering the third canonical form (`OKP`, whose
+// member set omits `y`).
+#[test]
+fn test_thumbprint_rfc8037_okp_known_answer() {
+    let jwk: PublicJwk = serde_json::from_str(
+        r#"{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        jwk.thumbprint(),
+        "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k"
+    );
+}
+
 #[test]
 fn test_thumbprint_via_public_jwk() {
     let ec_json = r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM","d":"870MB6gfuTJ4HtUnUvYMyJpr5eUZNP4Bk43bVdj3eAE"}"#;
     let jwk: Jwk = serde_json::from_str(ec_json).unwrap();
     let public_jwk = jwk.public_jwk().unwrap();
 
-    assert!(!public_jwk.thumbprint().is_empty());
+    // RFC 7638 publishes no EC worked example, so this value is derived from
+    // the §3.2 canonical form for `EC` spelled out independently —
+    // {"crv":"P-256","kty":"EC","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}
+    // — SHA-256'd and base64url-encoded, not read back off this implementation.
+    assert_eq!(
+        public_jwk.thumbprint(),
+        "cn-I_WNMClehiVp51i_0VpOENW1upEerA8sEam5hn-s"
+    );
+
+    // §3.1: private parameters are excluded, so `d` must not perturb the hash.
+    let public_only: PublicJwk = serde_json::from_str(
+        r#"{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#,
+    )
+    .unwrap();
+    assert_eq!(public_jwk.thumbprint(), public_only.thumbprint());
 }
 
 #[test]
