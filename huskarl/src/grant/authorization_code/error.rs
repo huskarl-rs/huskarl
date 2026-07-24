@@ -49,7 +49,8 @@ pub enum CompleteError {
     /// The token response included an ID token but the grant cannot validate it.
     #[snafu(display(
         "ID token received but the grant cannot validate it; \
-         supply `jws_verifier_factory` on the builder"
+         configure a `jwks_uri` (via server metadata or the builder) or supply a \
+         `jws_verifier_factory`"
     ))]
     IdTokenVerifierNotConfigured,
     /// The token response included an ID token but no issuer was configured on the grant.
@@ -89,7 +90,8 @@ pub enum CompleteError {
     /// A JARM response was received but the grant cannot validate it.
     #[snafu(display(
         "JARM response received but the grant cannot validate it; \
-         supply `jws_verifier_factory` on the builder"
+         configure a `jwks_uri` (via server metadata or the builder) or supply a \
+         `jws_verifier_factory`"
     ))]
     JarmVerifierNotConfigured,
     /// A JARM response was received but no issuer is configured on the grant.
@@ -107,9 +109,10 @@ pub enum CompleteError {
 pub enum StartError {
     /// An OIDC flow was started but the grant cannot validate ID tokens.
     #[snafu(display(
-        "OIDC flow started (scope contains `openid`) but no `jws_verifier_factory` was \
-         supplied, so the required ID token (OIDC Core 1.0 §3.1.3.3) could never be \
-         validated; supply one on the builder, or set `oidc(false)` if `openid` is an \
+        "OIDC flow started (scope contains `openid`) but no `jwks_uri` is configured, \
+         so the required ID token (OIDC Core 1.0 §3.1.3.3) could never be \
+         validated; configure a `jwks_uri` (via server metadata or the builder) or \
+         supply a `jws_verifier_factory`, or set `oidc(false)` if `openid` is an \
          ordinary scope on this server"
     ))]
     OidcVerifierNotConfigured,
@@ -172,8 +175,9 @@ pub enum BuildError {
     RequiredParEndpointMissing,
     /// `oidc(true)` was set but the grant cannot validate ID tokens.
     #[snafu(display(
-        "oidc(true) was set but no `jws_verifier_factory` was supplied, \
-         so ID tokens could never be validated"
+        "oidc(true) was set but no `jwks_uri` is configured (via server \
+         metadata or the builder) and no `jws_verifier_factory` was supplied, so \
+         the verifier has no key source and ID tokens could never be validated"
     ))]
     OidcRequiresVerifier,
     /// `oidc(true)` was set but no issuer is configured.
@@ -184,8 +188,9 @@ pub enum BuildError {
     OidcRequiresIssuer,
     /// A JWT-secured response mode was set but the grant cannot validate JARM responses.
     #[snafu(display(
-        "a JWT-secured response_mode was set but no `jws_verifier_factory` was \
-         supplied, so the JARM responses could never be validated"
+        "a JWT-secured response_mode was set but no `jwks_uri` is configured \
+         (via server metadata or the builder) and no `jws_verifier_factory` was \
+         supplied, so JARM responses could never be validated"
     ))]
     JarmRequiresVerifier,
     /// A JWT-secured response mode was set but no issuer is configured.

@@ -48,11 +48,9 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .client_auth(NoAuth)
         .redirect_uri("http://localhost:8080/login/callback")
         .dpop(DPoP::builder().signer(dpop_key).build())
-        .jws_verifier_factory(Arc::new(
-            JwksSource::builder()
-                .http_client(http_client.clone())
-                .build(),
-        ))
+        // ID-token verification is zero-config: the metadata's `jwks_uri` is
+        // used to build a default `JwksSource` over `http_client`. Set
+        // `jws_verifier_factory` only to customize (e.g. a KMS-backed verifier).
         .build()
         .await
         .whatever_context("Failed to build grant")?;

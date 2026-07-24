@@ -133,16 +133,29 @@ dropped.
 
 Requesting the `openid` scope makes the flow an OIDC authentication: the
 grant sends a `nonce`, requires ID-token validation to be configured (a
-`jws_verifier_factory` and an issuer) before `start()` will proceed, and
+`jwks_uri` — or a custom `jws_verifier_factory` — and an issuer) before
+`start()` will proceed, and
 rejects a token response without an ID token (OIDC Core 1.0 §3.1.3.3) —
 unless the server narrowed `openid` out of the granted scope. `complete()`
 returns the validated ID token on `CompleteOutput::id_token` alongside the
 token response whenever the flow is OIDC.
 
+Validation is zero-config: given a `jwks_uri` — which `builder_from_metadata`
+fills in from the server's metadata — the grant builds a default `JwksSource`
+that fetches the signing keys over its `http_client`. The fetch is eager, so
+`build()` performs network I/O and live requests stay warm; for an `oidc(true)`
+or JARM grant an unreachable JWKS fails the build, while an inferred flow
+tolerates a cold start and self-heals. Set `jws_verifier_factory` only to
+customize this: a different refresh TTL, or a key source other than a JWKS
+endpoint (a KMS, or a static set). With no `jwks_uri` and no factory the grant
+has no verifier — fine for a plain-OAuth flow, and caught at build or start
+when the flow actually requires one.
+
 The `oidc` builder setting overrides this inference for non-standard
 servers. `oidc(false)` treats `openid` as an ordinary OAuth scope — for
-pure-OAuth servers whose scope merely happens to use that name. An ID
-token the server returns anyway is still validated. `oidc(true)` applies
+pure-OAuth servers whose scope merely happens to use that name. It builds no
+default verifier and fetches no JWKS; supply `jws_verifier_factory` to still
+validate an ID token the server returns anyway. `oidc(true)` applies
 OIDC semantics regardless of scope — for servers that issue ID tokens on
 their own rules — and a missing ID token is then an error even if the
 granted scope omits `openid`. Since `oidc(true)` declares every flow OIDC,
@@ -155,10 +168,8 @@ a signed JWT ([JARM](https://openid.net/specs/oauth-v2-jarm.html)), so the
 callback parameters cannot be tampered with in transit:
 
 ```rust
-use std::sync::Arc;
-
 use huskarl::{
-    core::{client_auth::NoAuth, jwk::JwksSource, server_metadata::AuthorizationServerMetadata},
+    core::{client_auth::NoAuth, server_metadata::AuthorizationServerMetadata},
     grant::authorization_code::{AuthorizationCodeGrant, ResponseMode},
 };
 # async fn setup_jarm_grant(
@@ -169,11 +180,12 @@ use huskarl::{
 let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(metadata)
     .expect("server does not support authorization code grant")
     .client_id("client_id")
-    .http_client(client.clone())
+    .http_client(client)
     .client_auth(NoAuth)
     .redirect_uri("https://my-app/callback")
+    // JARM requires signature verification; `builder_from_metadata` supplies the
+    // `jwks_uri`, so the default `JwksSource` verifier is used automatically.
     .response_mode(ResponseMode::QueryJwt)
-    .jws_verifier_factory(Arc::new(JwksSource::builder().http_client(client).build()))
     .build()
     .await?;
 # Ok(())
@@ -188,8 +200,8 @@ surfaces.
 
 Because the client now requires every callback to be a JWT, a JWT-secured
 `response_mode` requires ID-token-style validation to be configured — a
-`jws_verifier_factory` and an issuer — and the grant fails to build without
-them.
+`jwks_uri` (or a custom `jws_verifier_factory`) and an issuer — and the grant
+fails to build without them.
 
 Completion enforces the mode in both directions. A plain callback for a flow
 that requested JARM is rejected (`MissingJarmResponse`), since honoring it

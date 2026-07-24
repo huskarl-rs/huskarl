@@ -66,7 +66,8 @@ use crate::{
 ///                 // Offline: serve the last good keyset so the build is warm.
 ///                 Err(_) => load_cached_keys(),
 ///             }
-///         }) as Pin<Box<dyn MaybeSendFuture<Output = Result<MultiKeyVerifier, Error>>>>
+///         })
+///             as Pin<Box<dyn MaybeSendFuture<Output = Result<MultiKeyVerifier, Error>>>>
 ///     })
 ///     .build()
 ///     .await?;

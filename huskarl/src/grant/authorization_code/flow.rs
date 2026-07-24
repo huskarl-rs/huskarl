@@ -1063,7 +1063,7 @@ mod tests {
             .redirect_uri("http://127.0.0.1/cb")
             .oidc(true)
             .issuer("https://as.example.com")
-            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .jws_verifier_factory(StubVerifierFactory)
             .build()
             .await
             .unwrap();
@@ -1077,9 +1077,11 @@ mod tests {
     }
 
     /// `oidc(true)` declares every flow OIDC, so a grant that could never
-    /// validate an ID token fails at build time, not at start.
+    /// validate an ID token fails at build time, not at start. With no
+    /// `jwks_uri` the default `JwksSource` has no key source, and no custom
+    /// factory was supplied — so there is no verifier to configure.
     #[tokio::test]
-    async fn oidc_true_without_verifier_fails_the_build() {
+    async fn oidc_true_without_key_source_fails_the_build() {
         let result = AuthorizationCodeGrant::builder()
             .client_id("client")
             .http_client(NoHttp)
@@ -1093,7 +1095,7 @@ mod tests {
 
         let err = result
             .err()
-            .expect("oidc(true) without a verifier must not build");
+            .expect("oidc(true) with no key source (no jwks_uri, no factory) must not build");
         assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
         assert!(
             format!("{err:?}").contains("OidcRequiresVerifier"),
@@ -1112,7 +1114,7 @@ mod tests {
             .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
             .redirect_uri("http://127.0.0.1/cb")
             .oidc(true)
-            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .jws_verifier_factory(StubVerifierFactory)
             .build()
             .await;
 
@@ -1124,6 +1126,142 @@ mod tests {
             format!("{err:?}").contains("OidcRequiresIssuer"),
             "got {err:?}"
         );
+    }
+
+    /// A caller-supplied factory is honored even with no `jwks_uri`: a custom
+    /// factory may carry its own keys (a KMS/enclave signer, or a static JWKS)
+    /// and need no URI. The default `JwksSource` needs one, but an explicitly
+    /// supplied factory must never be silently dropped.
+    #[tokio::test]
+    async fn supplied_factory_builds_verifier_without_jwks_uri() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .jws_verifier_factory(StubVerifierFactory)
+            .build()
+            .await
+            .expect("a supplied factory must build even without a jwks_uri");
+
+        assert!(
+            grant.jws_verifier.is_some(),
+            "the supplied factory must have produced a verifier"
+        );
+    }
+
+    /// With no factory and no `jwks_uri`, a plain-OAuth grant builds with no
+    /// verifier: verification is simply off, not a build error. The default
+    /// factory is a `JwksSource`, which has no key source without a URI.
+    #[tokio::test]
+    async fn default_factory_without_jwks_uri_builds_without_verifier() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .expect("a plain-OAuth grant must build without a verifier");
+
+        assert!(
+            grant.jws_verifier.is_none(),
+            "no factory and no jwks_uri means no verifier"
+        );
+    }
+
+    /// `oidc(false)` without JARM declares the flow non-OIDC, so no default
+    /// verifier is built even when a `jwks_uri` is present — and, crucially, no
+    /// JWKS fetch is attempted (the `NoHttp` client would fail one). A returned
+    /// ID token is then rejected at completion unless a factory is supplied.
+    #[tokio::test]
+    async fn oidc_false_builds_no_verifier_and_skips_the_fetch() {
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .jwks_uri("https://as.example.com/jwks".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .oidc(false)
+            .build()
+            .await
+            .expect("oidc(false) must build without touching the JWKS endpoint");
+
+        assert!(
+            grant.jws_verifier.is_none(),
+            "oidc(false) without JARM must build no default verifier"
+        );
+    }
+
+    /// The default `JwksSource` is actually built, and its startup policy is
+    /// applied: `oidc(true)`/JARM fail the build on an unreachable JWKS
+    /// (`FailFast`), while an inferred flow (`oidc` unset) comes up cold and
+    /// self-heals (`SeedEmpty`). A `200` with a valid JWKS builds a working
+    /// verifier — proving the keys are fetched and parsed end-to-end (a
+    /// malformed key would fail the build even on `200`).
+    #[rstest]
+    #[case::oidc_true_failfast_fatal(Some(true), None, 500, false)]
+    #[case::oidc_true_valid_jwks_builds(Some(true), None, 200, true)]
+    #[case::inferred_seed_empty_tolerates(None, None, 500, true)]
+    #[case::jarm_failfast_fatal(None, Some(ResponseMode::QueryJwt), 500, false)]
+    #[tokio::test]
+    async fn default_verifier_startup_policy(
+        #[case] oidc: Option<bool>,
+        #[case] response_mode: Option<ResponseMode>,
+        #[case] status: u16,
+        #[case] expect_verifier: bool,
+    ) {
+        use httpmock::prelude::*;
+        use huskarl_reqwest::ReqwestClient;
+
+        // A valid P-256 public JWK (RFC 7517 §A.1): a `200` must build a real
+        // verifier, so a skipped fetch or a malformed key would be caught.
+        const JWKS: &str = r#"{"keys":[{"kty":"EC","crv":"P-256","x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4","y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}]}"#;
+
+        let server = MockServer::start_async().await;
+        let body = if status == 200 { JWKS } else { "{}" };
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/jwks");
+                then.status(status)
+                    .header("content-type", "application/json")
+                    .body(body);
+            })
+            .await;
+
+        let http: ReqwestClient = reqwest::Client::new().into();
+        let result = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(http)
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .jwks_uri(server.url("/jwks").parse().unwrap())
+            .issuer("https://as.example.com")
+            .maybe_oidc(oidc)
+            .maybe_response_mode(response_mode)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await;
+
+        if expect_verifier {
+            let grant = result.expect("build should succeed and yield a verifier");
+            assert!(
+                grant.jws_verifier.is_some(),
+                "a default JwksSource verifier must be present",
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "FailFast must fail the build when the JWKS fetch fails",
+            );
+        }
     }
 
     /// An OIDC flow that could never validate its required ID token (OIDC
@@ -1419,7 +1557,7 @@ mod tests {
             .redirect_uri("http://127.0.0.1/cb")
             .maybe_oidc(oidc)
             .issuer("https://as.example.com")
-            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .jws_verifier_factory(StubVerifierFactory)
             .build()
             .await
             .unwrap()
@@ -1799,7 +1937,7 @@ mod tests {
             .response_mode(ResponseMode::QueryJwt);
         let result = if with_verifier {
             builder
-                .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+                .jws_verifier_factory(StubVerifierFactory)
                 .build()
                 .await
         } else {
@@ -1866,7 +2004,7 @@ mod tests {
             .redirect_uri("http://127.0.0.1/cb")
             .response_mode(mode)
             .issuer("https://as.example.com")
-            .jws_verifier_factory(std::sync::Arc::new(StubVerifierFactory))
+            .jws_verifier_factory(StubVerifierFactory)
             .build()
             .await
             .unwrap();
