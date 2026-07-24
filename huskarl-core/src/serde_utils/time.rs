@@ -24,7 +24,22 @@ fn to_unix<E: serde::ser::Error>(t: SystemTime) -> Result<u64, E> {
         .map_err(|_| E::custom("SystemTime is before the Unix epoch"))
 }
 
+/// The largest Unix timestamp accepted, in whole seconds.
+///
+/// `SystemTime`'s representable range is platform-specific, so `checked_add`
+/// alone is not a portable bound: native builds are backed by an `i64` seconds
+/// field and reject anything past `i64::MAX`, while the `wasm32-unknown-unknown`
+/// backing (`web_time::SystemTime`) is a `Duration` newtype anchored at
+/// `Duration::ZERO` — its range is a full `u64` of seconds, so it accepts values
+/// a server would reject. Capping here makes the accepted wire range the same on
+/// every target; `checked_add` below still rejects on any platform whose range
+/// is narrower than this.
+const MAX_UNIX_SECS: u64 = i64::MAX.cast_unsigned();
+
 fn from_unix<E: serde::de::Error>(secs: u64) -> Result<SystemTime, E> {
+    if secs > MAX_UNIX_SECS {
+        return Err(E::custom("Unix timestamp overflows SystemTime"));
+    }
     SystemTime::UNIX_EPOCH
         .checked_add(Duration::from_secs(secs))
         .ok_or_else(|| E::custom("Unix timestamp overflows SystemTime"))
@@ -220,6 +235,24 @@ mod tests {
     fn unix_secs_deserialize_float_truncates() {
         let parsed: WithTime = serde_json::from_value(json!({ "t": 1234.9 })).unwrap();
         assert_eq!(parsed.t, epoch_plus(1234));
+    }
+
+    // The accepted range is capped explicitly rather than left to `SystemTime`'s
+    // platform-specific one: `web_time::SystemTime` (wasm32-unknown-unknown) is a
+    // `Duration` newtype whose `checked_add` does not overflow until a full `u64`
+    // of seconds, so without the cap a browser would accept an `exp` that every
+    // native target rejects. Asserting both sides of the boundary keeps the wire
+    // contract identical on all targets — note this file's other rejection cases
+    // pass natively *because* of the native range, so they would not catch it.
+    #[test]
+    fn unix_secs_accepted_range_is_capped_the_same_on_every_target() {
+        let parsed: WithTime =
+            serde_json::from_value(json!({ "t": MAX_UNIX_SECS })).expect("the cap itself is valid");
+        assert_eq!(parsed.t, epoch_plus(MAX_UNIX_SECS));
+
+        let err = serde_json::from_value::<WithTime>(json!({ "t": MAX_UNIX_SECS + 1 }))
+            .expect_err("one past the cap is rejected");
+        assert!(err.to_string().contains("overflows"), "got: {err}");
     }
 
     // Values that pass through the full `from_value` path and must be rejected.
