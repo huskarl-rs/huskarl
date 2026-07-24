@@ -67,6 +67,7 @@ explanation — [the error model](_docs::explanation::error_handling),
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
+#![deny(clippy::unreachable)]
 #![warn(clippy::pedantic)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 // The dyn-capable strategy traits are shared between native and wasm32 behind

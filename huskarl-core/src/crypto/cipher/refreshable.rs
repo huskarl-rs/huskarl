@@ -258,7 +258,7 @@ mod tests {
             .await
             .unwrap_err();
         let DecryptError::Other { source } = err else {
-            unreachable!("expected DecryptError::Other, got {err:?}");
+            panic!("expected DecryptError::Other, got {err:?}");
         };
         assert_eq!(source.kind(), crate::error::ErrorKind::Crypto);
 

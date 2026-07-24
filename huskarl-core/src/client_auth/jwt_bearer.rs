@@ -217,7 +217,7 @@ mod tests {
 
     fn extract_form_str(form: &[(&str, FormValue<'_>)], key: &str) -> String {
         form.iter().find(|(k, _)| *k == key).map_or_else(
-            || unreachable!("key {key} not found in form params"),
+            || panic!("key {key} not found in form params"),
             |(_, v)| match v {
                 FormValue::NonSensitive(c) => c.to_string(),
                 FormValue::Sensitive(c) => c.expose_secret().to_string(),

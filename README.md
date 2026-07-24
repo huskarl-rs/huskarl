@@ -51,8 +51,10 @@ why not have them? Huskarl makes them accessible with minimal ceremony.
   and every operation returns one concrete `Error`/`ErrorKind` that embeds
   cleanly in your own error type. Type-safe builders make missing
   configuration a compile error.
-- **Hardened defaults.** `forbid(unsafe_code)`; no `unwrap`/`expect`/`panic`
-  in library code; HTTP response bodies and fetched JWKS sizes are bounded by
+- **Hardened defaults.** `forbid(unsafe_code)`; `unwrap`/`expect`/`panic`/
+  `unreachable` are denied in library code, so the handful that remain are
+  explicit, commented exceptions at locally-provable invariants rather than
+  unexamined ones; HTTP response bodies and fetched JWKS sizes are bounded by
   default; fuzzing and `cargo-deny` in CI.
 - **Runs on most `std` platforms, including WASM** (via a `WebCrypto` backend).
 

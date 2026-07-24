@@ -75,6 +75,14 @@ impl AccessToken {
             // Deterministically manufacture an InvalidHeaderValue (the type
             // has no public constructor): an N_A token has no header form,
             // and a control character is never a valid header value.
+            //
+            // The `Ok` branch is unreachable, and deliberately a panic rather
+            // than a value: the only value it could yield is a `HeaderValue`,
+            // and handing one back would present an N_A issuance as an
+            // `Authorization` credential (RFC 8693 §2.2.1). Failing loudly is
+            // the safe direction if `http` ever stopped rejecting control
+            // characters.
+            #[allow(clippy::unreachable)]
             AccessToken::NotAccessToken(_) => HeaderValue::from_str("\n")
                 .map(|_| unreachable!("a control character is never a valid header value")),
         }

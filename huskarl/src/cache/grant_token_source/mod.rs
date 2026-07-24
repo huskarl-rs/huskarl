@@ -553,7 +553,14 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             return Err(Some(err));
         }
 
-        unreachable!("the final attempt never continues, so the loop always returns");
+        // Every path in the body either returns or `continue`s, and `continue`
+        // is guarded on `attempt < MAX_ATTEMPTS`, so the loop cannot fall
+        // through — the compiler just cannot see it. A local, compiler-adjacent
+        // invariant with no caller input in it.
+        #[allow(clippy::unreachable)]
+        {
+            unreachable!("the final attempt never continues, so the loop always returns");
+        }
     }
 
     /// Persists the response's refresh token, if it carries one.

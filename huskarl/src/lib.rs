@@ -74,6 +74,7 @@ handling](_docs::explanation::error_handling).
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
+#![deny(clippy::unreachable)]
 #![warn(clippy::pedantic)]
 // bon's multiple `on(..., into)` clauses (e.g. `on(String, into), on(SecretString, into)`)
 // trip this lint, which sees the repeated `into` token as a duplicated attribute.

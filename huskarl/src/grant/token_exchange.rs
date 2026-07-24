@@ -286,7 +286,7 @@ mod tests {
             _request: Request<Bytes>,
             _idempotency: Idempotency,
         ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-            Box::pin(async { unreachable!("build_form performs no HTTP request") })
+            Box::pin(async { panic!("build_form performs no HTTP request") })
         }
     }
 
@@ -300,7 +300,7 @@ mod tests {
             _request: Request<Bytes>,
             _idempotency: Idempotency,
         ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-            Box::pin(async { unreachable!("endpoint resolution performs no HTTP request") })
+            Box::pin(async { panic!("endpoint resolution performs no HTTP request") })
         }
 
         fn uses_mtls(&self) -> bool {

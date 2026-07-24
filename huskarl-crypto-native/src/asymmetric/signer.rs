@@ -161,16 +161,19 @@ impl Key {
     ///
     /// The returned value includes the `d` component (and `dp`, `dq`, `p`, `q`, `qi` for RSA)
     /// and must be treated as sensitive.
-    // The `expect`s below are infallible by construction: a freshly derived
-    // private key always carries its components.
-    #[allow(clippy::expect_used)]
+    // The `expect`s and `unreachable!`s below are infallible by construction and
+    // locally checkable: a freshly derived private key always carries its
+    // components, and each arm destructures the public JWK its own `as_public_jwk`
+    // arm just built (`Es*` → `Ec`, `Ed25519` → `Okp`). Neither depends on caller
+    // input nor on an invariant held at a distance.
+    #[allow(clippy::expect_used, clippy::unreachable)]
     pub fn as_private_jwk(&self, kid: Option<&str>) -> jwk::AsymmetricPrivateJwk {
         use p256::elliptic_curve::PrimeField as _;
 
         match self {
             Key::Es256(signing_key) => {
                 let jwk::PublicKey::Ec(public) = self.as_public_jwk(kid).key else {
-                    unreachable!()
+                    unreachable!("as_public_jwk builds an Ec key for this arm")
                 };
                 let d = signing_key
                     .as_nonzero_scalar()
@@ -190,7 +193,7 @@ impl Key {
             }
             Key::Es384(signing_key) => {
                 let jwk::PublicKey::Ec(public) = self.as_public_jwk(kid).key else {
-                    unreachable!()
+                    unreachable!("as_public_jwk builds an Ec key for this arm")
                 };
                 let d = signing_key
                     .as_nonzero_scalar()
@@ -216,7 +219,7 @@ impl Key {
             Key::Ps512(k) => convert_rsa_to_private_jwk(k, kid, self.jws_algorithm()),
             Key::Ed25519 { key, .. } => {
                 let jwk::PublicKey::Okp(public) = self.as_public_jwk(kid).key else {
-                    unreachable!()
+                    unreachable!("as_public_jwk builds an Okp key for this arm")
                 };
                 let d = key.as_bytes().to_vec();
                 build_private_jwk(
