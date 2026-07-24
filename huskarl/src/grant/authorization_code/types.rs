@@ -231,7 +231,7 @@ pub struct CompleteOutput {
 ///
 /// A JARM response folds into this once verified, so the completion checks
 /// have no third shape to consider.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) enum AuthorizationResponse {
     /// The success parameters, plus the RFC 9207 `iss`.
     Success {
@@ -249,13 +249,57 @@ pub(super) enum AuthorizationResponse {
     },
 }
 
+// The authorization code is a bearer credential until it is exchanged, and
+// `state` is the CSRF token — the same reasoning as `PendingState` below, but
+// reaching the public `CompleteInput`'s derived `Debug`. Callback handling is
+// exactly where request logging happens, so redact at this level rather than
+// only on `CompleteInput`: no internal `{:?}` can leak them either.
+impl std::fmt::Debug for AuthorizationResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Success { iss, .. } => f
+                .debug_struct("Success")
+                .field("code", &"[REDACTED]")
+                .field("state", &"[REDACTED]")
+                .field("iss", iss)
+                .finish(),
+            Self::Error {
+                error,
+                error_description,
+                error_uri,
+                state,
+            } => f
+                .debug_struct("Error")
+                .field("error", error)
+                .field("error_description", error_description)
+                .field("error_uri", error_uri)
+                .field("state", &state.as_ref().map(|_| "[REDACTED]"))
+                .finish(),
+        }
+    }
+}
+
 /// What the authorization callback carried, before any verification.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) enum CallbackPayload {
     /// Response parameters read straight off the callback.
     Plain(AuthorizationResponse),
     /// A JWT-secured authorization response (JARM §2.1), still to be verified.
     Jarm { response: String },
+}
+
+// A JARM response is a signed JWT carrying that same `code`/`state` payload,
+// so it is no less sensitive for being encoded.
+impl std::fmt::Debug for CallbackPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain(response) => f.debug_tuple("Plain").field(response).finish(),
+            Self::Jarm { .. } => f
+                .debug_struct("Jarm")
+                .field("response", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 /// The information needed to complete an authorization code flow.
@@ -656,5 +700,55 @@ mod tests {
         // Non-secret fields stay visible for debugging.
         assert!(debug.contains("http://127.0.0.1/cb"), "{debug}");
         assert!(debug.contains("jkt-thumbprint"), "{debug}");
+    }
+
+    // `CompleteInput` is public and carries the authorization code, so its
+    // derived `Debug` must not out-leak the `PendingState` above.
+    #[test]
+    fn complete_input_debug_redacts_the_code_and_state() {
+        let input = CompleteInput::builder()
+            .code("secret-auth-code")
+            .state("csrf-state-value")
+            .iss("https://as.example")
+            .build();
+
+        let debug = format!("{input:?}");
+        assert!(!debug.contains("secret-auth-code"), "{debug}");
+        assert!(!debug.contains("csrf-state-value"), "{debug}");
+        // `iss` is not a credential and is worth seeing when debugging RFC 9207.
+        assert!(debug.contains("https://as.example"), "{debug}");
+    }
+
+    // A JARM response is the same payload, signed — equally sensitive.
+    #[test]
+    fn complete_input_debug_redacts_a_jarm_response() {
+        let input = CompleteInput {
+            payload: CallbackPayload::Jarm {
+                response: "eyJhbGciOiJFUzI1NiJ9.secret-jarm-body.sig".to_owned(),
+            },
+            resource: None,
+        };
+
+        let debug = format!("{input:?}");
+        assert!(!debug.contains("secret-jarm-body"), "{debug}");
+    }
+
+    // An OAuth error callback is loggable — except its `state`.
+    #[test]
+    fn complete_input_debug_keeps_oauth_error_details_but_not_state() {
+        let input = CompleteInput {
+            payload: CallbackPayload::Plain(AuthorizationResponse::Error {
+                error: "access_denied".to_owned(),
+                error_description: Some("user refused".to_owned()),
+                error_uri: None,
+                state: Some("csrf-state-value".to_owned()),
+            }),
+            resource: None,
+        };
+
+        let debug = format!("{input:?}");
+        assert!(debug.contains("access_denied"), "{debug}");
+        assert!(debug.contains("user refused"), "{debug}");
+        assert!(!debug.contains("csrf-state-value"), "{debug}");
     }
 }
