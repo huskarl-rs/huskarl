@@ -310,7 +310,8 @@ impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
             .http_client(self.http_client.clone())
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
-            .token_endpoint(self.effective_token_endpoint.clone())
+            .token_endpoint(self.token_endpoint.clone())
+            .maybe_mtls_token_endpoint(self.mtls_token_endpoint.clone())
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )
