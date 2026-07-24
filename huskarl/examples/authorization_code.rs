@@ -35,7 +35,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
 
     let listener = bind_loopback(8080)
         .await
-        .whatever_context("Failed to bind to localhost")?;
+        .whatever_context("Failed to bind the loopback callback listener")?;
 
     // The tokens obtained through this grant are bound to this key.
     let dpop_key = PrivateKey::generate(GenerateAlgorithm::Es256, None)
@@ -46,7 +46,11 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .client_id(client_id)
         .http_client(http_client.clone())
         .client_auth(NoAuth)
-        .redirect_uri("http://localhost:8080/login/callback")
+        // A literal loopback address, not `localhost` (RFC 8252 §7.3):
+        // `bind_loopback` binds one address family, and `localhost` may resolve
+        // to the other one — the callback would then never arrive. Register
+        // this exact URI with the authorization server.
+        .redirect_uri("http://127.0.0.1:8080/login/callback")
         .dpop(DPoP::builder().signer(dpop_key).build())
         // ID-token verification is zero-config: the metadata's `jwks_uri` is
         // used to build a default `JwksSource` over `http_client`. Set

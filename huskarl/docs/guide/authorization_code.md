@@ -221,4 +221,10 @@ by binding a local HTTP server to receive it — no need to extract parameters m
 Use `bind_loopback` to create the listener, include its port in the `redirect_uri`,
 and pass it to `complete_on_loopback` after calling `start`.
 
+Write the `redirect_uri` with a literal loopback address — `http://127.0.0.1:<port>/…`
+or `http://[::1]:<port>/…` — rather than `localhost`, and register that exact URI
+with the authorization server (RFC 8252 §7.3). `bind_loopback` binds a single
+address family, so a `localhost` redirect may resolve to the family it did not
+bind and the callback never arrives.
+
 Requires the `authorization-flow-loopback` feature.
