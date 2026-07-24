@@ -36,6 +36,34 @@ pub struct JwksSource {
     max_keys: usize,
     /// How long a fetched keyset is served before it is reloaded on the read path.
     ttl: Duration,
+    /// How a failed initial JWKS fetch at build time is handled.
+    startup: JwksStartup,
+}
+
+/// How [`JwksSource`] handles a failed initial JWKS fetch at build time.
+///
+/// The fetch is always attempted eagerly; this only governs whether *failure*
+/// is fatal. Neither variant accepts an unvalidated token — a cold source
+/// returns [`KeysUnavailable`](crate::crypto::verifier::VerifyError::KeysUnavailable).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum JwksStartup {
+    /// Fail construction if the initial fetch fails — surfaces a wrong `jwks_uri`
+    /// or an unreachable authorization server at boot rather than as a running
+    /// cold state. The default: a config error is louder at deploy than a
+    /// silently-degraded service.
+    #[default]
+    FailFast,
+    /// Come up with an empty keyset and self-heal via cold-backoff retries. The
+    /// happy-path fetch still populates keys before construction returns. Opt in
+    /// when boot must not be gated on the authorization server being reachable.
+    ///
+    /// Note this comes up *cold*: until a live fetch lands it verifies nothing and
+    /// returns [`KeysUnavailable`](crate::crypto::verifier::VerifyError::KeysUnavailable).
+    /// To instead come up **warm** from a trusted local cache — verifying
+    /// immediately while offline — build the verifier with a factory that falls
+    /// back to that cache; see
+    /// [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier).
+    SeedEmpty,
 }
 
 #[bon]
@@ -53,11 +81,16 @@ impl JwksSource {
         /// hour.
         #[builder(default = Duration::from_hours(1))]
         ttl: Duration,
+        /// How a failed initial fetch is handled. Defaults to
+        /// [`FailFast`](JwksStartup::FailFast): a failed boot-time fetch is fatal.
+        #[builder(default)]
+        startup: JwksStartup,
     ) -> Self {
         Self {
             http_client: Arc::new(http_client),
             max_keys,
             ttl,
+            startup,
         }
     }
 }
@@ -77,6 +110,12 @@ impl JwsVerifierFactory for JwksSource {
         let client = self.http_client.clone();
         let max_keys = self.max_keys;
         let ttl = self.ttl;
+        // SeedEmpty tolerates a failed initial fetch by seeding an empty keyset
+        // (which misses on everything) and self-healing via cold-backoff retries.
+        let fallback = match self.startup {
+            JwksStartup::SeedEmpty => Some(MultiKeyVerifier::new(Vec::new())),
+            JwksStartup::FailFast => None,
+        };
         let Some(uri) = jwks_uri.cloned() else {
             return Box::pin(async {
                 Err(Error::new(
@@ -89,6 +128,7 @@ impl JwsVerifierFactory for JwksSource {
         Box::pin(async move {
             let refreshing = ScheduledRefreshVerifier::builder()
                 .ttl(ttl)
+                .maybe_fallback(fallback)
                 .factory(move || {
                     let client = client.clone();
                     let uri = uri.clone();
@@ -126,7 +166,7 @@ mod tests {
     use bytes::Bytes;
     use http::{HeaderMap, Request, StatusCode};
 
-    use super::JwksSource;
+    use super::{JwksSource, JwksStartup};
     use crate::{
         EndpointUrl,
         crypto::verifier::{
@@ -195,6 +235,9 @@ mod tests {
                 body: jwks_with_keys(n_keys),
             })
             .max_keys(max_keys)
+            // Assert the fetch outcome directly: SeedEmpty would tolerate a
+            // rejected fetch and come up cold instead of surfacing the error.
+            .startup(JwksStartup::FailFast)
             .build();
         let uri = EndpointUrl::try_from("https://as.example.com/jwks").unwrap();
         source
