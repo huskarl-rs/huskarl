@@ -233,14 +233,21 @@ impl DeviceAuthorizationGrant {
 
         match token_or_err {
             Ok(token) => Ok(PollResult::Complete(Box::new(token))),
+            // The terminal codes end the flow for good, so they are honored only
+            // when the response was actually a verdict. A 5xx is reclassified as
+            // retryable `Transport` whatever its body says (RFC 6749 §5.2 puts
+            // error codes on 4xx), but keeps the code attached — so dispatching
+            // on the code alone would let a 503 carrying `access_denied` kill a
+            // flow the user never denied. The pending codes need no such guard:
+            // they only ever mean "keep waiting".
             Err(err) => match err.oauth_error_code() {
                 Some("slow_down") => {
                     pending_state.interval_secs = pending_state.interval_secs.saturating_add(5);
                     Ok(PollResult::Pending)
                 }
                 Some("authorization_pending") => Ok(PollResult::Pending),
-                Some("access_denied") => AccessDeniedSnafu.fail(),
-                Some("expired_token") => TokenExpiredSnafu.fail(),
+                Some("access_denied") if !err.is_retryable() => AccessDeniedSnafu.fail(),
+                Some("expired_token") if !err.is_retryable() => TokenExpiredSnafu.fail(),
                 _ => Err(err).context(ExchangeSnafu),
             },
         }
@@ -621,6 +628,46 @@ mod tests {
             g.poll(&mut pending(), None).await,
             Err(PollError::TokenExpired)
         ));
+    }
+
+    // A 5xx is a server fault, not a verdict on the flow: `form.rs` reclassifies
+    // it as retryable `Transport` while leaving the body's error code attached.
+    // Honoring that code would end a flow the user never denied — and, since the
+    // device code is still live, end it for no reason.
+    #[rstest::rstest]
+    #[case::access_denied(r#"{"error":"access_denied"}"#)]
+    #[case::expired_token(r#"{"error":"expired_token"}"#)]
+    #[tokio::test]
+    async fn terminal_code_on_a_5xx_does_not_end_the_flow(#[case] body: &'static str) {
+        let g = grant(StatusCode::SERVICE_UNAVAILABLE, body);
+        let err = g.poll(&mut pending(), None).await.unwrap_err();
+
+        let PollError::Exchange { source } = err else {
+            panic!("a 5xx must stay an exchange error, got {err:?}");
+        };
+        assert!(
+            source.is_retryable(),
+            "the reclassified transport error must reach the caller as retryable"
+        );
+    }
+
+    // The same codes on a genuine 4xx remain terminal — the guard must not
+    // disarm the verdicts, only decline to read one into a server fault.
+    #[rstest::rstest]
+    #[case::access_denied(r#"{"error":"access_denied"}"#, PollError::AccessDenied)]
+    #[case::expired_token(r#"{"error":"expired_token"}"#, PollError::TokenExpired)]
+    #[tokio::test]
+    async fn terminal_code_on_a_4xx_still_ends_the_flow(
+        #[case] body: &'static str,
+        #[case] expected: PollError,
+    ) {
+        let g = grant(StatusCode::BAD_REQUEST, body);
+        let err = g.poll(&mut pending(), None).await.unwrap_err();
+        assert_eq!(
+            std::mem::discriminant(&err),
+            std::mem::discriminant(&expected),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
