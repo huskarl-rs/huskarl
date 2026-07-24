@@ -233,7 +233,10 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         // was transient can still succeed on a later call, so surface that
         // (retryable) error rather than the Backoff signal. Mirrors the no-params
         // branch below.
-        if !self.breaker.try_acquire(self.breaker_threshold) {
+        if !self
+            .breaker
+            .try_acquire(self.breaker_threshold, self.breaker_cooldown)
+        {
             return Err(match refresh_error {
                 Some(source) if source.is_retryable() => {
                     Error::new(source.kind(), GetTokenError::RefreshFailed { source })
