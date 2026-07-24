@@ -5,7 +5,13 @@
 //! are serialised so that only one factory call runs at a time; waiters that
 //! arrive while a refresh is in flight adopt the result.
 
-use std::{pin::Pin, sync::Arc};
+use std::{
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use arc_swap::ArcSwap;
 
@@ -65,6 +71,22 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
             factory: Box::new(factory),
             refresh_lock: tokio::sync::Mutex::new(()),
         })
+    }
+
+    /// Seeds an explicit initial value without calling the factory (so it cannot
+    /// fail). The seam for a tolerated cold start: a placeholder value now,
+    /// refreshed through `factory` later.
+    pub(crate) fn from_seed(
+        seed: V,
+        factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
+        + MaybeSendSync
+        + 'static,
+    ) -> Self {
+        Self {
+            value: ArcSwap::from_pointee(seed),
+            factory: Box::new(factory),
+            refresh_lock: tokio::sync::Mutex::new(()),
+        }
     }
 
     /// Refreshes the value by re-invoking the factory and atomically swapping
@@ -172,9 +194,13 @@ pub(crate) enum GatedRefresh {
 
 #[allow(clippy::struct_field_names)]
 struct RefreshTimestamps {
-    last_refreshed: Instant,
+    /// When a value last loaded successfully. `None` = never (cold seed): reads as
+    /// infinitely stale and selects the cold-backoff regime.
+    last_refreshed: Option<Instant>,
     last_failed_refresh: Option<Instant>,
     last_refresh_attempt: Option<Instant>,
+    /// Consecutive failures while cold; escalates the cold backoff, reset on success.
+    consecutive_cold_failures: u32,
 }
 
 /// A [`Refreshable`] combined with TTL, failure-backoff, and rate-limiting policy.
@@ -183,6 +209,13 @@ pub(crate) struct ScheduledRefreshable<V> {
     ttl: Duration,
     failure_backoff: Duration,
     min_refresh_interval: Duration,
+    /// Backoff floor while cold (no value has ever loaded). Escalates per
+    /// consecutive failure, capped at `failure_backoff`.
+    cold_backoff: Duration,
+    /// Lock-free mirror of `timestamps.last_refreshed.is_none()` for the per-verify
+    /// [`is_cold`](Self::is_cold) fast path. Monotonic: cleared once a value loads,
+    /// never re-set.
+    cold: AtomicBool,
     timestamps: std::sync::Mutex<RefreshTimestamps>,
 }
 
@@ -192,6 +225,7 @@ impl<V: std::fmt::Debug> std::fmt::Debug for ScheduledRefreshable<V> {
             .field("inner", &self.inner)
             .field("ttl", &self.ttl)
             .field("failure_backoff", &self.failure_backoff)
+            .field("cold_backoff", &self.cold_backoff)
             .finish_non_exhaustive()
     }
 }
@@ -219,19 +253,57 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         /// Minimum time between any two refresh attempts, regardless of outcome.
         #[builder(default = Duration::from_mins(1))]
         min_refresh_interval: Duration,
+        /// Backoff floor while cold, before any value has loaded. Escalates per
+        /// consecutive failure up to `failure_backoff`.
+        #[builder(default = Duration::from_millis(250))]
+        cold_backoff: Duration,
+        /// Opt-in placeholder used if the initial fetch fails: construction then
+        /// succeeds in a cold state that self-heals, rather than failing. `None`
+        /// (the default) keeps a failed initial fetch fatal.
+        fallback: Option<V>,
     ) -> Result<Self, Error> {
-        let inner = Refreshable::builder().factory(factory).build().await?;
+        let now = Instant::now();
+        let (initial, timestamps) = match (factory().await, fallback) {
+            (Ok(value), _) => (
+                value,
+                RefreshTimestamps {
+                    last_refreshed: Some(now),
+                    last_failed_refresh: None,
+                    last_refresh_attempt: None,
+                    consecutive_cold_failures: 0,
+                },
+            ),
+            // Tolerated cold start: seed the placeholder and stamp the failed
+            // build as the last failure so the first retry waits one `cold_backoff`
+            // (the floor). Escalation begins only once a cold *retry* also fails.
+            (Err(_), Some(seed)) => (
+                seed,
+                RefreshTimestamps {
+                    last_refreshed: None,
+                    last_failed_refresh: Some(now),
+                    last_refresh_attempt: Some(now),
+                    consecutive_cold_failures: 0,
+                },
+            ),
+            (Err(e), None) => return Err(e),
+        };
+        let cold = AtomicBool::new(timestamps.last_refreshed.is_none());
         Ok(Self {
-            inner,
+            inner: Refreshable::from_seed(initial, factory),
             ttl,
             failure_backoff,
             min_refresh_interval,
-            timestamps: std::sync::Mutex::new(RefreshTimestamps {
-                last_refreshed: Instant::now(),
-                last_failed_refresh: None,
-                last_refresh_attempt: None,
-            }),
+            cold_backoff,
+            cold,
+            timestamps: std::sync::Mutex::new(timestamps),
         })
+    }
+
+    /// Whether no value has ever loaded (the initial fetch failed and a placeholder
+    /// was seeded). Drives the caller's cold-vs-warm read path. Lock-free: a stale
+    /// `true` self-corrects, since the caller re-checks after the miss-refresh.
+    pub(crate) fn is_cold(&self) -> bool {
+        self.cold.load(Ordering::Acquire)
     }
 
     /// The abuse-prevention gate — *may* a refresh be attempted right now, quite
@@ -246,6 +318,25 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// miss-triggered reload — see [`should_refresh_stale`](Self::should_refresh_stale)
     /// versus [`policy_permits_miss_refresh`](Self::policy_permits_miss_refresh).
     fn policy_permits_attempt(&self, now: Instant, ts: &RefreshTimestamps) -> bool {
+        // Cold: no value has ever loaded, so every request is failing now — recover
+        // far more urgently than the warm `failure_backoff`/`min_refresh_interval`,
+        // which assume a good value is still being served. The first retry waits
+        // one `cold_backoff` (the floor), then doubles per consecutive cold
+        // failure, capped at `failure_backoff`.
+        if ts.last_refreshed.is_none() {
+            let backoff = self
+                .cold_backoff
+                .saturating_mul(1u32 << ts.consecutive_cold_failures.min(16))
+                .min(self.failure_backoff);
+            return match ts
+                .last_failed_refresh
+                .and_then(|t| now.checked_duration_since(t))
+            {
+                Some(elapsed) => elapsed >= backoff,
+                None => true,
+            };
+        }
+
         // Rate limit: hard floor on refresh frequency.
         if ts
             .last_refresh_attempt
@@ -277,10 +368,12 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
-        // Not stale yet — the read path leaves a within-TTL value alone.
-        if now
-            .checked_duration_since(ts.last_refreshed)
-            .is_some_and(|elapsed| elapsed < self.ttl)
+        // Not stale yet — a within-TTL value is left alone. A cold seed
+        // (`last_refreshed == None`) reads as infinitely stale.
+        if let Some(last) = ts.last_refreshed
+            && now
+                .checked_duration_since(last)
+                .is_some_and(|elapsed| elapsed < self.ttl)
         {
             return false;
         }
@@ -312,10 +405,19 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         ts.last_refresh_attempt = Some(now);
         if success {
-            ts.last_refreshed = now;
+            ts.last_refreshed = Some(now);
             ts.last_failed_refresh = None;
+            ts.consecutive_cold_failures = 0;
+            // Warm now; publish to the lock-free `is_cold` mirror. `Release`
+            // pairs with the `Acquire` load, ordering it after the value swap.
+            self.cold.store(false, Ordering::Release);
         } else {
             ts.last_failed_refresh = Some(now);
+            // Escalate only while still cold; a warm failure keeps serving the
+            // last good value and uses the warm backoff.
+            if ts.last_refreshed.is_none() {
+                ts.consecutive_cold_failures = ts.consecutive_cold_failures.saturating_add(1);
+            }
         }
     }
 
@@ -378,8 +480,9 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
 
             if ttl_gated
+                && let Some(last) = ts.last_refreshed
                 && now
-                    .checked_duration_since(ts.last_refreshed)
+                    .checked_duration_since(last)
                     .is_some_and(|elapsed| elapsed < self.ttl)
             {
                 return false;
@@ -729,6 +832,100 @@ mod tests {
             calls.load(Ordering::SeqCst),
             2,
             "a stale value is reloaded on the read path"
+        );
+    }
+
+    /// A factory whose first call (the initial build) fails and every later call
+    /// succeeds — an upstream that is down at startup and then recovers.
+    fn ok_after_first_failure(
+        calls: Arc<AtomicUsize>,
+    ) -> impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<usize, Error>>>>
+    + MaybeSendSync
+    + 'static {
+        move || {
+            let calls = Arc::clone(&calls);
+            Box::pin(async move {
+                let n = calls.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Err(Error::new(
+                        crate::error::ErrorKind::Transport { retryable: true },
+                        "upstream down at boot",
+                    ))
+                } else {
+                    Ok(n)
+                }
+            })
+        }
+    }
+
+    /// A failed initial fetch with a `fallback` is tolerated: construction succeeds
+    /// cold, serves the placeholder, and a later refresh clears the cold state.
+    #[tokio::test]
+    async fn cold_start_seeds_then_recovers() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(ok_after_first_failure(calls))
+            .cold_backoff(Duration::ZERO) // no wait between cold retries in the test
+            .fallback(999_usize)
+            .build()
+            .await
+            .expect("cold start is tolerated, not fatal");
+        assert!(sr.is_cold(), "no value has loaded yet");
+        assert_eq!(*sr.load_full(), 999, "serving the seeded placeholder");
+
+        assert!(
+            sr.try_refresh_on_miss().await,
+            "the recovered upstream loads"
+        );
+        assert!(!sr.is_cold(), "warm once a value has loaded");
+        assert_eq!(*sr.load_full(), 1, "serving the fetched value");
+    }
+
+    /// A nonzero `cold_backoff` gates the very first cold retry: immediately
+    /// after a tolerated cold build (which stamps the failure but leaves the
+    /// escalation count at zero), the miss path is held off for one `cold_backoff`
+    /// rather than hammering a just-failed upstream, so the source stays cold and
+    /// the factory is not re-invoked.
+    #[tokio::test]
+    async fn cold_backoff_gates_the_first_retry() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(ok_after_first_failure(Arc::clone(&calls)))
+            .cold_backoff(Duration::from_secs(10)) // long enough to block an immediate retry
+            .fallback(999_usize)
+            .build()
+            .await
+            .expect("cold start is tolerated");
+        assert!(sr.is_cold());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "only the failed build has run"
+        );
+
+        assert!(
+            !sr.try_refresh_on_miss().await,
+            "the cold_backoff floor has not elapsed, so the retry is held off"
+        );
+        assert!(sr.is_cold(), "still cold; no second fetch was attempted");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "the factory was not re-invoked"
+        );
+    }
+
+    /// Without a `fallback`, a failed initial fetch stays fatal (fail-fast).
+    #[tokio::test]
+    async fn no_fallback_keeps_initial_failure_fatal() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let result = ScheduledRefreshable::builder()
+            .factory(ok_after_first_failure(calls))
+            .build()
+            .await;
+        assert!(
+            result.is_err(),
+            "no fallback => a failed initial fetch is fatal"
         );
     }
 }

@@ -16,6 +16,12 @@ pub enum VerifyError {
     /// No key matched the requested algorithm/kid pair.
     #[snafu(display("no matching key"))]
     NoMatchingKey,
+    /// No keyset has ever loaded — the initial JWKS fetch failed and the source
+    /// came up in a seeded-empty (cold) state that has not yet self-healed. Kept
+    /// distinct from [`NoMatchingKey`](Self::NoMatchingKey) so a still-unreachable
+    /// upstream reads as infrastructure, not a bad/unknown-`kid` token.
+    #[snafu(display("no keys available: JWKS has not loaded since startup"))]
+    KeysUnavailable,
     /// Multiple keys matched but the token has no `kid` to disambiguate.
     #[snafu(display("ambiguous key: multiple keys match but token has no kid"))]
     AmbiguousKeyMatch,
@@ -38,6 +44,8 @@ impl VerifyError {
             VerifyError::NoMatchingKey
             | VerifyError::AmbiguousKeyMatch
             | VerifyError::SignatureMismatch => false,
+            // A cold source may become ready once the upstream is reachable again.
+            VerifyError::KeysUnavailable => true,
             VerifyError::Other { source } => source.is_retryable(),
         }
     }

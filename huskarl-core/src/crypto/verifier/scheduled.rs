@@ -28,6 +28,52 @@ use crate::{
 /// [`JwksSource`](crate::jwk::JwksSource) rather than composing by hand; its `ttl`
 /// is this layer's TTL. See [composing crypto
 /// strategies](crate::_docs::explanation::crypto_strategies) for the full stack.
+///
+/// # Warm start from a persisted cache
+///
+/// The factory's `Ok` value is served immediately as the current keyset, so a
+/// factory that falls back to a *trusted local cache* comes up **warm** — able to
+/// verify at once — even when the authorization server is unreachable at boot,
+/// then picks up live keys on the next TTL refresh. This is distinct from
+/// [`JwksStartup::SeedEmpty`](crate::jwk::JwksStartup::SeedEmpty), which comes up
+/// *cold* and returns [`KeysUnavailable`](VerifyError::KeysUnavailable) until a
+/// live fetch lands. Persist each successful fetch so the cache tracks key
+/// rotations rather than a stale bake-in; if there is no live fetch *and* no
+/// cache (a first-ever offline boot), the build still fails — you genuinely have
+/// no keys.
+///
+/// ```rust,no_run
+/// # use std::pin::Pin;
+/// # use huskarl_core::{
+/// #     crypto::verifier::{MultiKeyVerifier, ScheduledRefreshVerifier},
+/// #     error::Error,
+/// #     platform::MaybeSendFuture,
+/// # };
+/// # async fn fetch_live_keys() -> Result<MultiKeyVerifier, Error> { unimplemented!() }
+/// # fn save_cached_keys(_keys: &MultiKeyVerifier) {}
+/// # fn load_cached_keys() -> Result<MultiKeyVerifier, Error> { unimplemented!() }
+/// # async fn example() -> Result<(), Error> {
+/// let verifier = ScheduledRefreshVerifier::builder()
+///     .factory(|| {
+///         Box::pin(async {
+///             match fetch_live_keys().await {
+///                 // Persist every good fetch so a later cold boot loads the
+///                 // freshest keyset the process ever saw, not a stale bake-in.
+///                 Ok(keys) => {
+///                     save_cached_keys(&keys);
+///                     Ok(keys)
+///                 }
+///                 // Offline: serve the last good keyset so the build is warm.
+///                 Err(_) => load_cached_keys(),
+///             }
+///         }) as Pin<Box<dyn MaybeSendFuture<Output = Result<MultiKeyVerifier, Error>>>>
+///     })
+///     .build()
+///     .await?;
+/// # let _ = verifier;
+/// # Ok(())
+/// # }
+/// ```
 pub struct ScheduledRefreshVerifier<V> {
     inner: ScheduledRefreshable<V>,
 }
@@ -64,14 +110,31 @@ impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
         /// Acts as a hard ceiling on refresh frequency for abuse prevention.
         #[builder(default = Duration::from_mins(1))]
         min_refresh_interval: Duration,
+        /// Backoff floor while cold (no keyset has loaded), escalating up to
+        /// `failure_backoff`.
+        #[builder(default = Duration::from_millis(250))]
+        cold_backoff: Duration,
+        /// Opt-in placeholder verifier used if the initial fetch fails, so the
+        /// stack comes up cold and self-heals instead of failing construction.
+        /// `None` (the default) keeps a failed initial fetch fatal.
+        fallback: Option<V>,
     ) -> Result<Self, Error> {
         let inner = ScheduledRefreshable::builder()
             .factory(factory)
             .ttl(ttl)
             .failure_backoff(failure_backoff)
             .min_refresh_interval(min_refresh_interval)
+            .cold_backoff(cold_backoff)
+            .maybe_fallback(fallback)
             .build()
             .await?;
+        // Coming up cold (initial fetch failed, placeholder seeded) is no longer a
+        // construction error, so surface it here — the only startup-time signal
+        // that the stack is degraded until it self-heals.
+        #[cfg(feature = "metrics")]
+        if inner.is_cold() {
+            ::metrics::counter!("huskarl.jws.cold_start").increment(1);
+        }
         Ok(Self { inner })
     }
 }
@@ -88,11 +151,23 @@ impl<V: JwsVerifier + 'static> JwsVerifier for ScheduledRefreshVerifier<V> {
         key_match: &'a KeyMatch<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
         Box::pin(async move {
-            // Bound staleness on the read path: if the keyset has outlived its
-            // TTL, the first verify to notice reloads it (single-flight,
-            // non-blocking for others) before verifying. This is what drops a
-            // retired key even when no token ever fails to verify.
-            self.inner.poll_refresh_ahead().await;
+            // Cold: no keyset has ever loaded (the initial fetch failed and an
+            // empty placeholder was seeded). Block on a single-flight reload so a
+            // burst of first requests adopts one shared fetch rather than each
+            // eating its own, then distinguish "keys never loaded" (infra) from an
+            // unknown-`kid` miss (bad token).
+            if self.inner.is_cold() {
+                self.inner.try_refresh_on_miss().await;
+                if self.inner.is_cold() {
+                    return Err(VerifyError::KeysUnavailable);
+                }
+            } else {
+                // Bound staleness on the read path: if the keyset has outlived its
+                // TTL, the first verify to notice reloads it (single-flight,
+                // non-blocking for others) before verifying. This is what drops a
+                // retired key even when no token ever fails to verify.
+                self.inner.poll_refresh_ahead().await;
+            }
             self.inner
                 .load_full()
                 .verify(input, signature, key_match)
@@ -319,5 +394,73 @@ mod tests {
             2,
             "initial build + one miss-driven reload"
         );
+    }
+
+    /// An always-failing factory: the upstream is down at boot and stays down.
+    #[allow(clippy::type_complexity)]
+    fn always_down()
+    -> impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<MissVerifier, Error>>>>
+    + MaybeSendSync
+    + 'static {
+        || {
+            Box::pin(async {
+                Err(Error::new(
+                    crate::error::ErrorKind::Transport { retryable: true },
+                    "down",
+                ))
+            })
+        }
+    }
+
+    /// A seeded-empty cold start reports [`VerifyError::KeysUnavailable`] — not a
+    /// bare miss — while the upstream stays unreachable, so the failure reads as
+    /// infrastructure rather than a bad token.
+    #[tokio::test]
+    async fn cold_verify_reports_keys_unavailable_while_upstream_down() {
+        let verifier = ScheduledRefreshVerifier::builder()
+            .factory(always_down())
+            .cold_backoff(Duration::ZERO) // retry immediately in the test
+            .fallback(MissVerifier { present: false })
+            .build()
+            .await
+            .expect("cold start is tolerated, not fatal");
+
+        let err = verifier
+            .verify(b"input", b"sig", &km())
+            .await
+            .expect_err("no keys have ever loaded");
+        assert!(matches!(err, VerifyError::KeysUnavailable));
+    }
+
+    /// The first verify recovers once the upstream returns: the cold miss-refresh
+    /// loads the real keyset and the token verifies — no `KeysUnavailable`.
+    #[tokio::test]
+    async fn cold_verify_recovers_when_upstream_returns() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let factory = move || {
+            let n = calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if n == 0 {
+                    Err(Error::new(
+                        crate::error::ErrorKind::Transport { retryable: true },
+                        "down at boot",
+                    ))
+                } else {
+                    Ok(MissVerifier { present: true })
+                }
+            }) as Pin<Box<dyn MaybeSendFuture<Output = Result<MissVerifier, Error>>>>
+        };
+        let verifier = ScheduledRefreshVerifier::builder()
+            .factory(factory)
+            .cold_backoff(Duration::ZERO)
+            .fallback(MissVerifier { present: false })
+            .build()
+            .await
+            .expect("cold start is tolerated");
+
+        verifier
+            .verify(b"input", b"sig", &km())
+            .await
+            .expect("the cold miss-refresh loads the recovered keyset and verifies");
     }
 }

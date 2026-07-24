@@ -131,6 +131,7 @@ impl<V: JwsVerifier> JwsVerifier for MetricsJwsVerifier<V> {
             let outcome = match &result {
                 Ok(()) => "success",
                 Err(VerifyError::NoMatchingKey) => "no_matching_key",
+                Err(VerifyError::KeysUnavailable) => "keys_unavailable",
                 Err(VerifyError::AmbiguousKeyMatch) => "ambiguous_key",
                 Err(VerifyError::SignatureMismatch) => "signature_mismatch",
                 Err(VerifyError::Other { .. }) => "error",
