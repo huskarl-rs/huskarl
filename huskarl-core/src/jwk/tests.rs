@@ -650,3 +650,20 @@ fn test_private_jwk_try_from_wrong_variant() {
     // The matching variant converts cleanly.
     assert!(SymmetricJwk::try_from(pjwk).is_ok());
 }
+
+#[test]
+fn test_oct_key_eq_is_still_equality() {
+    // `OctKey`'s `PartialEq` is hand-written to compare in constant time; guard
+    // against it degenerating into always-equal or always-unequal.
+    let oct = |bytes: Vec<u8>| OctKey::builder().k(bytes).build();
+
+    assert_eq!(oct(vec![7u8; 32]), oct(vec![7u8; 32]));
+    assert_ne!(oct(vec![7u8; 32]), oct(vec![8u8; 32]));
+    // Differs only in the last byte — a short-circuiting compare would agree
+    // here too, but this is where a truncating one would not.
+    let mut tail = vec![7u8; 32];
+    tail[31] = 8;
+    assert_ne!(oct(vec![7u8; 32]), oct(tail));
+    // Unequal lengths.
+    assert_ne!(oct(vec![7u8; 32]), oct(vec![7u8; 16]));
+}

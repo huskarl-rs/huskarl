@@ -47,6 +47,7 @@ serde_json = { workspace = true }
 sha2 = { workspace = true, default-features = false }
 snafu = { workspace = true }
 strum = { workspace = true }
+subtle = { version = "2.6.1", default-features = false }
 tokio = { version = "1", default-features = false, features = ["sync"] }
 url = { workspace = true, optional = true }
 zeroize = { version = "1", default-features = false }
