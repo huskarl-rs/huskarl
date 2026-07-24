@@ -13,6 +13,7 @@ use crate::{
         },
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
+        jwk::{JwksSource, JwksStartup},
     },
     grant::{
         authorization_code::{
@@ -155,6 +156,60 @@ impl AuthorizationCodeGrant {
             ..self.clone()
         })
     }
+}
+
+/// Resolves the grant's JWS verifier: a supplied factory as-is, otherwise a
+/// default [`JwksSource`] built only when a verifier could be needed and a
+/// `jwks_uri` is present.
+async fn resolve_jws_verifier(
+    factory: Option<Arc<dyn JwsVerifierFactory>>,
+    platform: Option<Arc<dyn JwsVerifierPlatform>>,
+    http_client: &Arc<dyn HttpClient>,
+    jwks_uri: Option<&EndpointUrl>,
+    oidc: Option<bool>,
+    response_mode: Option<ResponseMode>,
+) -> Result<Option<Arc<dyn JwsVerifier>>, Error> {
+    let require_platform = |platform: Option<Arc<dyn JwsVerifierPlatform>>| {
+        platform.ok_or_else(|| {
+            Error::new(
+                ErrorKind::Config,
+                super::error::MissingJwsVerifierPlatformSnafu.build(),
+            )
+        })
+    };
+
+    // A supplied factory is honored as-is, `jwks_uri` or not (it may carry its
+    // own keys — a KMS/enclave signer, or a static JWKS).
+    if let Some(factory) = factory {
+        let platform = require_platform(platform)?;
+        return Ok(Some(factory.build(jwks_uri, platform).await?));
+    }
+
+    let jarm = response_mode.is_some_and(ResponseMode::is_jwt_secured);
+
+    // `oidc(false)` without JARM declares the flow non-OIDC: build no default
+    // verifier and fetch no JWKS. A surprise ID token is then rejected as
+    // unvalidatable — supply a factory to validate one anyway. A missing
+    // `jwks_uri` likewise leaves the default `JwksSource` with no key source.
+    if (oidc == Some(false) && !jarm) || jwks_uri.is_none() {
+        return Ok(None);
+    }
+
+    let platform = require_platform(platform)?;
+    // Fail-fast only on declared need (`oidc(true)` or JARM). An inferred flow
+    // (`oidc` unset — the scope decides at `start()`) is unknown at build time,
+    // so come up lazily (`SeedEmpty`): a failed initial fetch is not fatal and
+    // the verifier self-heals when a token first needs it.
+    let startup = if oidc == Some(true) || jarm {
+        JwksStartup::FailFast
+    } else {
+        JwksStartup::SeedEmpty
+    };
+    let default = JwksSource::builder()
+        .http_client(Arc::clone(http_client))
+        .startup(startup)
+        .build();
+    Ok(Some(default.build(jwks_uri, platform).await?))
 }
 
 #[huskarl_macros::from_metadata(
@@ -308,23 +363,30 @@ impl AuthorizationCodeGrant {
         #[cfg(feature = "default-jws-verifier-platform")]
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
+        /// Factory that builds the JWS verifier for ID tokens (OIDC) and JARM
+        /// responses.
+        ///
+        /// Defaults to a [`JwksSource`] wired from `http_client`: with a
+        /// `jwks_uri`, verification is zero-config; without one, there is no
+        /// verifier. A supplied factory is honored as-is, including with no
+        /// `jwks_uri` (it may carry its own keys).
+        #[builder(
+            with = |factory: impl JwsVerifierFactory + 'static| Arc::new(factory) as Arc<dyn JwsVerifierFactory>,
+        )]
         jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
     ) -> Result<Self, Error> {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
-        let jws_verifier = match (jws_verifier_platform.clone(), jws_verifier_factory.clone()) {
-            (Some(platform), Some(factory)) => {
-                Some(factory.build(jwks_uri.as_ref(), platform).await?)
-            }
-            (None, Some(_)) => {
-                return Err(Error::new(
-                    ErrorKind::Config,
-                    super::error::MissingJwsVerifierPlatformSnafu.build(),
-                ));
-            }
-            (Some(_) | None, None) => None,
-        };
+        let jws_verifier = resolve_jws_verifier(
+            jws_verifier_factory,
+            jws_verifier_platform,
+            &http_client,
+            jwks_uri.as_ref(),
+            oidc,
+            response_mode,
+        )
+        .await?;
 
         let effective_token_endpoint = crate::grant::core::resolve_mtls_alias(
             http_client.as_ref(),

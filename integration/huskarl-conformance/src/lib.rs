@@ -13,7 +13,6 @@ use huskarl::{
         client_auth::ClientAuthentication,
         dpop::AuthorizationServerDPoP,
         http::{HttpClient, Idempotency},
-        jwk::JwksSource,
         server_metadata::AuthorizationServerMetadata,
     },
     grant::{
@@ -217,11 +216,7 @@ pub async fn run_auth_code_flow_with_listener<
         .redirect_uri(redirect_uri)
         .dpop(dpop)
         .jar(jar)
-        .jws_verifier_factory(Arc::new(
-            JwksSource::builder()
-                .http_client(http_client.clone())
-                .build(),
-        ))
+        // jws_verifier_factory defaults to a JwksSource wired from http_client.
         .build()
         .await
         .map_err(|e| format!("failed to build grant: {e}"))?;

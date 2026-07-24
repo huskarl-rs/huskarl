@@ -11,13 +11,15 @@
 //! `huskarl::prelude`), so importing the outermost prelude is enough.
 
 pub use crate::{
-    crypto::cipher::{AeadDecryptor as _, AeadEncryptor as _, AeadEncryptorSelector as _},
-    crypto::seal::{AeadSealer as _, AeadUnsealer as _},
-    crypto::signer::{
-        AsymmetricJwsSigner as _, AsymmetricJwsSignerSelector as _, JwsSigner as _,
-        JwsSignerSelector as _,
+    crypto::{
+        cipher::{AeadDecryptor as _, AeadEncryptor as _, AeadEncryptorSelector as _},
+        seal::{AeadSealer as _, AeadUnsealer as _},
+        signer::{
+            AsymmetricJwsSigner as _, AsymmetricJwsSignerSelector as _, JwsSigner as _,
+            JwsSignerSelector as _,
+        },
+        verifier::{JwsVerifier as _, JwsVerifierFactory as _, JwsVerifierPlatform as _},
     },
-    crypto::verifier::{JwsVerifier as _, JwsVerifierFactory as _, JwsVerifierPlatform as _},
     dpop::{AuthorizationServerDPoP as _, ResourceServerDPoP as _},
     secrets::Secret as _,
 };

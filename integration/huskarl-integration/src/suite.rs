@@ -360,9 +360,7 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         .http_client(http.clone())
         .client_auth(ClientSecret::new(ProvidedSecret::new(secret)))
         .redirect_uri(&redirect_uri)
-        .jws_verifier_factory(Arc::new(
-            JwksSource::builder().http_client(http.clone()).build(),
-        ))
+        // jws_verifier_factory defaults to a JwksSource wired from http_client.
         .maybe_jar(jar_key)
         // Knob defaults to true, so force off explicitly for the non-PAR variants.
         .prefer_pushed_authorization_requests(features.contains(Features::PAR))
