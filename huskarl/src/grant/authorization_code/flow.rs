@@ -641,7 +641,7 @@ mod tests {
             _request: http::Request<Bytes>,
             _idempotency: Idempotency,
         ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-            unreachable!("start() with direct delivery must not perform HTTP")
+            panic!("start() with direct delivery must not perform HTTP")
         }
     }
 
@@ -676,7 +676,7 @@ mod tests {
             _key_match: &'a crate::core::crypto::verifier::KeyMatch<'a>,
         ) -> MaybeSendBoxFuture<'a, Result<(), crate::core::crypto::verifier::VerifyError>>
         {
-            unreachable!("stub verifier must not be invoked")
+            panic!("stub verifier must not be invoked")
         }
     }
 

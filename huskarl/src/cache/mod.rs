@@ -159,7 +159,7 @@ mod tests {
             '_,
             Result<crate::core::http::HttpResponse, crate::core::Error>,
         > {
-            unreachable!("test only builds the cache, no HTTP expected")
+            panic!("test only builds the cache, no HTTP expected")
         }
     }
 

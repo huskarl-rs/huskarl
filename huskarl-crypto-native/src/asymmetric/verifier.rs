@@ -304,9 +304,13 @@ impl JwsVerifier for AsymmetricPublicKey {
                             input,
                             &rsa::pss::Signature::try_from(signature).map_err(mismatch)?,
                         ),
-                    _ => {
-                        unreachable!("RSA algorithm is already checked")
-                    }
+                    // `key_match` above already rejected any alg outside
+                    // `supported_algorithms()`, so this is unreachable today.
+                    // It stays an error rather than a panic because the two
+                    // lists are kept in sync by hand, and `alg` comes from the
+                    // JWS header: a future alg added to one and not the other
+                    // would otherwise be a remotely triggered panic here.
+                    _ => return Err(VerifyError::NoMatchingKey),
                 },
                 Key::Rs256(verifying_key) => verifying_key.verify(
                     input,

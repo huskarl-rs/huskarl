@@ -128,7 +128,7 @@ mod tests {
 
     fn parse_err(token: &str) -> super::JwsParseError {
         match parse_compact_jws::<(), ()>(token) {
-            Ok(_) => unreachable!("expected parse failure"),
+            Ok(_) => panic!("expected parse failure"),
             Err(e) => e,
         }
     }

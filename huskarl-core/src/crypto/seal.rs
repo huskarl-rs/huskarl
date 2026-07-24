@@ -399,7 +399,7 @@ mod tests {
 
     fn assert_invalid_bundle(err: &DecryptError) {
         let DecryptError::Other { source } = err else {
-            unreachable!("expected DecryptError::Other, got {err:?}");
+            panic!("expected DecryptError::Other, got {err:?}");
         };
         assert_eq!(source.kind(), ErrorKind::Crypto);
         assert_eq!(source.to_string(), "cryptographic operation failed");

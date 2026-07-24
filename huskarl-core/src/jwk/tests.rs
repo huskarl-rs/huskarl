@@ -179,7 +179,7 @@ fn test_parse_jwks_appendix_a2() {
 
     // Second key is RSA with CRT params
     let Key::Rsa(rsa) = &jwks.keys[1].key else {
-        unreachable!("Expected RSA key");
+        panic!("Expected RSA key");
     };
     assert!(rsa.p.is_some());
     assert!(rsa.q.is_some());
@@ -302,7 +302,7 @@ fn test_rsa_key_without_crt_params() {
     let json = r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYjqxnf7vQoSmcnVQ"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
     let Key::Rsa(rsa) = &jwk.key else {
-        unreachable!("Expected RSA key");
+        panic!("Expected RSA key");
     };
     assert!(rsa.p.is_none());
     assert!(rsa.q.is_none());
@@ -437,7 +437,7 @@ fn test_rsa_key_with_oth_roundtrip() {
 
     // oth is present on RsaKey
     let Key::Rsa(rsa) = &jwk.key else {
-        unreachable!("Expected RSA key");
+        panic!("Expected RSA key");
     };
     let oth = rsa.oth.as_ref().expect("oth should be present");
     assert_eq!(oth.len(), 1);
@@ -451,7 +451,7 @@ fn test_rsa_key_with_oth_roundtrip() {
     // oth passes through to RsaPrivateKey
     let pk = jwk.private_key().unwrap();
     let PrivateKey::Rsa(rsa_pk) = pk else {
-        unreachable!("Expected RSA private key");
+        panic!("Expected RSA private key");
     };
     assert!(rsa_pk.oth.is_some());
     assert_eq!(rsa_pk.oth.as_ref().unwrap().len(), 1);
@@ -462,7 +462,7 @@ fn test_rsa_key_without_oth_has_none() {
     let json = r#"{"kty":"RSA","n":"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw","e":"AQAB","d":"X4cTteJY_gn4FYPsXB8rdXix5vwsg1FLN5E3EaG6RJoVH-HLLKD9M7dx5oo7GURknchnrRweUkC7hT5fJLM0WbFAKNLWY2vv7B6NqXSzUvxT0_YSfqijwp3RTzlBaCxWp4doFk5N2o8Gy_nHNKroADIkJ46pRUohsXywbReAdYaMwFs9tv8d_cPVY3i07a3t8MN6TNwm0dSawm9v47UiCl3Sk5ZiG7xojPLu4sbg1U2jx4IBTNBznbJSzFHK66jT8bgkuqsk0GjskDJk19Z4qwjwbsnn4j2WBii3RL-Us2lGVkY8fkFzme1z0HbIkfz0Y6mqnOYjqxnf7vQoSmcnVQ"}"#;
     let jwk: Jwk = serde_json::from_str(json).unwrap();
     let Key::Rsa(rsa) = &jwk.key else {
-        unreachable!("Expected RSA key");
+        panic!("Expected RSA key");
     };
     assert!(rsa.oth.is_none());
     // oth not serialized when absent
