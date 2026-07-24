@@ -50,6 +50,11 @@ pub struct AuthorizationCodeGrant {
     /// metadata (before RFC 8705 §5 mTLS-alias resolution).
     pub(super) token_endpoint: EndpointUrl,
 
+    /// The mTLS alias for the token endpoint (RFC 8705 §5). Retained alongside
+    /// the resolved `effective_token_endpoint` so a derived grant can re-resolve
+    /// it rather than inherit a flattened endpoint pair.
+    pub(super) mtls_token_endpoint: Option<EndpointUrl>,
+
     /// The token endpoint used for token requests: the RFC 8705 §5 mTLS alias
     /// when the HTTP client uses mTLS, the primary token endpoint otherwise.
     pub(super) effective_token_endpoint: EndpointUrl,
@@ -456,6 +461,7 @@ impl AuthorizationCodeGrant {
             dpop,
             issuer,
             token_endpoint,
+            mtls_token_endpoint,
             effective_token_endpoint,
             token_endpoint_auth_methods_supported,
             jws_verifier,
@@ -548,7 +554,8 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
             .http_client(self.http_client.clone())
             .client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
-            .token_endpoint(self.effective_token_endpoint.clone())
+            .token_endpoint(self.token_endpoint.clone())
+            .maybe_mtls_token_endpoint(self.mtls_token_endpoint.clone())
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )

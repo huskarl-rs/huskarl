@@ -162,7 +162,8 @@ impl OAuth2ExchangeGrant for TokenExchangeGrant {
             .http_client(self.http_client.clone())
             .maybe_client_auth(self.client_auth.clone())
             .dpop(self.dpop.clone())
-            .token_endpoint(self.effective_token_endpoint.clone())
+            .token_endpoint(self.token_endpoint.clone())
+            .maybe_mtls_token_endpoint(self.mtls_token_endpoint.clone())
             .maybe_token_endpoint_auth_methods_supported(
                 self.token_endpoint_auth_methods_supported.clone(),
             )
@@ -289,12 +290,72 @@ mod tests {
         }
     }
 
+    /// An [`HttpClient`] presenting an RFC 8705 mTLS client certificate, so that
+    /// endpoint resolution takes the alias branch.
+    struct MtlsClient;
+
+    impl HttpClient for MtlsClient {
+        fn execute(
+            &self,
+            _request: Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            Box::pin(async { unreachable!("endpoint resolution performs no HTTP request") })
+        }
+
+        fn uses_mtls(&self) -> bool {
+            true
+        }
+    }
+
     fn grant() -> TokenExchangeGrant {
         TokenExchangeGrant::builder()
             .token_endpoint("https://as.example/token".parse::<EndpointUrl>().unwrap())
             .client_id("exchange-client")
             .http_client(UnusedClient)
             .build()
+    }
+
+    // RFC 8705 §5: the published token endpoint and the mTLS alias serve
+    // different roles — the former is the `Audience::TokenEndpoint` assertion
+    // `aud`, the latter is where the request is actually sent. A derived refresh
+    // grant must inherit both, not the resolved alias flattened into each.
+    #[test]
+    fn to_refresh_grant_keeps_published_and_alias_endpoints_distinct() {
+        let published: EndpointUrl = "https://as.example/token".parse().unwrap();
+        let alias: EndpointUrl = "https://mtls.as.example/token".parse().unwrap();
+
+        let grant = TokenExchangeGrant::builder()
+            .token_endpoint(published.clone())
+            .mtls_token_endpoint(alias.clone())
+            .client_id("exchange-client")
+            .http_client(MtlsClient)
+            .build();
+
+        assert_eq!(grant.token_endpoint(), &published);
+        assert_eq!(grant.effective_token_endpoint(), &alias);
+
+        let refresh = grant.to_refresh_grant();
+        assert_eq!(
+            refresh.token_endpoint(),
+            &published,
+            "the assertion audience must stay the published endpoint"
+        );
+        assert_eq!(
+            refresh.effective_token_endpoint(),
+            &alias,
+            "requests must still go to the mTLS alias"
+        );
+    }
+
+    // Without mTLS the alias is inert, and both endpoints stay the published one.
+    #[test]
+    fn to_refresh_grant_without_mtls_uses_the_published_endpoint_throughout() {
+        let published: EndpointUrl = "https://as.example/token".parse().unwrap();
+        let refresh = grant().to_refresh_grant();
+
+        assert_eq!(refresh.token_endpoint(), &published);
+        assert_eq!(refresh.effective_token_endpoint(), &published);
     }
 
     fn subject() -> SecurityToken {
