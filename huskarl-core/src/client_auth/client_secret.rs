@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use base64::prelude::*;
 use bon::Builder;
-use http::HeaderMap;
+use http::{HeaderMap, HeaderValue};
 
 use crate::{
     client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
@@ -58,14 +58,15 @@ impl ClientSecret {
         let credentials = format!("{client_id}:{client_secret}");
         let auth_header = format!("Basic {}", BASE64_STANDARD.encode(credentials.as_bytes()));
 
+        let mut auth_value: HeaderValue = auth_header.parse().map_err(|source| {
+            Error::new(ErrorKind::Auth, source).with_context("building Basic Authorization header")
+        })?;
+        // The base64 blob is the client secret; keep it out of the HPACK/QPACK
+        // dynamic table and out of `AuthenticationParams`' derived `Debug`.
+        auth_value.set_sensitive(true);
+
         let mut headers = HeaderMap::new();
-        headers.insert(
-            http::header::AUTHORIZATION,
-            auth_header.parse().map_err(|source| {
-                Error::new(ErrorKind::Auth, source)
-                    .with_context("building Basic Authorization header")
-            })?,
-        );
+        headers.insert(http::header::AUTHORIZATION, auth_value);
 
         Ok(AuthenticationParams::builder().headers(headers).build())
     }
@@ -256,7 +257,7 @@ mod tests {
             .await
             .unwrap();
 
-        let headers = params.headers.unwrap();
+        let headers = params.headers.as_ref().unwrap();
         let auth = headers.get(http::header::AUTHORIZATION).unwrap();
         let auth_str = auth.to_str().unwrap();
         assert!(auth_str.starts_with("Basic "));
@@ -269,6 +270,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(decoded, "my-client:my-secret");
+
+        // The header carries the client secret: it must be sensitive, so that
+        // neither HPACK nor `AuthenticationParams`' `Debug` leaks it.
+        assert!(auth.is_sensitive());
+        assert!(!format!("{params:?}").contains("Basic "));
     }
 
     #[tokio::test]

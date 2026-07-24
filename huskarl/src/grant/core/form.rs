@@ -47,13 +47,12 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             .proof(&parts.method, &parts.uri, self.dpop_jkt)
             .await?
         {
-            parts.headers.insert(
-                "DPoP",
-                HeaderValue::from_str(proof.expose_secret()).map_err(|e| {
-                    Error::new(ErrorKind::DPoP, e)
-                        .with_context("DPoP proof is not a valid header value")
-                })?,
-            );
+            let mut proof_value = HeaderValue::from_str(proof.expose_secret()).map_err(|e| {
+                Error::new(ErrorKind::DPoP, e)
+                    .with_context("DPoP proof is not a valid header value")
+            })?;
+            proof_value.set_sensitive(true);
+            parts.headers.insert("DPoP", proof_value);
         }
 
         parts.headers.insert(

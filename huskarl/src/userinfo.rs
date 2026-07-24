@@ -213,9 +213,10 @@ impl UserInfoClient {
             &self.userinfo_endpoint
         };
 
-        let header_value = access_token
+        let mut header_value = access_token
             .expose_header_value()
             .map_err(|source| userinfo_error(UserInfoError::BadAuthorizationHeader { source }))?;
+        header_value.set_sensitive(true);
 
         let dpop_jkt = access_token.dpop_jkt();
         let mut retried = false;
@@ -232,11 +233,10 @@ impl UserInfoClient {
                     .await
                     .map_err(|e| e.with_context("generating DPoP proof for UserInfo request"))?
             {
-                headers.insert(
-                    "DPoP",
-                    HeaderValue::from_str(proof.expose_secret())
-                        .map_err(|source| userinfo_error(UserInfoError::DPoPHeader { source }))?,
-                );
+                let mut proof_value = HeaderValue::from_str(proof.expose_secret())
+                    .map_err(|source| userinfo_error(UserInfoError::DPoPHeader { source }))?;
+                proof_value.set_sensitive(true);
+                headers.insert("DPoP", proof_value);
             }
 
             let (mut parts, ()) = http::Request::new(()).into_parts();
