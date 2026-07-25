@@ -10,7 +10,7 @@ use crate::{
     core::{
         Error, ErrorKind,
         dpop::ResourceServerDPoP,
-        platform::{Duration, MaybeSendBoxFuture, SystemTime},
+        platform::{Duration, Instant, MaybeSendBoxFuture},
     },
     grant::{
         core::{OAuth2ExchangeGrant, TokenResponse},
@@ -468,7 +468,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(CredentialView {
             has_refresh_token,
-            reconciled_at: SystemTime::now(),
+            reconciled_at: Instant::now(),
         });
     }
 
@@ -483,12 +483,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             .unwrap_or_else(PoisonError::into_inner))?;
         match max_staleness {
             None => Some(view.has_refresh_token),
-            Some(max) => {
-                let age = SystemTime::now()
-                    .duration_since(view.reconciled_at)
-                    .unwrap_or(Duration::MAX);
-                (age <= max).then_some(view.has_refresh_token)
-            }
+            Some(max) => (view.reconciled_at.elapsed() <= max).then_some(view.has_refresh_token),
         }
     }
 
@@ -588,7 +583,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
 #[derive(Clone, Copy)]
 struct CredentialView {
     has_refresh_token: bool,
-    reconciled_at: SystemTime,
+    reconciled_at: Instant,
 }
 
 #[cfg(test)]
