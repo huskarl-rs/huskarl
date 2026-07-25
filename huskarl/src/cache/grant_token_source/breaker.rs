@@ -3,7 +3,7 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use crate::core::platform::{Duration, SystemTime};
+use crate::core::platform::{Duration, Instant};
 
 /// Backoff breaker bounding repeated non-recoverable from-scratch acquisitions.
 ///
@@ -30,7 +30,7 @@ struct BreakerState {
     /// Non-recoverable from-scratch failures since the last success.
     consecutive: u32,
     /// When set and not yet reached, the breaker is open (cooling down).
-    open_until: Option<SystemTime>,
+    open_until: Option<Instant>,
 }
 
 impl Breaker {
@@ -49,7 +49,7 @@ impl Breaker {
         }
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(open_until) = state.open_until {
-            let now = SystemTime::now();
+            let now = Instant::now();
             if now < open_until {
                 return false;
             }
@@ -74,7 +74,7 @@ impl Breaker {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.consecutive = state.consecutive.saturating_add(1);
         if state.consecutive >= threshold {
-            state.open_until = Some(SystemTime::now() + cooldown);
+            state.open_until = Some(Instant::now() + cooldown);
         }
     }
 
