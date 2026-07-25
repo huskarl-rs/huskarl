@@ -43,8 +43,9 @@ let client_auth: ClientSecret = ClientSecret::new(client_secret);
 
 ## 3a. Build the validator from authorization server metadata
 
-Note: `builder_from_metadata` returns `None` if the server does not advertise
-an introspection endpoint.
+Note: `builder_from_metadata` errors if the server advertises no introspection
+endpoint. Since introspection is optional, add `.ok()` to treat an absent
+endpoint as "unsupported" rather than a failure.
 
 ```rust
 use huskarl_resource_server::{
@@ -65,8 +66,7 @@ let metadata = AuthorizationServerMetadata::fetch()
     .call()
     .await?;
 
-let validator = IntrospectionValidator::builder_from_metadata(&metadata)
-    .expect("authorization server does not support token introspection")
+let validator = IntrospectionValidator::builder_from_metadata(&metadata)?
     .client_id("my-resource-server")
     .aud("api://my-resource")
     .client_auth(ClientSecret::new(client_secret))
@@ -134,7 +134,7 @@ non-absolute URI fails every DPoP validation with an integration error.
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 # let client_secret = EnvVarSecret::new("CLIENT_SECRET", &StringEncoding)?;
 # let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-# let validator = IntrospectionValidator::builder_from_metadata(&metadata).expect("").client_id("my-resource-server").aud("api://my-resource").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
+# let validator = IntrospectionValidator::builder_from_metadata(&metadata)?.client_id("my-resource-server").aud("api://my-resource").client_auth(ClientSecret::new(client_secret)).http_client(http_client.clone()).build().await?;
 use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 
 let mut headers = http::HeaderMap::new();

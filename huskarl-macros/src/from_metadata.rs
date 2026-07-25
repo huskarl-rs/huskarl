@@ -20,9 +20,11 @@
 //! have the target type, so the conversion is required to succeed.
 //!
 //! Gating: if exactly one *required* field (not `Option<T>`) draws from an
-//! Option-typed extraction, the generated function returns `Option<Builder<…>>`
-//! and the body is wrapped in `.as_ref().map(|x| …)`. Multiple gates aren't
-//! supported.
+//! Option-typed extraction, the generated function returns
+//! `Result<Builder<…>, huskarl_core::Error>` and the body is wrapped in
+//! `.as_ref().map(|x| …).ok_or_else(…)`, the error naming the absent field.
+//! Multiple gates aren't supported. Only this branch names `::huskarl_core`;
+//! ungated invocations stay dependency-free.
 
 use darling::{FromMeta, ast::NestedMeta};
 use proc_macro2::{Span, TokenStream};
@@ -269,12 +271,14 @@ fn emit_impl(
             // so the closure sees the same `&Metadata` as in non-gate position.
             Extraction::With { closure, .. } => quote! { (#closure)(#metadata_var) },
         };
+        let missing_field = gate_field_name(gate);
         quote! {
             #outer_extract
                 .as_ref()
                 .map(|#gate_var| {
                     Self::#start_fn() #setter_chain
                 })
+                .ok_or_else(|| ::huskarl_core::server_metadata::missing_field(#missing_field))
         }
     } else {
         quote! { Self::#start_fn() #setter_chain }
@@ -282,8 +286,9 @@ fn emit_impl(
 
     let return_ty = if gate.is_some() {
         quote! {
-            ::core::option::Option<
-                #builder_ident<#builder_type_args #state_chain>
+            ::core::result::Result<
+                #builder_ident<#builder_type_args #state_chain>,
+                ::huskarl_core::Error,
             >
         }
     } else {
@@ -307,13 +312,30 @@ fn emit_impl(
     let state_alias_doc = format!(" State of [`{builder_ident}`] returned by [`{method_name}`].");
     let method_doc = format!(" Returns a [`{builder_ident}`] pre-populated from server metadata.");
 
+    // A gated method returns `Result`, which is itself `#[must_use]` — adding
+    // the attribute would trip `clippy::double_must_use` — and needs an
+    // `# Errors` section for `clippy::missing_errors_doc`.
+    let (must_use, errors_doc) = match gate {
+        Some(gate) => {
+            let field = gate_field_name(gate);
+            let doc = format!(
+                " # Errors\n\n Returns an error of kind [`ErrorKind::Config`] if the \
+                 metadata has no `{field}`.\n\n \
+                 [`ErrorKind::Config`]: ::huskarl_core::ErrorKind::Config"
+            );
+            (quote! {}, quote! { #[doc = ""] #[doc = #doc] })
+        }
+        None => (quote! { #[must_use] }, quote! {}),
+    };
+
     Ok(quote! {
         #[doc = #state_alias_doc]
         #method_vis type #alias_ident = #state_chain;
 
         #impl_head #struct_ident<#self_type_args> #where_clause {
             #[doc = #method_doc]
-            #[must_use]
+            #errors_doc
+            #must_use
             #method_vis fn #method_name(
                 #metadata_var: &#metadata_type,
             ) -> #return_ty {
@@ -321,6 +343,20 @@ fn emit_impl(
             }
         }
     })
+}
+
+/// The metadata field a gate draws from, as it appears in the discovery
+/// document: the dotted path with `?` markers stripped. A `with =` gate has no
+/// path to render, so it falls back to the target field's own name.
+fn gate_field_name(gate: &MetadataField) -> String {
+    match &gate.extraction {
+        Extraction::Path(segs) => segs
+            .iter()
+            .map(|s| s.name.to_string())
+            .collect::<Vec<_>>()
+            .join("."),
+        Extraction::With { .. } => gate.field_ident.to_string(),
+    }
 }
 
 fn find_fn_new_mut(item: &mut ItemImpl) -> Result<&mut syn::ImplItemFn> {

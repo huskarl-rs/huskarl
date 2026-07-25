@@ -105,8 +105,11 @@ async fn run_plan(plan_name: &str) -> Vec<String> {
             .call()
             .await
             .ok()
+            // `.ok()`: a module without a `userinfo_endpoint` still runs.
             .and_then(|m| {
-                UserInfoClient::builder_from_metadata(&m).map(|b| b.dpop(NoDPoP).build())
+                UserInfoClient::builder_from_metadata(&m)
+                    .ok()
+                    .map(|b| b.dpop(NoDPoP).build())
             });
         // Await the async builder outside the Option chain.
         let userinfo_client = match userinfo_client {

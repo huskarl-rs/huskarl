@@ -209,7 +209,7 @@ pub async fn run_auth_code_flow_with_listener<
         })?;
 
     let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
-        .ok_or("authorization server does not advertise an authorization endpoint")?
+        .map_err(|e| e.to_string())?
         .client_id(client_id)
         .http_client(http_client.clone())
         .client_auth(client_auth)

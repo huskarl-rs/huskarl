@@ -13,8 +13,8 @@ to obtain tokens.
 
 The registration endpoint (and its mTLS alias) is discovered from
 [`AuthorizationServerMetadata`](crate::core::server_metadata::AuthorizationServerMetadata)
-via `builder_from_metadata` — which returns `None` if the server does not
-advertise a registration endpoint — or supplied directly with
+via `builder_from_metadata` — which errors if the server advertises no
+registration endpoint — or supplied directly with
 [`ClientRegistration::builder`](crate::registration::ClientRegistration::builder).
 
 ## Handling the issued client secret
@@ -38,9 +38,8 @@ use huskarl::registration::{ClientMetadata, ClientRegistration};
 # async fn example(
 #     http_client: impl HttpClient + 'static,
 #     metadata: AuthorizationServerMetadata,
-# ) {
-let registration = ClientRegistration::builder_from_metadata(&metadata)
-    .expect("server does not support dynamic client registration")
+# ) -> Result<(), huskarl::core::Error> {
+let registration = ClientRegistration::builder_from_metadata(&metadata)?
     .build();
 
 let desired = ClientMetadata::builder()
@@ -56,6 +55,7 @@ println!("registered client_id: {}", info.client_id);
 if let Some(secret) = &info.client_secret {
     persist_to_secret_store(secret);
 }
+# Ok(())
 # }
 # fn persist_to_secret_store(_secret: &huskarl::core::secrets::SecretString) {}
 ```

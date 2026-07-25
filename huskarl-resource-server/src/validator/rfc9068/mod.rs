@@ -188,6 +188,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
     }
 }
 
+/// State of [`Rfc9068ValidatorBuilder`] returned by
+/// [`Rfc9068Validator::builder_from_metadata`]: `issuer` and `jwks_uri` set.
+pub type Rfc9068ValidatorBuilderFromMetadataState =
+    rfc9068_validator_builder::SetJwksUri<rfc9068_validator_builder::SetIssuer>;
+
 impl Rfc9068Validator<()> {
     /// Creates a builder for [`Rfc9068Validator`].
     ///
@@ -203,10 +208,7 @@ impl Rfc9068Validator<()> {
     /// Call `.with_claims::<MyClaims>()` on the builder to use a custom claims type.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> Rfc9068ValidatorBuilder<
-        (),
-        rfc9068_validator_builder::SetJwksUri<rfc9068_validator_builder::SetIssuer>,
-    > {
+    ) -> Rfc9068ValidatorBuilder<(), Rfc9068ValidatorBuilderFromMetadataState> {
         Self::builder()
             .issuer(metadata.issuer.clone())
             .maybe_jwks_uri(metadata.jwks_uri.clone())

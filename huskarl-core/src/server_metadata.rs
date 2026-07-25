@@ -13,6 +13,18 @@ use crate::{
     http::HttpClient,
 };
 
+/// Builds the [`ErrorKind::Config`] error returned by the
+/// `builder_from_metadata` constructors when [`AuthorizationServerMetadata`]
+/// lacks a field the target requires.
+///
+/// `field` names the absent field as it appears in the discovery document,
+/// dotted for a nested one (`mtls_endpoint_aliases.token_endpoint`).
+#[must_use]
+pub fn missing_field(field: &str) -> Error {
+    Error::from(ErrorKind::Config)
+        .with_context(format!("authorization server metadata has no `{field}`"))
+}
+
 /// mTLS endpoint aliases from AS discovery metadata (RFC 8705 §5.1).
 #[derive(Debug, Clone, Deserialize, bon::Builder)]
 #[non_exhaustive]

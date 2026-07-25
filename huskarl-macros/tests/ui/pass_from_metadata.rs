@@ -3,7 +3,7 @@
 //! - nested-through-Option path
 //! - `with =` escape hatch
 //! - gating field (required-on-target draws from Option-in-source) →
-//!   `Option<Builder<…>>` return type.
+//!   `Result<Builder<…>, huskarl_core::Error>` naming the absent field.
 
 #[derive(Debug)]
 struct Meta {
@@ -137,13 +137,19 @@ fn main() {
     assert_eq!(built.nested_value, None);
     assert_eq!(built.counter_doubled, None);
 
-    let opt = WithGate::builder_from_metadata(&meta);
-    assert!(opt.is_some());
-    let built = opt.unwrap().build();
+    let gated = WithGate::builder_from_metadata(&meta);
+    let built = gated.unwrap().build();
     assert_eq!(built.required_in_target, 42);
 
-    let opt = WithGate::builder_from_metadata(&meta_none);
-    assert!(opt.is_none());
+    // `.err()`, not `unwrap_err()`: bon builders aren't `Debug`.
+    let err = WithGate::builder_from_metadata(&meta_none)
+        .err()
+        .expect("required_in_target absent");
+    assert_eq!(err.kind(), huskarl_core::ErrorKind::Config);
+    assert_eq!(
+        err.to_string(),
+        "authorization server metadata has no `required_in_target`: invalid configuration"
+    );
 
     let built = WithWhere::<()>::builder_from_metadata(&meta).build();
     assert_eq!(built.name.as_deref(), Some("hello"));
