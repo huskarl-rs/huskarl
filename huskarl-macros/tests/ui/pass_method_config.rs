@@ -56,7 +56,9 @@ pub struct Client {
 impl Client {
     /// Public wrapper spelling out the generated state alias by name, exactly
     /// as the production crate does.
-    pub fn from_meta(meta: &Meta) -> Option<ClientBuilder<ClientFromMetaInternalState>> {
+    pub fn from_meta(
+        meta: &Meta,
+    ) -> Result<ClientBuilder<ClientFromMetaInternalState>, huskarl_core::Error> {
         Self::from_meta_internal(meta)
     }
 }
@@ -70,12 +72,15 @@ fn main() {
     assert_eq!(client.endpoint, Url("https://as.example.com".to_owned()));
     assert_eq!(client.issuer.as_deref(), Some("https://as.example.com"));
 
-    // Absent gate source → no builder.
+    // Absent gate source → an error naming the field, not a bare `None`.
     let meta = Meta {
         endpoint: None,
         issuer: String::new(),
     };
-    assert!(Client::from_meta(&meta).is_none());
+    // `.err()`, not `unwrap_err()`: bon builders aren't `Debug`.
+    let err = Client::from_meta(&meta).err().expect("endpoint absent");
+    assert_eq!(err.kind(), huskarl_core::ErrorKind::Config);
+    assert!(err.to_string().contains("endpoint"));
 
     // The fallible setter still works for manual construction.
     let client = Client::builder()

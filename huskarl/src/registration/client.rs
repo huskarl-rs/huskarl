@@ -23,7 +23,7 @@ use crate::core::{
 /// Construct it with [`builder`](Self::builder), or with `builder_from_metadata`
 /// to fill the endpoint from
 /// [`AuthorizationServerMetadata`](crate::core::server_metadata::AuthorizationServerMetadata)
-/// (which returns `None` when the server advertises no registration endpoint).
+/// (which errors when the server advertises no registration endpoint).
 ///
 /// If the server requires an initial access token (RFC 7591 §3.1), supply it via
 /// the builder; it is sent as a bearer token on the registration request.

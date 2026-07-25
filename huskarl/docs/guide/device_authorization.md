@@ -16,8 +16,9 @@ credentials instead.
 
 ## 2a. Set up the grant with authorization server metadata
 
-Note: `builder_from_metadata` returns `None` if the server does not advertise
-a device authorization endpoint.
+Note: `builder_from_metadata` errors if the server advertises no device
+authorization endpoint. Since the device flow is optional, add `.ok()` to treat
+an absent endpoint as "unsupported" rather than a failure.
 
 ```rust
 use huskarl::{
@@ -36,8 +37,7 @@ let metadata = AuthorizationServerMetadata::fetch()
     .await?;
 
 let grant: DeviceAuthorizationGrant =
-    DeviceAuthorizationGrant::builder_from_metadata(&metadata)
-        .expect("server does not support device authorization")
+    DeviceAuthorizationGrant::builder_from_metadata(&metadata)?
         .client_id("client_id")
         .http_client(client)
         .client_auth(NoAuth)

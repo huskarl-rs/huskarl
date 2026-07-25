@@ -15,8 +15,8 @@ this page assumes. Public clients (single-page apps, CLI tools) typically use
 
 ## 2a. Set up the grant with authorization server metadata
 
-Note: `builder_from_metadata` returns `None` if the server does not advertise
-an authorization endpoint.
+Note: `builder_from_metadata` errors if the server advertises no authorization
+endpoint.
 
 ```rust
 use huskarl::{
@@ -32,8 +32,7 @@ let metadata = AuthorizationServerMetadata::fetch()
     .call()
     .await?;
 
-let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
-    .expect("server does not support authorization code grant")
+let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(&metadata)?
     .client_id("client_id")
     .http_client(client)
     .client_auth(NoAuth)
@@ -177,8 +176,7 @@ use huskarl::{
 # ) -> Result<(), Box<dyn std::error::Error>> {
 # let client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 
-let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(metadata)
-    .expect("server does not support authorization code grant")
+let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder_from_metadata(metadata)?
     .client_id("client_id")
     .http_client(client)
     .client_auth(NoAuth)

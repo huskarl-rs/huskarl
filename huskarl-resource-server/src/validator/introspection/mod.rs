@@ -32,7 +32,7 @@ use crate::{
         jwk::JwksSource,
         jwt::{JtiUniquenessChecker, validator::ClaimCheck},
         platform::{Duration, MaybeSendSync},
-        server_metadata::AuthorizationServerMetadata,
+        server_metadata::{AuthorizationServerMetadata, missing_field},
     },
     introspection::TokenIntrospection,
     validator::{
@@ -241,6 +241,12 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
     }
 }
 
+/// State of [`IntrospectionValidatorBuilder`] returned by
+/// [`IntrospectionValidator::builder_from_metadata`]: `issuer`,
+/// `introspection_endpoint`, `jwks_uri`, and `token_endpoint` set.
+pub type IntrospectionValidatorBuilderFromMetadataState =
+    SetTokenEndpoint<SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>>;
+
 impl IntrospectionValidator<()> {
     /// Creates a builder for [`IntrospectionValidator`].
     ///
@@ -255,14 +261,18 @@ impl IntrospectionValidator<()> {
     /// Pre-fills `issuer`, `introspection_endpoint`, `jwks_uri`, and
     /// `token_endpoint` from the metadata. Call `.with_claims::<MyClaims>()` to
     /// use a custom claims type.
-    #[allow(clippy::type_complexity)]
+    ///
+    /// # Errors
+    ///
+    /// Returns an error of kind [`ErrorKind::Config`] if the metadata has no
+    /// `introspection_endpoint`.
+    ///
+    /// [`ErrorKind::Config`]: huskarl_core::ErrorKind::Config
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> Option<
-        IntrospectionValidatorBuilder<
-            (),
-            SetTokenEndpoint<SetJwksUri<SetIntrospectionEndpoint<SetIssuer>>>,
-        >,
+    ) -> Result<
+        IntrospectionValidatorBuilder<(), IntrospectionValidatorBuilderFromMetadataState>,
+        Error,
     > {
         metadata
             .introspection_endpoint
@@ -274,6 +284,7 @@ impl IntrospectionValidator<()> {
                     .maybe_jwks_uri(metadata.jwks_uri.clone())
                     .token_endpoint(metadata.token_endpoint.clone())
             })
+            .ok_or_else(|| missing_field("introspection_endpoint"))
     }
 }
 

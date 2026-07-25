@@ -35,7 +35,13 @@ mod util;
 ///
 /// If a *required* grant field (not `Option<T>`) draws from an `Option`-typed
 /// extraction, the generated function gates on it and returns
-/// `Option<Builder<…>>`. At most one gating field per struct is supported.
+/// `Result<Builder<…>, huskarl_core::Error>` of kind `ErrorKind::Config`, whose
+/// message names the absent field. At most one gating field per struct is
+/// supported.
+///
+/// Gated code names `::huskarl_core`, so a struct with a gating field must be in
+/// a crate depending on `huskarl-core` under its default name. Ungated
+/// invocations (like the example below) have no such requirement.
 ///
 /// The macro is generic over the metadata type — `metadata = …` names any
 /// type, and the generated `builder_from_metadata(&Meta)` pre-fills the

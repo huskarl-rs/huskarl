@@ -18,7 +18,7 @@ use crate::{
             JwsParseError, parse_compact_jws,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
         },
-        server_metadata::AuthorizationServerMetadata,
+        server_metadata::{AuthorizationServerMetadata, missing_field},
     },
     grant::core::OAuth2ExchangeGrant,
     token::{AccessToken, id_token::StandardOidcProfileClaims},
@@ -56,10 +56,13 @@ pub struct UserInfoClient {
     require_signed_response: bool,
 }
 
-/// State of [`UserInfoClientBuilder`] returned by [`UserInfoClient::from_grant`]:
-/// `userinfo_endpoint`, `mtls_userinfo_endpoint`, `dpop`, `jws_verifier`,
-/// `issuer`, and `client_id` set.
-pub type UserInfoClientFromGrantState = user_info_client_builder::SetClientId<
+/// State of [`UserInfoClientBuilder`] returned by
+/// [`UserInfoClient::builder_from_grant`]: `userinfo_endpoint`,
+/// `mtls_userinfo_endpoint`, `dpop`, `jws_verifier`, `issuer`, and `client_id`
+/// set.
+// Name mirrors the `{Struct}{Method}State` alias `#[from_metadata]` generates,
+// so the hand-written and generated constructors read alike.
+pub type UserInfoClientBuilderFromGrantState = user_info_client_builder::SetClientId<
     user_info_client_builder::SetIssuer<
         user_info_client_builder::SetJwsVerifier<
             user_info_client_builder::SetDpop<
@@ -224,7 +227,10 @@ impl UserInfoClient {
     /// Remaining fields — notably `require_signed_response`, which no grant
     /// records — are left to the caller.
     ///
-    /// Returns `None` if the metadata has no `userinfo_endpoint`.
+    /// # Errors
+    ///
+    /// Returns an error of kind [`ErrorKind::Config`] if the metadata has no
+    /// `userinfo_endpoint`.
     ///
     /// ```rust
     /// use huskarl::userinfo::UserInfoClient;
@@ -236,8 +242,7 @@ impl UserInfoClient {
     /// #     grant: AuthorizationCodeGrant,
     /// #     metadata: AuthorizationServerMetadata,
     /// # ) -> Result<(), Error> {
-    /// let client = UserInfoClient::from_grant(&grant, &metadata)
-    ///     .expect("provider publishes a userinfo_endpoint")
+    /// let client = UserInfoClient::builder_from_grant(&grant, &metadata)?
     ///     .require_signed_response(true)
     ///     .build()
     ///     .await?;
@@ -245,27 +250,27 @@ impl UserInfoClient {
     /// # Ok(())
     /// # }
     /// ```
-    #[must_use]
-    pub fn from_grant(
+    pub fn builder_from_grant(
         grant: &impl OAuth2ExchangeGrant,
         metadata: &AuthorizationServerMetadata,
-    ) -> Option<UserInfoClientBuilder<UserInfoClientFromGrantState>> {
-        let userinfo_endpoint = metadata.userinfo_endpoint.clone()?;
+    ) -> Result<UserInfoClientBuilder<UserInfoClientBuilderFromGrantState>, Error> {
+        let userinfo_endpoint = metadata
+            .userinfo_endpoint
+            .clone()
+            .ok_or_else(|| missing_field("userinfo_endpoint"))?;
 
-        Some(
-            Self::builder()
-                .userinfo_endpoint(userinfo_endpoint)
-                .maybe_mtls_userinfo_endpoint(
-                    metadata
-                        .mtls_endpoint_aliases
-                        .as_ref()
-                        .and_then(|a| a.userinfo_endpoint.clone()),
-                )
-                .dpop(grant.dpop().to_resource_server_dpop())
-                .maybe_jws_verifier(grant.jws_verifier())
-                .maybe_issuer(grant.issuer())
-                .maybe_client_id(grant.client_id()),
-        )
+        Ok(Self::builder()
+            .userinfo_endpoint(userinfo_endpoint)
+            .maybe_mtls_userinfo_endpoint(
+                metadata
+                    .mtls_endpoint_aliases
+                    .as_ref()
+                    .and_then(|a| a.userinfo_endpoint.clone()),
+            )
+            .dpop(grant.dpop().to_resource_server_dpop())
+            .maybe_jws_verifier(grant.jws_verifier())
+            .maybe_issuer(grant.issuer())
+            .maybe_client_id(grant.client_id()))
     }
     /// Call the `UserInfo` endpoint with the given access token.
     ///
@@ -1393,7 +1398,7 @@ mod tests {
         assert_eq!(result.sub, "user1");
     }
 
-    // --- from_grant validator derivation ---
+    // --- builder_from_grant validator derivation ---
 
     /// Factory yielding [`AcceptAllVerifier`], standing in for a JWKS-backed one.
     struct AcceptAllFactory;
@@ -1443,7 +1448,7 @@ mod tests {
     /// A grant's verifier reaches the built client, so a signed `UserInfo`
     /// response validates instead of hard-erroring.
     #[tokio::test]
-    async fn from_grant_derives_jwt_validator() {
+    async fn builder_from_grant_derives_jwt_validator() {
         let jwt = build_test_jwt(
             &serde_json::json!({"alg": "RS256"}),
             &serde_json::json!({
@@ -1455,7 +1460,7 @@ mod tests {
         );
 
         let grant = code_grant(true).await;
-        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+        let client = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
             .expect("metadata carries a userinfo_endpoint")
             .build()
             .await
@@ -1477,14 +1482,14 @@ mod tests {
     #[case::wrong_audience("https://op.example.com", "other-client")]
     #[case::wrong_issuer("https://evil.example.com", "my-client")]
     #[tokio::test]
-    async fn from_grant_validator_checks_claims(#[case] iss: &str, #[case] aud: &str) {
+    async fn builder_from_grant_validator_checks_claims(#[case] iss: &str, #[case] aud: &str) {
         let jwt = build_test_jwt(
             &serde_json::json!({"alg": "RS256"}),
             &serde_json::json!({"sub": "user1", "iss": iss, "aud": aud}),
         );
 
         let grant = code_grant(true).await;
-        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+        let client = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
             .unwrap()
             .build()
             .await
@@ -1505,14 +1510,14 @@ mod tests {
     /// A grant with no verifier cannot produce one: the JWT path stays closed
     /// and reports the missing configuration rather than skipping validation.
     #[tokio::test]
-    async fn from_grant_without_verifier_rejects_jwt_response() {
+    async fn builder_from_grant_without_verifier_rejects_jwt_response() {
         let jwt = build_test_jwt(
             &serde_json::json!({"alg": "RS256"}),
             &serde_json::json!({"sub": "user1", "iss": "https://op.example.com", "aud": "my-client"}),
         );
 
         let grant = code_grant(false).await;
-        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+        let client = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
             .unwrap()
             .build()
             .await
@@ -1530,11 +1535,11 @@ mod tests {
         ));
     }
 
-    /// `require_signed_response` carries through `from_grant`.
+    /// `require_signed_response` carries through `builder_from_grant`.
     #[tokio::test]
-    async fn from_grant_honors_require_signed_response() {
+    async fn builder_from_grant_honors_require_signed_response() {
         let grant = code_grant(true).await;
-        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+        let client = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
             .unwrap()
             .require_signed_response(true)
             .build()
@@ -1561,9 +1566,9 @@ mod tests {
     /// Requiring signed responses from a grant that has no verifier is the
     /// same misconfiguration the builder rejects.
     #[tokio::test]
-    async fn from_grant_require_signed_without_verifier_errors() {
+    async fn builder_from_grant_require_signed_without_verifier_errors() {
         let grant = code_grant(false).await;
-        let err = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+        let err = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
             .unwrap()
             .require_signed_response(true)
             .build()
@@ -1573,10 +1578,9 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::Config);
     }
 
-    /// No `userinfo_endpoint` in metadata is not an error — the provider
-    /// simply does not offer one.
+    /// Absent `userinfo_endpoint` errors, and the message names the field.
     #[tokio::test]
-    async fn from_grant_without_userinfo_endpoint_is_none() {
+    async fn builder_from_grant_without_userinfo_endpoint_names_the_field() {
         let metadata: AuthorizationServerMetadata = serde_json::from_value(serde_json::json!({
             "issuer": "https://op.example.com",
             "authorization_endpoint": "https://op.example.com/authorize",
@@ -1586,14 +1590,23 @@ mod tests {
         .unwrap();
 
         let grant = code_grant(true).await;
-        assert!(UserInfoClient::from_grant(&grant, &metadata).is_none());
+        // `.err()`, not `unwrap_err()`: bon builders aren't `Debug`.
+        let err = UserInfoClient::builder_from_grant(&grant, &metadata)
+            .err()
+            .expect("metadata carries no userinfo_endpoint");
+
+        assert_eq!(err.kind(), ErrorKind::Config);
+        assert_eq!(
+            err.to_string(),
+            "authorization server metadata has no `userinfo_endpoint`: invalid configuration"
+        );
     }
 
-    /// Plain JSON still works through `from_grant` when a validator is derived.
+    /// Plain JSON still works through `builder_from_grant` when a validator is derived.
     #[tokio::test]
-    async fn from_grant_still_accepts_json() {
+    async fn builder_from_grant_still_accepts_json() {
         let grant = code_grant(true).await;
-        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+        let client = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
             .unwrap()
             .build()
             .await

@@ -182,6 +182,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
     }
 }
 
+/// State of [`CustomValidatorBuilder`] returned by
+/// [`CustomValidator::builder_from_metadata`]: `authorization_server` and
+/// `jwks_uri` set.
+pub type CustomValidatorBuilderFromMetadataState = SetJwksUri<SetAuthorizationServer>;
+
 impl CustomValidator<()> {
     /// Creates a builder for [`CustomValidator`].
     ///
@@ -200,7 +205,7 @@ impl CustomValidator<()> {
     /// claims type.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
-    ) -> CustomValidatorBuilder<(), SetJwksUri<SetAuthorizationServer>> {
+    ) -> CustomValidatorBuilder<(), CustomValidatorBuilderFromMetadataState> {
         Self::builder()
             .authorization_server(metadata.issuer.clone())
             .maybe_jwks_uri(metadata.jwks_uri.clone())

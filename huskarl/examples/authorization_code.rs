@@ -42,7 +42,7 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .whatever_context("Failed to generate DPoP key")?;
 
     let grant = AuthorizationCodeGrant::builder_from_metadata(&metadata)
-        .whatever_context("Authorization server metadata didn't include authorization URL")?
+        .whatever_context("Authorization server does not support the authorization code grant")?
         .client_id(client_id)
         .http_client(http_client.clone())
         .client_auth(NoAuth)
