@@ -11,7 +11,7 @@ use crate::{
     authorizer::{dpop_resend_advised, extract_dpop_nonce},
     core::{
         EndpointUrl, Error, ErrorKind,
-        crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
+        crypto::verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
         dpop::{NoDPoP, ResourceServerDPoP},
         http::{HttpClient, Idempotency},
         jwt::{
@@ -50,13 +50,33 @@ pub struct UserInfoClient {
 
     /// Optional JWT validator for `application/jwt` `UserInfo` responses (OIDC Core §5.3.2).
     jwt_validator: Option<JwtValidator>,
+
+    /// Reject an unsigned `application/json` response (OIDC Registration §2,
+    /// `userinfo_signed_response_alg`).
+    require_signed_response: bool,
 }
+
+/// State of [`UserInfoClientBuilder`] returned by [`UserInfoClient::from_grant`]:
+/// `userinfo_endpoint`, `mtls_userinfo_endpoint`, `dpop`, `jws_verifier`,
+/// `issuer`, and `client_id` set.
+pub type UserInfoClientFromGrantState = user_info_client_builder::SetClientId<
+    user_info_client_builder::SetIssuer<
+        user_info_client_builder::SetJwsVerifier<
+            user_info_client_builder::SetDpop<
+                user_info_client_builder::SetMtlsUserinfoEndpoint<
+                    user_info_client_builder::SetUserinfoEndpoint,
+                >,
+            >,
+        >,
+    >,
+>;
 
 impl core::fmt::Debug for UserInfoClient {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("UserInfoClient")
             .field("userinfo_endpoint", &self.userinfo_endpoint)
             .field("mtls_userinfo_endpoint", &self.mtls_userinfo_endpoint)
+            .field("require_signed_response", &self.require_signed_response)
             .finish_non_exhaustive()
     }
 }
@@ -73,10 +93,10 @@ impl UserInfoClient {
     ///
     /// # Errors
     ///
-    /// Returns an error of kind [`ErrorKind::Config`] if JWT-response
-    /// validation is misconfigured (a `jws_verifier_factory` is supplied
-    /// without `issuer` or `client_id`), or propagates the failure if
-    /// building the JWS verifier from `jwks_uri` fails.
+    /// Returns an error of kind [`ErrorKind::Config`] if a verifier is
+    /// configured without `issuer` or `client_id`, or `require_signed_response`
+    /// is set without a verifier. Propagates the failure if building the JWS
+    /// verifier from `jwks_uri` fails.
     #[builder(on(String, into))]
     pub async fn new(
         /// The URL of the `UserInfo` endpoint.
@@ -104,7 +124,14 @@ impl UserInfoClient {
         /// When provided (along with `jwks_uri`), a [`JwtValidator`] is built that validates
         /// signed `UserInfo` responses. If the provider returns a JWT response without a
         /// validator configured, [`UserInfoError::JwtResponseNotSupported`] is returned.
+        ///
+        /// Ignored when `jws_verifier` is set.
         jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
+        /// An already-resolved JWS verifier for JWT response validation.
+        ///
+        /// Takes precedence over `jws_verifier_factory`, and needs no `jwks_uri`.
+        #[builder(with = |verifier: impl JwsVerifier + 'static| Arc::new(verifier) as Arc<dyn JwsVerifier>)]
+        jws_verifier: Option<Arc<dyn JwsVerifier>>,
         /// JWS verifier platform for JWT response validation.
         ///
         /// Required when `jws_verifier_factory` is provided. When the
@@ -116,32 +143,47 @@ impl UserInfoClient {
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
         /// The issuer URL, used for JWT `iss` claim validation (OIDC Core §5.3.2).
         ///
-        /// Required when JWT validation is configured (`jwks_uri` and
-        /// `jws_verifier_factory` are provided).
+        /// Required whenever a verifier is configured.
         #[from_metadata(path = "issuer")]
         issuer: Option<String>,
         /// The client ID, used for JWT `aud` claim validation (OIDC Core §5.3.2).
         ///
-        /// Required when JWT validation is configured (`jwks_uri` and
-        /// `jws_verifier_factory` are provided).
+        /// Required whenever a verifier is configured.
         client_id: Option<String>,
+        /// Reject a plain `application/json` response with
+        /// [`UserInfoError::UnsignedResponse`], for a client registered with
+        /// `userinfo_signed_response_alg` (OIDC Registration §2).
+        ///
+        /// Defaults to `false`, accepting either content type. Requires a
+        /// verifier.
+        #[builder(default)]
+        require_signed_response: bool,
     ) -> Result<Self, Error> {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
-        let jwt_validator = if let Some(jws_verifier_platform) = jws_verifier_platform
+        // The factory branch needs a `jwks_uri` to read keys from.
+        let verifier = if let Some(verifier) = jws_verifier {
+            Some(verifier)
+        } else if let Some(jws_verifier_platform) = jws_verifier_platform
             && let Some(factory) = jws_verifier_factory
             && jwks_uri.is_some()
         {
+            Some(
+                factory
+                    .build(jwks_uri.as_ref(), jws_verifier_platform)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        let jwt_validator = if let Some(verifier) = verifier {
             let issuer = issuer
                 .ok_or_else(|| Error::new(ErrorKind::Config, UserInfoBuildError::MissingIssuer))?;
             let client_id = client_id.ok_or_else(|| {
                 Error::new(ErrorKind::Config, UserInfoBuildError::MissingClientId)
             })?;
-
-            let verifier = factory
-                .build(jwks_uri.as_ref(), jws_verifier_platform)
-                .await?;
 
             Some(
                 JwtValidator::builder()
@@ -154,37 +196,76 @@ impl UserInfoClient {
             None
         };
 
+        // No verifier means no response of either content type is acceptable;
+        // fail at build time rather than at the first request.
+        if require_signed_response && jwt_validator.is_none() {
+            return Err(Error::new(
+                ErrorKind::Config,
+                UserInfoBuildError::RequireSignedWithoutValidator,
+            ));
+        }
+
         Ok(Self {
             userinfo_endpoint,
             mtls_userinfo_endpoint,
             dpop,
             jwt_validator,
+            require_signed_response,
         })
     }
 }
 
 impl UserInfoClient {
-    /// Creates a `UserInfo` client from an `OAuth2` grant and authorization server metadata.
+    /// Returns a [`UserInfoClientBuilder`] pre-populated from a grant and
+    /// authorization server metadata.
     ///
-    /// The `DPoP` configuration is derived from the grant, converted to its resource
-    /// server form — the same pattern used by [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache).
+    /// Sets `userinfo_endpoint` and `mtls_userinfo_endpoint` from the metadata,
+    /// and `dpop`, `jws_verifier`, `issuer`, and `client_id` from the grant.
+    /// Remaining fields — notably `require_signed_response`, which no grant
+    /// records — are left to the caller.
     ///
-    /// Returns `None` if the metadata does not include a `userinfo_endpoint`.
+    /// Returns `None` if the metadata has no `userinfo_endpoint`.
+    ///
+    /// ```rust
+    /// use huskarl::userinfo::UserInfoClient;
+    /// # use huskarl::{
+    /// #     core::{server_metadata::AuthorizationServerMetadata, Error},
+    /// #     grant::authorization_code::AuthorizationCodeGrant,
+    /// # };
+    /// # async fn example(
+    /// #     grant: AuthorizationCodeGrant,
+    /// #     metadata: AuthorizationServerMetadata,
+    /// # ) -> Result<(), Error> {
+    /// let client = UserInfoClient::from_grant(&grant, &metadata)
+    ///     .expect("provider publishes a userinfo_endpoint")
+    ///     .require_signed_response(true)
+    ///     .build()
+    ///     .await?;
+    /// # let _ = client;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
     pub fn from_grant(
         grant: &impl OAuth2ExchangeGrant,
         metadata: &AuthorizationServerMetadata,
-    ) -> Option<Self> {
+    ) -> Option<UserInfoClientBuilder<UserInfoClientFromGrantState>> {
         let userinfo_endpoint = metadata.userinfo_endpoint.clone()?;
 
-        Some(Self {
-            userinfo_endpoint,
-            mtls_userinfo_endpoint: metadata
-                .mtls_endpoint_aliases
-                .as_ref()
-                .and_then(|a| a.userinfo_endpoint.clone()),
-            dpop: grant.dpop().to_resource_server_dpop(),
-            jwt_validator: None,
-        })
+        Some(
+            Self::builder()
+                .userinfo_endpoint(userinfo_endpoint)
+                .maybe_mtls_userinfo_endpoint(
+                    metadata
+                        .mtls_endpoint_aliases
+                        .as_ref()
+                        .and_then(|a| a.userinfo_endpoint.clone()),
+                )
+                .dpop(grant.dpop().to_resource_server_dpop())
+                .maybe_jws_verifier(grant.jws_verifier())
+                .maybe_issuer(grant.issuer())
+                .maybe_client_id(grant.client_id()),
+        )
     }
     /// Call the `UserInfo` endpoint with the given access token.
     ///
@@ -291,6 +372,12 @@ impl UserInfoClient {
                 }));
             }
 
+            // Falling back to the unverified path on the server's say-so is a
+            // signature-stripping downgrade.
+            if self.require_signed_response && !is_jwt_response {
+                return Err(userinfo_error(UserInfoError::UnsignedResponse));
+            }
+
             let user_info: UserInfo = if is_jwt_response {
                 self.decode_jwt_response(&body).await?
             } else {
@@ -381,6 +468,13 @@ pub enum UserInfoBuildError {
     /// `client_id` is required when JWT validation is configured.
     #[snafu(display("client_id is required when JWT validation is configured for UserInfo"))]
     MissingClientId,
+    /// `require_signed_response` was set without JWT validation configured.
+    #[snafu(display(
+        "require_signed_response is set but no JWT validator is configured for UserInfo; \
+         supply `jwks_uri` and `jws_verifier_factory`, or unset the requirement — no \
+         response of either content type could be accepted"
+    ))]
+    RequireSignedWithoutValidator,
 }
 
 /// Source vocabulary for `UserInfo` request failures.
@@ -431,6 +525,13 @@ pub enum UserInfoError {
     /// `application/jwt`.
     #[snafu(display("UserInfo response is missing the Content-Type header"))]
     MissingContentType,
+    /// The `UserInfo` endpoint returned `application/json` but the client was
+    /// built with `require_signed_response`.
+    #[snafu(display(
+        "UserInfo endpoint returned an unsigned application/json response but \
+         require_signed_response is set"
+    ))]
+    UnsignedResponse,
     /// The `UserInfo` endpoint returned an unexpected Content-Type.
     ///
     /// Per OIDC Core §5.3.2, the content-type MUST be `application/json` for
@@ -558,6 +659,7 @@ mod tests {
             mtls_userinfo_endpoint: None,
             dpop: Arc::new(NoDPoP),
             jwt_validator: None,
+            require_signed_response: false,
         }
     }
 
@@ -1035,6 +1137,7 @@ mod tests {
             mtls_userinfo_endpoint: None,
             dpop: Arc::new(NoDPoP),
             jwt_validator: Some(validator),
+            require_signed_response: false,
         }
     }
 
@@ -1119,6 +1222,395 @@ mod tests {
             userinfo_source(&err),
             UserInfoError::MalformedJwtResponseBody
         ));
+    }
+
+    // --- require_signed_response ---
+
+    /// A client requiring signed responses rejects plain JSON rather than
+    /// taking its claims unverified.
+    #[tokio::test]
+    async fn require_signed_response_rejects_json() {
+        let mut client = jwt_client();
+        client.require_signed_response = true;
+
+        let http = MockHttpClient::new(HttpResponse {
+            status: StatusCode::OK,
+            headers: json_headers(),
+            body: Bytes::from_static(b"{\"sub\":\"user1\",\"email\":\"jane@example.com\"}"),
+        });
+
+        let err = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .expect_err("an unsigned response must not satisfy a signed-response client");
+
+        assert_eq!(err.kind(), ErrorKind::Protocol);
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::UnsignedResponse
+        ));
+    }
+
+    /// The rejection happens before deserialization, so a well-formed unsigned
+    /// body that would otherwise pass every later check still fails.
+    #[tokio::test]
+    async fn require_signed_response_rejects_json_before_sub_check() {
+        let mut client = jwt_client();
+        client.require_signed_response = true;
+
+        let http = MockHttpClient::new(HttpResponse {
+            status: StatusCode::OK,
+            headers: json_headers(),
+            body: Bytes::from_static(b"not json at all"),
+        });
+
+        let err = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(userinfo_source(&err), UserInfoError::UnsignedResponse),
+            "content type decides before the body is parsed, got {err:?}"
+        );
+    }
+
+    /// The requirement does not disturb the signed path.
+    #[tokio::test]
+    async fn require_signed_response_accepts_jwt() {
+        let jwt = build_test_jwt(
+            &serde_json::json!({"alg": "RS256"}),
+            &serde_json::json!({
+                "sub": "user1",
+                "iss": "https://op.example.com",
+                "aud": "my-client"
+            }),
+        );
+
+        let mut client = jwt_client();
+        client.require_signed_response = true;
+
+        let http = MockHttpClient::new(jwt_response(&jwt));
+        let result = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap();
+
+        assert_eq!(result.sub, "user1");
+    }
+
+    /// A non-JSON, non-JWT content type still reports the more specific error.
+    #[tokio::test]
+    async fn require_signed_response_keeps_content_type_error() {
+        let mut client = jwt_client();
+        client.require_signed_response = true;
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/html"),
+        );
+        let http = MockHttpClient::new(HttpResponse {
+            status: StatusCode::OK,
+            headers,
+            body: Bytes::from_static(b"<html/>"),
+        });
+
+        let err = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::UnexpectedContentType { .. }
+        ));
+    }
+
+    /// Requiring signed responses with nothing to verify them would reject
+    /// every response, so the builder refuses it.
+    #[tokio::test]
+    async fn require_signed_response_without_validator_is_a_build_error() {
+        let err = UserInfoClient::builder()
+            .userinfo_endpoint("https://op.example.com/userinfo".parse().unwrap())
+            .require_signed_response(true)
+            .build()
+            .await
+            .expect_err("no validator means no acceptable response");
+
+        assert_eq!(err.kind(), ErrorKind::Config);
+        assert!(
+            std::error::Error::source(&err)
+                .and_then(|s| s.downcast_ref::<UserInfoBuildError>())
+                .is_some_and(|e| matches!(e, UserInfoBuildError::RequireSignedWithoutValidator)),
+            "got {err:?}"
+        );
+    }
+
+    /// Factory that always fails, to prove `jws_verifier` short-circuits it.
+    struct ExplodingFactory;
+
+    impl JwsVerifierFactory for ExplodingFactory {
+        fn build(
+            &self,
+            _jwks_uri: Option<&EndpointUrl>,
+            _platform: Arc<dyn JwsVerifierPlatform>,
+        ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
+            Box::pin(async { Err(Error::new(ErrorKind::Config, "factory must not be called")) })
+        }
+    }
+
+    /// A supplied `jws_verifier` needs no `jwks_uri` and takes precedence over
+    /// a factory.
+    #[tokio::test]
+    async fn jws_verifier_takes_precedence_over_factory() {
+        let jwt = build_test_jwt(
+            &serde_json::json!({"alg": "RS256"}),
+            &serde_json::json!({
+                "sub": "user1",
+                "iss": "https://op.example.com",
+                "aud": "my-client"
+            }),
+        );
+
+        let client = UserInfoClient::builder()
+            .userinfo_endpoint("https://op.example.com/userinfo".parse().unwrap())
+            .jws_verifier(AcceptAllVerifier)
+            .jws_verifier_factory(Arc::new(ExplodingFactory))
+            .issuer("https://op.example.com")
+            .client_id("my-client")
+            .require_signed_response(true)
+            .build()
+            .await
+            .expect("the supplied verifier is used, so the factory never runs");
+
+        let http = MockHttpClient::new(jwt_response(&jwt));
+        let result = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap();
+
+        assert_eq!(result.sub, "user1");
+    }
+
+    // --- from_grant validator derivation ---
+
+    /// Factory yielding [`AcceptAllVerifier`], standing in for a JWKS-backed one.
+    struct AcceptAllFactory;
+
+    impl JwsVerifierFactory for AcceptAllFactory {
+        fn build(
+            &self,
+            _jwks_uri: Option<&EndpointUrl>,
+            _platform: Arc<dyn JwsVerifierPlatform>,
+        ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
+            Box::pin(async { Ok(Arc::new(AcceptAllVerifier) as _) })
+        }
+    }
+
+    /// Builds an authorization code grant, optionally carrying a JWS verifier.
+    ///
+    /// The HTTP client is never exercised — these tests build a `UserInfo`
+    /// client from the grant rather than running a token exchange.
+    async fn code_grant(
+        with_verifier: bool,
+    ) -> crate::grant::authorization_code::AuthorizationCodeGrant {
+        crate::grant::authorization_code::AuthorizationCodeGrant::builder()
+            .client_id("my-client")
+            .issuer("https://op.example.com")
+            .http_client(MockHttpClient::sequence(vec![]))
+            .client_auth(crate::core::client_auth::NoAuth)
+            .token_endpoint("https://op.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://op.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .maybe_jws_verifier_factory(with_verifier.then_some(AcceptAllFactory))
+            .build()
+            .await
+            .unwrap()
+    }
+
+    fn userinfo_metadata() -> AuthorizationServerMetadata {
+        serde_json::from_value(serde_json::json!({
+            "issuer": "https://op.example.com",
+            "authorization_endpoint": "https://op.example.com/authorize",
+            "token_endpoint": "https://op.example.com/token",
+            "userinfo_endpoint": "https://op.example.com/userinfo",
+            "response_types_supported": ["code"],
+        }))
+        .unwrap()
+    }
+
+    /// A grant's verifier reaches the built client, so a signed `UserInfo`
+    /// response validates instead of hard-erroring.
+    #[tokio::test]
+    async fn from_grant_derives_jwt_validator() {
+        let jwt = build_test_jwt(
+            &serde_json::json!({"alg": "RS256"}),
+            &serde_json::json!({
+                "sub": "user1",
+                "iss": "https://op.example.com",
+                "aud": "my-client",
+                "email": "jane@example.com"
+            }),
+        );
+
+        let grant = code_grant(true).await;
+        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+            .expect("metadata carries a userinfo_endpoint")
+            .build()
+            .await
+            .unwrap();
+
+        let http = MockHttpClient::new(jwt_response(&jwt));
+        let result = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap();
+
+        assert_eq!(result.sub, "user1");
+        assert_eq!(result.profile.email.as_deref(), Some("jane@example.com"));
+    }
+
+    /// The derived validator checks `aud` and `iss`, not just the signature —
+    /// otherwise it would accept any JWS the server's JWKS covers.
+    #[rstest::rstest]
+    #[case::wrong_audience("https://op.example.com", "other-client")]
+    #[case::wrong_issuer("https://evil.example.com", "my-client")]
+    #[tokio::test]
+    async fn from_grant_validator_checks_claims(#[case] iss: &str, #[case] aud: &str) {
+        let jwt = build_test_jwt(
+            &serde_json::json!({"alg": "RS256"}),
+            &serde_json::json!({"sub": "user1", "iss": iss, "aud": aud}),
+        );
+
+        let grant = code_grant(true).await;
+        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+
+        let http = MockHttpClient::new(jwt_response(&jwt));
+        let err = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .expect_err("a mismatched iss or aud must be rejected");
+
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::JwtValidation { .. }
+        ));
+    }
+
+    /// A grant with no verifier cannot produce one: the JWT path stays closed
+    /// and reports the missing configuration rather than skipping validation.
+    #[tokio::test]
+    async fn from_grant_without_verifier_rejects_jwt_response() {
+        let jwt = build_test_jwt(
+            &serde_json::json!({"alg": "RS256"}),
+            &serde_json::json!({"sub": "user1", "iss": "https://op.example.com", "aud": "my-client"}),
+        );
+
+        let grant = code_grant(false).await;
+        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+
+        let http = MockHttpClient::new(jwt_response(&jwt));
+        let err = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .expect_err("no verifier means no validation is possible");
+
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::JwtResponseNotSupported
+        ));
+    }
+
+    /// `require_signed_response` carries through `from_grant`.
+    #[tokio::test]
+    async fn from_grant_honors_require_signed_response() {
+        let grant = code_grant(true).await;
+        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+            .unwrap()
+            .require_signed_response(true)
+            .build()
+            .await
+            .unwrap();
+
+        let http = MockHttpClient::new(HttpResponse {
+            status: StatusCode::OK,
+            headers: json_headers(),
+            body: Bytes::from_static(b"{\"sub\":\"user1\"}"),
+        });
+
+        let err = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            userinfo_source(&err),
+            UserInfoError::UnsignedResponse
+        ));
+    }
+
+    /// Requiring signed responses from a grant that has no verifier is the
+    /// same misconfiguration the builder rejects.
+    #[tokio::test]
+    async fn from_grant_require_signed_without_verifier_errors() {
+        let grant = code_grant(false).await;
+        let err = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+            .unwrap()
+            .require_signed_response(true)
+            .build()
+            .await
+            .expect_err("no derivable validator means no acceptable response");
+
+        assert_eq!(err.kind(), ErrorKind::Config);
+    }
+
+    /// No `userinfo_endpoint` in metadata is not an error — the provider
+    /// simply does not offer one.
+    #[tokio::test]
+    async fn from_grant_without_userinfo_endpoint_is_none() {
+        let metadata: AuthorizationServerMetadata = serde_json::from_value(serde_json::json!({
+            "issuer": "https://op.example.com",
+            "authorization_endpoint": "https://op.example.com/authorize",
+            "token_endpoint": "https://op.example.com/token",
+            "response_types_supported": ["code"],
+        }))
+        .unwrap();
+
+        let grant = code_grant(true).await;
+        assert!(UserInfoClient::from_grant(&grant, &metadata).is_none());
+    }
+
+    /// Plain JSON still works through `from_grant` when a validator is derived.
+    #[tokio::test]
+    async fn from_grant_still_accepts_json() {
+        let grant = code_grant(true).await;
+        let client = UserInfoClient::from_grant(&grant, &userinfo_metadata())
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+
+        let http = MockHttpClient::new(HttpResponse {
+            status: StatusCode::OK,
+            headers: json_headers(),
+            body: Bytes::from_static(b"{\"sub\":\"user1\"}"),
+        });
+
+        let result = client
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap();
+
+        assert_eq!(result.sub, "user1");
     }
 
     #[tokio::test]

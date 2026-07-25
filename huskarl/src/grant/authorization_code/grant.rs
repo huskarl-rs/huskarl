@@ -529,6 +529,10 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
         self.dpop.as_ref()
     }
 
+    fn jws_verifier(&self) -> Option<Arc<dyn JwsVerifier>> {
+        self.jws_verifier.clone()
+    }
+
     fn http_client(&self) -> &dyn HttpClient {
         self.http_client.as_ref()
     }

@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use serde::Serialize;
 
 use crate::{
     core::{
         EndpointUrl, Error, ErrorKind,
         client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
+        crypto::verifier::JwsVerifier,
         dpop::AuthorizationServerDPoP,
         http::HttpClient,
         platform::{MaybeSend, MaybeSendSync},
@@ -84,6 +87,15 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
 
     /// Returns the configured `DPoP` implementation (if any).
     fn dpop(&self) -> &dyn AuthorizationServerDPoP;
+
+    /// Returns the grant's resolved JWS verifier, if it has one.
+    ///
+    /// Keyed on the authorization server's JWKS, so it covers every JWS that
+    /// server signs: ID tokens, JARM responses, and signed `UserInfo`
+    /// responses. Defaults to `None`.
+    fn jws_verifier(&self) -> Option<Arc<dyn JwsVerifier>> {
+        None
+    }
 
     /// Returns the HTTP client used for token requests.
     fn http_client(&self) -> &dyn HttpClient;
