@@ -112,3 +112,117 @@ pub mod string_or_vec {
         deserializer.deserialize_any(StringOrVec)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+    use serde::{Deserialize, Serialize};
+    use serde_json::json;
+
+    /// Mirrors the `aud` attributes on
+    /// [`JwtClaims`](crate::jwt::JwtClaims) — `default` for an absent claim,
+    /// `skip_serializing_if` to omit the empty case.
+    #[derive(Debug, PartialEq, Serialize, Deserialize)]
+    struct WithAud {
+        #[serde(
+            default,
+            skip_serializing_if = "Vec::is_empty",
+            with = "super::string_or_vec"
+        )]
+        aud: Vec<String>,
+    }
+
+    /// Without `skip_serializing_if`, to pin the empty → `null` case.
+    #[derive(Debug, Serialize)]
+    struct AlwaysAud {
+        #[serde(with = "super::string_or_vec")]
+        aud: Vec<String>,
+    }
+
+    // --- accepted shapes ---
+
+    // Audiences are compared verbatim, so nothing here may be trimmed,
+    // deduplicated, or reordered.
+    #[rstest]
+    #[case::empty_array(json!({"aud": []}), vec![])]
+    #[case::empty_string_is_an_audience(json!({"aud": ""}), vec![""])]
+    #[case::empty_string_in_array(json!({"aud": ["a", ""]}), vec!["a", ""])]
+    #[case::duplicates_retained(json!({"aud": ["a", "a"]}), vec!["a", "a"])]
+    #[case::order_retained(json!({"aud": ["b", "a"]}), vec!["b", "a"])]
+    #[case::surrounding_space_retained(json!({"aud": " a "}), vec![" a "])]
+    #[case::interior_nul_retained(json!({"aud": "a\0b"}), vec!["a\0b"])]
+    #[case::non_ascii_retained(json!({"aud": "ｈｔｔｐｓ://例.example"}), vec!["ｈｔｔｐｓ://例.example"])]
+    fn deserialize_accepts(#[case] input: serde_json::Value, #[case] expected: Vec<&str>) {
+        let parsed: WithAud = serde_json::from_value(input).unwrap();
+        assert_eq!(parsed.aud, expected);
+    }
+
+    #[test]
+    fn deserialize_accepts_a_large_array() {
+        let audiences: Vec<String> = (0..10_000)
+            .map(|n| format!("https://rs{n}.example"))
+            .collect();
+        let parsed: WithAud = serde_json::from_value(json!({"aud": audiences})).unwrap();
+        assert_eq!(parsed.aud.len(), 10_000);
+        assert_eq!(parsed.aud[9_999], "https://rs9999.example");
+    }
+
+    // --- rejected shapes ---
+
+    // Anything that is not a string or an array of strings must fail the parse
+    // outright rather than coerce to a stringified audience that could then match
+    // a configured one.
+    #[rstest]
+    #[case::number(json!({"aud": 1}))]
+    #[case::float(json!({"aud": 1.5}))]
+    #[case::bool(json!({"aud": true}))]
+    #[case::object(json!({"aud": {"aud": "a"}}))]
+    #[case::number_in_array(json!({"aud": ["a", 1]}))]
+    #[case::bool_in_array(json!({"aud": ["a", true]}))]
+    #[case::null_in_array(json!({"aud": ["a", null]}))]
+    #[case::nested_array(json!({"aud": [["a"]]}))]
+    #[case::object_in_array(json!({"aud": [{"a": 1}]}))]
+    fn deserialize_rejects(#[case] input: serde_json::Value) {
+        serde_json::from_value::<WithAud>(input).unwrap_err();
+    }
+
+    #[test]
+    fn deserialize_error_names_the_expected_shape() {
+        let err = serde_json::from_value::<WithAud>(json!({"aud": 1})).unwrap_err();
+        assert!(
+            err.to_string().contains("a string or array of strings"),
+            "unexpected message: {err}"
+        );
+    }
+
+    // --- serialization ---
+
+    #[rstest]
+    #[case::empty_is_omitted(vec![], json!({}))]
+    #[case::one_is_bare(vec!["a"], json!({"aud": "a"}))]
+    #[case::many_is_an_array(vec!["a", "b"], json!({"aud": ["a", "b"]}))]
+    fn serialize_shape(#[case] aud: Vec<&str>, #[case] expected: serde_json::Value) {
+        let aud = aud.into_iter().map(Into::into).collect();
+        assert_eq!(serde_json::to_value(WithAud { aud }).unwrap(), expected);
+    }
+
+    // Only `skip_serializing_if` suppresses the empty case; unguarded it emits
+    // `null`, which this adapter reads back as empty.
+    #[test]
+    fn serialize_empty_without_skip_emits_null() {
+        let v = serde_json::to_value(AlwaysAud { aud: vec![] }).unwrap();
+        assert_eq!(v, json!({"aud": null}));
+        let parsed: WithAud = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed.aud, Vec::<String>::new());
+    }
+
+    // A round trip preserves the audience list but not the wire shape: a
+    // one-element array re-serializes as a bare string. Signatures cover the
+    // encoded form, so a re-serialized JWT is not byte-identical to the original.
+    #[test]
+    fn single_element_array_reserializes_as_a_bare_string() {
+        let parsed: WithAud = serde_json::from_value(json!({"aud": ["a"]})).unwrap();
+        assert_eq!(parsed.aud, vec!["a"]);
+        assert_eq!(serde_json::to_value(parsed).unwrap(), json!({"aud": "a"}));
+    }
+}
