@@ -10,7 +10,7 @@
 //! full request loop, including handling `401`s and servers that don't emit a
 //! spec-correct `invalid_token` challenge.
 
-mod challenge;
+pub(crate) mod challenge;
 
 use std::sync::Arc;
 

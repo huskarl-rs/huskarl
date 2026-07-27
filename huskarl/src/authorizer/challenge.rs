@@ -2,15 +2,18 @@
 
 use http::{HeaderMap, header::WWW_AUTHENTICATE};
 
+use crate::core::OAuthErrorCode;
+
 /// A parsed `WWW-Authenticate` challenge (RFC 7235 §2.1).
 ///
-/// Obtained from [`parse_challenges`]. Scheme and parameter names are case-insensitive.
+/// Obtain challenges with [`parse_challenges`]. Use [`is_scheme`](Self::is_scheme)
+/// and [`param`](Self::param) for case-insensitive comparisons.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Challenge {
     /// The authentication scheme, e.g. `Bearer` or `DPoP`.
     pub scheme: String,
-    /// What follows the scheme: auth parameters or a `token68`.
+    /// The scheme's mutually exclusive auth parameters or `token68` value.
     pub payload: ChallengePayload,
 }
 
@@ -18,9 +21,10 @@ pub struct Challenge {
 /// `token68 / #auth-param` alternation, which is mutually exclusive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChallengePayload {
-    /// Auth parameters in order of appearance, with quoted-string values
-    /// unquoted and unescaped. A bare scheme (`Negotiate`) parses as an
-    /// empty list.
+    /// Auth parameters in wire order.
+    ///
+    /// Quoted strings are unquoted and quoted pairs are unescaped. A bare
+    /// scheme is represented by an empty list. Duplicate names are preserved.
     Params(Vec<(String, String)>),
     /// The `token68` payload for schemes that use one (e.g. `Basic`,
     /// `Negotiate`).
@@ -35,8 +39,7 @@ impl Challenge {
         }
     }
 
-    /// Appends an auth parameter. Parser-internal: only called while the
-    /// payload is still the `Params` variant.
+    // Called only while the parser is building the `Params` variant.
     fn push_param(&mut self, name: String, value: String) {
         debug_assert!(matches!(self.payload, ChallengePayload::Params(_)));
         if let ChallengePayload::Params(params) = &mut self.payload {
@@ -44,13 +47,13 @@ impl Challenge {
         }
     }
 
-    /// Returns true if the challenge's scheme matches, case-insensitively.
+    /// Returns whether the authentication scheme matches case-insensitively.
     #[must_use]
     pub fn is_scheme(&self, scheme: &str) -> bool {
         self.scheme.eq_ignore_ascii_case(scheme)
     }
 
-    /// The auth parameters, or an empty slice for a `token68` challenge.
+    /// Returns the auth parameters, or an empty slice for a `token68` challenge.
     #[must_use]
     pub fn params(&self) -> &[(String, String)] {
         match &self.payload {
@@ -59,7 +62,7 @@ impl Challenge {
         }
     }
 
-    /// The `token68` payload, if this challenge carries one.
+    /// Returns the `token68` payload, if present.
     #[must_use]
     pub fn token68(&self) -> Option<&str> {
         match &self.payload {
@@ -68,8 +71,7 @@ impl Challenge {
         }
     }
 
-    /// Returns the first parameter with the given name, compared
-    /// case-insensitively.
+    /// Returns the first parameter whose name matches case-insensitively.
     #[must_use]
     pub fn param(&self, name: &str) -> Option<&str> {
         self.params()
@@ -78,25 +80,20 @@ impl Challenge {
             .map(|(_, v)| v.as_str())
     }
 
-    /// The RFC 6749-style `error` code carried by this challenge, if any
-    /// (RFC 6750 §3 for `Bearer`, RFC 9449 §7.1 for `DPoP`).
+    /// Returns the challenge's typed `error` code, if present.
+    ///
+    /// Unknown extension codes are preserved as [`OAuthErrorCode::Other`]. Use
+    /// [`param`](Self::param) to read the original wire value.
     #[must_use]
-    pub fn error(&self) -> Option<&str> {
-        self.param("error")
+    pub fn error(&self) -> Option<OAuthErrorCode> {
+        self.param("error").map(OAuthErrorCode::from)
     }
 }
 
-/// Parses every challenge across all `WWW-Authenticate` values in a
-/// response's headers — the same map handed to
-/// [`HttpAuthorizer::process_response`](super::HttpAuthorizer::process_response).
+/// Parses all challenges from every `WWW-Authenticate` header value.
 ///
-/// Use this to inspect what a resource server objected to when deciding how
-/// to handle a `401` — e.g. a `Bearer`/`DPoP` challenge with
-/// `error="insufficient_scope"` calls for re-authorization with a broader
-/// scope, which re-sending cannot fix.
-///
-/// Malformed input never fails the call: unparseable segments are skipped
-/// and the well-formed challenges are returned.
+/// Invalid header values and malformed segments are skipped where possible, so
+/// an empty result does not prove that the server sent no challenge.
 #[must_use]
 pub fn parse_challenges(headers: &HeaderMap) -> Vec<Challenge> {
     let mut out = Vec::new();
@@ -110,11 +107,31 @@ pub fn parse_challenges(headers: &HeaderMap) -> Vec<Challenge> {
     out
 }
 
+pub(crate) trait ChallengeCode {
+    fn matches(&self, actual: &OAuthErrorCode) -> bool;
+}
+
+impl ChallengeCode for str {
+    fn matches(&self, actual: &OAuthErrorCode) -> bool {
+        actual.as_str() == self
+    }
+}
+
+impl ChallengeCode for OAuthErrorCode {
+    fn matches(&self, actual: &OAuthErrorCode) -> bool {
+        actual == self
+    }
+}
+
 /// Returns true if any challenge carries the given `error` code.
-pub(crate) fn challenge_has_error(headers: &HeaderMap, code: &str) -> bool {
+pub(crate) fn challenge_has_error<C: ChallengeCode + ?Sized>(
+    headers: &HeaderMap,
+    code: &C,
+) -> bool {
     parse_challenges(headers)
         .iter()
-        .any(|challenge| challenge.error() == Some(code))
+        .filter_map(Challenge::error)
+        .any(|actual| code.matches(&actual))
 }
 
 // ---------------------------------------------------------------------------
@@ -473,13 +490,46 @@ mod tests {
         let challenges = parse_challenges(&headers);
         assert_eq!(challenges.len(), 2);
         assert!(challenges[0].is_scheme("bearer"));
-        assert_eq!(challenges[0].error(), Some("invalid_token"));
+        assert_eq!(challenges[0].error(), Some(OAuthErrorCode::InvalidToken));
         assert_eq!(
             challenges[0].param("ERROR_DESCRIPTION"),
             Some("The access token expired")
         );
         assert!(challenges[1].is_scheme("DPoP"));
-        assert_eq!(challenges[1].error(), Some("use_dpop_nonce"));
+        assert_eq!(challenges[1].error(), Some(OAuthErrorCode::UseDPoPNonce));
+    }
+
+    // Standard resource-server error codes should parse to typed variants.
+    #[test]
+    fn every_resource_server_code_arrives_typed() {
+        for (wire, expected) in [
+            ("invalid_request", OAuthErrorCode::InvalidRequest),
+            ("invalid_token", OAuthErrorCode::InvalidToken),
+            ("insufficient_scope", OAuthErrorCode::InsufficientScope),
+            ("invalid_dpop_proof", OAuthErrorCode::InvalidDPoPProof),
+            ("use_dpop_nonce", OAuthErrorCode::UseDPoPNonce),
+            (
+                "insufficient_user_authentication",
+                OAuthErrorCode::InsufficientUserAuthentication,
+            ),
+        ] {
+            let headers = headers(&[&format!(r#"Bearer error="{wire}""#)]);
+            let challenges = parse_challenges(&headers);
+            assert_eq!(challenges[0].error(), Some(expected), "{wire}");
+            // The original wire spelling remains available.
+            assert_eq!(challenges[0].param("error"), Some(wire), "{wire}");
+        }
+    }
+
+    // Preserve extension codes that are not yet in the registry.
+    #[test]
+    fn an_unknown_challenge_code_is_preserved_verbatim() {
+        let headers = headers(&[r#"Bearer error="something_bespoke""#]);
+        let challenges = parse_challenges(&headers);
+        assert_eq!(
+            challenges[0].error(),
+            Some(OAuthErrorCode::from("something_bespoke"))
+        );
     }
 
     // The motivating bug for the parser: `error=` inside a quoted value must
@@ -492,7 +542,7 @@ mod tests {
 
         let challenges = parse_challenges(&headers);
         assert_eq!(challenges.len(), 1);
-        assert_eq!(challenges[0].error(), Some("invalid_request"));
+        assert_eq!(challenges[0].error(), Some(OAuthErrorCode::InvalidRequest));
     }
 
     #[test]
@@ -503,7 +553,7 @@ mod tests {
 
         let challenges = parse_challenges(&headers);
         assert_eq!(challenges.len(), 1);
-        assert_eq!(challenges[0].error(), Some("invalid_request"));
+        assert_eq!(challenges[0].error(), Some(OAuthErrorCode::InvalidRequest));
     }
 
     #[test]
@@ -515,7 +565,7 @@ mod tests {
         assert_eq!(challenges[0].scheme, "Basic");
         assert_eq!(challenges[0].token68(), Some("dGVzdDoxMjM="));
         assert!(challenges[0].params().is_empty());
-        assert_eq!(challenges[1].error(), Some("invalid_token"));
+        assert_eq!(challenges[1].error(), Some(OAuthErrorCode::InvalidToken));
     }
 
     #[test]
@@ -527,7 +577,7 @@ mod tests {
             challenges[0].payload,
             ChallengePayload::Token68("a/b+c==".to_owned())
         );
-        assert_eq!(challenges[1].error(), Some("x"));
+        assert_eq!(challenges[1].error(), Some(OAuthErrorCode::from("x")));
     }
 
     #[test]
@@ -560,8 +610,8 @@ mod tests {
 
         let challenges = parse_challenges(&headers);
         assert_eq!(challenges.len(), 2);
-        assert_eq!(challenges[0].error(), Some("invalid_token"));
-        assert_eq!(challenges[1].error(), Some("use_dpop_nonce"));
+        assert_eq!(challenges[0].error(), Some(OAuthErrorCode::InvalidToken));
+        assert_eq!(challenges[1].error(), Some(OAuthErrorCode::UseDPoPNonce));
     }
 
     #[test]

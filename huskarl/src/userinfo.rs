@@ -1,19 +1,21 @@
 //! `OpenID` Connect `UserInfo` endpoint (OIDC Core §5.3).
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, str::Utf8Error, sync::Arc};
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header::InvalidHeaderValue};
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
+use snafu::prelude::*;
 
+#[cfg(test)]
+use crate::core::RetryAdvice;
 use crate::{
-    authorizer::{dpop_resend_advised, extract_dpop_nonce},
+    authorizer::{challenge, dpop_resend_advised, extract_dpop_nonce},
     core::{
-        EndpointUrl, Error, ErrorKind,
+        EndpointUrl, Error, OAuthError,
         crypto::verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
         dpop::{NoDPoP, ResourceServerDPoP},
-        http::{HttpClient, Idempotency},
+        http::{FailedResponse, HttpClient, Idempotency, TruncatedBody},
         jwt::{
             JwsParseError, parse_compact_jws,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
@@ -24,20 +26,12 @@ use crate::{
     token::{AccessToken, id_token::StandardOidcProfileClaims},
 };
 
-/// Wraps a `UserInfo` failure with its error kind.
-fn userinfo_error(source: UserInfoError) -> Error {
-    let kind = match &source {
-        UserInfoError::JwtResponseNotSupported => ErrorKind::Config,
-        UserInfoError::DPoPHeader { .. } => ErrorKind::DPoP,
-        _ => ErrorKind::Protocol,
-    };
-    Error::new(kind, source)
-}
-
 /// `OpenID` Connect `UserInfo` client.
 ///
 /// Standard claims are returned as typed fields on [`UserInfo`]; any
-/// additional provider-specific claims land in [`UserInfo::extra`].
+/// additional provider-specific claims are stored in [`UserInfo::extra`]. The
+/// client validates the response subject against the ID token subject supplied
+/// to [`get`](Self::get).
 pub struct UserInfoClient {
     /// The URL of the `UserInfo` endpoint.
     userinfo_endpoint: EndpointUrl,
@@ -96,10 +90,9 @@ impl UserInfoClient {
     ///
     /// # Errors
     ///
-    /// Returns an error of kind [`ErrorKind::Config`] if a verifier is
-    /// configured without `issuer` or `client_id`, or `require_signed_response`
-    /// is set without a verifier. Propagates the failure if building the JWS
-    /// verifier from `jwks_uri` fails.
+    /// Returns an error when a configured verifier has no `issuer` or
+    /// `client_id`, when `require_signed_response` is enabled without a
+    /// verifier, or when the verifier cannot be built from `jwks_uri`.
     #[builder(on(String, into))]
     pub async fn new(
         /// The URL of the `UserInfo` endpoint.
@@ -182,11 +175,8 @@ impl UserInfoClient {
         };
 
         let jwt_validator = if let Some(verifier) = verifier {
-            let issuer = issuer
-                .ok_or_else(|| Error::new(ErrorKind::Config, UserInfoBuildError::MissingIssuer))?;
-            let client_id = client_id.ok_or_else(|| {
-                Error::new(ErrorKind::Config, UserInfoBuildError::MissingClientId)
-            })?;
+            let issuer = issuer.context(MissingIssuerSnafu)?;
+            let client_id = client_id.context(MissingClientIdSnafu)?;
 
             Some(
                 JwtValidator::builder()
@@ -201,12 +191,10 @@ impl UserInfoClient {
 
         // No verifier means no response of either content type is acceptable;
         // fail at build time rather than at the first request.
-        if require_signed_response && jwt_validator.is_none() {
-            return Err(Error::new(
-                ErrorKind::Config,
-                UserInfoBuildError::RequireSignedWithoutValidator,
-            ));
-        }
+        ensure!(
+            !require_signed_response || jwt_validator.is_some(),
+            RequireSignedWithoutValidatorSnafu
+        );
 
         Ok(Self {
             userinfo_endpoint,
@@ -229,8 +217,7 @@ impl UserInfoClient {
     ///
     /// # Errors
     ///
-    /// Returns an error of kind [`ErrorKind::Config`] if the metadata has no
-    /// `userinfo_endpoint`.
+    /// Returns an error if `metadata` has no `userinfo_endpoint`.
     ///
     /// ```rust
     /// use huskarl::userinfo::UserInfoClient;
@@ -274,17 +261,20 @@ impl UserInfoClient {
     }
     /// Call the `UserInfo` endpoint with the given access token.
     ///
-    /// The `expected_sub` parameter is the `sub` claim from the ID Token. Per
-    /// OIDC Core §5.3.2, the `sub` in the `UserInfo` response MUST exactly match
-    /// the `sub` in the ID Token; if they differ, this method returns an error
-    /// carrying [`UserInfoError::SubMismatch`].
+    /// Pass the ID token's `sub` claim as `expected_sub`. The response is
+    /// rejected unless its `sub` matches exactly, as required by OIDC Core
+    /// §5.3.2.
     ///
     /// # Errors
     ///
-    /// Returns an error of kind [`ErrorKind::Protocol`] with a
-    /// [`UserInfoError`] source for response-validation failures (status,
-    /// content type, `sub` mismatch, deserialization, JWT validation);
-    /// transport and `DPoP` proof failures propagate with their own kinds.
+    /// Returns an error if the request or `DPoP` proof fails; the endpoint
+    /// returns a non-success status; the content type is missing or unsupported;
+    /// JSON decoding, JWT parsing, signature validation, or claim validation
+    /// fails; a signed response is required but plain JSON is returned; or
+    /// `sub` differs from `expected_sub`.
+    ///
+    /// A `Bearer` or `DPoP` `WWW-Authenticate` challenge on a failed response is
+    /// exposed through [`Error::verdict`](crate::core::Error::verdict).
     pub async fn get(
         &self,
         http_client: &impl HttpClient,
@@ -301,7 +291,7 @@ impl UserInfoClient {
 
         let mut header_value = access_token
             .expose_header_value()
-            .map_err(|source| userinfo_error(UserInfoError::BadAuthorizationHeader { source }))?;
+            .context(BadAuthorizationHeaderSnafu)?;
         header_value.set_sensitive(true);
 
         let dpop_jkt = access_token.dpop_jkt();
@@ -317,10 +307,10 @@ impl UserInfoClient {
                     .dpop
                     .proof(&Method::GET, endpoint.as_uri(), access_token.token(), jkt)
                     .await
-                    .map_err(|e| e.with_context("generating DPoP proof for UserInfo request"))?
+                    .context(GeneratingProofSnafu)?
             {
-                let mut proof_value = HeaderValue::from_str(proof.expose_secret())
-                    .map_err(|source| userinfo_error(UserInfoError::DPoPHeader { source }))?;
+                let mut proof_value =
+                    HeaderValue::from_str(proof.expose_secret()).context(DPoPHeaderSnafu)?;
                 proof_value.set_sensitive(true);
                 headers.insert("DPoP", proof_value);
             }
@@ -333,7 +323,7 @@ impl UserInfoClient {
             let response = http_client
                 .execute(request, Idempotency::Idempotent)
                 .await
-                .map_err(|e| e.with_context("UserInfo request failed"))?;
+                .context(RequestFailedSnafu)?;
 
             let status = response.status;
             let response_headers = response.headers;
@@ -350,10 +340,10 @@ impl UserInfoClient {
             }
 
             if !status.is_success() {
-                return Err(userinfo_error(UserInfoError::BadStatus {
+                return Err(Error::from(UserInfoError::BadStatus {
                     status,
                     headers: response_headers,
-                    body: body.to_vec(),
+                    body: TruncatedBody::from_bytes(&body),
                 }));
             }
 
@@ -361,9 +351,9 @@ impl UserInfoClient {
             // JSON responses, or "application/jwt" for signed/encrypted responses.
             let ct_header = response_headers
                 .get(http::header::CONTENT_TYPE)
-                .ok_or_else(|| userinfo_error(UserInfoError::MissingContentType))?;
+                .ok_or_else(|| Error::from(UserInfoError::MissingContentType))?;
             let ct_str = ct_header.to_str().ok().ok_or_else(|| {
-                userinfo_error(UserInfoError::UnexpectedContentType {
+                Error::from(UserInfoError::UnexpectedContentType {
                     content_type: String::from_utf8_lossy(ct_header.as_bytes()).into_owned(),
                 })
             })?;
@@ -372,7 +362,7 @@ impl UserInfoClient {
             let is_jwt_response = media_type.eq_ignore_ascii_case("application/jwt");
 
             if !is_jwt_response && !media_type.eq_ignore_ascii_case("application/json") {
-                return Err(userinfo_error(UserInfoError::UnexpectedContentType {
+                return Err(Error::from(UserInfoError::UnexpectedContentType {
                     content_type: media_type.to_owned(),
                 }));
             }
@@ -380,18 +370,17 @@ impl UserInfoClient {
             // Falling back to the unverified path on the server's say-so is a
             // signature-stripping downgrade.
             if self.require_signed_response && !is_jwt_response {
-                return Err(userinfo_error(UserInfoError::UnsignedResponse));
+                return Err(Error::from(UserInfoError::UnsignedResponse));
             }
 
             let user_info: UserInfo = if is_jwt_response {
                 self.decode_jwt_response(&body).await?
             } else {
-                serde_json::from_slice(&body)
-                    .map_err(|source| userinfo_error(UserInfoError::Deserialize { source }))?
+                serde_json::from_slice(&body).context(DeserializeSnafu)?
             };
 
             if user_info.sub != expected_sub {
-                return Err(userinfo_error(UserInfoError::SubMismatch {
+                return Err(Error::from(UserInfoError::SubMismatch {
                     expected: expected_sub.to_owned(),
                     actual: user_info.sub.clone(),
                 }));
@@ -406,21 +395,20 @@ impl UserInfoClient {
         let jwt_validator = self
             .jwt_validator
             .as_ref()
-            .ok_or_else(|| userinfo_error(UserInfoError::JwtResponseNotSupported))?;
+            .ok_or_else(|| Error::from(UserInfoError::JwtResponseNotSupported))?;
 
-        let jwt_str = std::str::from_utf8(body)
-            .map_err(|_| userinfo_error(UserInfoError::MalformedJwtResponseBody))?;
+        let jwt_str = std::str::from_utf8(body).context(MalformedJwtResponseBodySnafu)?;
 
         // Parse and validate the JWT (signature, iss, aud, exp) with
         // claims as a raw Value. `JwtClaims` splits standard JWT claims
         // (sub, iss, aud, …) from the rest via `#[serde(flatten)]`, so
         // `validated.claims` is everything *except* the registered set.
-        let parsed = parse_compact_jws::<(), serde_json::Value>(jwt_str.trim())
-            .map_err(|source| userinfo_error(UserInfoError::JwtParse { source }))?;
+        let parsed =
+            parse_compact_jws::<(), serde_json::Value>(jwt_str.trim()).context(JwtParseSnafu)?;
         let validated = jwt_validator
             .validate_parsed_jws(parsed)
             .await
-            .map_err(|source| userinfo_error(UserInfoError::JwtValidation { source }))?;
+            .context(JwtValidationSnafu)?;
 
         // Reconstruct the full claim set: re-insert `sub` (which
         // `JwtClaims` consumed) so `UserInfo` can deserialize it.
@@ -432,17 +420,19 @@ impl UserInfoClient {
             claims_map.insert("sub".to_owned(), serde_json::Value::String(sub.clone()));
         }
 
-        serde_json::from_value(serde_json::Value::Object(claims_map))
-            .map_err(|source| userinfo_error(UserInfoError::Deserialize { source }))
+        Ok(
+            serde_json::from_value(serde_json::Value::Object(claims_map))
+                .context(DeserializeSnafu)?,
+        )
     }
 }
 
-/// Standard OIDC `UserInfo` claims (OIDC Core §5.1).
+/// Claims returned by an OIDC `UserInfo` response (OIDC Core §5.1).
 ///
 /// Standard profile claims live in [`profile`](Self::profile) — the same
 /// [`StandardOidcProfileClaims`] set that may be asserted in an ID token.
-/// Claims beyond the standard set land in [`extra`](Self::extra); callers
-/// wanting typed access deserialize individual values on demand, e.g.
+/// Claims beyond the standard set are stored in [`extra`](Self::extra). To use
+/// an extension claim as a typed value, deserialize it on demand, for example:
 /// `serde_json::from_value(user_info.extra.remove("groups")?)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -460,43 +450,42 @@ pub struct UserInfo {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-/// Source vocabulary for [`UserInfoClient`] build failures.
-///
-/// Carried as the source of [`ErrorKind::Config`] errors returned by the builder —
-/// match on the error kind rather than downcasting to this type.
-#[derive(Debug, Snafu)]
+/// The cause of a [`UserInfoClient`] build failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 #[non_exhaustive]
-pub enum UserInfoBuildError {
+pub(crate) enum UserInfoBuildError {
     /// `issuer` is required when JWT validation is configured.
     #[snafu(display("issuer is required when JWT validation is configured for UserInfo"))]
+    #[classify(no)]
     MissingIssuer,
     /// `client_id` is required when JWT validation is configured.
     #[snafu(display("client_id is required when JWT validation is configured for UserInfo"))]
+    #[classify(no)]
     MissingClientId,
     /// `require_signed_response` was set without JWT validation configured.
     #[snafu(display(
         "require_signed_response is set but no JWT validator is configured for UserInfo; \
-         supply `jwks_uri` and `jws_verifier_factory`, or unset the requirement — no \
+         supply 'jwks_uri' and 'jws_verifier_factory', or unset the requirement — no \
          response of either content type could be accepted"
     ))]
+    #[classify(no)]
     RequireSignedWithoutValidator,
 }
 
-/// Source vocabulary for `UserInfo` request failures.
-///
-/// Carried as the source of errors returned by [`UserInfoClient::get`] —
-/// match on the error kind rather than downcasting to this type.
-#[derive(Debug, Snafu)]
+/// The cause of a `UserInfo` request failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 #[non_exhaustive]
-pub enum UserInfoError {
+pub(crate) enum UserInfoError {
     /// Could not build the Authorization header from the access token.
-    #[snafu(display("Failed to build Authorization header for UserInfo request"))]
+    #[snafu(display("failed to build Authorization header for UserInfo request"))]
+    #[classify(no)]
     BadAuthorizationHeader {
         /// The underlying error.
         source: InvalidHeaderValue,
     },
     /// `DPoP` proof could not be set as an HTTP header.
-    #[snafu(display("Failed to set DPoP proof as HTTP header"))]
+    #[snafu(display("failed to set DPoP proof as HTTP header"))]
+    #[classify(no)]
     DPoPHeader {
         /// The underlying error.
         source: InvalidHeaderValue,
@@ -508,27 +497,32 @@ pub enum UserInfoError {
     #[snafu(display(
         "UserInfo endpoint returned application/jwt but no JWT validator was configured"
     ))]
+    #[classify(no)]
     JwtResponseNotSupported,
     /// The `UserInfo` JWT response could not be parsed as a compact JWS.
-    #[snafu(display("Failed to parse UserInfo JWT response"))]
+    #[snafu(display("failed to parse UserInfo JWT response"))]
+    #[classify(no)]
     JwtParse {
         /// The underlying parse error.
         source: JwsParseError,
     },
     /// JWT signature or claims validation failed on a `UserInfo` JWT response.
     #[snafu(display("UserInfo JWT response validation failed"))]
+    #[classify(with = UserInfoError::jwt_validation_origin)]
     JwtValidation {
         /// The underlying JWT validation error.
         source: JwtValidationError,
     },
     /// The `UserInfo` JWT response body is not valid UTF-8.
     #[snafu(display("UserInfo JWT response body is not valid UTF-8"))]
-    MalformedJwtResponseBody,
+    #[classify(no)]
+    MalformedJwtResponseBody { source: Utf8Error },
     /// The `UserInfo` response is missing the `Content-Type` header.
     ///
     /// Per OIDC Core §5.3.2, the content-type MUST be `application/json` or
     /// `application/jwt`.
     #[snafu(display("UserInfo response is missing the Content-Type header"))]
+    #[classify(no)]
     MissingContentType,
     /// The `UserInfo` endpoint returned `application/json` but the client was
     /// built with `require_signed_response`.
@@ -536,40 +530,94 @@ pub enum UserInfoError {
         "UserInfo endpoint returned an unsigned application/json response but \
          require_signed_response is set"
     ))]
+    #[classify(no)]
     UnsignedResponse,
     /// The `UserInfo` endpoint returned an unexpected Content-Type.
     ///
     /// Per OIDC Core §5.3.2, the content-type MUST be `application/json` for
     /// plain JSON responses or `application/jwt` for signed/encrypted responses.
     #[snafu(display("UserInfo endpoint returned unexpected Content-Type: {content_type}"))]
+    #[classify(no)]
     UnexpectedContentType {
         /// The Content-Type value received.
         content_type: String,
     },
     /// The response body could not be deserialized as JSON.
-    #[snafu(display("Failed to deserialize UserInfo response"))]
+    #[snafu(display("failed to deserialize UserInfo response"))]
+    #[classify(no)]
     Deserialize {
         /// The underlying error.
         source: serde_json::Error,
     },
     /// The `sub` claim in the `UserInfo` response does not match the ID Token (OIDC Core §5.3.2).
     #[snafu(display("UserInfo sub mismatch: expected {expected}, got {actual}"))]
+    #[classify(no)]
     SubMismatch {
         /// The expected `sub` from the ID Token.
         expected: String,
         /// The `sub` returned by the `UserInfo` endpoint.
         actual: String,
     },
+    /// The `DPoP` proof for the request could not be generated.
+    #[snafu(display("generating DPoP proof for UserInfo request"))]
+    GeneratingProof {
+        /// The underlying error.
+        source: Error,
+    },
+    /// The HTTP request itself failed.
+    #[snafu(display("UserInfo request failed"))]
+    RequestFailed {
+        /// The underlying error.
+        source: Error,
+    },
     /// The server returned a non-success HTTP status code.
-    #[snafu(display("UserInfo endpoint returned HTTP {status}"))]
+    #[snafu(display("UserInfo endpoint returned HTTP {status}: {body}"))]
+    #[classify(with = UserInfoError::read_off_the_response)]
     BadStatus {
         /// The HTTP status code.
         status: StatusCode,
-        /// The response headers.
+        /// The response headers, used to inspect `WWW-Authenticate` challenges.
         headers: HeaderMap,
-        /// The raw response body.
-        body: Vec<u8>,
+        /// The response body, rendered as a bounded prefix.
+        body: TruncatedBody,
     },
+}
+
+impl UserInfoError {
+    fn jwt_validation_origin(
+        source: &JwtValidationError,
+    ) -> crate::core::error::propagation::Origin<'_> {
+        crate::core::error::propagation::Cause::origin(source)
+    }
+
+    /// Classifies the response using its HTTP status and authentication challenge.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Classify handlers receive references to every variant field"
+    )]
+    fn read_off_the_response(
+        status: &StatusCode,
+        headers: &HeaderMap,
+        _body: &TruncatedBody,
+    ) -> crate::core::error::propagation::Origin<'static> {
+        use crate::core::error::propagation::Origin;
+
+        let Some(failed) = FailedResponse::new(*status, headers) else {
+            // `BadStatus` should only be constructed for non-success responses.
+            return Origin::Establishes(crate::core::RetryAdvice::No.into());
+        };
+        let verdict = challenge::parse_challenges(headers)
+            .into_iter()
+            .filter(|challenge| challenge.is_scheme("Bearer") || challenge.is_scheme("DPoP"))
+            .find_map(|challenge| {
+                challenge.error().map(|code| {
+                    OAuthError::new(code)
+                        .with_description(challenge.param("error_description").map(str::to_owned))
+                        .with_uri(challenge.param("error_uri").map(str::to_owned))
+                })
+            });
+        Origin::Establishes(failed.classification(verdict))
+    }
 }
 
 #[cfg(test)]
@@ -577,7 +625,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            EndpointUrl,
+            EndpointUrl, OAuthErrorCode,
             crypto::{
                 KeyMatchStrength,
                 verifier::{JwsVerifier, KeyMatch, VerifyError},
@@ -631,12 +679,11 @@ mod tests {
         }
     }
 
-    /// Extracts the [`UserInfoError`] source from a wrapped error.
+    // Extracts the typed cause without depending on display text.
     fn userinfo_source(err: &Error) -> &UserInfoError {
-        std::error::Error::source(err)
-            .expect("UserInfo errors carry a source")
+        err.cause()
             .downcast_ref::<UserInfoError>()
-            .expect("source is a UserInfoError")
+            .expect("carries a UserInfoError")
     }
 
     fn bearer_token(token: &str) -> AccessToken {
@@ -718,7 +765,6 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(err.kind(), ErrorKind::Protocol);
         let source = userinfo_source(&err);
         assert!(matches!(source, UserInfoError::SubMismatch { .. }));
         assert!(
@@ -743,7 +789,7 @@ mod tests {
 
         assert!(
             matches!(userinfo_source(&err), UserInfoError::BadStatus { status, body, .. }
-                if *status == StatusCode::FORBIDDEN && body == b"access denied"),
+                if *status == StatusCode::FORBIDDEN && body.to_string() == "access denied"),
             "expected BadStatus with FORBIDDEN, got {err:?}"
         );
     }
@@ -931,6 +977,122 @@ mod tests {
         assert_eq!(http.calls(), 2);
     }
 
+    // An `invalid_token` challenge is a verdict on the access token.
+    #[tokio::test]
+    async fn invalid_token_challenge_is_a_dead_credential() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "www-authenticate",
+            HeaderValue::from_static(
+                r#"Bearer error="invalid_token", error_description="expired""#,
+            ),
+        );
+        let http = MockHttpClient::sequence(vec![HttpResponse {
+            status: StatusCode::UNAUTHORIZED,
+            headers,
+            body: Bytes::new(),
+        }]);
+
+        let err = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.verdict()
+                .is_some_and(|v| v.code() == &OAuthErrorCode::InvalidToken)
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_verdict_ignores_non_oauth_authentication_schemes() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::WWW_AUTHENTICATE,
+            HeaderValue::from_static(
+                r#"Basic realm="legacy", error="invalid_grant", Bearer error="invalid_token""#,
+            ),
+        );
+        let http = MockHttpClient::new(HttpResponse {
+            status: StatusCode::UNAUTHORIZED,
+            headers,
+            body: Bytes::new(),
+        });
+
+        let err = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.verdict().map(OAuthError::code),
+            Some(&OAuthErrorCode::InvalidToken)
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_verdict_preserves_challenge_diagnostics() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::WWW_AUTHENTICATE,
+            HeaderValue::from_static(
+                r#"DPoP error="invalid_token", error_description="proof expired", error_uri="https://rs.example.com/errors/proof""#,
+            ),
+        );
+        let http = MockHttpClient::new(HttpResponse {
+            status: StatusCode::UNAUTHORIZED,
+            headers,
+            body: Bytes::new(),
+        });
+
+        let err = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+        let verdict = err.verdict().expect("DPoP challenge carries a verdict");
+        assert_eq!(verdict.description(), Some("proof expired"));
+        assert_eq!(verdict.uri(), Some("https://rs.example.com/errors/proof"));
+    }
+
+    // A bare 401 does not establish why authentication failed.
+    #[tokio::test]
+    async fn a_bare_401_stays_protocol() {
+        let http = MockHttpClient::sequence(vec![HttpResponse {
+            status: StatusCode::UNAUTHORIZED,
+            headers: HeaderMap::new(),
+            body: Bytes::new(),
+        }]);
+
+        let err = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert!(err.verdict().is_none());
+        assert_eq!(err.retry_advice(), crate::core::RetryAdvice::No);
+    }
+
+    // A transient response preserves its retry interval.
+    #[tokio::test]
+    async fn a_5xx_is_a_retryable_server_condition() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, HeaderValue::from_static("10"));
+        let http = MockHttpClient::sequence(vec![HttpResponse {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            headers,
+            body: Bytes::new(),
+        }]);
+
+        let err = client()
+            .get(&http, &bearer_token("tok"), "user1")
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.retry_advice(),
+            RetryAdvice::retry_after(crate::core::platform::Duration::from_secs(10))
+        );
+    }
+
     #[tokio::test]
     async fn nonce_header_without_challenge_does_not_retry() {
         // A plain 401 rotating the nonce (RFC 9449 §8.1) rejected the token
@@ -974,7 +1136,6 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(err.kind(), ErrorKind::Config);
         let source = userinfo_source(&err);
         assert!(matches!(source, UserInfoError::JwtResponseNotSupported));
         assert!(source.to_string().contains("application/jwt"));
@@ -1225,7 +1386,7 @@ mod tests {
 
         assert!(matches!(
             userinfo_source(&err),
-            UserInfoError::MalformedJwtResponseBody
+            UserInfoError::MalformedJwtResponseBody { source: _ }
         ));
     }
 
@@ -1249,7 +1410,6 @@ mod tests {
             .await
             .expect_err("an unsigned response must not satisfy a signed-response client");
 
-        assert_eq!(err.kind(), ErrorKind::Protocol);
         assert!(matches!(
             userinfo_source(&err),
             UserInfoError::UnsignedResponse
@@ -1343,10 +1503,9 @@ mod tests {
             .await
             .expect_err("no validator means no acceptable response");
 
-        assert_eq!(err.kind(), ErrorKind::Config);
         assert!(
-            std::error::Error::source(&err)
-                .and_then(|s| s.downcast_ref::<UserInfoBuildError>())
+            err.cause()
+                .downcast_ref::<UserInfoBuildError>()
                 .is_some_and(|e| matches!(e, UserInfoBuildError::RequireSignedWithoutValidator)),
             "got {err:?}"
         );
@@ -1361,7 +1520,7 @@ mod tests {
             _jwks_uri: Option<&EndpointUrl>,
             _platform: Arc<dyn JwsVerifierPlatform>,
         ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
-            Box::pin(async { Err(Error::new(ErrorKind::Config, "factory must not be called")) })
+            Box::pin(async { Err(Error::new(RetryAdvice::No, "factory must not be called")) })
         }
     }
 
@@ -1568,14 +1727,12 @@ mod tests {
     #[tokio::test]
     async fn builder_from_grant_require_signed_without_verifier_errors() {
         let grant = code_grant(false).await;
-        let err = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
+        let _err = UserInfoClient::builder_from_grant(&grant, &userinfo_metadata())
             .unwrap()
             .require_signed_response(true)
             .build()
             .await
             .expect_err("no derivable validator means no acceptable response");
-
-        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
     /// Absent `userinfo_endpoint` errors, and the message names the field.
@@ -1647,5 +1804,39 @@ mod tests {
             userinfo_source(&err),
             UserInfoError::SubMismatch { .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod classification {
+    use super::*;
+
+    #[test]
+    fn a_jwt_infrastructure_failure_preserves_its_classification() {
+        let source = Error::new(crate::core::RetryAdvice::RETRY, "the JTI store");
+        let err = Error::from(UserInfoError::JwtValidation {
+            source: JwtValidationError::JtiCheck { source },
+        });
+
+        assert_eq!(err.retry_advice(), crate::core::RetryAdvice::RETRY);
+    }
+
+    // Resource-server challenges use the shared typed verdict representation.
+    #[test]
+    fn a_challenge_becomes_the_verdict() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "www-authenticate",
+            HeaderValue::from_static(r#"Bearer error="insufficient_scope""#),
+        );
+        let err = Error::from(UserInfoError::BadStatus {
+            status: StatusCode::FORBIDDEN,
+            headers,
+            body: TruncatedBody::new(""),
+        });
+        assert!(
+            err.verdict()
+                .is_some_and(|v| v.code() == &crate::core::OAuthErrorCode::InsufficientScope)
+        );
     }
 }
