@@ -61,7 +61,8 @@ let validator = Rfc9068Validator::builder()
 
 The API items here are the reference docs. For task-oriented how-to guides
 (validating RFC 9068, custom, introspection, and multi-issuer tokens, plus
-`DPoP` enforcement) and design explanation (choosing a validator, how
-multi-issuer routing stays safe), see the [`_docs`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/) module.
+`DPoP` enforcement) and design explanation — [the error
+model](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/explanation/error_handling/), choosing a validator, and how
+multi-issuer routing stays safe — see the [`_docs`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/) module.
 
 <!-- cargo-reedme: end -->

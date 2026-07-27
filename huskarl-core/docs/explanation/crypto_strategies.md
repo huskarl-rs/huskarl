@@ -153,6 +153,18 @@ relevant trait — the operation trait inbound, the selector trait outbound:
   rotated-in key is discovered rather than how quickly a removed one is dropped,
   but the mechanism is identical and the caller never has to poll.
 
+- **Warm start from a persisted cache.** A scheduled-refresh layer serves its
+  factory's `Ok` value immediately, so a factory that falls back to a *trusted
+  local cache* comes up **warm** — able to verify at once — even when the
+  authorization server is unreachable at boot, then picks up live keys on the
+  next TTL refresh. This is distinct from
+  [`JwksStartup::SeedEmpty`](crate::jwk::JwksStartup::SeedEmpty), which comes up
+  *cold* and returns
+  [`KeysUnavailable`](crate::crypto::verifier::VerifyError::KeysUnavailable)
+  until a live fetch lands. Persist each successful fetch so the cache tracks key
+  rotations rather than a stale bake-in; with no live fetch *and* no cache (a
+  first-ever offline boot) the build still fails — you genuinely have no keys.
+
 - **Retrying** —
   [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier),
   [`RetryingDecryptor`](crate::crypto::cipher::RetryingDecryptor). React to a

@@ -116,7 +116,7 @@ PKCS#8 has no `kid`, so stamp one with
 [`with_kid`](crate::asymmetric::signer::Pkcs8Pem::with_kid); otherwise the
 secret's identity fills it, and failing that the key has none.
 
-## Symmetric (HMAC) keys ride the same funnel
+## Symmetric (HMAC) keys go through the same funnel
 
 An HS256/384/512 key is loaded exactly like the asymmetric ones — same
 `from_secret`, same decoders, same `kid` precedence. A JWK-JSON secret goes

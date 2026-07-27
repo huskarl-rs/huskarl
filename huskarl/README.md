@@ -75,10 +75,11 @@ refresh token store, refresh timing), see the [`_docs`](https://docs.rs/huskarl/
 
 Most applications wrap a grant in an
 [`InMemoryTokenCache`](https://docs.rs/huskarl/latest/huskarl/cache/in_memory/struct.InMemoryTokenCache.html) and an
-[`HttpAuthorizer`](https://docs.rs/huskarl/latest/huskarl/authorizer/struct.HttpAuthorizer.html) for the request path; every
-operation returns the one concrete [`Error`](https://docs.rs/huskarl_core/latest/huskarl_core/error/struct.Error.html) type, which embeds
-in your own error enum. See [caching tokens and wiring an
-authorizer](https://docs.rs/huskarl/latest/huskarl/_docs/guide/caching/) and [error
-handling](https://docs.rs/huskarl/latest/huskarl/_docs/explanation/error_handling/).
+[`HttpAuthorizer`](https://docs.rs/huskarl/latest/huskarl/authorizer/struct.HttpAuthorizer.html) for the request path. Most
+operations return [`Error`](https://docs.rs/huskarl_core/latest/huskarl_core/error/struct.Error.html); token acquisition returns
+[`TokenError`](https://docs.rs/huskarl/latest/huskarl/cache/struct.TokenError.html), whose [`Recovery`](https://docs.rs/huskarl/latest/huskarl/cache/enum.Recovery.html) guides
+application control flow. See [caching tokens and wiring an
+authorizer](https://docs.rs/huskarl/latest/huskarl/_docs/guide/caching/) and the [error-handling
+guide](https://docs.rs/huskarl/latest/huskarl/_docs/guide/handling_errors/).
 
 <!-- cargo-reedme: end -->
