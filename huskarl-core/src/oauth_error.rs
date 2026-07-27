@@ -322,7 +322,7 @@ impl OAuthErrorCode {
     /// [`ServerError`](Self::ServerError) return [`RetryAdvice::RETRY`]. All
     /// other codes return [`RetryAdvice::No`]. No delay is inferred from the
     /// code. Code handling that also has response headers should use
-    /// the failed-response conversion path.
+    /// [`FailedResponse::into_error`](crate::http::FailedResponse::into_error).
     ///
     /// # Examples
     ///
@@ -464,6 +464,37 @@ mod tests {
             "every variant except `Other` needs a row in `CODES` — one was added \
              without a spelling, and `as_str` will render it as \"unknown\""
         );
+    }
+
+    // A statusless rejection and a failed HTTP response must classify every
+    // OAuth code consistently. Iterate over the registry to cover new codes.
+    #[test]
+    fn a_statusless_rejection_agrees_with_the_response_path() {
+        let headers = http::HeaderMap::new();
+        for (code, spelling) in CODES {
+            let statusless = crate::Error::propagate(
+                crate::error::propagation::Classification::judged(
+                    code.implied_retry_advice(),
+                    OAuthError::new(*spelling),
+                ),
+                "underlying",
+            );
+            let from_response =
+                crate::http::FailedResponse::new(http::StatusCode::BAD_REQUEST, &headers)
+                    .expect("not a success")
+                    .into_error(Some(OAuthError::new(*spelling)), "underlying");
+
+            assert_eq!(
+                statusless.retry_advice(),
+                from_response.retry_advice(),
+                "{code:?}"
+            );
+            assert_eq!(
+                statusless.verdict().map(OAuthError::code),
+                from_response.verdict().map(OAuthError::code),
+                "{code:?}"
+            );
+        }
     }
 
     // Preserve all three members of an RFC 6749 §5.2 response.
