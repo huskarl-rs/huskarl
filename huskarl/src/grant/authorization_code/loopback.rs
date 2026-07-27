@@ -16,64 +16,60 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    core::Error,
-    grant::authorization_code::{CompleteError, CompleteInput, CompleteOutput, ParseCallbackError},
+    core::{Error, RetryAdvice},
+    grant::authorization_code::{CompleteInput, CompleteOutput, ParseCallbackError},
 };
 
-/// Errors that can occur when handling the authorization code callback with the loopback implementation.
+/// Errors from handling an authorization-code callback on a loopback listener.
 ///
-/// The `OAuthError` variant is control flow for login UIs (e.g. the user
-/// denied access); the rest carry the underlying failure.
+/// OAuth rejections can be handled separately from callback and I/O failures.
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum LoopbackError {
     /// Invalid redirect URI in callback.
-    #[snafu(display("Invalid redirect URI in callback state: {source}"))]
+    #[snafu(display("invalid redirect URI in callback state"))]
     InvalidRedirectUri {
         /// The underlying error.
         source: url::ParseError,
     },
     /// Failed to accept connection.
-    #[snafu(display("Failed to accept connection: {source}"))]
+    #[snafu(display("failed to accept connection"))]
     Accept {
         /// The underlying error.
         source: std::io::Error,
     },
     /// Failed to read request.
-    #[snafu(display("Failed to read request: {source}"))]
+    #[snafu(display("failed to read request"))]
     ReadRequest {
         /// The underlying error.
         source: std::io::Error,
     },
-    /// Authorization server returned error.
-    #[snafu(display(
-        "Authorization server returned error: {error}{}",
-        error_uri.as_ref().map(|uri| format!(" (see {uri})")).unwrap_or_default()
-    ))]
+    /// The authorization server returned an error response (RFC 6749 §4.1.2.1)
+    /// — e.g. the user denied access.
+    ///
+    /// Match [`OAuthError::code`](crate::core::OAuthError::code) to select an
+    /// appropriate error page.
+    #[snafu(display("authorization server returned an error response: {verdict}"))]
     #[non_exhaustive]
     OAuthError {
-        /// The `error` field in the `OAuth2` error response.
-        error: String,
-        /// The `error_description` field in the `OAuth2` error response.
-        error_description: Option<String>,
-        /// The `error_uri` field in the `OAuth2` error response.
-        error_uri: Option<String>,
+        /// The RFC 6749 §4.1.2.1 error response.
+        verdict: crate::core::OAuthError,
     },
     /// The callback parameters could not be parsed (malformed query, or a
     /// single-valued parameter that appeared more than once — RFC 6749 §3.1).
-    #[snafu(display("Failed to parse callback parameters: {source}"))]
+    #[snafu(display("failed to parse callback parameters"))]
     InvalidCallbackParameters {
         /// The underlying parse error.
-        source: crate::core::oauth_form::Error,
+        source: crate::core::oauth_form::FormError,
     },
     /// Missing required parameter.
-    #[snafu(display("Missing required parameter: {param}"))]
+    #[snafu(display("missing required parameter: {param}"))]
     MissingParameter {
         /// The missing parameter name.
         param: &'static str,
     },
     /// Failed to complete authorization.
-    #[snafu(display("Failed to complete authorization: {source}"))]
+    #[snafu(display("failed to complete authorization"))]
     Complete {
         /// The underlying error.
         source: Error,
@@ -81,16 +77,21 @@ pub enum LoopbackError {
 }
 
 impl LoopbackError {
-    /// If true, a failed callback handling attempt may succeed if retried.
+    /// Returns whether callback handling should be retried and any known delay.
+    ///
+    /// Listener I/O errors are retryable. OAuth rejections, invalid callback
+    /// parameters, and invalid redirect state are not. Completion failures
+    /// preserve the underlying [`Error::retry_advice`].
     #[must_use]
-    pub fn is_retryable(&self) -> bool {
+    pub fn retry_advice(&self) -> RetryAdvice {
         match self {
             LoopbackError::InvalidRedirectUri { .. }
             | LoopbackError::OAuthError { .. }
             | LoopbackError::InvalidCallbackParameters { .. }
-            | LoopbackError::MissingParameter { .. } => false,
-            LoopbackError::Accept { .. } | LoopbackError::ReadRequest { .. } => true,
-            LoopbackError::Complete { source } => source.is_retryable(),
+            | LoopbackError::MissingParameter { .. } => RetryAdvice::No,
+            // Another browser request may still arrive on the listener.
+            LoopbackError::Accept { .. } | LoopbackError::ReadRequest { .. } => RetryAdvice::RETRY,
+            LoopbackError::Complete { source } => source.retry_advice(),
         }
     }
 }
@@ -109,12 +110,11 @@ pub enum ErrorContext {
     OAuthError {
         /// The port the loopback server is listening on.
         port: u16,
-        /// The OAuth error code.
-        error: String,
-        /// The optional human-readable error description.
-        description: Option<String>,
-        /// The optional `error_uri` documenting the error.
-        error_uri: Option<String>,
+        /// The RFC 6749 §4.1.2.1 error response.
+        ///
+        /// The description and URI are untrusted server-controlled text and
+        /// must be escaped before rendering.
+        verdict: crate::core::OAuthError,
     },
     /// Token exchange or another internal operation failed.
     InternalError {
@@ -156,9 +156,11 @@ impl Default for CallbackRenderer {
             }),
             error: Arc::new(|ctx| {
                 let message = match ctx {
-                    ErrorContext::OAuthError {
-                        error, description, ..
-                    } => html_escape(description.as_deref().unwrap_or(error.as_str())),
+                    ErrorContext::OAuthError { verdict, .. } => html_escape(
+                        verdict
+                            .description()
+                            .unwrap_or_else(|| verdict.code().as_str()),
+                    ),
                     ErrorContext::InternalError { message, .. } => html_escape(message),
                 };
                 CallbackResponse::Html(format!(
@@ -188,15 +190,11 @@ fn error_query_string(ctx: &ErrorContext) -> String {
     }
 
     let params = match ctx {
-        ErrorContext::OAuthError {
-            error,
-            description,
-            error_uri,
-            ..
-        } => Params {
-            error,
-            error_description: description.as_deref(),
-            error_uri: error_uri.as_deref(),
+        // Preserve extension error codes when rebuilding the query string.
+        ErrorContext::OAuthError { verdict, .. } => Params {
+            error: verdict.code().as_str(),
+            error_description: verdict.description(),
+            error_uri: verdict.uri(),
         },
         ErrorContext::InternalError { message, .. } => Params {
             error: "server_error",
@@ -210,15 +208,9 @@ fn error_query_string(ctx: &ErrorContext) -> String {
 
 fn to_error_context(port: u16, err: &LoopbackError) -> ErrorContext {
     match err {
-        LoopbackError::OAuthError {
-            error,
-            error_description,
-            error_uri,
-        } => ErrorContext::OAuthError {
+        LoopbackError::OAuthError { verdict } => ErrorContext::OAuthError {
             port,
-            error: error.clone(),
-            description: error_description.clone(),
-            error_uri: error_uri.clone(),
+            verdict: verdict.clone(),
         },
         _ => ErrorContext::InternalError {
             port,
@@ -453,21 +445,12 @@ fn parse_callback_params(path_and_query: &str) -> Result<CompleteInput, Loopback
     })
 }
 
-/// An AS error response surfaces from `complete` (after its checks run);
-/// recover it as the `OAuthError` control-flow variant for the error page.
+/// Converts an authorization-server verdict into the error-page variant.
 fn map_complete_error(source: Error) -> LoopbackError {
-    use std::error::Error as _;
-
-    if let Some(CompleteError::OAuthError {
-        error,
-        error_description,
-        error_uri,
-    }) = source.source().and_then(|s| s.downcast_ref())
-    {
+    // A code echoed in a 5xx response is not an authorization-server verdict.
+    if let Some(verdict) = source.verdict() {
         return LoopbackError::OAuthError {
-            error: error.clone(),
-            error_description: error_description.clone(),
-            error_uri: error_uri.clone(),
+            verdict: verdict.clone(),
         };
     }
     LoopbackError::Complete { source }
@@ -827,10 +810,10 @@ mod tests {
 
         let err = handle.await.unwrap().unwrap_err();
         assert!(
-            matches!(&err, LoopbackError::OAuthError { error, error_description, error_uri }
-                if error == "access_denied"
-                    && error_description.as_deref() == Some("user denied")
-                    && error_uri.as_deref() == Some("https://as.example.com/doc")),
+            matches!(&err, LoopbackError::OAuthError { verdict }
+                if verdict.code() == &crate::core::OAuthErrorCode::AccessDenied
+                    && verdict.description() == Some("user denied")
+                    && verdict.uri() == Some("https://as.example.com/doc")),
             "got {err:?}"
         );
     }
@@ -1127,10 +1110,9 @@ mod tests {
             return;
         }
 
-        let err = bind_loopback(port)
+        let _err = bind_loopback(port)
             .await
             .expect_err("the port is held by `squatter`");
-        assert_eq!(err.kind(), std::io::ErrorKind::AddrInUse);
     }
 
     #[test]

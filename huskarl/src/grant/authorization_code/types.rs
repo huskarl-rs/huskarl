@@ -312,7 +312,7 @@ impl std::fmt::Debug for CallbackPayload {
 ///
 /// An OAuth error response also parses; completion checks its `state` like any
 /// other callback, then surfaces it as
-/// [`CompleteError::OAuthError`](super::CompleteError::OAuthError).
+/// a rejection carrying the server's [`verdict`](crate::core::Error::verdict).
 #[derive(Debug, Clone)]
 pub struct CompleteInput {
     pub(super) payload: CallbackPayload,

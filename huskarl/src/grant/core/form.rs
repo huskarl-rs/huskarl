@@ -270,6 +270,19 @@ pub(crate) enum HandleResponseError {
     },
 }
 
+impl HandleResponseError {
+    /// Returns whether the response is unusable because its body could not be parsed.
+    ///
+    /// A parsed OAuth body is classified separately using the HTTP status.
+    #[cfg(any(feature = "metrics", test))]
+    pub(crate) fn is_unusable_response(&self) -> bool {
+        match self {
+            Self::UnparseableErrorResponse { .. } | Self::UnparseableSuccessResponse { .. } => true,
+            Self::OAuth2 { .. } => false,
+        }
+    }
+}
+
 /// The `OAuth2` error response, as it arrived on the wire.
 ///
 /// Read a classified response through [`Error::verdict`], which exposes these
