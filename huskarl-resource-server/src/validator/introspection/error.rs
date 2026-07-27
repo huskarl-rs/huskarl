@@ -4,34 +4,41 @@ use snafu::prelude::*;
 
 use crate::{
     TokenType,
-    error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
+    error::{Challenge, ToRfc6750Error, TokenErrorCode, TokenValidationError},
     introspection::IntrospectionCallError,
     validator::{error::TokenBindingError, extract::TokenExtractError, observe::ValidationOutcome},
 };
 
 /// Error returned by [`super::IntrospectionValidator::validate_request`].
+///
+/// Extraction, binding, and endpoint-call variants preserve the underlying
+/// challenge. An audience mismatch produces an `invalid_token` challenge. The
+/// recorded token type selects which supported authentication scheme receives
+/// client error details.
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(super)))]
 #[non_exhaustive]
 pub enum IntrospectionValidateError {
     /// Failed to extract the access token from the request headers.
-    #[snafu(display("Token presentation error"))]
+    #[snafu(display("token presentation error"))]
     Extract {
         /// The underlying token extraction error.
         source: TokenExtractError,
     },
     /// Sender-constraint binding check failed.
-    #[snafu(display("Token binding error"))]
+    #[snafu(display("token binding error"))]
     Binding {
-        /// The token type that was presented.
+        /// The token type that was presented, used to select the challenge that
+        /// receives error details.
         token_type: TokenType,
         /// The underlying binding error.
         source: TokenBindingError,
     },
     /// The introspection call failed.
-    #[snafu(display("Introspection call error"))]
+    #[snafu(display("introspection call error"))]
     Call {
-        /// The token type that was presented.
+        /// The token type that was presented, used to select the challenge that
+        /// receives error details.
         token_type: TokenType,
         /// The underlying introspection call error.
         source: IntrospectionCallError,
@@ -39,11 +46,12 @@ pub enum IntrospectionValidateError {
     /// The introspected token's audience did not satisfy the configured check
     /// (RFC 7662 §4).
     #[snafu(display(
-        "Token audience mismatch: expected {expected}, got [{}]",
+        "token audience mismatch: expected {expected}, got [{}]",
         actual.join(", ")
     ))]
     Audience {
-        /// The token type that was presented.
+        /// The token type that was presented, used to select the challenge that
+        /// receives error details.
         token_type: TokenType,
         /// A description of the expected audience.
         expected: String,
@@ -53,6 +61,18 @@ pub enum IntrospectionValidateError {
 }
 
 impl ToRfc6750Error for IntrospectionValidateError {
+    fn challenge(&self) -> Challenge {
+        match self {
+            Self::Extract { source } => source.challenge(),
+            Self::Binding { source, .. } => source.challenge(),
+            Self::Call { source, .. } => source.challenge(),
+            Self::Audience { .. } => {
+                Challenge::new(TokenValidationError::Client(TokenErrorCode::InvalidToken))
+                    .with_description("The access token is not intended for this resource")
+            }
+        }
+    }
+
     fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
             Self::Extract { source } => source.attempted_scheme(),
@@ -62,32 +82,12 @@ impl ToRfc6750Error for IntrospectionValidateError {
         }
     }
 
-    fn token_error(&self) -> TokenValidationError {
-        match self {
-            Self::Extract { source } => source.token_error(),
-            Self::Binding { source, .. } => source.token_error(),
-            Self::Call { source, .. } => source.token_error(),
-            Self::Audience { .. } => TokenValidationError::Client(TokenErrorCode::InvalidToken),
-        }
-    }
-
-    fn error_description(&self) -> Option<String> {
-        match self {
-            Self::Extract { source } => source.error_description(),
-            Self::Binding { source, .. } => source.error_description(),
-            Self::Call { source, .. } => source.error_description(),
-            Self::Audience { .. } => {
-                Some("The access token is not intended for this resource".to_string())
-            }
-        }
-    }
-
     fn validation_outcome(&self) -> ValidationOutcome {
-        match self.token_error() {
+        match self.challenge().error {
             // Metrics must agree with the wire: a 5xx (a failed endpoint call,
             // or a nonce checker down) is our failure, whichever check tripped
             // it, and a nonce challenge is routine churn, not a binding failure.
-            TokenValidationError::Server(_) => return ValidationOutcome::CallError,
+            TokenValidationError::Server { .. } => return ValidationOutcome::CallError,
             TokenValidationError::Client(TokenErrorCode::UseDPoPNonce) => {
                 return ValidationOutcome::NonceRequired;
             }
@@ -99,6 +99,36 @@ impl ToRfc6750Error for IntrospectionValidateError {
             // Post-triage, the only client-classified call failure is an
             // inactive token — a bad token, like a bad audience.
             Self::Audience { .. } | Self::Call { .. } => ValidationOutcome::InvalidToken,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::validator::binding::MtlsBindingError;
+
+    crate::forwarding_table! {
+        /// Every variant with an inner challenge preserves it unchanged.
+        introspection_validate_error_forwards {
+            || TokenExtractError::InvalidTokenHeaderFormat
+                => |source| IntrospectionValidateError::Extract { source },
+            || TokenBindingError::MtlsBinding {
+                source: MtlsBindingError::CertBoundTokenWithoutCert,
+            } => |source| IntrospectionValidateError::Binding {
+                token_type: TokenType::Bearer,
+                source,
+            },
+            || IntrospectionCallError::TokenInactive
+                => |source| IntrospectionValidateError::Call {
+                    token_type: TokenType::Bearer,
+                    source,
+                },
+            || IntrospectionCallError::UnexpectedJwtResponse
+                => |source| IntrospectionValidateError::Call {
+                    token_type: TokenType::DPoP,
+                    source,
+                },
         }
     }
 }

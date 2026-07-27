@@ -81,8 +81,8 @@ pub struct ValidationEvent<'a> {
     /// The outcome label.
     pub outcome: ValidationOutcome,
     /// The validator's rejection, when a token was presented but refused — its
-    /// [`error_description`](ToRfc6750Error::error_description),
-    /// [`token_error`](ToRfc6750Error::token_error), and `Debug` output give
+    /// [`Challenge::description`](crate::error::Challenge::description),
+    /// [`Challenge::error`](crate::error::Challenge::error), and `Debug` output give
     /// more detail than the outcome label alone.
     pub error: Option<&'a dyn ToRfc6750Error>,
     /// The token's issuer, when known and trustworthy as a metrics label: the

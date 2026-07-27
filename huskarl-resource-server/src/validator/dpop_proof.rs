@@ -53,7 +53,7 @@ pub struct ValidatedDPoPProof {
 /// `typ=dpop+jwt`, an asymmetric algorithm, and an embedded JWK. Returns
 /// the proof's claims for downstream binding checks.
 ///
-/// # Example
+/// # Examples
 ///
 /// ```
 /// use std::sync::Arc;
@@ -169,7 +169,12 @@ struct DPoPProofClaims {
 }
 
 impl DPoPProofError {
-    /// Human-readable error description suitable for RFC 6750 `error_description`.
+    /// Returns the client-safe RFC 6750 `error_description`, if one is available.
+    ///
+    /// This text omits server-side failure details. Callers normally obtain it
+    /// through the enclosing validation error's [`ToRfc6750Error::challenge`].
+    ///
+    /// [`ToRfc6750Error::challenge`]: crate::error::ToRfc6750Error::challenge
     #[must_use]
     pub fn error_description(&self) -> Option<String> {
         match self {
@@ -280,7 +285,7 @@ mod tests {
 #[non_exhaustive]
 pub enum DPoPProofError {
     /// Not a valid compact JWS.
-    #[snafu(display("Bad DPoP proof format"))]
+    #[snafu(display("bad DPoP proof format"))]
     BadFormat {
         /// The underlying parse error.
         source: JwsParseError,
@@ -295,13 +300,13 @@ pub enum DPoPProofError {
     #[snafu(display("DPoP proof JWK contains private-key material"))]
     JwkPrivateKey,
     /// Cannot create verifier from embedded JWK.
-    #[snafu(display("Failed to create DPoP verification key"))]
+    #[snafu(display("failed to create DPoP verification key"))]
     CreateVerifier {
         /// The underlying error.
         source: CreateVerifierError,
     },
     /// JWT validation failed (signature, expiry, typ, alg, etc.).
-    #[snafu(display("Invalid DPoP proof"))]
+    #[snafu(display("invalid DPoP proof"))]
     InvalidProof {
         /// The underlying validation error.
         source: JwtValidationError,

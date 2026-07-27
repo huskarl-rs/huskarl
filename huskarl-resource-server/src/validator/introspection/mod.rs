@@ -264,10 +264,13 @@ impl IntrospectionValidator<()> {
     ///
     /// # Errors
     ///
-    /// Returns an error of kind [`ErrorKind::Config`] if the metadata has no
+    /// Returns an error if the metadata has no
     /// `introspection_endpoint`.
     ///
-    /// [`ErrorKind::Config`]: huskarl_core::ErrorKind::Config
+    /// # Errors
+    ///
+    /// Returns an error when the metadata does not name an
+    /// `introspection_endpoint`.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> Result<

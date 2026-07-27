@@ -15,9 +15,8 @@
 //!   through `Box<dyn AccessTokenValidator<…>>`.)
 //! - [`ProvideValidatorMetadata`](crate::validator::metadata::ProvideValidatorMetadata)
 //!   — `.validator_metadata(…)` in generic contexts.
-//! - [`ToRfc6750Error`](crate::error::ToRfc6750Error) — `.token_error()`,
-//!   `.error_description()` on validation errors when building responses by
-//!   hand.
+//! - [`ToRfc6750Error`](crate::error::ToRfc6750Error) — `.challenge()` on
+//!   validation errors when building responses by hand.
 //! - The [`huskarl-core` prelude](crate::core::prelude) — `.get_secret_value()`
 //!   on secrets, and `DPoP` proof methods.
 

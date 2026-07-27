@@ -9,10 +9,10 @@ use snafu::{ResultExt as _, Snafu, ensure};
 
 use crate::{
     core::{
-        EndpointUrl, Error,
+        EndpointUrl, Error, OAuthError, RetryAdvice,
         client_auth::{AuthenticationContext, ClientAuthentication},
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
-        http::{HttpClient, HttpResponse, Idempotency},
+        http::{FailedResponse, HttpClient, HttpResponse, Idempotency, TruncatedBody},
         jwt::{
             ConfirmationClaim,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
@@ -21,6 +21,7 @@ use crate::{
         platform::{Duration, SystemTime},
         secrets::SecretString,
     },
+    error::{Challenge, ServerStatus, ToRfc6750Error},
     validator::ValidatedRequest,
 };
 
@@ -175,7 +176,7 @@ impl TokenIntrospection {
                     .build(),
             )
             .await
-            .context(ClientAuthSnafu)?;
+            .context(AuthenticatingSnafu)?;
 
         let (body, auth_headers) = {
             let mut body = oauth_form::to_string(&IntrospectionRequest {
@@ -215,7 +216,7 @@ impl TokenIntrospection {
         let response = http_client
             .execute(request, Idempotency::Idempotent)
             .await
-            .context(HttpRequestSnafu)?;
+            .context(SendingSnafu)?;
 
         let (introspection, introspection_jwt) = self.parse_response::<Claims>(response).await?;
 
@@ -253,12 +254,26 @@ impl TokenIntrospection {
             });
         let body = response.body;
 
-        if !status.is_success() {
-            return BadStatusSnafu {
-                status,
-                body: String::from_utf8_lossy(&body).into_owned(),
-            }
-            .fail();
+        if let Some(failed) = FailedResponse::new(status, &response.headers) {
+            // RFC 7662 §2.3: an introspection error response follows RFC 6749
+            // §5.2, so the shared classifier reads it the same way the token
+            // endpoint does — 5xx/429 as retryable, honouring `Retry-After`, and
+            // a well-formed error body on a 4xx as a verdict naming what the AS
+            // decided about *our* credentials.
+            let verdict = serde_json::from_slice::<IntrospectionErrorBody>(&body)
+                .ok()
+                .map(|error| {
+                    OAuthError::new(error.error).with_description(error.error_description)
+                });
+            return Err(IntrospectionCallError::Refused {
+                source: failed.into_error(
+                    verdict,
+                    BadIntrospectionStatus {
+                        status,
+                        body: TruncatedBody::from_bytes(&body),
+                    },
+                ),
+            });
         }
 
         if is_jwt_response {
@@ -268,7 +283,7 @@ impl TokenIntrospection {
                 .ok_or_else(|| UnexpectedJwtResponseSnafu.build())?;
 
             let jwt_str = std::str::from_utf8(&body)
-                .map_err(|_| MalformedJwtResponseBodySnafu.build())?
+                .context(MalformedJwtResponseBodySnafu)?
                 .trim();
 
             let validated = jwt_validator
@@ -435,33 +450,65 @@ mod timestamp_tests {
     }
 }
 
+/// The cause recorded for a non-success introspection response.
+#[derive(Debug, Snafu)]
+#[snafu(display("introspection endpoint returned HTTP {status}: {body}"))]
+pub(crate) struct BadIntrospectionStatus {
+    status: StatusCode,
+    /// A bounded body prefix, preventing echoed tokens from filling logs.
+    body: TruncatedBody,
+}
+
+/// An RFC 6749 §5.2 error body, which RFC 7662 §2.3 says introspection errors
+/// follow.
+#[derive(Debug, Deserialize)]
+struct IntrospectionErrorBody {
+    error: String,
+    error_description: Option<String>,
+}
+
 /// Error returned by [`TokenIntrospection::introspect`].
+///
+/// When used by an introspection validator, [`ToRfc6750Error::challenge`]
+/// classifies `TokenInactive` as `invalid_token`. All other variants are
+/// server-side failures and therefore produce a 5xx response without a
+/// `WWW-Authenticate` challenge. Retryable failures use HTTP 503 and preserve
+/// any known `Retry-After` interval.
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum IntrospectionCallError {
-    /// Client authentication failed.
-    #[snafu(display("Client authentication failed"))]
-    ClientAuth {
-        /// The underlying authentication error.
+    /// This resource server could not construct its credentials for the
+    /// introspection endpoint.
+    ///
+    /// Produces HTTP 500 unless the source classifies the failure as retryable,
+    /// in which case it produces HTTP 503.
+    #[snafu(display("assembling credentials for the introspection endpoint"))]
+    Authenticating {
+        /// The classified failure.
         source: Error,
     },
-    /// Failed to build or execute the HTTP request to the introspection endpoint,
-    /// or to read its response body.
-    #[snafu(display("HTTP request to introspection endpoint failed"))]
-    HttpRequest {
-        /// The underlying HTTP error.
+    /// The introspection request failed before a usable response was received.
+    ///
+    /// Produces HTTP 502 unless the source classifies the failure as retryable,
+    /// in which case it produces HTTP 503.
+    #[snafu(display("sending the introspection request"))]
+    Sending {
+        /// The classified failure.
         source: Error,
     },
-    /// The introspection endpoint returned a non-2xx status code.
-    #[snafu(display("Introspection endpoint returned status {status}"))]
-    BadStatus {
-        /// The HTTP status code.
-        status: StatusCode,
-        /// The response body, as a lossy UTF-8 string.
-        body: String,
+    /// The introspection endpoint answered with a non-success status.
+    ///
+    /// A well-formed OAuth error response is treated as this resource server's
+    /// request or credential failure and produces HTTP 500. An unexplained
+    /// non-success response produces HTTP 502. A retryable source produces HTTP
+    /// 503 instead and preserves its retry interval.
+    #[snafu(display("the introspection endpoint refused the request"))]
+    Refused {
+        /// The classified failure.
+        source: Error,
     },
     /// Failed to parse the JSON introspection response.
-    #[snafu(display("Failed to parse introspection JSON response"))]
+    #[snafu(display("failed to parse introspection JSON response"))]
     ParseJsonResponse {
         /// The underlying JSON parse error.
         source: serde_json::Error,
@@ -478,13 +525,16 @@ pub enum IntrospectionCallError {
         source: JwtValidationError,
     },
     /// The token is not active (`active: false`).
-    #[snafu(display("Token is not active"))]
+    #[snafu(display("token is not active"))]
     TokenInactive,
     /// The JWT introspection response body is not valid UTF-8.
     #[snafu(display("JWT introspection response body is not valid UTF-8"))]
-    MalformedJwtResponseBody,
+    MalformedJwtResponseBody {
+        /// The underlying error, which names the offending byte offset.
+        source: std::str::Utf8Error,
+    },
     /// The introspection response contains a timestamp that cannot be represented as a Unix timestamp.
-    #[snafu(display("Introspection response field '{field}' has invalid timestamp: {value}"))]
+    #[snafu(display("introspection response field '{field}' has invalid timestamp: {value}"))]
     InvalidTimestamp {
         /// The name of the field with the invalid timestamp.
         field: &'static str,
@@ -492,52 +542,287 @@ pub enum IntrospectionCallError {
         value: i64,
     },
     /// Failed to serialize the introspection request body.
-    #[snafu(display("Failed to serialize introspection request body"))]
+    #[snafu(display("failed to serialize introspection request body"))]
     SerializeRequest {
         /// The underlying serialization error.
-        source: oauth_form::Error,
+        source: oauth_form::FormError,
     },
 }
 
-impl IntrospectionCallError {
-    /// Classifies this error as a client-side or server-side failure.
-    ///
-    /// Only [`Self::TokenInactive`] is a client error. All other variants represent
-    /// server-side failures (unreachable AS, misconfigured credentials, malformed response)
-    /// that should result in a 5xx response with no RFC 6750 error details.
-    #[must_use]
-    pub fn token_error(&self) -> crate::error::TokenValidationError {
-        use crate::error::{TokenErrorCode, TokenValidationError};
-        match self {
-            Self::TokenInactive => TokenValidationError::Client(TokenErrorCode::InvalidToken),
-            Self::ClientAuth { .. } | Self::HttpRequest { .. } | Self::BadStatus { .. } => {
-                TokenValidationError::Server(http::StatusCode::SERVICE_UNAVAILABLE)
+/// Maps an introspection failure to a server response classification.
+///
+/// Retryable failures produce 503 and preserve any known delay. Other failures
+/// use `settled`, which reflects where the call failed.
+fn call_response(source: &Error, settled: ServerStatus) -> crate::error::TokenValidationError {
+    // Retryable failures override the settled status and retain their delay.
+    if let RetryAdvice::Retry { after } = source.retry_advice() {
+        return crate::error::TokenValidationError::Server {
+            status: ServerStatus::SERVICE_UNAVAILABLE,
+            retry_after: after,
+        };
+    }
+    crate::error::TokenValidationError::server(settled)
+}
+
+impl ToRfc6750Error for IntrospectionCallError {
+    fn challenge(&self) -> Challenge {
+        let error = {
+            use crate::error::{TokenErrorCode, TokenValidationError};
+            match self {
+                Self::TokenInactive => TokenValidationError::Client(TokenErrorCode::InvalidToken),
+                // Our credentials, our request.
+                Self::Authenticating { source } => {
+                    call_response(source, ServerStatus::INTERNAL_SERVER_ERROR)
+                }
+                // No answer came back at all.
+                Self::Sending { source } => call_response(source, ServerStatus::BAD_GATEWAY),
+                // An answer came back and refused us. A verdict means the AS judged
+                // our credentials — ours to fix, never fixed by retrying; anything
+                // else is a response we cannot use, which is theirs.
+                Self::Refused { source } => call_response(
+                    source,
+                    // A verdict means the AS judged our credentials, which is
+                    // this deployment's problem; anything else is a response we
+                    // could not use, which is the AS's.
+                    if source.verdict().is_some() {
+                        ServerStatus::INTERNAL_SERVER_ERROR
+                    } else {
+                        ServerStatus::BAD_GATEWAY
+                    },
+                ),
+                // We got an answer and could not use it: the AS is misbehaving.
+                Self::ParseJsonResponse { .. }
+                | Self::JwtResponse { .. }
+                | Self::MalformedJwtResponseBody { .. }
+                | Self::InvalidTimestamp { .. } => {
+                    TokenValidationError::server(ServerStatus::BAD_GATEWAY)
+                }
+                // We were not built to handle what it sent, or we built the request
+                // wrong. Neither is the AS's fault.
+                Self::UnexpectedJwtResponse | Self::SerializeRequest { .. } => {
+                    TokenValidationError::server(ServerStatus::INTERNAL_SERVER_ERROR)
+                }
             }
-            Self::SerializeRequest { .. }
-            | Self::ParseJsonResponse { .. }
-            | Self::UnexpectedJwtResponse
-            | Self::JwtResponse { .. }
-            | Self::MalformedJwtResponseBody
-            | Self::InvalidTimestamp { .. } => {
-                TokenValidationError::Server(http::StatusCode::INTERNAL_SERVER_ERROR)
+        };
+        let challenge = Challenge::new(error);
+        match self {
+            Self::TokenInactive => challenge.with_description("The access token is revoked"),
+            _ => challenge,
+        }
+    }
+    fn attempted_scheme(&self) -> Option<crate::TokenType> {
+        None
+    }
+}
+
+#[cfg(test)]
+mod call_classification {
+    use http::{HeaderMap, StatusCode};
+
+    use super::*;
+    use crate::error::TokenValidationError;
+
+    fn status_of(err: &IntrospectionCallError) -> StatusCode {
+        match err.challenge().error {
+            TokenValidationError::Server { status, .. } => status.get(),
+            TokenValidationError::Client(code) => {
+                panic!("expected a server-side failure, got {code:?}")
             }
         }
     }
 
-    /// Returns a human-readable description of the error for the RFC 6750 `error_description` parameter, if applicable.
-    #[must_use]
-    pub fn error_description(&self) -> Option<String> {
-        match self {
-            Self::TokenInactive => Some("The access token is revoked".to_string()),
-            Self::SerializeRequest { .. }
-            | Self::ClientAuth { .. }
-            | Self::HttpRequest { .. }
-            | Self::BadStatus { .. }
-            | Self::ParseJsonResponse { .. }
-            | Self::UnexpectedJwtResponse
-            | Self::JwtResponse { .. }
-            | Self::MalformedJwtResponseBody
-            | Self::InvalidTimestamp { .. } => None,
+    /// Builds the error the real path builds, so these assert the wiring and
+    /// not just `call_status` in isolation.
+    fn from_response(
+        status: StatusCode,
+        headers: &HeaderMap,
+        body: &str,
+    ) -> IntrospectionCallError {
+        let failed = FailedResponse::new(status, headers).expect("not a success");
+        let verdict = serde_json::from_slice::<IntrospectionErrorBody>(body.as_bytes())
+            .ok()
+            .map(|e| OAuthError::new(e.error).with_description(e.error_description));
+        IntrospectionCallError::Refused {
+            source: failed.into_error(
+                verdict,
+                BadIntrospectionStatus {
+                    status,
+                    body: TruncatedBody::new(body),
+                },
+            ),
         }
+    }
+
+    /// The AS is down or throttling: retrying may genuinely work, and 503 is
+    /// the only status that says so.
+    #[test]
+    fn an_unavailable_as_is_503() {
+        let none = HeaderMap::new();
+        for status in [
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+        ] {
+            assert_eq!(
+                status_of(&from_response(status, &none, "")),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{status}"
+            );
+        }
+    }
+
+    /// The regression this redesign exists for. The AS rejected *our*
+    /// introspection credentials — that heals when someone rotates a secret or
+    /// re-registers us, but never by being retried. Answering 503 sent every
+    /// caller back into the same wall and made a misconfigured deployment look
+    /// like an upstream outage.
+    #[test]
+    fn the_as_rejecting_our_credentials_is_500_not_503() {
+        let none = HeaderMap::new();
+        for (status, body) in [
+            (StatusCode::UNAUTHORIZED, r#"{"error":"invalid_client"}"#),
+            (StatusCode::BAD_REQUEST, r#"{"error":"invalid_request"}"#),
+            (StatusCode::FORBIDDEN, r#"{"error":"unauthorized_client"}"#),
+        ] {
+            let err = from_response(status, &none, body);
+            assert_eq!(
+                status_of(&err),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "{status} {body}"
+            );
+        }
+    }
+
+    /// A non-success the AS did not explain is it misbehaving, not us.
+    #[test]
+    fn an_unexplained_4xx_is_502() {
+        let err = from_response(
+            StatusCode::NOT_FOUND,
+            &HeaderMap::new(),
+            "<html>nope</html>",
+        );
+        assert_eq!(status_of(&err), StatusCode::BAD_GATEWAY);
+    }
+
+    /// A layer that knows a fault will clear gets to say so, and 503 follows
+    /// without `call_response` knowing anything about secret providers.
+    ///
+    /// The interval it measured comes with it. A 503 that names none leaves
+    /// the client to guess, and its guess is seconds — against a cooldown
+    /// something downstairs already timed at thirty.
+    #[test]
+    fn a_lower_layer_that_knows_it_will_clear_earns_a_503() {
+        // The cause here is deliberately a bare string: nothing reads it. What
+        // drives the 503 is the advice, which is the axis built to carry it.
+        let cooling_down = Error::new(
+            RetryAdvice::retry_after(crate::core::platform::Duration::from_secs(30)),
+            "the secret provider is in cooldown",
+        );
+        let err = IntrospectionCallError::Authenticating {
+            source: cooling_down,
+        };
+        assert_eq!(status_of(&err), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            err.challenge().error.retry_after(),
+            Some(crate::core::platform::Duration::from_secs(30)),
+            "the interval the cooldown measured must survive to the response",
+        );
+    }
+
+    /// The AS's own `Retry-After` is the other source of an interval, and it
+    /// travels the same route: `FailedResponse` reads the header, the advice
+    /// carries it, and this hands it to the response.
+    #[test]
+    fn an_upstream_retry_after_reaches_our_own_response() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", http::HeaderValue::from_static("120"));
+        let err = from_response(StatusCode::SERVICE_UNAVAILABLE, &headers, "");
+
+        assert_eq!(status_of(&err), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            err.challenge().error.retry_after(),
+            Some(crate::core::platform::Duration::from_mins(2))
+        );
+    }
+
+    /// The other half: a failure nobody timed names no interval. `None` here
+    /// has to mean "nothing knew", or a client cannot trust the ones that do.
+    #[test]
+    fn a_failure_nothing_timed_names_no_interval() {
+        for err in [
+            from_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &HeaderMap::new(),
+                "<html>down</html>",
+            ),
+            from_response(
+                StatusCode::UNAUTHORIZED,
+                &HeaderMap::new(),
+                r#"{"error":"invalid_client"}"#,
+            ),
+            IntrospectionCallError::MalformedJwtResponseBody {
+                source: String::from_utf8(vec![0xff]).unwrap_err().utf8_error(),
+            },
+            IntrospectionCallError::TokenInactive,
+        ] {
+            assert_eq!(err.challenge().error.retry_after(), None, "{err:?}");
+        }
+    }
+
+    /// An answer we could not use is the AS's doing; a request we built wrong,
+    /// or a response we were not configured to handle, is ours.
+    #[test]
+    fn unusable_answers_are_502_and_our_own_faults_are_500() {
+        for err in [
+            IntrospectionCallError::MalformedJwtResponseBody {
+                source: String::from_utf8(vec![0xff]).unwrap_err().utf8_error(),
+            },
+            IntrospectionCallError::InvalidTimestamp {
+                field: "exp",
+                value: -1,
+            },
+        ] {
+            assert_eq!(status_of(&err), StatusCode::BAD_GATEWAY, "{err:?}");
+        }
+        assert_eq!(
+            status_of(&IntrospectionCallError::UnexpectedJwtResponse),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    /// An inactive token is the one thing here that is the *client's* problem,
+    /// and it stays a 401 `invalid_token` rather than any of the above.
+    #[test]
+    fn an_inactive_token_is_still_the_clients_problem() {
+        let challenge = IntrospectionCallError::TokenInactive.challenge();
+        assert!(matches!(
+            challenge.error,
+            TokenValidationError::Client(crate::error::TokenErrorCode::InvalidToken)
+        ));
+        assert_eq!(
+            challenge.description.as_deref(),
+            Some("The access token is revoked"),
+        );
+    }
+
+    /// An AS that echoes the introspection request back in its error body must
+    /// not put the access token into an operator's logs in full.
+    #[test]
+    fn an_echoed_request_body_is_bounded() {
+        // A marker past the 256-byte bound: if it shows up, the tail of the
+        // request — which is where the token would be — reached the log.
+        let echoed = format!("token={}TAIL_OF_TOKEN", "s3cret".repeat(200));
+        let err = from_response(StatusCode::BAD_REQUEST, &HeaderMap::new(), &echoed);
+        // Rendered the way an operator would see it: the whole source chain.
+        let rendered = std::iter::successors(Some(&err as &dyn std::error::Error), |e| e.source())
+            .map(|e| format!("{e}: {e:?}"))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            !rendered.contains("TAIL_OF_TOKEN"),
+            "the tail of an echoed request reached the source chain: {rendered}"
+        );
+        assert!(rendered.contains("bytes total"), "got {rendered}");
     }
 }

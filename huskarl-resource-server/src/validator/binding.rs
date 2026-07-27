@@ -4,7 +4,6 @@
 //! and can be shared across JWT validation and token introspection flows.
 
 use base64::prelude::*;
-use http::StatusCode;
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, prelude::*};
 
@@ -16,6 +15,7 @@ use crate::{
         jwt::ConfirmationClaim,
         secrets::SecretString,
     },
+    error::ServerStatus,
     validator::{
         dpop_proof::{DPoPProofError, DPoPProofValidator, ValidatedDPoPProof},
         error::{
@@ -131,18 +131,20 @@ fn cert_thumbprint(der: &[u8]) -> String {
 }
 
 /// Error returned by [`check_mtls_binding`].
+///
+/// Every variant produces an RFC 6750 `invalid_token` client error.
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum MtlsBindingError {
     /// Token has a certificate thumbprint binding (`cnf.x5t#S256`) but no client
     /// certificate was provided to verify against.
-    #[snafu(display("Token is certificate-bound but no client certificate was presented"))]
+    #[snafu(display("token is certificate-bound but no client certificate was presented"))]
     CertBoundTokenWithoutCert,
     /// The client certificate thumbprint does not match the binding in the token.
-    #[snafu(display("Client certificate thumbprint does not match token binding"))]
+    #[snafu(display("client certificate thumbprint does not match token binding"))]
     CertThumbprintMismatch,
     /// mTLS certificate-bound tokens are required but the token has no `cnf.x5t#S256` binding.
-    #[snafu(display("Certificate-bound tokens are required but token has no certificate binding"))]
+    #[snafu(display("certificate-bound tokens are required but token has no certificate binding"))]
     MtlsRequired,
 }
 
@@ -279,23 +281,28 @@ fn verify_claims_and_binding(
 }
 
 /// Error returned by [`DPoPBindingChecker::check`].
+///
+/// Most variants produce an RFC 9449 `invalid_dpop_proof` client error. A
+/// missing token thumbprint produces `invalid_token`, and a nonce retry produces
+/// `use_dpop_nonce`. Resource-server integration and nonce-checker failures are
+/// server errors and therefore emit no `WWW-Authenticate` challenge.
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum DPoPBindingError {
     /// The token has no `cnf.jkt` thumbprint binding.
-    #[snafu(display("Token has no DPoP key thumbprint binding"))]
+    #[snafu(display("token has no DPoP key thumbprint binding"))]
     MissingThumbprintBinding,
     /// The `DPoP` proof key algorithm does not support thumbprint computation.
-    #[snafu(display("No thumbprint for DPoP proof key"))]
+    #[snafu(display("no thumbprint for DPoP proof key"))]
     NoThumbprintForKey,
     /// The `DPoP` key thumbprint does not match the token's `cnf.jkt`.
     #[snafu(display("DPoP key thumbprint does not match token binding"))]
     ThumbprintMismatch,
     /// The `DPoP` proof failed structural validation (format, signature, JWK, typ, alg, etc.).
-    #[snafu(display("DPoP proof validation failed: {source}"))]
+    #[snafu(display("DPoP proof validation failed"))]
     ProofValidation { source: DPoPProofError },
     /// The HTTP URI in the proof could not be normalized.
-    #[snafu(display("Malformed HTTP URL in DPoP proof"))]
+    #[snafu(display("malformed HTTP URL in DPoP proof"))]
     MalformedUrl { source: http::Error },
     /// The request URI supplied to the validator is not absolute (e.g. an
     /// origin-form `/path` taken straight from a framework request object).
@@ -306,7 +313,7 @@ pub enum DPoPBindingError {
     /// `uri` contract and [validating DPoP-bound
     /// tokens](crate::_docs::guide::dpop) for reconstructing it behind a proxy.
     #[snafu(display(
-        "Request URI '{uri}' is not absolute; reconstruct the external target URI \
+        "request URI '{uri}' is not absolute; reconstruct the external target URI \
          (scheme + authority + path) before calling the validator"
     ))]
     RequestUriNotAbsolute {
@@ -317,7 +324,7 @@ pub enum DPoPBindingError {
     #[snafu(display("DPoP nonce check failed"))]
     NonceCheckFailed { source: Error },
     /// The `DPoP` proof nonce is missing or invalid. The client must retry with the provided nonce.
-    #[snafu(display("A DPoP nonce is required"))]
+    #[snafu(display("a DPoP nonce is required"))]
     NonceRequired { nonce: String },
     /// The `DPoP` proof is missing a required claim.
     #[snafu(display("DPoP proof is missing the required claim '{claim}'"))]
@@ -338,39 +345,35 @@ pub enum DPoPBindingError {
 }
 
 impl crate::error::ToRfc6750Error for DPoPBindingError {
-    fn attempted_scheme(&self) -> Option<TokenType> {
-        Some(TokenType::DPoP)
-    }
-
-    fn token_error(&self) -> crate::error::TokenValidationError {
-        use crate::error::{TokenErrorCode, TokenValidationError};
-        match self {
-            // NonceCheckFailed is a checker malfunction; RequestUriNotAbsolute
-            // is an integration bug (the deployment passed a non-absolute
-            // request URI). Neither is a client error.
-            Self::NonceCheckFailed { .. } | Self::RequestUriNotAbsolute { .. } => {
-                TokenValidationError::Server(StatusCode::INTERNAL_SERVER_ERROR)
+    fn challenge(&self) -> crate::error::Challenge {
+        let error = {
+            use crate::error::{TokenErrorCode, TokenValidationError};
+            match self {
+                // NonceCheckFailed is a checker malfunction; RequestUriNotAbsolute
+                // is an integration bug (the deployment passed a non-absolute
+                // request URI). Neither is a client error.
+                Self::NonceCheckFailed { .. } | Self::RequestUriNotAbsolute { .. } => {
+                    TokenValidationError::server(ServerStatus::INTERNAL_SERVER_ERROR)
+                }
+                Self::ProofValidation {
+                    source:
+                        DPoPProofError::InvalidProof {
+                            source: crate::core::jwt::validator::JwtValidationError::JtiCheck { .. },
+                        },
+                } => TokenValidationError::server(ServerStatus::INTERNAL_SERVER_ERROR),
+                Self::NonceRequired { .. } => {
+                    TokenValidationError::Client(TokenErrorCode::UseDPoPNonce)
+                }
+                // The token itself lacks a DPoP key binding — token-level failure.
+                Self::MissingThumbprintBinding => {
+                    TokenValidationError::Client(TokenErrorCode::InvalidToken)
+                }
+                // All other variants correspond to §4.3 proof validation criteria.
+                _ => TokenValidationError::Client(TokenErrorCode::InvalidDPoPProof),
             }
-            Self::ProofValidation {
-                source:
-                    DPoPProofError::InvalidProof {
-                        source: crate::core::jwt::validator::JwtValidationError::JtiCheck { .. },
-                    },
-            } => TokenValidationError::Server(StatusCode::INTERNAL_SERVER_ERROR),
-            Self::NonceRequired { .. } => {
-                TokenValidationError::Client(TokenErrorCode::UseDPoPNonce)
-            }
-            // The token itself lacks a DPoP key binding — token-level failure.
-            Self::MissingThumbprintBinding => {
-                TokenValidationError::Client(TokenErrorCode::InvalidToken)
-            }
-            // All other variants correspond to §4.3 proof validation criteria.
-            _ => TokenValidationError::Client(TokenErrorCode::InvalidDPoPProof),
-        }
-    }
-
-    fn error_description(&self) -> Option<String> {
-        match self {
+        };
+        let challenge = crate::error::Challenge::new(error);
+        let description = match self {
             Self::MissingThumbprintBinding => {
                 Some("The access token has no DPoP key thumbprint binding".to_string())
             }
@@ -382,7 +385,6 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
             Self::MalformedUrl { .. } => {
                 Some("The DPoP proof has a malformed HTTP URL".to_string())
             }
-            // Server-side details; nothing actionable for the client.
             Self::RequestUriNotAbsolute { .. } | Self::NonceCheckFailed { .. } => None,
             Self::NonceRequired { .. } => Some("A DPoP nonce is required".to_string()),
             Self::MissingProofClaim { claim } => Some(format!(
@@ -391,32 +393,35 @@ impl crate::error::ToRfc6750Error for DPoPBindingError {
             Self::ProofClaimMismatch { claim, .. } => {
                 Some(format!("The DPoP proof '{claim}' claim is invalid"))
             }
+        };
+        match description {
+            Some(description) => challenge.with_description(description),
+            None => challenge,
         }
+    }
+    fn attempted_scheme(&self) -> Option<TokenType> {
+        Some(TokenType::DPoP)
     }
 }
 
 impl crate::error::ToRfc6750Error for MtlsBindingError {
+    fn challenge(&self) -> crate::error::Challenge {
+        let error = {
+            crate::error::TokenValidationError::Client(crate::error::TokenErrorCode::InvalidToken)
+        };
+        let description = match self {
+            Self::CertBoundTokenWithoutCert => {
+                "The access token is certificate-bound but no client certificate was presented"
+            }
+            Self::CertThumbprintMismatch => {
+                "The client certificate thumbprint does not match the token binding"
+            }
+            Self::MtlsRequired => "The protected resource requires a client certificate",
+        };
+        crate::error::Challenge::new(error).with_description(description)
+    }
     fn attempted_scheme(&self) -> Option<TokenType> {
         None
-    }
-
-    fn token_error(&self) -> crate::error::TokenValidationError {
-        crate::error::TokenValidationError::Client(crate::error::TokenErrorCode::InvalidToken)
-    }
-
-    fn error_description(&self) -> Option<String> {
-        match self {
-            Self::CertBoundTokenWithoutCert => Some(
-                "The access token is certificate-bound but no client certificate was presented"
-                    .to_string(),
-            ),
-            Self::CertThumbprintMismatch => Some(
-                "The client certificate thumbprint does not match the token binding".to_string(),
-            ),
-            Self::MtlsRequired => {
-                Some("The protected resource requires a client certificate".to_string())
-            }
-        }
     }
 }
 
@@ -437,6 +442,7 @@ mod tests {
             jwt::Jwt,
             platform::Duration,
         },
+        error::ToRfc6750Error as _,
     };
 
     // The request the proof is bound to. Tests keep these fixed and vary the proof.
@@ -896,5 +902,32 @@ mod tests {
         // No binding present and mTLS not required: the certificate is ignored.
         assert!(check_mtls_binding(None, None, false).is_ok());
         assert!(check_mtls_binding(Some(&cnf_x5t(None)), Some(CLIENT_CERT_DER), false).is_ok());
+    }
+
+    #[test]
+    fn binding_error_challenges_preserve_client_descriptions() {
+        assert_eq!(
+            DPoPBindingError::ThumbprintMismatch
+                .challenge()
+                .description
+                .as_deref(),
+            Some("The DPoP key thumbprint does not match the token binding"),
+        );
+        assert_eq!(
+            DPoPBindingError::ProofValidation {
+                source: DPoPProofError::MissingJwkHeader,
+            }
+            .challenge()
+            .description
+            .as_deref(),
+            Some("The DPoP proof is missing the JWK header"),
+        );
+        assert_eq!(
+            MtlsBindingError::CertBoundTokenWithoutCert
+                .challenge()
+                .description
+                .as_deref(),
+            Some("The access token is certificate-bound but no client certificate was presented"),
+        );
     }
 }
