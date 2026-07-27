@@ -1,10 +1,14 @@
-//! The [`from_metadata`](macro@from_metadata) attribute macro for the huskarl crates.
+//! Procedural macros for the huskarl crates.
+//!
+//! Use [`Classify`] to derive error propagation and
+//! [`from_metadata`](macro@from_metadata) to build configuration from metadata.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 use proc_macro::TokenStream;
 
+mod classify;
 mod from_metadata;
 mod util;
 
@@ -35,9 +39,8 @@ mod util;
 ///
 /// If a *required* grant field (not `Option<T>`) draws from an `Option`-typed
 /// extraction, the generated function gates on it and returns
-/// `Result<Builder<…>, huskarl_core::Error>` of kind `ErrorKind::Config`, whose
-/// message names the absent field. At most one gating field per struct is
-/// supported.
+/// `Result<Builder<…>, huskarl_core::Error>` whose message names the absent
+/// field. At most one gating field per struct is supported.
 ///
 /// Gated code names `::huskarl_core`, so a struct with a gating field must be in
 /// a crate depending on `huskarl-core` under its default name. Ungated
@@ -83,4 +86,86 @@ mod util;
 #[proc_macro_attribute]
 pub fn from_metadata(args: TokenStream, input: TokenStream) -> TokenStream {
     from_metadata::expand(args.into(), input.into()).into()
+}
+
+/// Derives `huskarl_core::error::propagation::Cause` and a conversion to
+/// `huskarl_core::Error` for an enum.
+///
+/// Each variant either propagates an existing huskarl error or establishes a
+/// new classification. A variant propagates when it has a field whose type is
+/// bare `Error` or `<huskarl-core dependency>::Error`. The derive resolves the
+/// dependency name from `Cargo.toml`, so aliases are supported.
+///
+/// Variants that do not propagate an error must have exactly one of:
+///
+/// - `#[classify(no)]`: retrying will not help.
+/// - `#[classify(retry)]`: the same operation may succeed later.
+/// - `#[classify(with = path)]`: call `path` with references to the fields, in
+///   declaration order. The function returns
+///   `huskarl_core::error::propagation::Origin` and chooses whether to establish
+///   a classification or propagate a nested `Error`.
+///
+/// ```rust
+/// use std::fmt;
+///
+/// use huskarl_core::{Error, RetryAdvice, error::propagation::Origin};
+/// use huskarl_macros::Classify;
+///
+/// #[derive(Debug, Classify)]
+/// enum RequestCause {
+///     #[classify(no)]
+///     InvalidRequest,
+///     #[classify(retry)]
+///     Unavailable,
+///     #[classify(with = RequestCause::classify_status)]
+///     Response {
+///         status: u16,
+///     },
+///     Wrapped(Error),
+/// }
+///
+/// impl RequestCause {
+///     fn classify_status(status: &u16) -> Origin<'_> {
+///         let advice = match status {
+///             429 => RetryAdvice::RETRY.into(),
+///             _ => RetryAdvice::No.into(),
+///         };
+///         Origin::Establishes(advice)
+///     }
+/// }
+///
+/// impl fmt::Display for RequestCause {
+///     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+///         f.write_str("request failed")
+///     }
+/// }
+///
+/// impl std::error::Error for RequestCause {}
+///
+/// let error: Error = RequestCause::Unavailable.into();
+/// assert_eq!(error.retry_advice(), RetryAdvice::RETRY);
+///
+/// let inner = Error::new(RetryAdvice::No, "invalid response");
+/// let error: Error = RequestCause::Wrapped(inner).into();
+/// assert_eq!(error.retry_advice(), RetryAdvice::No);
+/// ```
+///
+/// The generated implementations preserve type, lifetime, and const generics,
+/// including bounds and `where` clauses. The derive adds no bounds: the enum
+/// itself must satisfy `Cause`, including `std::error::Error`, `'static`, and
+/// the platform's send/sync requirements.
+///
+/// # Limitations
+///
+/// - Only enums are supported.
+/// - Propagation detection is syntactic. Type aliases, nested types, and other
+///   paths ending in `Error` are not recognized. Bare `Error` is assumed to be
+///   `huskarl_core::Error`.
+/// - A propagating variant cannot also have `#[classify(...)]`. If several
+///   fields have a recognized error type, the first one is propagated.
+/// - The generated `Cause` or `From` implementation must not conflict with an
+///   existing implementation.
+#[proc_macro_derive(Classify, attributes(classify))]
+pub fn classify(input: TokenStream) -> TokenStream {
+    classify::expand(input.into()).into()
 }

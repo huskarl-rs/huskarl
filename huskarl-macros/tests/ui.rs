@@ -7,6 +7,12 @@ fn ui_pass() {
     t.pass("tests/ui/pass_*.rs");
 }
 
+#[test]
+fn ui_classify_compile_fail() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/ui/fail_classify_*.rs");
+}
+
 // The .stderr snapshots are recorded against nightly diagnostics; stable and
 // MSRV toolchains render errors differently, so only compare them on nightly.
 #[rustversion::attr(

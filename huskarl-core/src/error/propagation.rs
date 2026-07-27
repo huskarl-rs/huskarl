@@ -21,9 +21,9 @@ pub enum Origin<'a> {
 
 /// An error type whose variants report how they are classified.
 ///
-/// Implement this trait when converting an error enum with
-/// [`Error::from_cause`]. Each variant chooses independently because an enum
-/// can contain both leaf failures and wrappers.
+/// Implement this trait, usually via `#[derive(Classify)]`, when converting an
+/// error enum with [`Error::from_cause`]. Each variant chooses independently
+/// because an enum can contain both leaf failures and wrappers.
 pub trait Cause: std::error::Error + crate::platform::MaybeSendSync + 'static + Sized {
     /// Returns the classification origin for this variant.
     fn origin(&self) -> Origin<'_>;

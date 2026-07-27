@@ -1,0 +1,5 @@
+error: this variant has a field of type `Error`, so it propagates that error's classification; remove the `#[classify(...)]` attribute. To override one member, use `#[classify(with = path)]` and build from `Error::classification`
+ --> tests/ui/fail_classify_error_field_with_attribute.rs:3:5
+  |
+3 |     #[classify(no)]
+  |     ^

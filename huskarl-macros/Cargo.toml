@@ -17,6 +17,7 @@ doc = false
 [dependencies]
 darling = "0.23"
 proc-macro2 = "1"
+proc-macro-crate = "3"
 quote = "1"
 syn = { version = "2", features = ["full"] }
 

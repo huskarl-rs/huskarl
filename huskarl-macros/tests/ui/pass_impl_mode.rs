@@ -14,7 +14,10 @@ pub trait IntoUrl {
 impl IntoUrl for &str {
     fn into_url(self) -> Result<Url, huskarl_core::Error> {
         if self.is_empty() {
-            Err(huskarl_core::ErrorKind::Config.into())
+            Err(huskarl_core::Error::new(
+                huskarl_core::RetryAdvice::No,
+                "the endpoint is not configured",
+            ))
         } else {
             Ok(Url(self.to_owned()))
         }

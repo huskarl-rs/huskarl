@@ -1,0 +1,5 @@
+error: duplicate `#[classify(...)]`
+ --> tests/ui/fail_classify_duplicate_after_empty.rs:4:5
+  |
+4 |     #[classify(no)]
+  |     ^

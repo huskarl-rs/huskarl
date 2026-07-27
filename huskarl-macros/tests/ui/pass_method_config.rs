@@ -79,8 +79,8 @@ fn main() {
     };
     // `.err()`, not `unwrap_err()`: bon builders aren't `Debug`.
     let err = Client::from_meta(&meta).err().expect("endpoint absent");
-    assert_eq!(err.kind(), huskarl_core::ErrorKind::Config);
-    assert!(err.to_string().contains("endpoint"));
+    assert_eq!(err.retry_advice(), huskarl_core::RetryAdvice::No);
+    assert!(format!("{err:#}").contains("endpoint"));
 
     // The fallible setter still works for manual construction.
     let client = Client::builder()

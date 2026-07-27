@@ -318,11 +318,7 @@ fn emit_impl(
     let (must_use, errors_doc) = match gate {
         Some(gate) => {
             let field = gate_field_name(gate);
-            let doc = format!(
-                " # Errors\n\n Returns an error of kind [`ErrorKind::Config`] if the \
-                 metadata has no `{field}`.\n\n \
-                 [`ErrorKind::Config`]: ::huskarl_core::ErrorKind::Config"
-            );
+            let doc = format!(" # Errors\n\n Returns an error if the metadata has no `{field}`.");
             (quote! {}, quote! { #[doc = ""] #[doc = #doc] })
         }
         None => (quote! { #[must_use] }, quote! {}),

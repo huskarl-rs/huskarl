@@ -1,0 +1,5 @@
+error: multiple `classify` directives in one attribute
+ --> tests/ui/fail_classify_multiple_directives.rs:3:20
+  |
+3 |     #[classify(no, retry)]
+  |                    ^^^^^
