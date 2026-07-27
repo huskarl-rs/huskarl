@@ -30,6 +30,10 @@ metrics = ["dep:metrics"]
 # When enabled, provides FileSecret for reading secrets from files using async I/O.
 fs = ["tokio/fs"]
 
+# When enabled, `Error::new` panics when handed a cause that already wraps a
+# classified error.
+strict-propagation = []
+
 [dependencies]
 arc-swap = "1"
 metrics = { workspace = true, optional = true }

@@ -77,6 +77,7 @@ required-features = ["authorization-flow-loopback"]
 
 [dev-dependencies]
 huskarl = { path = ".", default-features = true }
+huskarl-core = { workspace = true, features = ["strict-propagation"] }
 huskarl-crypto-native = { path = "../huskarl-crypto-native" }
 huskarl-resource-server = { path = "../huskarl-resource-server" }
 
