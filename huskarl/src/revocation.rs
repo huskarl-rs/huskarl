@@ -120,10 +120,9 @@ impl TokenRevocation {
     ///
     /// # Errors
     ///
-    /// Returns an error of kind
-    /// [`ErrorKind::Auth`](crate::core::ErrorKind::Auth) if client
-    /// authentication fails; other kinds propagate from the HTTP request or
-    /// server response.
+    /// Returns an error if client authentication cannot be assembled; a failure
+    /// of the HTTP request or of the server's response propagates with its own
+    /// classification.
     pub async fn revoke(
         &self,
         http_client: &impl HttpClient,

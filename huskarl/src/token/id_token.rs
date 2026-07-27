@@ -319,17 +319,28 @@ impl IdTokenValidator {
 #[non_exhaustive]
 pub enum IdTokenValidationError {
     /// Base JWT errors.
+    #[snafu(display("validating the ID token as a JWT"))]
     Jwt {
         /// The underlying error.
         source: JwtValidationError,
     },
     /// Nonce mismatch between expected and actual nonce.
+    #[snafu(display("the 'nonce' claim does not match the one sent with the request"))]
     NonceMismatch,
     /// `max_age` set but `auth_time` absent.
+    #[snafu(display(
+        "'max_age' was requested but the ID token has no 'auth_time' claim, \
+         which OIDC Core 1.0 §2 requires when it was"
+    ))]
     AuthTimeMissing,
     /// Subject missing from JWT claims.
+    #[snafu(display("the ID token has no 'sub' claim"))]
     SubjectMissing,
     /// Authentication time exceeds `max_age`. OIDC Core §3.1.3.7 step 13.
+    #[snafu(display(
+        "the end-user authenticated at {auth_time}, longer ago than the requested \
+         'max_age' of {max_age_secs}s (OIDC Core 1.0 §3.1.3.7 step 13)"
+    ))]
     AuthTimeTooOld {
         /// The authentication time (seconds since Unix epoch).
         auth_time: u64,
@@ -344,14 +355,30 @@ pub enum IdTokenValidationError {
         untrusted: Vec<String>,
     },
     /// `acr` claim missing but was required.
+    #[snafu(display("the ID token has no 'acr' claim, which was required"))]
     AcrMissing,
     /// `acr` claim does not match the required value. OIDC Core §3.1.3.7 step 12.
+    #[snafu(display(
+        "the 'acr' claim is '{actual}', expected '{expected}' \
+         (OIDC Core 1.0 §3.1.3.7 step 12)"
+    ))]
     AcrMismatch {
         /// The expected authentication context class reference.
         expected: String,
         /// The actual authentication context class reference.
         actual: String,
     },
+}
+
+impl crate::core::error::propagation::Cause for IdTokenValidationError {
+    fn origin(&self) -> crate::core::error::propagation::Origin<'_> {
+        match self {
+            Self::Jwt { source } => crate::core::error::propagation::Cause::origin(source),
+            _ => crate::core::error::propagation::Origin::Establishes(
+                crate::core::RetryAdvice::No.into(),
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -532,9 +559,9 @@ mod tests {
         );
     }
 
-    /// Regression: an `auth_time` slightly ahead of the client clock (routine
-    /// AS skew on a fresh interactive login) must validate — it used to fail
-    /// `duration_since` and be rejected as `AuthTimeTooOld`.
+    /// An `auth_time` slightly ahead of the client clock (routine AS skew on a
+    /// fresh interactive login) must validate rather than failing
+    /// `duration_since` and being rejected as `AuthTimeTooOld`.
     #[tokio::test]
     async fn auth_time_slightly_in_future_is_accepted() {
         let (signer, verifier) = signer_and_verifier().await;
