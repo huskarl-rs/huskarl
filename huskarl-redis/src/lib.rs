@@ -59,15 +59,27 @@ use redis::RedisError;
 /// Everything except `NoRetry` (reconnects, wait-and-retry, redirects) may
 /// succeed on a re-send. This only classifies; whether a re-send is *safe*
 /// is per-command — argue it at the call site.
-fn transport_error(source: RedisError, context: &'static str) -> huskarl_core::Error {
+/// The cause of a Redis transport failure.
+#[derive(Debug, snafu::Snafu)]
+#[snafu(display("{operation}"))]
+pub(crate) struct RedisOperationError {
+    /// What was being attempted.
+    operation: &'static str,
+    /// The underlying error.
+    source: RedisError,
+}
+
+#[track_caller]
+fn transport_error(source: RedisError, operation: &'static str) -> huskarl_core::Error {
     let retryable = !matches!(source.retry_method(), redis::RetryMethod::NoRetry);
-    huskarl_core::Error::new(huskarl_core::ErrorKind::Transport { retryable }, source)
-        .with_context(context)
+    huskarl_core::Error::new(
+        huskarl_core::RetryAdvice::retry_if(retryable),
+        RedisOperationError { operation, source },
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use huskarl_core::ErrorKind;
     use rstest::rstest;
 
     use super::*;
@@ -80,9 +92,11 @@ mod tests {
         #[case] source: RedisError,
         #[case] retryable: bool,
     ) {
+        let err = transport_error(source, "testing");
         assert_eq!(
-            transport_error(source, "testing").kind(),
-            ErrorKind::Transport { retryable }
+            err.retry_advice(),
+            huskarl_core::RetryAdvice::retry_if(retryable),
+            "expected retryable={retryable}"
         );
     }
 }

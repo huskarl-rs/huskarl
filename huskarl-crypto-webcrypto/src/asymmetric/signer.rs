@@ -22,7 +22,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use huskarl_core::{
-    Error, ErrorKind,
+    Error,
     crypto::signer::{
         AsymmetricJwsSigner, AsymmetricJwsSignerSelector, JwsSigner, JwsSignerSelector,
     },
@@ -220,19 +220,19 @@ impl GenerateAlgorithm {
 #[derive(Debug, Snafu)]
 pub enum GenerateError {
     /// Unable to find webcrypto support in environment.
-    #[snafu(display("Failed to find WebCrypto support"))]
+    #[snafu(display("failed to find WebCrypto support"))]
     NoCrypto {
         /// The underlying error.
         source: GetCryptoError,
     },
     /// An error occurred when attempting to generate the key.
-    #[snafu(display("Error generating key"))]
+    #[snafu(display("error generating key"))]
     Generate {
         /// The underlying error.
         source: helpers::GenerateKeyError,
     },
     /// An error occurred when attempting to get the JWK for the key.
-    #[snafu(display("Error getting JWK for private key"))]
+    #[snafu(display("error getting JWK for private key"))]
     GetPublicJwk {
         /// The underlying error.
         source: helpers::GetPublicJwkError,
@@ -282,29 +282,25 @@ impl PrivateKey {
 }
 
 /// Errors that can occur when signing.
-#[derive(Debug, Snafu)]
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 pub enum SignError {
     /// Unable to find webcrypto support in environment.
     #[snafu(
         context(name(CryptoAbsentSnafu)),
         display("Failed to find WebCrypto support")
     )]
+    #[classify(no)]
     NoCrypto {
         /// The underlying error.
         source: GetCryptoError,
     },
     /// Error occurred when attempting to sign.
-    #[snafu(display("Signing failed"))]
+    #[snafu(display("signing failed"))]
+    #[classify(no)]
     Sign {
         /// The underlying error.
         source: JsSignError,
     },
-}
-
-impl From<SignError> for Error {
-    fn from(value: SignError) -> Self {
-        Error::new(ErrorKind::Crypto, value)
-    }
 }
 
 impl JwsSignerSelector for PrivateKey {

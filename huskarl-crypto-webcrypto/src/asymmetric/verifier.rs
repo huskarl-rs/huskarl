@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use huskarl_core::{
-    Error, ErrorKind,
+    Error,
     crypto::{
         KeyMatchStrength,
         verifier::{JwsVerifier, KeyMatch, VerifyError},
@@ -22,8 +22,8 @@ use web_sys::{Crypto, CryptoKey};
 use crate::{
     KeyUsage,
     helpers::{
-        GetCryptoError, ImportParams, JsVerifyError, SignAlgorithm, get_crypto, import_key,
-        verify_with_key,
+        GetCryptoError, ImportKeyError, ImportParams, JsVerifyError, SignAlgorithm, get_crypto,
+        import_key, verify_with_key,
     },
 };
 
@@ -42,29 +42,24 @@ impl AsymmetricPublicKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the JWK cannot be used for verification:
+    /// Returns an error if the JWK cannot be used for verification:
     /// its `use` is not `sig`, its `key_ops` excludes `verify`, the algorithm is
     /// unsupported, the key material cannot be imported, or — for RSA — the
     /// modulus is outside the 2048–8192 bit range (RFC 7518 §3.3 sets the
-    /// 2048-bit minimum). Returns [`ErrorKind::Crypto`] if `WebCrypto` itself is
-    /// unavailable.
+    /// 2048-bit minimum), or if `WebCrypto` itself is unavailable.
     pub async fn from_jwk(key: jwk::PublicJwk) -> Result<Self, Error> {
         let kid = key.kid.clone();
 
         if let Some(key_use) = key.key_use
             && key_use != KeyUse::Sign
         {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "JWK use must be sig for verification, got {key_use:?}"
-            )));
+            return Err(KeyUseNotSigSnafu { key_use }.build().into());
         }
 
         if let Some(key_ops) = &key.key_operations
             && !key_ops.contains(&KeyOperation::Verify)
         {
-            return Err(
-                Error::from(ErrorKind::Config).with_context("JWK key_ops does not include verify")
-            );
+            return Err(VerifierKeyError::KeyOpsMissingVerify.into());
         }
 
         let verifying_key = Key::new(key).await?;
@@ -124,30 +119,80 @@ fn rsa_modulus_bits(n: &[u8]) -> u32 {
 
 /// Context line for a key whose `kty`/`crv`/`alg` combination has no
 /// supported verification algorithm.
-fn unsupported_key_context(key: &jwk::PublicKey, alg: Option<&str>) -> String {
+fn unsupported_key(key: &jwk::PublicKey, alg: Option<&str>) -> VerifierKeyError {
     let key_type = match key {
         jwk::PublicKey::Rsa(_) => "kty RSA".to_string(),
         jwk::PublicKey::Ec(ec) => format!("kty EC, crv {}", ec.crv),
         jwk::PublicKey::Okp(okp) => format!("kty OKP, crv {}", okp.crv),
         _ => "unrecognized kty".to_string(),
     };
-    format!(
-        "unsupported verification key: {key_type}, alg {}",
-        alg.unwrap_or("unset")
-    )
+    VerifierKeyError::UnsupportedKey {
+        key_type,
+        alg: alg.unwrap_or("unset").to_string(),
+    }
 }
 
-/// Min: RFC 7518 §3.3 floor. Max: `DoS` guard on attacker-supplied JWKs (importKey enforces neither).
+// RFC 7518 §3.3 minimum and a denial-of-service limit for untrusted JWKs.
+const MIN_RSA_BITS: u32 = 2048;
+const MAX_RSA_BITS: u32 = 8192;
+
 fn check_rsa_modulus(rsa_key: &jwk::RsaPublicKey) -> Result<(), Error> {
-    const MIN_RSA_BITS: u32 = 2048;
-    const MAX_RSA_BITS: u32 = 8192;
     let bits = rsa_modulus_bits(&rsa_key.n);
     if !(MIN_RSA_BITS..=MAX_RSA_BITS).contains(&bits) {
-        return Err(Error::from(ErrorKind::Config).with_context(format!(
-            "RSA modulus is {bits} bits, outside the {MIN_RSA_BITS}–{MAX_RSA_BITS} bit range (RFC 7518 §3.3)"
-        )));
+        return Err(RsaModulusOutOfRangeSnafu { bits }.build().into());
     }
     Ok(())
+}
+
+/// The cause of an asymmetric verification-key failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum VerifierKeyError {
+    /// The RSA modulus is outside the accepted range.
+    #[snafu(display(
+        "RSA modulus is {bits} bits, outside the {MIN_RSA_BITS}–{MAX_RSA_BITS} bit range (RFC 7518 §3.3)"
+    ))]
+    #[classify(no)]
+    RsaModulusOutOfRange {
+        /// The modulus size actually presented.
+        bits: u32,
+    },
+    /// The JWK declares a `use` other than `sig`.
+    #[snafu(display("JWK use must be sig for verification, got {key_use:?}"))]
+    #[classify(no)]
+    KeyUseNotSig {
+        /// The declared use.
+        key_use: KeyUse,
+    },
+    /// The JWK's `key_ops` omits `verify`.
+    #[snafu(display("JWK key_ops does not include verify"))]
+    #[classify(no)]
+    KeyOpsMissingVerify,
+    /// `SubtleCrypto` is not available on this platform.
+    #[snafu(display("WebCrypto is unavailable"))]
+    #[classify(no)]
+    WebCryptoUnavailable {
+        /// The underlying error.
+        source: GetCryptoError,
+    },
+    /// `SubtleCrypto` rejected the key during import.
+    #[snafu(display("failed to import {key_description} public key"))]
+    #[classify(no)]
+    ImportFailed {
+        /// The key being imported, e.g. `RSASSA-PKCS1-v1_5/SHA-256`.
+        key_description: String,
+        /// The underlying error.
+        source: ImportKeyError,
+    },
+    /// No verifier supports this key type and algorithm pairing.
+    #[snafu(display("unsupported verification key: {key_type}, alg {alg}"))]
+    #[classify(no)]
+    UnsupportedKey {
+        /// The key type and curve, as described by the JWK.
+        key_type: String,
+        /// The requested algorithm, or `unset`.
+        alg: String,
+    },
 }
 
 async fn create_rsa_key(
@@ -166,10 +211,10 @@ async fn create_rsa_key(
         &[KeyUsage::Verify],
     )
     .await
-    .map_err(|e| {
-        Error::new(ErrorKind::Config, e)
-            .with_context(format!("failed to import {alg_name}/{hash} public key"))
+    .with_context(|_| ImportFailedSnafu {
+        key_description: format!("{alg_name}/{hash}"),
     })
+    .map_err(Error::from)
 }
 
 async fn create_ec_key(
@@ -187,10 +232,10 @@ async fn create_ec_key(
         &[KeyUsage::Verify],
     )
     .await
-    .map_err(|e| {
-        Error::new(ErrorKind::Config, e)
-            .with_context(format!("failed to import {named_curve} public key"))
+    .with_context(|_| ImportFailedSnafu {
+        key_description: named_curve.to_string(),
     })
+    .map_err(Error::from)
 }
 
 /// Union of [`Key::supported_algorithms`] across all variants.
@@ -215,9 +260,7 @@ impl Key {
     }
 
     async fn new(jwk: jwk::PublicJwk) -> Result<Key, Error> {
-        let crypto = get_crypto().map_err(|e| {
-            Error::new(ErrorKind::Crypto, e).with_context("WebCrypto is unavailable")
-        })?;
+        let crypto = get_crypto().context(WebCryptoUnavailableSnafu)?;
 
         match &jwk.key {
             jwk::PublicKey::Ec(ec_public_key)
@@ -244,8 +287,7 @@ impl Key {
                     Some("PS384") => Some(("RSA-PSS", "SHA-384", Key::Ps384)),
                     Some("PS512") => Some(("RSA-PSS", "SHA-512", Key::Ps512)),
                     Some(alg) => {
-                        return Err(Error::from(ErrorKind::Config)
-                            .with_context(unsupported_key_context(&jwk.key, Some(alg))));
+                        return Err(unsupported_key(&jwk.key, Some(alg)).into());
                     }
                 };
                 check_rsa_modulus(rsa_key)?;
@@ -280,14 +322,12 @@ impl Key {
                         &[KeyUsage::Verify],
                     )
                     .await
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Config, e)
-                            .with_context("failed to import Ed25519 public key")
+                    .with_context(|_| ImportFailedSnafu {
+                        key_description: "Ed25519".to_string(),
                     })?,
                 ))
             }
-            key => Err(Error::from(ErrorKind::Config)
-                .with_context(unsupported_key_context(key, jwk.algorithm.as_deref()))),
+            key => Err(unsupported_key(key, jwk.algorithm.as_deref()).into()),
         }
     }
 
@@ -374,26 +414,22 @@ impl Key {
 }
 
 /// Errors that can occur when verifying.
-#[derive(Debug, Snafu)]
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 pub enum AsymmetricPublicKeyError {
     /// Unable to find `WebCrypto` support in environment.
-    #[snafu(display("Failed to find WebCrypto support"))]
+    #[snafu(display("failed to find WebCrypto support"))]
+    #[classify(no)]
     NoCrypto {
         /// The underlying error.
         source: GetCryptoError,
     },
     /// Error occurred when attempting to verify.
-    #[snafu(display("Verification failed"))]
+    #[snafu(display("verification failed"))]
+    #[classify(no)]
     Verify {
         /// The underlying error.
         source: JsVerifyError,
     },
-}
-
-impl From<AsymmetricPublicKeyError> for Error {
-    fn from(value: AsymmetricPublicKeyError) -> Self {
-        Error::new(ErrorKind::Crypto, value)
-    }
 }
 
 impl JwsVerifier for AsymmetricPublicKey {
@@ -682,8 +718,10 @@ mod tests {
             )
             .build();
         let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
-        assert!(err.to_string().contains("2048"), "unexpected error: {err}");
+        assert!(
+            format!("{err:#}").contains("2048"),
+            "unexpected error: {err:#}"
+        );
 
         // The same undersized key is also rejected when it carries no `alg`
         // (the all-RSA import arm).
@@ -711,8 +749,7 @@ mod tests {
                     .build(),
             )
             .build();
-        let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
     }
 
     /// Significant bits of a big-endian modulus, skipping leading zero bytes.
@@ -737,8 +774,7 @@ mod tests {
             .await
             .unwrap();
         let jwk = verification_jwk(&signer, Some("ES384")).await;
-        let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
     }
 
     /// An RSA key labelled with an EC algorithm matches no [`Key::new`] arm.
@@ -753,8 +789,7 @@ mod tests {
         .await
         .unwrap();
         let jwk = verification_jwk(&signer, Some("ES256")).await;
-        let err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = AsymmetricPublicKey::from_jwk(jwk).await.unwrap_err();
     }
 
     /// Verifying against an algorithm the key does not support hits the

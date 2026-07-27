@@ -10,7 +10,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use huskarl_core::{
-    Error, ErrorKind,
+    Error,
     crypto::{
         KeyMatchStrength,
         cipher::{
@@ -29,6 +29,30 @@ use web_sys::{
     CryptoKey,
     js_sys::{Object, Reflect, Uint8Array},
 };
+
+/// The cause of an AES-GCM key failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum AeadKeyError {
+    /// AES-GCM key material must be 16, 24, or 32 bytes.
+    #[snafu(display("AES-GCM key material must be 16, 24, or 32 bytes, got {len}"))]
+    #[classify(no)]
+    BadKeyLength {
+        /// The length actually presented.
+        len: usize,
+    },
+    /// The declared `alg` disagrees with the length-implied one.
+    #[snafu(display(
+        "JWK algorithm {alg} disagrees with the key length, which selects {selected}"
+    ))]
+    #[classify(no)]
+    AlgorithmLengthMismatch {
+        /// The algorithm the JWK declared.
+        alg: String,
+        /// The algorithm the key length implies.
+        selected: String,
+    },
+}
 
 use crate::{
     JsError, KeyUsage,
@@ -96,23 +120,26 @@ impl std::fmt::Debug for AesGcmKey {
 }
 
 /// Errors importing key material into `WebCrypto`, folded into the core
-/// [`Error`] (kind [`ErrorKind::Crypto`]) at the public boundary.
-#[derive(Debug, Snafu)]
+/// [`Error`] at the public boundary.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 enum ImportError {
     /// `WebCrypto` was not available in the environment.
     #[snafu(display("WebCrypto unavailable"))]
+    #[classify(no)]
     LoadCrypto {
         /// The underlying error.
         source: GetCryptoError,
     },
     /// The key-usage list could not be serialized.
     #[snafu(display("failed to serialize key usages"))]
+    #[classify(no)]
     Usages {
         /// The underlying error.
         source: serde_wasm_bindgen::Error,
     },
     /// `SubtleCrypto.importKey` rejected the key material.
     #[snafu(display("importKey failed"))]
+    #[classify(no)]
     Import {
         /// The underlying error.
         #[snafu(source(from(JsValue, JsError::new)))]
@@ -120,6 +147,7 @@ enum ImportError {
     },
     /// Awaiting the `importKey` promise failed.
     #[snafu(display("awaiting importKey failed"))]
+    #[classify(no)]
     ImportAwait {
         /// The underlying error.
         #[snafu(source(from(JsValue, JsError::new)))]
@@ -127,45 +155,39 @@ enum ImportError {
     },
 }
 
-impl From<ImportError> for Error {
-    fn from(value: ImportError) -> Self {
-        Error::new(ErrorKind::Crypto, value)
-    }
-}
-
 /// Errors that can occur during an encrypt/decrypt operation.
-#[derive(Debug, Snafu)]
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 enum OpError {
     #[snafu(display("WebCrypto unavailable"))]
+    #[classify(no)]
     OpCrypto { source: GetCryptoError },
     #[snafu(display("failed to generate nonce"))]
+    #[classify(no)]
     Random {
         #[snafu(source(from(JsValue, JsError::new)))]
         source: JsError,
     },
     #[snafu(display("failed to build AES-GCM parameters"))]
+    #[classify(no)]
     Params {
         #[snafu(source(from(JsValue, JsError::new)))]
         source: JsError,
     },
     #[snafu(display("AES-GCM operation failed"))]
+    #[classify(no)]
     Op {
         #[snafu(source(from(JsValue, JsError::new)))]
         source: JsError,
     },
     #[snafu(display("awaiting AES-GCM operation failed"))]
+    #[classify(no)]
     Await {
         #[snafu(source(from(JsValue, JsError::new)))]
         source: JsError,
     },
     #[snafu(display("ciphertext shorter than the authentication tag"))]
+    #[classify(no)]
     ShortCiphertext,
-}
-
-impl From<OpError> for Error {
-    fn from(value: OpError) -> Self {
-        Error::new(ErrorKind::Crypto, value)
-    }
 }
 
 // An AEAD authentication failure surfaces here as `Op`/`Await` (a rejected
@@ -193,22 +215,22 @@ impl AesGcmKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the key material is not 16, 24, or 32
-    /// bytes or the JWK's `alg` disagrees with the key length, and
-    /// [`ErrorKind::Crypto`] if `WebCrypto` rejects the import.
+    /// Returns an error if the key material is not 16, 24, or 32
+    /// bytes, if the JWK's `alg` disagrees with the key length, or if
+    /// `WebCrypto` rejects the import.
     pub async fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         let len = jwk.key.k.len();
         let Some(enc_algorithm) = enc_algorithm_for_len(len) else {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "AES-GCM key material must be 16, 24, or 32 bytes, got {len}"
-            )));
+            return Err(AeadKeyError::BadKeyLength { len }.into());
         };
         if let Some(alg) = jwk.algorithm.as_deref()
             && alg != enc_algorithm
         {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "JWK algorithm {alg} disagrees with the key length, which selects {enc_algorithm}"
-            )));
+            return Err(AeadKeyError::AlgorithmLengthMismatch {
+                alg: alg.to_owned(),
+                selected: enc_algorithm.to_owned(),
+            }
+            .into());
         }
 
         let crypto = get_crypto().context(LoadCryptoSnafu)?;
@@ -258,10 +280,9 @@ impl AesGcmKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
-    /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
-    /// it is not a valid AES-GCM key, and [`ErrorKind::Crypto`] if `WebCrypto`
-    /// rejects the import.
+    /// Returns an error if the secret cannot be fetched or
+    /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), if
+    /// it is not a valid AES-GCM key, or if `WebCrypto` rejects the import.
     pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
         secret: S,
     ) -> Result<Self, Error> {

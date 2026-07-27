@@ -12,7 +12,7 @@
 //!
 //! To sign, generate a non-extractable
 //! [`PrivateKey`](asymmetric::signer::PrivateKey) and hand it to `huskarl-core`'s
-//! [`Jwt`](huskarl_core::jwt::Jwt) builder; to verify, build an
+//! [`Jwt`](huskarl_core::jwt::Jwt) builder. To verify, build an
 //! [`AsymmetricPublicKey`](asymmetric::verifier::AsymmetricPublicKey) from a
 //! public JWK (or use [`WebCryptoVerifierPlatform`] over a JWKS).
 //!

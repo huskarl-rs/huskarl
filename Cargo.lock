@@ -1309,6 +1309,7 @@ dependencies = [
  "ed25519-dalek",
  "hmac",
  "huskarl-core",
+ "huskarl-macros",
  "p256",
  "p384",
  "pkcs8",
@@ -1331,6 +1332,7 @@ dependencies = [
  "base64",
  "huskarl-core",
  "huskarl-crypto-native",
+ "huskarl-macros",
  "serde",
  "serde-wasm-bindgen",
  "serde_bytes",
@@ -1397,6 +1399,7 @@ dependencies = [
  "redis-test",
  "rstest",
  "sha2",
+ "snafu",
  "tokio",
 ]
 
@@ -1408,7 +1411,10 @@ dependencies = [
  "bytes",
  "http",
  "huskarl-core",
+ "huskarl-macros",
  "reqwest",
+ "snafu",
+ "strum",
  "tokio",
 ]
 

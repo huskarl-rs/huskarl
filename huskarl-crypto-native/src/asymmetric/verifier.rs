@@ -4,10 +4,10 @@
 //! [`AsymmetricPublicKey`] is the entry type; build one with
 //! [`AsymmetricPublicKey::from_jwk`].
 
-use std::sync::Arc;
+use std::{array::TryFromSliceError, sync::Arc};
 
 use huskarl_core::{
-    Error, ErrorKind,
+    Error,
     crypto::{
         KeyMatchStrength,
         verifier::{JwsVerifier, KeyMatch, VerifyError},
@@ -16,6 +16,97 @@ use huskarl_core::{
     platform::MaybeSendBoxFuture,
 };
 use rsa::{BoxedUint, RsaPublicKey, signature::Verifier};
+use snafu::{ResultExt as _, Snafu};
+
+// RFC 7518 §3.3 minimum RSA modulus. `RsaPublicKey::new` enforces the
+// 8192-bit maximum.
+const MIN_RSA_BITS: u32 = 2048;
+
+/// The cause of an asymmetric verification-key failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum VerifierKeyError {
+    /// The RSA modulus is below the RFC 7518 §3.3 minimum.
+    #[snafu(display(
+        "RSA modulus is {bits} bits, below the {MIN_RSA_BITS}-bit minimum (RFC 7518 §3.3)"
+    ))]
+    #[classify(no)]
+    RsaModulusTooSmall {
+        /// The modulus size actually presented.
+        bits: u32,
+    },
+    /// The RSA components did not form a valid public key.
+    #[snafu(display("invalid RSA public key"))]
+    #[classify(no)]
+    InvalidRsaPublicKey {
+        /// The underlying error.
+        source: rsa::Error,
+    },
+    /// An EC public-key point was rejected.
+    #[snafu(display("invalid {curve} public key point"))]
+    #[classify(no)]
+    InvalidEcPoint {
+        /// The curve the point was read against.
+        curve: &'static str,
+        /// The underlying error.
+        source: signature::Error,
+    },
+    /// An Ed25519 public key was not 32 bytes.
+    #[snafu(display("Ed25519 public key must be 32 bytes, got {len}"))]
+    #[classify(no)]
+    Ed25519WrongLength {
+        /// The length actually presented.
+        len: usize,
+        /// The underlying error.
+        source: TryFromSliceError,
+    },
+    /// The 32 bytes were the right length but not a valid Ed25519 point.
+    #[snafu(display("invalid Ed25519 public key"))]
+    #[classify(no)]
+    InvalidEd25519PublicKey {
+        /// The underlying error.
+        source: ed25519_dalek::SignatureError,
+    },
+    /// No verifier supports this key type and algorithm pairing.
+    #[snafu(display("unsupported verification key: {key_type}, alg {alg}"))]
+    #[classify(no)]
+    UnsupportedKey {
+        /// The key type and curve, as described by the JWK.
+        key_type: String,
+        /// The requested algorithm, or `unset`.
+        alg: String,
+    },
+    /// The JWK declares a `use` other than `sig`.
+    #[snafu(display("JWK use must be sig for verification, got {key_use:?}"))]
+    #[classify(no)]
+    KeyUseNotSig {
+        /// The declared use.
+        key_use: KeyUse,
+    },
+    /// The JWK's `key_ops` omits `verify`.
+    #[snafu(display("JWK key_ops does not include verify"))]
+    #[classify(no)]
+    KeyOpsMissingVerify,
+}
+
+/// A signature that will not decode as the algorithm it was verified against.
+#[derive(Debug, Snafu)]
+#[snafu(display("not a well-formed {alg} signature"))]
+pub(crate) struct MalformedSignatureError {
+    /// The algorithm the signature bytes were read against.
+    alg: String,
+    /// The underlying error.
+    source: signature::Error,
+}
+
+/// Converts a decoding failure while preserving the algorithm in its source.
+impl From<MalformedSignatureError> for VerifyError {
+    fn from(source: MalformedSignatureError) -> Self {
+        VerifyError::MalformedSignature {
+            source: Box::new(source),
+        }
+    }
+}
 
 #[derive(Debug)]
 enum Key {
@@ -52,22 +143,17 @@ impl Key {
         }
     }
 
-    pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Result<Key, Error> {
-        fn rsa_key_from_jwk(rsa_jwk: jwk::RsaPublicKey) -> Result<rsa::RsaPublicKey, Error> {
-            // RFC 7518 §3.3 minimum. (RsaPublicKey::new enforces the 8192-bit max itself.)
-            const MIN_RSA_BITS: u32 = 2048;
-
+    pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Result<Key, VerifierKeyError> {
+        fn rsa_key_from_jwk(
+            rsa_jwk: jwk::RsaPublicKey,
+        ) -> Result<rsa::RsaPublicKey, VerifierKeyError> {
             let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
             let bits = n_boxed.bits_vartime();
             if bits < MIN_RSA_BITS {
-                return Err(Error::from(ErrorKind::Config).with_context(format!(
-                    "RSA modulus is {bits} bits, below the {MIN_RSA_BITS}-bit minimum (RFC 7518 §3.3)"
-                )));
+                return RsaModulusTooSmallSnafu { bits }.fail();
             }
             let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e.into_boxed_slice());
-            RsaPublicKey::new(n_boxed, e_boxed).map_err(|e| {
-                Error::new(ErrorKind::Config, e).with_context("invalid RSA public key")
-            })
+            RsaPublicKey::new(n_boxed, e_boxed).context(InvalidRsaPublicKeySnafu)
         }
 
         match jwk_key {
@@ -109,10 +195,7 @@ impl Key {
 
                 p256::ecdsa::VerifyingKey::from_sec1_bytes(&point)
                     .map(Self::Es256)
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Config, e)
-                            .with_context("invalid P-256 public key point")
-                    })
+                    .context(InvalidEcPointSnafu { curve: "P-256" })
             }
             jwk::PublicKey::Ec(ec_public_key)
                 if alg.is_none_or(|a| a == "ES384") && ec_public_key.crv == "P-384" =>
@@ -125,47 +208,38 @@ impl Key {
 
                 p384::ecdsa::VerifyingKey::from_sec1_bytes(&point)
                     .map(Self::Es384)
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Config, e)
-                            .with_context("invalid P-384 public key point")
-                    })
+                    .context(InvalidEcPointSnafu { curve: "P-384" })
             }
             jwk::PublicKey::Okp(okp_public_key)
                 if alg.is_none_or(|a| ["Ed25519", "EdDSA"].contains(&a))
                     && okp_public_key.crv == "Ed25519" =>
             {
-                let x: &[u8; 32] = okp_public_key.x.as_slice().try_into().map_err(|_| {
-                    Error::from(ErrorKind::Config).with_context(format!(
-                        "Ed25519 public key must be 32 bytes, got {}",
-                        okp_public_key.x.len()
-                    ))
-                })?;
+                let x = okp_public_key.x.as_slice();
+                let x: &[u8; 32] = x
+                    .try_into()
+                    .context(Ed25519WrongLengthSnafu { len: x.len() })?;
                 ed25519_dalek::VerifyingKey::from_bytes(x)
                     .map(Self::Ed25519)
-                    .map_err(|e| {
-                        Error::new(ErrorKind::Config, e).with_context("invalid Ed25519 public key")
-                    })
+                    .context(InvalidEd25519PublicKeySnafu)
             }
-            key => {
-                Err(Error::from(ErrorKind::Config).with_context(unsupported_key_context(&key, alg)))
-            }
+            key => Err(unsupported_key(&key, alg)),
         }
     }
 }
 
 /// Context line for a key whose `kty`/`crv`/`alg` combination has no
 /// supported verification algorithm.
-fn unsupported_key_context(key: &jwk::PublicKey, alg: Option<&str>) -> String {
+fn unsupported_key(key: &jwk::PublicKey, alg: Option<&str>) -> VerifierKeyError {
     let key_type = match key {
         jwk::PublicKey::Rsa(_) => "kty RSA".to_string(),
         jwk::PublicKey::Ec(ec) => format!("kty EC, crv {}", ec.crv),
         jwk::PublicKey::Okp(okp) => format!("kty OKP, crv {}", okp.crv),
         _ => "unrecognized kty".to_string(),
     };
-    format!(
-        "unsupported verification key: {key_type}, alg {}",
-        alg.unwrap_or("unset")
-    )
+    VerifierKeyError::UnsupportedKey {
+        key_type,
+        alg: alg.unwrap_or("unset").to_string(),
+    }
 }
 
 #[derive(Debug)]
@@ -188,7 +262,7 @@ impl AsymmetricPublicKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the JWK cannot be used for verification:
+    /// Returns an error if the JWK cannot be used for verification:
     /// its `use` is not `sig`, its `key_ops` excludes `verify`, the algorithm is
     /// unsupported, the key material fails to parse, or — for RSA — the modulus
     /// is outside the 2048–8192 bit range (RFC 7518 §3.3 sets the 2048-bit
@@ -218,17 +292,13 @@ impl AsymmetricPublicKey {
         if let Some(key_use) = key.key_use
             && key_use != KeyUse::Sign
         {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "JWK use must be sig for verification, got {key_use:?}"
-            )));
+            return Err(KeyUseNotSigSnafu { key_use }.build().into());
         }
 
         if let Some(key_ops) = &key.key_operations
             && !key_ops.contains(&KeyOperation::Verify)
         {
-            return Err(
-                Error::from(ErrorKind::Config).with_context("JWK key_ops does not include verify")
-            );
+            return Err(VerifierKeyError::KeyOpsMissingVerify.into());
         }
 
         let verifying_key = Key::new(key.key, key.algorithm.as_deref())?;
@@ -253,12 +323,9 @@ impl JwsVerifier for AsymmetricPublicKey {
         signature: &'a [u8],
         key_match: &'a KeyMatch<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
-        // A malformed signature encoding can never verify, so it maps to
-        // SignatureMismatch just like a failed verification.
-        fn mismatch(_: signature::Error) -> VerifyError {
-            VerifyError::SignatureMismatch
-        }
-
+        // Decoding the signature bytes and checking them are different
+        // failures: reporting a truncated signature as a mismatch sends an
+        // operator looking for a key rotation over a malformed token.
         Box::pin(async move {
             if self.key_match(key_match).is_none() {
                 return Err(VerifyError::NoMatchingKey);
@@ -267,42 +334,50 @@ impl JwsVerifier for AsymmetricPublicKey {
             match &self.inner.verifying_key {
                 Key::Es256(verifying_key) => verifying_key.verify(
                     input,
-                    &p256::ecdsa::Signature::from_slice(signature).map_err(mismatch)?,
+                    &p256::ecdsa::Signature::from_slice(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Es384(verifying_key) => verifying_key.verify(
                     input,
-                    &p384::ecdsa::Signature::from_slice(signature).map_err(mismatch)?,
+                    &p384::ecdsa::Signature::from_slice(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Rsa(public_key) => match key_match.alg {
                     "RS256" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(public_key.clone())
                         .verify(
                             input,
-                            &rsa::pkcs1v15::Signature::try_from(signature).map_err(mismatch)?,
+                            &rsa::pkcs1v15::Signature::try_from(signature)
+                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "RS384" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(public_key.clone())
                         .verify(
                             input,
-                            &rsa::pkcs1v15::Signature::try_from(signature).map_err(mismatch)?,
+                            &rsa::pkcs1v15::Signature::try_from(signature)
+                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "RS512" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(public_key.clone())
                         .verify(
                             input,
-                            &rsa::pkcs1v15::Signature::try_from(signature).map_err(mismatch)?,
+                            &rsa::pkcs1v15::Signature::try_from(signature)
+                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "PS256" => rsa::pss::VerifyingKey::<sha2::Sha256>::new(public_key.clone())
                         .verify(
                             input,
-                            &rsa::pss::Signature::try_from(signature).map_err(mismatch)?,
+                            &rsa::pss::Signature::try_from(signature)
+                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "PS384" => rsa::pss::VerifyingKey::<sha2::Sha384>::new(public_key.clone())
                         .verify(
                             input,
-                            &rsa::pss::Signature::try_from(signature).map_err(mismatch)?,
+                            &rsa::pss::Signature::try_from(signature)
+                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "PS512" => rsa::pss::VerifyingKey::<sha2::Sha512>::new(public_key.clone())
                         .verify(
                             input,
-                            &rsa::pss::Signature::try_from(signature).map_err(mismatch)?,
+                            &rsa::pss::Signature::try_from(signature)
+                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     // `key_match` above already rejected any alg outside
                     // `supported_algorithms()`, so this is unreachable today.
@@ -314,34 +389,41 @@ impl JwsVerifier for AsymmetricPublicKey {
                 },
                 Key::Rs256(verifying_key) => verifying_key.verify(
                     input,
-                    &rsa::pkcs1v15::Signature::try_from(signature).map_err(mismatch)?,
+                    &rsa::pkcs1v15::Signature::try_from(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Rs384(verifying_key) => verifying_key.verify(
                     input,
-                    &rsa::pkcs1v15::Signature::try_from(signature).map_err(mismatch)?,
+                    &rsa::pkcs1v15::Signature::try_from(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Rs512(verifying_key) => verifying_key.verify(
                     input,
-                    &rsa::pkcs1v15::Signature::try_from(signature).map_err(mismatch)?,
+                    &rsa::pkcs1v15::Signature::try_from(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ps256(verifying_key) => verifying_key.verify(
                     input,
-                    &rsa::pss::Signature::try_from(signature).map_err(mismatch)?,
+                    &rsa::pss::Signature::try_from(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ps384(verifying_key) => verifying_key.verify(
                     input,
-                    &rsa::pss::Signature::try_from(signature).map_err(mismatch)?,
+                    &rsa::pss::Signature::try_from(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ps512(verifying_key) => verifying_key.verify(
                     input,
-                    &rsa::pss::Signature::try_from(signature).map_err(mismatch)?,
+                    &rsa::pss::Signature::try_from(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ed25519(verifying_key) => verifying_key.verify_strict(
                     input,
-                    &ed25519_dalek::Signature::from_slice(signature).map_err(mismatch)?,
+                    &ed25519_dalek::Signature::from_slice(signature)
+                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
             }
-            .map_err(mismatch)
+            .map_err(|_| VerifyError::SignatureMismatch)
         })
     }
 }
@@ -349,7 +431,7 @@ impl JwsVerifier for AsymmetricPublicKey {
 #[cfg(test)]
 mod tests {
     use huskarl_core::{
-        Error, ErrorKind,
+        Error,
         crypto::signer::{
             AsymmetricJwsSigner as _, AsymmetricJwsSignerSelector as _, JwsSigner as _,
             JwsSignerSelector as _,
@@ -466,8 +548,10 @@ mod tests {
             )
             .build();
         let err = AsymmetricPublicKey::from_jwk(jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
-        assert!(err.to_string().contains("2048"), "unexpected error: {err}");
+        assert!(
+            format!("{err:#}").contains("2048"),
+            "unexpected error: {err:#}"
+        );
     }
 
     #[test]
@@ -482,8 +566,7 @@ mod tests {
                     .build(),
             )
             .build();
-        let err = AsymmetricPublicKey::from_jwk(jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = AsymmetricPublicKey::from_jwk(jwk).unwrap_err();
     }
 
     #[tokio::test]

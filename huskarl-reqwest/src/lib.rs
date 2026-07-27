@@ -19,10 +19,38 @@ pub mod mtls;
 use bytes::Bytes;
 use http::Request;
 use huskarl_core::{
-    Error, ErrorKind,
+    Error, RetryAdvice,
     http::{HttpClient, HttpResponse, Idempotency},
     platform::MaybeSendBoxFuture,
 };
+use snafu::ResultExt as _;
+
+/// The cause of a `reqwest` client or request construction failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum ReqwestSetupError {
+    /// The HTTP client could not be built from the configured options.
+    #[snafu(display("building HTTP client"))]
+    #[classify(no)]
+    BuildingClient {
+        /// The underlying error.
+        source: reqwest::Error,
+    },
+    /// The outgoing request could not be built.
+    #[snafu(display("building HTTP request"))]
+    #[classify(no)]
+    BuildingRequest {
+        /// The underlying error.
+        source: reqwest::Error,
+    },
+    /// The response body exceeded the configured limit.
+    #[snafu(display("response body exceeded {max} byte limit"))]
+    #[classify(no)]
+    OversizeBody {
+        /// The configured ceiling.
+        max: usize,
+    },
+}
 
 /// Default maximum response body size (1 MiB).
 ///
@@ -81,8 +109,8 @@ impl ReqwestClient {
     ///
     /// # Errors
     ///
-    /// Returns an [`Error`] of kind [`Config`](huskarl_core::ErrorKind::Config)
-    /// if the mTLS identity cannot be applied or the client fails to build.
+    /// Returns an [`Error`] if the mTLS identity cannot be applied or the client
+    /// fails to build.
     #[builder]
     pub async fn new(
         /// The `User-Agent` header sent with each request. Defaults to
@@ -179,9 +207,7 @@ impl ReqwestClient {
         let mtls_output = mtls.apply(reqwest_builder).await?;
 
         Ok(Self {
-            client: mtls_output.builder.build().map_err(|e| {
-                Error::new(ErrorKind::Config, e).with_context("building HTTP client")
-            })?,
+            client: mtls_output.builder.build().context(BuildingClientSnafu)?,
             uses_mtls,
             max_response_bytes,
             #[cfg(all(
@@ -225,14 +251,10 @@ impl ReqwestClient {
     }
 }
 
-/// Builds the error returned when a response body exceeds the configured limit.
-///
-/// Classified as [`ErrorKind::Protocol`] rather than a transport failure: the
-/// server sent something we refuse to process, and re-sending would only pull
-/// the same oversized body, so it must not be retried.
+/// Builds a non-retryable error for an oversized response body.
+#[track_caller]
 fn oversize_error(max: usize) -> Error {
-    Error::from(ErrorKind::Protocol)
-        .with_context(format!("response body exceeded {max} byte limit"))
+    Error::from(ReqwestSetupError::OversizeBody { max })
 }
 
 /// Reads a response body, enforcing the optional size cap.
@@ -303,6 +325,7 @@ async fn read_body(
 /// processed and only the response lost.
 ///
 /// On `wasm32`, fetch errors are opaque, so nothing is marked retryable.
+#[track_caller]
 fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
     #[cfg(not(target_arch = "wasm32"))]
     let retryable = source.is_connect()
@@ -314,7 +337,7 @@ fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
         false
     };
 
-    Error::new(ErrorKind::Transport { retryable }, source)
+    Error::new(RetryAdvice::retry_if(retryable), source)
 }
 
 impl HttpClient for ReqwestClient {
@@ -340,9 +363,7 @@ impl HttpClient for ReqwestClient {
                 .headers(parts.headers)
                 .body(body)
                 .build()
-                .map_err(|e| {
-                    Error::new(ErrorKind::Config, e).with_context("building HTTP request")
-                })?;
+                .context(BuildingRequestSnafu)?;
 
             let response = self
                 .client
@@ -371,7 +392,7 @@ mod tests {
     use bytes::Bytes;
     use http::Request;
     use huskarl_core::{
-        ErrorKind,
+        RetryAdvice,
         http::{HttpClient, Idempotency},
     };
 
@@ -445,16 +466,14 @@ mod tests {
     async fn oversized_content_length_is_rejected_early() {
         let url = serve_once(vec![b'x'; 5000], true);
         let error = get(&url, Some(1000)).await.unwrap_err();
-        assert!(matches!(error.kind(), ErrorKind::Protocol));
-        assert!(!error.is_retryable());
+        assert_eq!(error.retry_advice(), RetryAdvice::No);
     }
 
     #[tokio::test]
     async fn oversized_streamed_body_without_content_length_is_rejected() {
         let url = serve_once(vec![b'x'; 5000], false);
         let error = get(&url, Some(1000)).await.unwrap_err();
-        assert!(matches!(error.kind(), ErrorKind::Protocol));
-        assert!(!error.is_retryable());
+        assert_eq!(error.retry_advice(), RetryAdvice::No);
     }
 
     #[tokio::test]
@@ -529,10 +548,10 @@ mod tests {
     async fn connect_failure_is_retryable_regardless_of_idempotency() {
         for idempotency in [Idempotency::Idempotent, Idempotency::Unknown] {
             let error = transport_error(connect_error().await, idempotency);
-            assert!(
-                matches!(error.kind(), ErrorKind::Transport { retryable: true }),
-                "connect failure with {idempotency:?} should be retryable, got {:?}",
-                error.kind()
+            assert_eq!(
+                error.retry_advice(),
+                RetryAdvice::RETRY,
+                "connect failure with {idempotency:?} should be retryable"
             );
         }
     }
@@ -541,16 +560,10 @@ mod tests {
     async fn timeout_is_retryable_only_when_idempotent() {
         let (error, _listener) = timeout_error().await;
         let error = transport_error(error, Idempotency::Idempotent);
-        assert!(matches!(
-            error.kind(),
-            ErrorKind::Transport { retryable: true }
-        ));
+        assert_eq!(error.retry_advice(), RetryAdvice::RETRY);
 
         let (error, _listener) = timeout_error().await;
         let error = transport_error(error, Idempotency::Unknown);
-        assert!(matches!(
-            error.kind(),
-            ErrorKind::Transport { retryable: false }
-        ));
+        assert_eq!(error.retry_advice(), RetryAdvice::No);
     }
 }
