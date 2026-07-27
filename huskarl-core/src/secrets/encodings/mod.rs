@@ -10,10 +10,42 @@ use std::sync::Arc;
 pub use base64::Base64Encoding;
 pub use conversion::StringToBytes;
 pub use hex::HexEncoding;
+use snafu::Snafu;
 pub use string::StringEncoding;
 use zeroize::Zeroizing;
 
 use crate::{error::Error, platform::MaybeSendSync};
+
+/// The cause of a secret-decoding failure.
+///
+/// Messages identify the encoding without exposing the secret or its length.
+// `::base64` / `::hex` rather than the bare paths: this module has `base64` and
+// `hex` submodules of its own, which would shadow the crates.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum EncodingError {
+    /// The secret is not valid base64 in either alphabet.
+    #[snafu(display("decoding the secret as base64"))]
+    #[classify(no)]
+    Base64 {
+        /// The underlying error.
+        source: ::base64::DecodeError,
+    },
+    /// The secret is not valid hex.
+    #[snafu(display("decoding the secret as hex"))]
+    #[classify(no)]
+    Hex {
+        /// The underlying error.
+        source: ::hex::FromHexError,
+    },
+    /// The secret bytes are not valid UTF-8.
+    #[snafu(display("the secret is not valid UTF-8"))]
+    #[classify(no)]
+    NotUtf8 {
+        /// The underlying error.
+        source: std::str::Utf8Error,
+    },
+}
 
 /// Copies `bytes` with all ASCII whitespace removed, applying `map` to each
 /// retained byte.
@@ -40,7 +72,7 @@ fn strip_ascii_whitespace(bytes: &[u8], map: impl Fn(u8) -> u8) -> Zeroizing<Vec
 
 /// A named, reusable mapping from one secret type to another.
 ///
-/// This is the unifying abstraction over what used to be separate ideas:
+/// One abstraction over what would otherwise be separate ideas:
 /// decoders (`SecretBytes` → `SecretBytes`, e.g. [`Base64Encoding`]), the UTF-8
 /// view ([`StringEncoding`]: `SecretBytes` → [`SecretString`](crate::secrets::SecretString)),
 /// the reverse conversion ([`StringToBytes`]), and value transforms like
@@ -63,8 +95,8 @@ pub trait SecretMap: MaybeSendSync {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`](crate::error::ErrorKind::Config) if `input`
-    /// cannot be mapped (e.g. invalid base64, non-UTF-8 bytes).
+    /// Returns an error if `input` cannot be mapped, such as for invalid base64
+    /// or non-UTF-8 bytes.
     fn apply(&self, input: Self::In) -> Result<Self::Out, Error>;
 }
 
@@ -100,10 +132,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::{
-        error::ErrorKind,
-        secrets::{SecretBytes, SecretString},
-    };
+    use crate::secrets::{SecretBytes, SecretString};
 
     /// Wraps raw bytes for feeding into a byte-input mapping.
     fn bytes(raw: &[u8]) -> SecretBytes {
@@ -127,8 +156,7 @@ mod tests {
 
     #[test]
     fn string_rejects_invalid_utf8() {
-        let err = StringEncoding.apply(bytes(b"\xff\xfe")).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = StringEncoding.apply(bytes(b"\xff\xfe")).unwrap_err();
     }
 
     // ── StringToBytes (SecretString → SecretBytes) ────────────────────────
@@ -156,8 +184,7 @@ mod tests {
     #[case::non_hex_character(b"zz")]
     #[case::non_hex_byte(b"\xff")]
     fn hex_rejects_invalid_input(#[case] input: &[u8]) {
-        let err = HexEncoding.apply(bytes(input)).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = HexEncoding.apply(bytes(input)).unwrap_err();
     }
 
     // ── Base64Encoding (SecretBytes → SecretBytes) ────────────────────────
@@ -182,8 +209,7 @@ mod tests {
     #[case::not_base64(b"not_valid_base64!!")]
     #[case::non_base64_bytes(b"\xff\xff")]
     fn base64_rejects_invalid_input(#[case] input: &[u8]) {
-        let err = Base64Encoding.apply(bytes(input)).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = Base64Encoding.apply(bytes(input)).unwrap_err();
     }
 
     // ── Blanket impls (&T / Box / Arc) ────────────────────────────────────

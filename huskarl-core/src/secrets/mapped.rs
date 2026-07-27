@@ -9,11 +9,30 @@
 
 use std::marker::PhantomData;
 
+use snafu::ResultExt as _;
+
 use crate::{
     error::Error,
     platform::{MaybeSendBoxFuture, MaybeSendSync},
     secrets::{Secret, SecretMap, SecretOutput},
 };
+
+/// The cause of a secret-mapping failure.
+///
+/// The caller-supplied label from [`MappedSecret::with_context`] becomes a
+/// distinct layer in the source chain.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum MappedSecretError {
+    /// Applying the map to the fetched secret failed.
+    #[snafu(display("{label}"))]
+    Mapping {
+        /// What the caller called this secret, defaulting to a generic label.
+        label: String,
+        /// The underlying error.
+        source: Error,
+    },
+}
 
 /// A [`Secret`] decorator that transforms an inner source's value through a
 /// [`SecretMap`].
@@ -80,12 +99,11 @@ where
     ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
         Box::pin(async move {
             let input = self.inner.get_secret_value().await?;
-            let value = self.map.apply(input.value).map_err(|err| {
-                err.with_context(
-                    self.context
-                        .clone()
-                        .unwrap_or_else(|| "mapping secret value".to_owned()),
-                )
+            let value = self.map.apply(input.value).with_context(|_| MappingSnafu {
+                label: self
+                    .context
+                    .clone()
+                    .unwrap_or_else(|| "mapping secret value".to_owned()),
             })?;
             Ok(SecretOutput {
                 value,
@@ -191,7 +209,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        error::ErrorKind,
+        error::RetryAdvice,
         secrets::{
             SecretBytes, SecretString, WithIdentity,
             encodings::{Base64Encoding, StringToBytes},
@@ -258,9 +276,8 @@ mod tests {
     async fn surfaces_map_error_as_config_with_default_context() {
         let secret = MappedSecret::new(BytesSource(b"not base64 !!"), Base64Encoding);
         let err = secret.get_secret_value().await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
         assert!(
-            err.to_string().contains("mapping secret value"),
+            format!("{err:#}").contains("mapping secret value"),
             "expected default context in: {err}"
         );
     }
@@ -271,7 +288,7 @@ mod tests {
             .with_context("decoding the widget key");
         let err = secret.get_secret_value().await.unwrap_err();
         assert!(
-            err.to_string().contains("decoding the widget key"),
+            format!("{err:#}").contains("decoding the widget key"),
             "expected custom context in: {err}"
         );
     }
@@ -302,9 +319,8 @@ mod tests {
     #[tokio::test]
     async fn try_map_propagates_function_error() {
         let secret = StringSource("hello")
-            .try_map(|_s| Err::<SecretBytes, _>(Error::from(ErrorKind::Config)));
-        let err = secret.get_secret_value().await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+            .try_map(|_s| Err::<SecretBytes, _>(Error::new(RetryAdvice::No, "config failure")));
+        let _err = secret.get_secret_value().await.unwrap_err();
     }
 
     #[tokio::test]
@@ -320,11 +336,11 @@ mod tests {
     #[tokio::test]
     async fn try_map_error_carries_context() {
         let secret = StringSource("hello")
-            .try_map(|_s| Err::<SecretBytes, _>(Error::from(ErrorKind::Config)))
+            .try_map(|_s| Err::<SecretBytes, _>(Error::new(RetryAdvice::No, "config failure")))
             .with_context("parsing the vault payload");
         let err = secret.get_secret_value().await.unwrap_err();
         assert!(
-            err.to_string().contains("parsing the vault payload"),
+            format!("{err:#}").contains("parsing the vault payload"),
             "expected custom context in: {err}"
         );
     }

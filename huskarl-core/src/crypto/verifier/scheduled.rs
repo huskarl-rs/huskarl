@@ -16,31 +16,16 @@ use crate::{
 /// removed key lingers; key *additions* are handled by the miss-triggered
 /// [`RetryingVerifier`](super::RetryingVerifier) layered on top.
 ///
-/// On each [`verify`](JwsVerifier::verify) past the TTL (and if the
-/// rate-limit/backoff policy allows), the first caller to notice reloads
-/// single-flight — non-blocking for concurrent callers, who keep serving the
-/// current keyset. [`try_refresh`](JwsVerifier::try_refresh) drives the same
-/// reload for the miss-triggered path, under the same policy.
+/// [`try_refresh`](JwsVerifier::try_refresh) drives the same reload for the
+/// miss-triggered path, under the same policy.
 ///
 /// For the common JWKS-backed stack (this layer +
 /// [`RetryingVerifier`](super::RetryingVerifier) +
 /// [`MultiKeyVerifier`](super::MultiKeyVerifier)) use
-/// [`JwksSource`](crate::jwk::JwksSource) rather than composing by hand; its `ttl`
-/// is this layer's TTL. See [composing crypto
-/// strategies](crate::_docs::explanation::crypto_strategies) for the full stack.
-///
-/// # Warm start from a persisted cache
-///
-/// The factory's `Ok` value is served immediately as the current keyset, so a
-/// factory that falls back to a *trusted local cache* comes up **warm** — able to
-/// verify at once — even when the authorization server is unreachable at boot,
-/// then picks up live keys on the next TTL refresh. This is distinct from
-/// [`JwksStartup::SeedEmpty`](crate::jwk::JwksStartup::SeedEmpty), which comes up
-/// *cold* and returns [`KeysUnavailable`](VerifyError::KeysUnavailable) until a
-/// live fetch lands. Persist each successful fetch so the cache tracks key
-/// rotations rather than a stale bake-in; if there is no live fetch *and* no
-/// cache (a first-ever offline boot), the build still fails — you genuinely have
-/// no keys.
+/// [`JwksSource`](crate::jwk::JwksSource) rather than composing by hand; its
+/// `ttl` is this layer's TTL. See [composing crypto
+/// strategies](crate::_docs::explanation::crypto_strategies) for the read-path
+/// reload and for warm-starting from a persisted cache.
 ///
 /// ```rust,no_run
 /// # use std::pin::Pin;
@@ -129,9 +114,7 @@ impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
             .maybe_fallback(fallback)
             .build()
             .await?;
-        // Coming up cold (initial fetch failed, placeholder seeded) is no longer a
-        // construction error, so surface it here — the only startup-time signal
-        // that the stack is degraded until it self-heals.
+        // Report a seeded-empty cold start until the first fetch succeeds.
         #[cfg(feature = "metrics")]
         if inner.is_cold() {
             ::metrics::counter!("huskarl.jws.cold_start").increment(1);
@@ -403,14 +386,7 @@ mod tests {
     -> impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<MissVerifier, Error>>>>
     + MaybeSendSync
     + 'static {
-        || {
-            Box::pin(async {
-                Err(Error::new(
-                    crate::error::ErrorKind::Transport { retryable: true },
-                    "down",
-                ))
-            })
-        }
+        || Box::pin(async { Err(Error::new(crate::error::RetryAdvice::RETRY, "down")) })
     }
 
     /// A seeded-empty cold start reports [`VerifyError::KeysUnavailable`] — not a
@@ -442,10 +418,7 @@ mod tests {
             let n = calls.fetch_add(1, Ordering::SeqCst);
             Box::pin(async move {
                 if n == 0 {
-                    Err(Error::new(
-                        crate::error::ErrorKind::Transport { retryable: true },
-                        "down at boot",
-                    ))
+                    Err(Error::new(crate::error::RetryAdvice::RETRY, "down at boot"))
                 } else {
                     Ok(MissVerifier { present: true })
                 }

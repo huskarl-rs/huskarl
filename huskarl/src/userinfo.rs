@@ -1595,10 +1595,10 @@ mod tests {
             .err()
             .expect("metadata carries no userinfo_endpoint");
 
-        assert_eq!(err.kind(), ErrorKind::Config);
+        // The detail is a chain layer now, so the alternate form carries it.
         assert_eq!(
-            err.to_string(),
-            "authorization server metadata has no `userinfo_endpoint`: invalid configuration"
+            format!("{err:#}"),
+            "authorization server metadata has no 'userinfo_endpoint'"
         );
     }
 

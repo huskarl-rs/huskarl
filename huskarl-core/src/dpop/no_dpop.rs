@@ -6,7 +6,7 @@ use snafu::Snafu;
 use crate::{
     crypto::signer::AsymmetricJwsSignerSelector,
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
-    error::{Error, ErrorKind},
+    error::Error,
     platform::MaybeSendBoxFuture,
     secrets::SecretString,
 };
@@ -37,7 +37,7 @@ impl AuthorizationServerDPoP for NoDPoP {
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async move {
             if dpop_jkt.is_some() {
-                Err(Error::new(ErrorKind::DPoP, DPoPNotConfigured))
+                Err(DPoPNotConfiguredSnafu.build().into())
             } else {
                 Ok(None)
             }
@@ -53,10 +53,7 @@ impl AuthorizationServerDPoP for NoDPoP {
         _signer: Arc<dyn AsymmetricJwsSignerSelector>,
     ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
         // DPoP is disabled here; a per-session key needs SessionKeyedDPoP.
-        Err(Error::from(ErrorKind::DPoP).with_context(
-            "a per-session DPoP key was bound, but DPoP is not enabled on this grant; \
-             configure it with SessionKeyedDPoP",
-        ))
+        Err(super::implementation::DPoPKeyError::DPoPNotEnabled.into())
     }
 }
 
@@ -70,7 +67,21 @@ impl ResourceServerDPoP for NoDPoP {
         _access_token: &'a SecretString,
         _dpop_jkt: &'a str,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
-        Box::pin(async { Err(Error::new(ErrorKind::DPoP, DPoPNotConfigured)) })
+        Box::pin(async { Err(DPoPNotConfiguredSnafu.build().into()) })
+    }
+}
+
+// This single-shape cause always establishes a terminal classification.
+impl crate::error::propagation::Cause for DPoPNotConfigured {
+    fn origin(&self) -> crate::error::propagation::Origin<'_> {
+        crate::error::propagation::Origin::Establishes(crate::error::RetryAdvice::No.into())
+    }
+}
+
+impl From<DPoPNotConfigured> for Error {
+    #[track_caller]
+    fn from(source: DPoPNotConfigured) -> Self {
+        Self::from_cause(source)
     }
 }
 
@@ -86,17 +97,15 @@ mod tests {
         let proof = dpop.proof(&Method::POST, &uri, None).await.unwrap();
         assert!(proof.is_none());
 
-        let err = dpop
+        let _err = dpop
             .proof(&Method::POST, &uri, Some("jkt"))
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DPoP);
 
         let resource = dpop.to_resource_server_dpop();
-        let err = resource
+        let _err = resource
             .proof(&Method::GET, &uri, &SecretString::new("token"), "jkt")
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DPoP);
     }
 }

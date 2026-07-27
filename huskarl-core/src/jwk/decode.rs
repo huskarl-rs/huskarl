@@ -1,8 +1,10 @@
 //! Decoding key-material secrets into a [`PrivateJwk`].
 
+use snafu::prelude::*;
+
 use crate::{
-    error::{Error, ErrorKind},
-    jwk::{Jwk, OctKey, PrivateJwk, SymmetricJwk},
+    error::Error,
+    jwk::{Jwk, OctKey, ParsingJsonSnafu, PrivateJwk, SymmetricJwk},
     secrets::{SecretBytes, SecretMap, SecretString},
 };
 
@@ -23,12 +25,9 @@ impl SecretMap for JwkJson {
     type Out = PrivateJwk;
 
     fn apply(&self, input: SecretString) -> Result<PrivateJwk, Error> {
-        let jwk: Jwk = serde_json::from_str(input.expose_secret()).map_err(|source| {
-            Error::new(ErrorKind::Config, source).with_context("parsing JWK JSON")
-        })?;
-        jwk.private_jwk().ok_or_else(|| {
-            Error::from(ErrorKind::Config).with_context("JWK JSON contains no secret key material")
-        })
+        let jwk: Jwk = serde_json::from_str(input.expose_secret()).context(ParsingJsonSnafu)?;
+        jwk.private_jwk()
+            .ok_or_else(|| Error::from(crate::jwk::JwkError::NoSecretKeyMaterial))
     }
 }
 
@@ -139,14 +138,12 @@ mod tests {
         let public_only = r#"{"kty":"EC","crv":"P-256","alg":"ES256",
             "x":"MKBCTNIcKUSDii11ySs3526iDZ8AiTo7Tu6KPAqv7D4",
             "y":"4Etl6SRW2YiLUrN5vfvVHuhp7x8PxltmWWlbbM4IFyM"}"#;
-        let err = JwkJson.apply(SecretString::new(public_only)).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = JwkJson.apply(SecretString::new(public_only)).unwrap_err();
     }
 
     #[test]
     fn rejects_malformed_json() {
-        let err = JwkJson.apply(SecretString::new("not json")).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = JwkJson.apply(SecretString::new("not json")).unwrap_err();
     }
 
     #[test]

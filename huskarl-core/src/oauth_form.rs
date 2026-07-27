@@ -55,13 +55,15 @@ use snafu::Snafu;
 // ============================ Error ============================
 
 /// An error returned while serializing or deserializing OAuth form data.
+///
+/// The distinct name avoids ambiguity with the crate-wide [`crate::Error`].
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
-pub enum Error {
+pub enum FormError {
     /// A single-valued parameter appeared more than once. RFC 6749 §3.1
     /// requires request and response parameters to appear at most once.
     #[snafu(display(
-        "parameter `{name}` appears {count} times but a single value is expected (RFC 6749 §3.1)"
+        "parameter '{name}' appears {count} times but a single value is expected (RFC 6749 §3.1)"
     ))]
     DuplicateParameter {
         /// The name of the repeated parameter.
@@ -86,7 +88,11 @@ pub enum Error {
     },
 }
 
-impl Error {
+/// Compatibility name retained while workspace consumers migrate to
+/// [`FormError`].
+pub type Error = FormError;
+
+impl FormError {
     fn other(message: impl Into<String>) -> Self {
         Error::Other {
             message: message.into(),
@@ -882,21 +888,21 @@ impl<'de> de::Deserializer<'de> for ValueDe {
         let b = self
             .single()?
             .parse()
-            .map_err(|_| Error::other("invalid boolean"))?;
+            .map_err(|source| Error::other(format!("invalid boolean: {source}")))?;
         v.visit_bool(b)
     }
     fn deserialize_i64<V: Visitor<'de>>(self, v: V) -> Result<V::Value, Error> {
         let n = self
             .single()?
             .parse()
-            .map_err(|_| Error::other("invalid integer"))?;
+            .map_err(|source| Error::other(format!("invalid integer: {source}")))?;
         v.visit_i64(n)
     }
     fn deserialize_u64<V: Visitor<'de>>(self, v: V) -> Result<V::Value, Error> {
         let n = self
             .single()?
             .parse()
-            .map_err(|_| Error::other("invalid integer"))?;
+            .map_err(|source| Error::other(format!("invalid integer: {source}")))?;
         v.visit_u64(n)
     }
     fn deserialize_option<V: Visitor<'de>>(self, v: V) -> Result<V::Value, Error> {
@@ -912,9 +918,7 @@ impl<'de> de::Deserializer<'de> for ValueDe {
         // A single value may be a JSON array (the structured case, e.g.
         // authorization_details) or a lone scalar requested as a one-element seq.
         match serde_json::from_str::<serde_json::Value>(self.single()?) {
-            Ok(j @ serde_json::Value::Array(_)) => {
-                de::Deserializer::deserialize_seq(j, v).map_err(Error::from)
-            }
+            Ok(j @ serde_json::Value::Array(_)) => Ok(de::Deserializer::deserialize_seq(j, v)?),
             _ => v.visit_seq(StrSeq {
                 iter: self.values.into_iter(),
             }),
@@ -930,7 +934,7 @@ impl<'de> de::Deserializer<'de> for ValueDe {
     }
     fn deserialize_map<V: Visitor<'de>>(self, v: V) -> Result<V::Value, Error> {
         let j: serde_json::Value = serde_json::from_str(self.single()?)?;
-        de::Deserializer::deserialize_map(j, v).map_err(Error::from)
+        Ok(de::Deserializer::deserialize_map(j, v)?)
     }
     fn deserialize_enum<V: Visitor<'de>>(
         self,
@@ -943,7 +947,7 @@ impl<'de> de::Deserializer<'de> for ValueDe {
         // tagged) handled by serde_json; a bare string is a unit variant.
         match serde_json::from_str::<serde_json::Value>(&s) {
             Ok(j @ serde_json::Value::Object(_)) => {
-                de::Deserializer::deserialize_enum(j, name, variants, v).map_err(Error::from)
+                Ok(de::Deserializer::deserialize_enum(j, name, variants, v)?)
             }
             _ => s.into_deserializer().deserialize_enum(name, variants, v),
         }

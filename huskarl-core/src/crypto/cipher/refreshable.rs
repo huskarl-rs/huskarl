@@ -22,15 +22,11 @@ use crate::{
 /// [`ScheduledRefreshCipher`](super::ScheduledRefreshCipher), which wraps the
 /// same mechanism.
 ///
-/// This allows runtime rotation of encryption keys (e.g. from a KMS or secret
-/// manager) without restarting the application.
-///
 /// For emitting, go through the selector API
 /// ([`select_encryptor`](AeadEncryptorSelector::select_encryptor)), which hands
-/// back a frozen snapshot. The type is deliberately *not* an [`AeadEncryptor`]:
-/// reading metadata and then encrypting on a hot-swappable handle could straddle
-/// a rotation — the hazard the selector exists to prevent (see [composing crypto
-/// strategies](crate::_docs::explanation::crypto_strategies)).
+/// back a frozen snapshot; the type is deliberately *not* an [`AeadEncryptor`].
+/// See [composing crypto strategies](crate::_docs::explanation::crypto_strategies)
+/// for the straddled-rotation hazard that rules out.
 ///
 /// All clones share the same underlying state, so a refresh performed through
 /// any clone is visible to all others — a single `RefreshableCipher` can be
@@ -203,7 +199,7 @@ mod tests {
                 if tag == self.inner.kid.as_bytes() {
                     Ok(ciphertext.to_vec())
                 } else {
-                    Err(Error::from(crate::error::ErrorKind::Crypto).into())
+                    Err(Error::new(crate::error::RetryAdvice::No, "crypto failure").into())
                 }
             })
         }
@@ -257,10 +253,9 @@ mod tests {
             .decrypt(None, &output.nonce, &output.ciphertext, &output.tag, b"")
             .await
             .unwrap_err();
-        let DecryptError::Other { source } = err else {
+        let DecryptError::Other { source: _ } = err else {
             panic!("expected DecryptError::Other, got {err:?}");
         };
-        assert_eq!(source.kind(), crate::error::ErrorKind::Crypto);
 
         let m = CipherMatch::builder().kid("v1").build();
         assert_eq!(decryptor.cipher_match(&m), Some(KeyMatchStrength::ByKeyId));

@@ -1,6 +1,11 @@
+use snafu::ResultExt as _;
+
 use crate::{
-    error::{Error, ErrorKind},
-    secrets::{SecretBytes, SecretMap, encodings::strip_ascii_whitespace},
+    error::Error,
+    secrets::{
+        SecretBytes, SecretMap,
+        encodings::{HexSnafu, strip_ascii_whitespace},
+    },
 };
 
 /// Decodes hex-encoded bytes into `SecretBytes`.
@@ -17,8 +22,7 @@ impl SecretMap for HexEncoding {
 
     fn apply(&self, input: SecretBytes) -> Result<SecretBytes, Error> {
         let stripped = strip_ascii_whitespace(input.expose_secret(), |b| b);
-        let decoded =
-            hex::decode(&*stripped).map_err(|source| Error::new(ErrorKind::Config, source))?;
+        let decoded = hex::decode(&*stripped).context(HexSnafu)?;
         Ok(SecretBytes::new(decoded))
     }
 }

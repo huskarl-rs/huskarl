@@ -19,9 +19,8 @@ use crate::{
 ///
 /// Write the method body as `Box::pin(async move { ... })`. The future may
 /// only borrow `self`, so copy the `jti` value into it if needed. Transient
-/// failures of a backing store classify as
-/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport) with
-/// `retryable: true`.
+/// failures of a backing store carry
+/// [`RetryAdvice::Retry`](crate::error::RetryAdvice::Retry).
 pub trait JtiUniquenessChecker: std::fmt::Debug + MaybeSendSync {
     /// Checks if the supplied JTI value was seen before, and adds the JTI value to the set of seen values.
     ///

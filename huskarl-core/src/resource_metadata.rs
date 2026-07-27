@@ -9,13 +9,49 @@
 
 use http::HeaderMap;
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt as _;
 
-use crate::{
-    EndpointUrl,
-    error::{Error, ErrorKind},
-    http::HttpClient,
-    well_known::insert_well_known_path,
-};
+use crate::{EndpointUrl, error::Error, http::HttpClient, well_known::insert_well_known_path};
+
+/// The cause of a protected-resource metadata failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum ResourceMetadataError {
+    /// The resource identifier is not a usable URL.
+    #[snafu(display("invalid resource identifier {resource:?}"))]
+    InvalidResource {
+        /// The rejected identifier.
+        resource: String,
+        /// The underlying error.
+        source: Error,
+    },
+    /// The well-known path could not be inserted into a valid resource URL.
+    #[snafu(display("building the well-known metadata URL for {resource:?}"))]
+    #[classify(no)]
+    WellKnownUrl {
+        /// The identifier the URL was being built from.
+        resource: String,
+        /// The underlying error.
+        source: http::Error,
+    },
+    /// The metadata document could not be fetched.
+    #[snafu(display("fetching protected resource metadata from {url}"))]
+    Fetching {
+        /// The metadata URL.
+        url: String,
+        /// The underlying error.
+        source: Error,
+    },
+    /// RFC 9728 §3.3: the document's `resource` must equal the one requested.
+    #[snafu(display("resource mismatch (RFC 9728 §3.3): expected {expected:?}, got {actual:?}"))]
+    #[classify(no)]
+    ResourceMismatch {
+        /// The resource that was requested.
+        expected: String,
+        /// The resource the document declared.
+        actual: String,
+    },
+}
 
 /// Protected resource metadata (RFC 9728 §2).
 ///
@@ -124,10 +160,9 @@ impl ProtectedResourceMetadata {
     ///
     /// # Errors
     ///
-    /// [`ErrorKind::Config`] for an invalid resource identifier,
-    /// [`ErrorKind::Protocol`] for a non-2xx response, an undeserializable
-    /// body, or a §3.3 resource mismatch, and the transport's own
-    /// classification for connection failures.
+    /// Returns a non-retryable error for an invalid resource identifier or an
+    /// unusable response. Connection failures retain the transport's
+    /// classification.
     #[builder(on(String, into))]
     pub async fn fetch<C: HttpClient>(http_client: &C, resource: String) -> Result<Self, Error> {
         let metadata_url = well_known_url(&resource)?;
@@ -138,17 +173,16 @@ impl ProtectedResourceMetadata {
             HeaderMap::new(),
         )
         .await
-        .map_err(|err| {
-            err.with_context(format!(
-                "fetching protected resource metadata from {metadata_url}"
-            ))
+        .with_context(|_| FetchingSnafu {
+            url: metadata_url.to_string(),
         })?;
 
         if metadata.resource != resource {
-            return Err(Error::from(ErrorKind::Protocol).with_context(format!(
-                "resource mismatch (RFC 9728 §3.3): expected {resource:?}, got {:?}",
-                metadata.resource
-            )));
+            return Err(ResourceMetadataError::ResourceMismatch {
+                expected: resource.clone(),
+                actual: metadata.resource.clone(),
+            }
+            .into());
         }
 
         Ok(metadata)
@@ -179,19 +213,15 @@ pub const WELL_KNOWN_PATH: &str = "/.well-known/oauth-protected-resource";
 ///
 /// # Errors
 ///
-/// Returns [`ErrorKind::Config`] if `resource` is not a valid resource
-/// identifier: an absolute http(s) URL without a fragment component (RFC
-/// 9728 §1.2; `http` is tolerated for loopback and test servers).
+/// Returns a non-retryable error unless `resource` is an absolute HTTP(S) URL
+/// without a fragment (RFC 9728 §1.2).
 pub fn well_known_url(resource: &str) -> Result<EndpointUrl, Error> {
     let resource_url: EndpointUrl = resource
         .parse()
-        .map_err(|e: Error| e.with_context(format!("invalid resource identifier {resource:?}")))?;
+        .context(InvalidResourceSnafu { resource })?;
 
     insert_well_known_path(resource_url.into_uri(), WELL_KNOWN_PATH)
-        .map_err(|source| {
-            Error::new(ErrorKind::Config, source)
-                .with_context(format!("invalid resource identifier {resource:?}"))
-        })?
+        .context(WellKnownUrlSnafu { resource })?
         .try_into()
 }
 
@@ -200,6 +230,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::error::RetryAdvice;
 
     #[test]
     fn deserializes_a_full_document() {
@@ -376,8 +407,7 @@ mod tests {
             .call()
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Protocol);
-        assert!(err.to_string().contains("RFC 9728"), "{err}");
+        assert!(format!("{err:#}").contains("RFC 9728"), "{err:#}");
     }
 
     // RFC 9728 §3.1: the well-known segment goes between host and path, so a
@@ -429,6 +459,6 @@ mod tests {
     #[case::urn("urn:example:resource")]
     fn rejects_invalid_resource_identifiers(#[case] resource: &str) {
         let err = well_known_url(resource).unwrap_err();
-        assert!(matches!(err.kind(), ErrorKind::Config), "{err}");
+        assert_eq!(err.retry_advice(), RetryAdvice::No, "{err}");
     }
 }

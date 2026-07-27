@@ -9,7 +9,7 @@ use crate::{
         CreateVerifierError, JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform,
         MultiKeyVerifier, RetryingVerifier, ScheduledRefreshVerifier,
     },
-    error::{Error, ErrorKind},
+    error::{Error, RetryAdvice},
     http::HttpClient,
     jwk::{Jwks, PublicJwks},
     platform::{Duration, MaybeSendBoxFuture},
@@ -62,7 +62,7 @@ pub enum JwksStartup {
     /// To instead come up **warm** from a trusted local cache — verifying
     /// immediately while offline — build the verifier with a factory that falls
     /// back to that cache; see
-    /// [`ScheduledRefreshVerifier`].
+    /// [`crate::crypto::verifier::ScheduledRefreshVerifier`].
     SeedEmpty,
 }
 
@@ -119,7 +119,7 @@ impl JwsVerifierFactory for JwksSource {
         let Some(uri) = jwks_uri.cloned() else {
             return Box::pin(async {
                 Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     CreateVerifierError::MissingJwksUri,
                 ))
             });
@@ -143,10 +143,11 @@ impl JwsVerifierFactory for JwksSource {
                         let public_jwks: PublicJwks = jwks.into();
 
                         if public_jwks.keys.len() > max_keys {
-                            return Err(Error::from(ErrorKind::Protocol).with_context(format!(
-                                "JWKS contains {} keys, exceeding the limit of {max_keys}",
-                                public_jwks.keys.len()
-                            )));
+                            return Err(crate::jwk::JwkError::TooManyKeys {
+                                count: public_jwks.keys.len(),
+                                max: max_keys,
+                            }
+                            .into());
                         }
 
                         MultiKeyVerifier::from_jwks(&public_jwks, platform.as_ref()).await
@@ -172,7 +173,7 @@ mod tests {
         crypto::verifier::{
             CreateVerifierError, JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform,
         },
-        error::{Error, ErrorKind},
+        error::Error,
         http::{HttpClient, HttpResponse, Idempotency},
         jwk::PublicJwk,
         platform::MaybeSendBoxFuture,
@@ -212,8 +213,7 @@ mod tests {
         {
             Box::pin(async {
                 Err(CreateVerifierError::UnsupportedKey {
-                    source: Error::from(ErrorKind::Config)
-                        .with_context("this platform supports no keys"),
+                    source: Error::from(crate::jwk::JwkError::NoSupportedKeys),
                 })
             })
         }
@@ -256,7 +256,6 @@ mod tests {
     async fn fetched_jwks_over_default_limit_is_rejected() {
         let limit = 100;
         let error = build_source(limit + 1, limit).await.unwrap_err();
-        assert!(matches!(error.kind(), ErrorKind::Protocol));
-        assert!(!error.is_retryable());
+        assert_eq!(error.retry_advice(), crate::error::RetryAdvice::No);
     }
 }

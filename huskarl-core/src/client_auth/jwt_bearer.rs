@@ -1,15 +1,27 @@
 use std::{sync::Arc, time::Duration};
 
 use bon::Builder;
-use snafu::Snafu;
+use snafu::prelude::*;
 
 use crate::{
     client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
     crypto::signer::JwsSignerSelector,
-    error::{Error, ErrorKind},
+    error::Error,
     jwt::Jwt,
     platform::MaybeSendBoxFuture,
 };
+
+/// The cause of a JWT-bearer client-authentication failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum JwtBearerError {
+    /// Signing the client assertion JWT failed.
+    #[snafu(display("signing client assertion JWT"))]
+    SigningAssertion {
+        /// The underlying error.
+        source: Error,
+    },
+}
 
 /// Client authentication with a signed JWT assertion (RFC 7521 / 7523, `OpenID`
 /// Connect Core 1.0 §9).
@@ -77,10 +89,9 @@ pub enum Audience {
     /// Use the authorization server's issuer identifier as the sole audience
     /// (draft-ietf-oauth-security-topics-update §2.1.2.1). Recommended.
     ///
-    /// The issuer usually comes from authorization server metadata. Fails
-    /// with [`ErrorKind::Config`] if no issuer is configured — there is no
-    /// fallback, since an endpoint-URL audience weakens audience-injection
-    /// protection.
+    /// The issuer usually comes from authorization server metadata. Returns a
+    /// non-retryable error if no issuer is configured; falling back to an
+    /// endpoint URL would weaken audience-injection protection.
     Issuer,
     /// Use the authorization server's token endpoint URL, even when the
     /// assertion is sent to another endpoint (PAR, revocation, introspection,
@@ -89,9 +100,8 @@ pub enum Audience {
     /// This is the historically common pattern, but it is the value an
     /// audience-injection attack
     /// (draft-ietf-oauth-security-topics-update §2.1) exploits — only use it
-    /// for a legacy server that requires it. Fails with [`ErrorKind::Config`]
-    /// if the caller cannot supply the token endpoint (e.g. a revocation or
-    /// introspection client configured without one).
+    /// for a legacy server that requires it. Returns a non-retryable error if
+    /// the caller cannot supply the token endpoint.
     TokenEndpoint,
     /// Use the exact endpoint URI the assertion is sent to
     /// (draft-ietf-oauth-security-topics-update §2.1.2.2).
@@ -106,8 +116,8 @@ pub enum Audience {
 
 /// [`Audience::Issuer`] requires an issuer, but none was configured.
 ///
-/// Carried as the source of [`ErrorKind::Config`] errors from
-/// [`JwtBearer::authentication_context`](ClientAuthentication::authentication_context).
+/// Used as the source of a non-retryable error from
+/// [`ClientAuthentication::authentication_context`].
 #[derive(Debug, Clone, Copy, Default, Snafu)]
 #[snafu(display(
     "Audience::Issuer requires an issuer; fetch authorization server metadata \
@@ -118,8 +128,8 @@ pub struct MissingIssuer;
 /// [`Audience::TokenEndpoint`] requires the authorization server's token
 /// endpoint, but the caller could not supply one.
 ///
-/// Carried as the source of [`ErrorKind::Config`] errors from
-/// [`JwtBearer::authentication_context`](ClientAuthentication::authentication_context).
+/// Used as the source of a non-retryable error from
+/// [`ClientAuthentication::authentication_context`].
 /// Arises when authenticating to an endpoint whose client is configured
 /// without the token endpoint (e.g. revocation or introspection).
 #[derive(Debug, Clone, Copy, Default, Snafu)]
@@ -137,13 +147,10 @@ impl ClientAuthentication for JwtBearer {
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
             let audience = match &self.audience {
-                Audience::Issuer => ctx
-                    .issuer
-                    .ok_or_else(|| Error::new(ErrorKind::Config, MissingIssuer))?
-                    .to_string(),
+                Audience::Issuer => ctx.issuer.context(MissingIssuerSnafu)?.to_string(),
                 Audience::TokenEndpoint => ctx
                     .token_endpoint
-                    .ok_or_else(|| Error::new(ErrorKind::Config, MissingTokenEndpoint))?
+                    .context(MissingTokenEndpointSnafu)?
                     .to_string(),
                 Audience::TargetEndpoint => ctx.target_endpoint.to_string(),
                 Audience::Custom(custom) => custom.to_string(),
@@ -165,7 +172,7 @@ impl ClientAuthentication for JwtBearer {
             let assertion = jwt
                 .to_jws_compact(&*self.signer.select_signer().await)
                 .await
-                .map_err(|err| err.with_context("signing client assertion JWT"))?;
+                .context(SigningAssertionSnafu)?;
 
             Ok(AuthenticationParams::builder()
                 .form_params(bon::map! {
@@ -175,6 +182,34 @@ impl ClientAuthentication for JwtBearer {
                 })
                 .build())
         })
+    }
+}
+
+// This single-shape cause always establishes a terminal classification.
+impl crate::error::propagation::Cause for MissingIssuer {
+    fn origin(&self) -> crate::error::propagation::Origin<'_> {
+        crate::error::propagation::Origin::Establishes(crate::error::RetryAdvice::No.into())
+    }
+}
+
+impl From<MissingIssuer> for Error {
+    #[track_caller]
+    fn from(source: MissingIssuer) -> Self {
+        Self::from_cause(source)
+    }
+}
+
+// This single-shape cause always establishes a terminal classification.
+impl crate::error::propagation::Cause for MissingTokenEndpoint {
+    fn origin(&self) -> crate::error::propagation::Origin<'_> {
+        crate::error::propagation::Origin::Establishes(crate::error::RetryAdvice::No.into())
+    }
+}
+
+impl From<MissingTokenEndpoint> for Error {
+    #[track_caller]
+    fn from(source: MissingTokenEndpoint) -> Self {
+        Self::from_cause(source)
     }
 }
 
@@ -308,12 +343,10 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        // The erased cause remains visible in the formatted source chain.
         assert!(
-            std::error::Error::source(&err)
-                .expect("carries a source")
-                .downcast_ref::<MissingIssuer>()
-                .is_some()
+            format!("{err:#}").contains("issuer"),
+            "the failure must still name what was missing: {err:#}"
         );
     }
 
@@ -394,12 +427,10 @@ mod tests {
             )
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        // The erased cause remains visible in the formatted source chain.
         assert!(
-            std::error::Error::source(&err)
-                .expect("carries a source")
-                .downcast_ref::<MissingTokenEndpoint>()
-                .is_some()
+            format!("{err:#}").contains("token endpoint"),
+            "the failure must still name what was missing: {err:#}"
         );
     }
 

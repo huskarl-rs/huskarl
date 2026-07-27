@@ -145,10 +145,10 @@ fn main() {
     let err = WithGate::builder_from_metadata(&meta_none)
         .err()
         .expect("required_in_target absent");
-    assert_eq!(err.kind(), huskarl_core::ErrorKind::Config);
+    assert_eq!(err.retry_advice(), huskarl_core::RetryAdvice::No);
     assert_eq!(
-        err.to_string(),
-        "authorization server metadata has no `required_in_target`: invalid configuration"
+        format!("{err:#}"),
+        "authorization server metadata has no 'required_in_target'"
     );
 
     let built = WithWhere::<()>::builder_from_metadata(&meta).build();

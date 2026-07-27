@@ -7,19 +7,23 @@ use crate::jwt::structure::{JwtClaims, JwtHeader};
 /// An error that occurred while parsing a compact JWS token.
 #[derive(Debug, Snafu)]
 pub enum JwsParseError {
-    /// Wrong number of `.`-separated parts
+    /// Wrong number of `.`-separated parts.
+    #[snafu(display("a compact JWS has three '.'-separated parts"))]
     InvalidFormat,
     /// A JWS part could not be decoded as `Base64URL`.
+    #[snafu(display("decoding a base64url JWS part"))]
     Base64 {
         /// The underlying error.
         source: base64::DecodeError,
     },
     /// The header could not be parsed.
+    #[snafu(display("parsing the JWS header"))]
     Header {
         /// The underlying error.
         source: serde_json::Error,
     },
     /// The claims could not be parsed.
+    #[snafu(display("parsing the JWS claims"))]
     Claims {
         /// The underlying error.
         source: serde_json::Error,

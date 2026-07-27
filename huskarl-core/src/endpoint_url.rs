@@ -8,8 +8,53 @@ use std::str::FromStr;
 
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use snafu::Snafu;
 
-use crate::error::{Error, ErrorKind};
+use crate::error::Error;
+
+/// The cause of an [`EndpointUrl`] validation failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum EndpointUrlError {
+    /// The URL has no scheme, no authority, or neither.
+    #[snafu(display("endpoint URL must be absolute (have a scheme and authority): {uri}"))]
+    #[classify(no)]
+    NotAbsolute {
+        /// The rejected URL.
+        uri: Uri,
+    },
+    /// The scheme is something other than `http` or `https`.
+    #[snafu(display("endpoint URL scheme must be http or https: {uri}"))]
+    #[classify(no)]
+    UnsupportedScheme {
+        /// The rejected URL.
+        uri: Uri,
+    },
+    /// The authority carries userinfo credentials (RFC 9110 §4.2.4).
+    #[snafu(display(
+        "endpoint URL must not contain userinfo (credentials) in its authority: {uri}"
+    ))]
+    #[classify(no)]
+    UserinfoInAuthority {
+        /// The rejected URL.
+        uri: Uri,
+    },
+    /// The URL contains a fragment, which OAuth endpoints forbid and
+    /// [`Uri`] would silently discard.
+    #[snafu(display("endpoint URL must not contain a fragment component: {url}"))]
+    #[classify(no)]
+    FragmentPresent {
+        /// The rejected URL, as supplied.
+        url: String,
+    },
+    /// The string is not a valid URI at all.
+    #[snafu(display("invalid endpoint URL"))]
+    #[classify(no)]
+    InvalidUri {
+        /// The underlying error.
+        source: http::uri::InvalidUri,
+    },
+}
 
 /// An endpoint URL.
 ///
@@ -22,7 +67,7 @@ use crate::error::{Error, ErrorKind};
 /// [`From`].
 ///
 /// Construction validates that the URL is a plausible endpoint, rejecting
-/// anything else with [`ErrorKind::Config`]:
+/// anything else with [`RetryAdvice::No`](crate::error::RetryAdvice::No):
 ///
 /// - it must be **absolute** — have both a scheme and an authority; a relative
 ///   reference such as `/token` cannot be requested;
@@ -60,22 +105,20 @@ impl EndpointUrl {
     /// validation point every conversion funnels through.
     fn from_uri(uri: Uri) -> Result<Self, Error> {
         let (Some(scheme), Some(authority)) = (uri.scheme(), uri.authority()) else {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "endpoint URL must be absolute (have a scheme and authority): {uri}"
-            )));
+            return Err(NotAbsoluteSnafu { uri }.build().into());
         };
 
-        if scheme != &http::uri::Scheme::HTTP && scheme != &http::uri::Scheme::HTTPS {
-            return Err(Error::from(ErrorKind::Config)
-                .with_context(format!("endpoint URL scheme must be http or https: {uri}")));
-        }
-
+        let unsupported_scheme =
+            scheme != &http::uri::Scheme::HTTP && scheme != &http::uri::Scheme::HTTPS;
         // '@' in an authority is always the userinfo delimiter (RFC 3986
         // §3.2); it must be percent-encoded anywhere else.
-        if authority.as_str().contains('@') {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "endpoint URL must not contain userinfo (credentials) in its authority: {uri}"
-            )));
+        let has_userinfo = authority.as_str().contains('@');
+
+        if unsupported_scheme {
+            return Err(UnsupportedSchemeSnafu { uri }.build().into());
+        }
+        if has_userinfo {
+            return Err(UserinfoInAuthoritySnafu { uri }.build().into());
         }
 
         Ok(Self(uri))
@@ -112,8 +155,9 @@ impl From<EndpointUrl> for Uri {
     }
 }
 
+#[track_caller]
 fn invalid_uri(source: http::uri::InvalidUri) -> Error {
-    Error::new(ErrorKind::Config, source).with_context("invalid endpoint URL")
+    Error::from(EndpointUrlError::InvalidUri { source })
 }
 
 impl TryFrom<Uri> for EndpointUrl {
@@ -147,9 +191,7 @@ impl FromStr for EndpointUrl {
         // §3.1, §3.2). A query component is still permitted (the authorization
         // endpoint may carry one per RFC 6749 §3.1).
         if s.contains('#') {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "endpoint URL must not contain a fragment component: {s}"
-            )));
+            return Err(FragmentPresentSnafu { url: s }.build().into());
         }
         s.parse::<Uri>()
             .map_err(invalid_uri)
@@ -178,6 +220,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::error::RetryAdvice;
 
     #[test]
     fn accepts_absolute_https() {
@@ -205,7 +248,7 @@ mod tests {
     #[case::authority_only_without_scheme("as.example.com/token")]
     fn rejects_invalid_endpoint(#[case] input: &str) {
         let err = EndpointUrl::try_from(input).unwrap_err();
-        assert!(matches!(err.kind(), ErrorKind::Config));
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
 
     // Only http and https endpoints can actually be requested; any other
@@ -217,8 +260,8 @@ mod tests {
     #[case::custom_scheme("custom-app://as.example.com/token")]
     fn rejects_non_http_scheme(#[case] input: &str) {
         let err = EndpointUrl::try_from(input).unwrap_err();
-        assert!(matches!(err.kind(), ErrorKind::Config));
-        assert!(err.to_string().contains("http or https"), "{err}");
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
+        assert!(format!("{err:#}").contains("http or https"), "{err:#}");
     }
 
     // RFC 9110 §4.2.4: a sender MUST NOT generate the userinfo subcomponent in
@@ -229,8 +272,8 @@ mod tests {
     #[case::bare_user("https://user@as.example.com/token")]
     fn rejects_userinfo(#[case] input: &str) {
         let err = EndpointUrl::try_from(input).unwrap_err();
-        assert!(matches!(err.kind(), ErrorKind::Config));
-        assert!(err.to_string().contains("userinfo"), "{err}");
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
+        assert!(format!("{err:#}").contains("userinfo"), "{err:#}");
     }
 
     // The userinfo check guards the `Uri` funnel too, not just string parsing.
@@ -248,7 +291,7 @@ mod tests {
     #[case::empty_fragment("https://as.example.com/token#")]
     fn rejects_fragment(#[case] input: &str) {
         let err = EndpointUrl::try_from(input).unwrap_err();
-        assert!(matches!(err.kind(), ErrorKind::Config));
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
 
     // A query component is permitted (the authorization endpoint may carry one
@@ -263,8 +306,8 @@ mod tests {
     }
 
     #[test]
-    fn uri_conversion_is_now_checked() {
-        // The `Uri` impl no longer wraps unconditionally.
+    fn uri_conversion_is_checked() {
+        // The `Uri` impl validates rather than wrapping unconditionally.
         let relative: Uri = "/authorize".parse().unwrap();
         assert!(EndpointUrl::try_from(relative).is_err());
     }

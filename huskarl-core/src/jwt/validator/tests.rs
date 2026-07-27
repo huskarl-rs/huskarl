@@ -6,6 +6,54 @@ use crate::crypto::{
     verifier::{JwsVerifier, KeyMatch, VerifyError},
 };
 
+fn classification(error: &JwtValidationError) -> crate::error::propagation::Classification {
+    match crate::error::propagation::Cause::origin(error) {
+        crate::error::propagation::Origin::Propagates(source) => source.classification(),
+        crate::error::propagation::Origin::Establishes(classification) => classification,
+    }
+}
+
+#[test]
+fn infrastructure_failures_preserve_their_complete_classification() {
+    let verifier_source = crate::Error::propagate(
+        crate::error::propagation::Classification::judged(
+            crate::RetryAdvice::retry_after(crate::platform::Duration::from_secs(17)),
+            crate::OAuthError::new("temporarily_unavailable"),
+        ),
+        "the verifier backend",
+    );
+    let expected = verifier_source.classification();
+    let signature = JwtValidationError::Signature {
+        source: VerifyError::Other {
+            source: verifier_source,
+        },
+    };
+    assert_eq!(classification(&signature), expected);
+
+    let jti_source = crate::Error::new(crate::RetryAdvice::RETRY, "the JTI store");
+    let expected = jti_source.classification();
+    let jti = JwtValidationError::JtiCheck { source: jti_source };
+    assert_eq!(classification(&jti), expected);
+}
+
+#[test]
+fn an_invalid_signature_is_terminal_but_an_unavailable_keyset_is_not() {
+    let invalid = JwtValidationError::Signature {
+        source: VerifyError::SignatureMismatch,
+    };
+    assert_eq!(
+        classification(&invalid).retry_advice(),
+        crate::RetryAdvice::No,
+    );
+    let unavailable = JwtValidationError::Signature {
+        source: VerifyError::KeysUnavailable,
+    };
+    assert_eq!(
+        classification(&unavailable).retry_advice(),
+        crate::RetryAdvice::RETRY,
+    );
+}
+
 #[derive(Debug)]
 struct MockVerifier;
 
@@ -476,10 +524,9 @@ async fn max_token_age_missing_iat() {
     ));
 }
 
-/// Regression: an `iat` slightly in the future (AS clock ahead, within the
-/// configured leeway) must not be rejected by the `max_token_age` check — it
-/// used to fail as `TokenTooOld` before the leeway-aware `IssuedInFuture`
-/// check could run.
+/// An `iat` slightly in the future (AS clock ahead, within the configured
+/// leeway) must not be rejected by the `max_token_age` check as `TokenTooOld`
+/// before the leeway-aware `IssuedInFuture` check can run.
 #[tokio::test]
 async fn max_token_age_allows_future_iat_within_leeway() {
     let now = SystemTime::now()

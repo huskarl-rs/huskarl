@@ -8,11 +8,12 @@ use bon::Builder;
 use http::{Method, Uri, uri::Scheme};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
+use snafu::prelude::*;
 
 use crate::{
     crypto::signer::{AsymmetricJwsSigner, AsymmetricJwsSignerSelector},
     dpop::{AuthorizationServerDPoP, ResourceServerDPoP},
-    error::{Error, ErrorKind},
+    error::Error,
     jwt::Jwt,
     platform::MaybeSendBoxFuture,
     secrets::SecretString,
@@ -72,14 +73,14 @@ impl AuthorizationServerDPoP for DPoP {
                 .clone();
 
             let Some(dpop_jkt) = dpop_jkt else {
-                return Err(no_thumbprint_error());
+                return Err(Error::from(DPoPKeyError::NoThumbprint));
             };
 
             let signer = self
                 .signer
                 .select_signer_by_thumbprint(dpop_jkt)
                 .await
-                .ok_or_else(no_matching_key_error)?;
+                .ok_or_else(|| Error::from(DPoPKeyError::NoMatchingKey))?;
 
             sign_proof(&*signer, method, uri, None, nonce).await
         })
@@ -97,7 +98,7 @@ impl AuthorizationServerDPoP for DPoP {
         _signer: Arc<dyn AsymmetricJwsSignerSelector>,
     ) -> Result<Arc<dyn AuthorizationServerDPoP>, Error> {
         // A fixed-key grant must not be silently overridden with a session key.
-        Err(fixed_key_override_error())
+        Err(Error::from(DPoPKeyError::FixedKeyOverride))
     }
 }
 
@@ -145,7 +146,7 @@ impl AuthorizationServerDPoP for SessionKeyedDPoP {
         _dpop_jkt: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         // Reached only when no per-session key was bound.
-        Box::pin(async { Err(no_session_key_error()) })
+        Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
     }
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
@@ -183,7 +184,7 @@ impl ResourceServerDPoP for SessionKeyedResourceDPoP {
         _access_token: &'a SecretString,
         _dpop_jkt: &'a str,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
-        Box::pin(async { Err(no_session_key_error()) })
+        Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
     }
 }
 
@@ -233,7 +234,7 @@ impl ResourceServerDPoP for ResourceDPoP {
                 .signer
                 .select_signer_by_thumbprint(dpop_jkt)
                 .await
-                .ok_or_else(no_matching_key_error)?;
+                .ok_or_else(|| Error::from(DPoPKeyError::NoMatchingKey))?;
 
             sign_proof(
                 &*signer,
@@ -247,32 +248,46 @@ impl ResourceServerDPoP for ResourceDPoP {
     }
 }
 
-/// No JWK thumbprint provided for proof.
-///
-/// This indicates a logic error; the caller should provide a thumbprint
-/// when `DPoP` is configured.
-fn no_thumbprint_error() -> Error {
-    Error::from(ErrorKind::DPoP).with_context("no JWK thumbprint provided for proof")
-}
-
-fn no_matching_key_error() -> Error {
-    Error::from(ErrorKind::DPoP).with_context("no matching key for the given thumbprint")
-}
-
-/// A per-session key was bound, but this `DPoP` is not session-keyed.
-fn fixed_key_override_error() -> Error {
-    Error::from(ErrorKind::DPoP).with_context(
+/// The cause of a `DPoP` key-selection failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum DPoPKeyError {
+    /// No JWK thumbprint was provided for the proof.
+    #[snafu(display("no JWK thumbprint provided for proof"))]
+    #[classify(no)]
+    NoThumbprint,
+    /// The requested thumbprint matches none of the configured keys.
+    #[snafu(display("no matching key for the given thumbprint"))]
+    #[classify(no)]
+    NoMatchingKey,
+    /// A per-session key was bound, but this `DPoP` is not session-keyed.
+    #[snafu(display(
         "a per-session DPoP key was bound, but this grant is configured with a fixed DPoP key; \
-         configure SessionKeyedDPoP to accept per-session keys",
-    )
-}
-
-/// A `SessionKeyedDPoP` template was used directly, without a key bound.
-fn no_session_key_error() -> Error {
-    Error::from(ErrorKind::DPoP).with_context(
+         configure SessionKeyedDPoP to accept per-session keys"
+    ))]
+    #[classify(no)]
+    FixedKeyOverride,
+    /// A `SessionKeyedDPoP` template was used directly, without a key bound.
+    #[snafu(display(
         "SessionKeyedDPoP has no key bound; bind a per-session key first (the grant's \
-         with_session_dpop_key)",
-    )
+         with_session_dpop_key)"
+    ))]
+    #[classify(no)]
+    NoSessionKey,
+    /// `DPoP` is disabled on this grant, so a per-session key has nowhere to go.
+    #[snafu(display(
+        "a per-session DPoP key was bound, but DPoP is not enabled on this grant; \
+         configure it with SessionKeyedDPoP"
+    ))]
+    #[classify(no)]
+    DPoPNotEnabled,
+    /// The request URI could not be normalized for the `htu` claim.
+    #[snafu(display("normalizing URI for DPoP proof"))]
+    #[classify(no)]
+    NormalizingUri {
+        /// The underlying error.
+        source: http::Error,
+    },
 }
 
 fn origin_from_uri(uri: &Uri) -> Origin {
@@ -303,9 +318,7 @@ async fn sign_proof(
     let extra_claims = DPoPClaims {
         htm: htm.as_str(),
         htu: normalize_uri_for_dpop(htu)
-            .map_err(|source| {
-                Error::new(ErrorKind::DPoP, source).with_context("normalizing URI for DPoP proof")
-            })?
+            .context(NormalizingUriSnafu)?
             .to_string(),
         ath: token.map(hash_access_token_for_dpop),
         nonce,
@@ -508,8 +521,7 @@ mod tests {
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
 
         let err = dpop.proof(&Method::POST, &uri, None).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DPoP);
-        assert!(err.to_string().contains("no JWK thumbprint"));
+        assert!(format!("{err:#}").contains("no JWK thumbprint"), "{err:#}");
     }
 
     #[tokio::test]
@@ -524,8 +536,7 @@ mod tests {
             .proof(&Method::POST, &uri, Some("wrong-thumbprint"))
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DPoP);
-        assert!(err.to_string().contains("no matching key"));
+        assert!(format!("{err:#}").contains("no matching key"), "{err:#}");
     }
 
     #[tokio::test]
@@ -674,11 +685,10 @@ mod tests {
     async fn session_keyed_dpop_without_key_errors() {
         let session = SessionKeyedDPoP::new();
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
-        let err = session
+        let _err = session
             .proof(&Method::POST, &uri, Some("jkt"))
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DPoP);
     }
 
     #[tokio::test]
@@ -693,8 +703,7 @@ mod tests {
             .build();
         // `unwrap_err` would require the Ok type (a non-Debug trait object) to
         // be Debug, so recover the error via `.err()`.
-        let err = dpop.with_session_key(session_key).err().unwrap();
-        assert_eq!(err.kind(), ErrorKind::DPoP);
+        let _err = dpop.with_session_key(session_key).err().unwrap();
     }
 
     #[tokio::test]
@@ -702,10 +711,9 @@ mod tests {
         let session_key: Arc<dyn AsymmetricJwsSignerSelector> = Arc::new(MockAsymmetricJwsSigner {
             jwk: mock_public_jwk(),
         });
-        let err = crate::dpop::NoDPoP
+        let _err = crate::dpop::NoDPoP
             .with_session_key(session_key)
             .err()
             .unwrap();
-        assert_eq!(err.kind(), ErrorKind::DPoP);
     }
 }

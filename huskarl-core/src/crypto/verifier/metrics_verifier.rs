@@ -7,8 +7,7 @@ use crate::{
 };
 
 /// The registered JWS `alg` identifiers (RFC 7518 §3.1, plus `EdDSA` from
-/// RFC 8037, its fully-specified `Ed25519`/`Ed448` variants, and `ES256K` from
-/// RFC 8812), used to bound the cardinality of the `alg` metrics label.
+/// RFC 8037, its `Ed25519`/`Ed448` variants, and `ES256K` from RFC 8812).
 const KNOWN_JWS_ALGORITHMS: &[&str] = &[
     "HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256", "ES384", "ES512", "ES256K",
     "PS256", "PS384", "PS512", "EdDSA", "Ed25519", "Ed448", "none",
@@ -34,10 +33,8 @@ fn alg_label(alg: &str) -> &'static str {
 /// each verification attempt and a `huskarl.jws.refresh` counter for each
 /// refresh attempt.
 ///
-/// Wrap your verifier with this type to instrument JWS signature verifications.
-/// The `name` parameter is included as a label on every counter, allowing metrics
-/// from multiple wrapped verifiers to be distinguished — typically set to the
-/// issuer URL or JWKS URI of the authorization server.
+/// `name` is a label on every counter, distinguishing multiple wrapped verifiers
+/// — typically the issuer URL or JWKS URI.
 ///
 /// # Labels
 ///
@@ -49,10 +46,6 @@ fn alg_label(alg: &str) -> &'static str {
 /// | `alg`     | registered JWS alg (`RS256`, `ES256`, …) or `other`                          | Algorithm from the JWS header            |
 /// | `outcome` | `success`, `no_matching_key`, `ambiguous_key`, `signature_mismatch`, `error` | Verification result                      |
 ///
-/// The `alg` label is bounded to the JWA registry set: the header value is
-/// attacker-supplied, and any value outside the registry is recorded as
-/// `other` to prevent metric cardinality explosion.
-///
 /// `huskarl.jws.refresh`:
 ///
 /// | Label     | Values                       | Description                       |
@@ -60,12 +53,9 @@ fn alg_label(alg: &str) -> &'static str {
 /// | `name`    | user-provided                | Identifies this verifier instance |
 /// | `outcome` | `refreshed`, `not_refreshed` | Refresh result                    |
 ///
-/// `no_matching_key` and `signature_mismatch` are particularly useful for security
-/// monitoring — elevated rates may indicate key rotation in progress or an attack.
-/// The `alg` label is restricted to the registered JWS algorithm identifiers; any
-/// other value (an unrecognised or attacker-supplied `alg`) is bucketed as `other`
-/// so that arbitrary header values cannot inflate label cardinality — a spike in
-/// `other` is itself a signal worth alerting on.
+/// `no_matching_key` and `signature_mismatch` are worth monitoring — elevated
+/// rates may indicate key rotation in progress or an attack, as is a spike in
+/// `alg` = `other`.
 ///
 /// Note that `not_refreshed` covers "no refresh warranted", "blocked by
 /// policy", and "refresh failed" alike — the
@@ -92,9 +82,6 @@ pub struct MetricsJwsVerifier<V> {
 #[bon::bon]
 impl<V> MetricsJwsVerifier<V> {
     /// Creates a new [`MetricsJwsVerifier`].
-    ///
-    /// `name` is included as a label on every counter to distinguish this verifier
-    /// from others. Typically set to the issuer URL or JWKS URI.
     #[builder]
     pub fn new(inner: V, #[builder(into)] name: String) -> Self {
         Self { inner, name }
@@ -133,6 +120,7 @@ impl<V: JwsVerifier> JwsVerifier for MetricsJwsVerifier<V> {
                 Err(VerifyError::NoMatchingKey) => "no_matching_key",
                 Err(VerifyError::KeysUnavailable) => "keys_unavailable",
                 Err(VerifyError::AmbiguousKeyMatch) => "ambiguous_key",
+                Err(VerifyError::MalformedSignature { .. }) => "malformed_signature",
                 Err(VerifyError::SignatureMismatch) => "signature_mismatch",
                 Err(VerifyError::Other { .. }) => "error",
             };
@@ -186,8 +174,6 @@ mod tests {
 
     #[test]
     fn unknown_algorithms_bucket_to_other() {
-        // Unrecognised, empty, and wrong-case values all collapse to a single
-        // bounded label so an attacker-supplied `alg` cannot blow up cardinality.
         assert_eq!(alg_label("RS999"), "other");
         assert_eq!(alg_label(""), "other");
         assert_eq!(alg_label("rs256"), "other");

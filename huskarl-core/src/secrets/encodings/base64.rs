@@ -3,10 +3,14 @@ use base64::{
     alphabet::STANDARD,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
+use snafu::ResultExt as _;
 
 use crate::{
-    error::{Error, ErrorKind},
-    secrets::{SecretBytes, SecretMap, encodings::strip_ascii_whitespace},
+    error::Error,
+    secrets::{
+        SecretBytes, SecretMap,
+        encodings::{Base64Snafu, strip_ascii_whitespace},
+    },
 };
 
 /// A forgiving base64 decoder: standard alphabet with padding treated as
@@ -40,9 +44,7 @@ impl SecretMap for Base64Encoding {
             b'_' => b'/',
             other => other,
         });
-        let decoded = FORGIVING
-            .decode(&*stripped)
-            .map_err(|source| Error::new(ErrorKind::Config, source))?;
+        let decoded = FORGIVING.decode(&*stripped).context(Base64Snafu)?;
         Ok(SecretBytes::new(decoded))
     }
 }

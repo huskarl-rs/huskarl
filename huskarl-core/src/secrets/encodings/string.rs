@@ -1,6 +1,8 @@
+use snafu::ResultExt as _;
+
 use crate::{
-    error::{Error, ErrorKind},
-    secrets::{SecretBytes, SecretMap, SecretString},
+    error::Error,
+    secrets::{SecretBytes, SecretMap, SecretString, encodings::NotUtf8Snafu},
 };
 
 /// Interprets bytes as UTF-8 text: the `SecretBytes` → `SecretString` conversion.
@@ -19,8 +21,7 @@ impl SecretMap for StringEncoding {
     type Out = SecretString;
 
     fn apply(&self, input: SecretBytes) -> Result<SecretString, Error> {
-        let s = std::str::from_utf8(input.expose_secret())
-            .map_err(|source| Error::new(ErrorKind::Config, source))?;
+        let s = std::str::from_utf8(input.expose_secret()).context(NotUtf8Snafu)?;
         Ok(SecretString::new(s.trim()))
     }
 }

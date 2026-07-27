@@ -4,31 +4,30 @@
 //! [composing crypto strategies](crate::_docs::explanation::crypto_strategies)
 //! for how it relates to JWE and the parts-level cipher traits.
 
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, num::TryFromIntError, sync::Arc};
 
-use snafu::Snafu;
+use snafu::{ResultExt as _, Snafu, ensure};
 
 use crate::{
     crypto::cipher::{AeadDecryptor, AeadEncryptorSelector, CipherMatch, DecryptError},
-    error::{Error, ErrorKind},
+    error::Error,
     platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
 
 /// Errors that could occur during AEAD unsealing.
 ///
-/// Used as the source of [`ErrorKind::Crypto`] errors — sealer implementations
-/// construct these to describe *why* an unseal
-/// failed without expanding the kind-level vocabulary.
+/// Sealer implementations use this as the source of framing failures.
 ///
 /// This covers only failures the framing layer itself detects. An
 /// authentication-tag mismatch is raised by the inner
 /// [`AeadDecryptor`] and flows through as
 /// [`DecryptError::Other`], not as an `UnsealError`.
 #[non_exhaustive]
-#[derive(Debug, Snafu)]
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 pub enum UnsealError {
     /// The bundle is malformed or uses an unsupported version.
     #[snafu(display("invalid bundle"))]
+    #[classify(no)]
     InvalidBundle,
 }
 
@@ -84,7 +83,7 @@ pub trait AeadUnsealer: std::fmt::Debug + MaybeSendSync {
     ///
     /// Returns [`DecryptError::NoMatchingKey`] if no key matched the given
     /// `kid`; all other failures — malformed bundles, authentication
-    /// failure — classify as [`ErrorKind::Crypto`] via [`DecryptError::Other`].
+    /// failure — arrive as [`DecryptError::Other`].
     fn unseal<'a>(
         &'a self,
         bundle: &'a [u8],
@@ -219,12 +218,20 @@ impl<C: AeadEncryptorSelector> AeadSealer for AeadV1Sealer<C> {
             let kid = encryptor.key_id().map(Cow::into_owned);
             let output = encryptor.encrypt(plaintext, aad).await?;
 
-            let nonce_len: u8 = output.nonce.len().try_into().map_err(|_| {
-                Error::new(crate::ErrorKind::Crypto, "nonce length exceeds u8::MAX")
-            })?;
-            let tag_len: u8 =
-                output.tag.len().try_into().map_err(|_| {
-                    Error::new(crate::ErrorKind::Crypto, "tag length exceeds u8::MAX")
+            let nonce_len: u8 =
+                output
+                    .nonce
+                    .len()
+                    .try_into()
+                    .with_context(|_| NonceTooLongSnafu {
+                        len: output.nonce.len(),
+                    })?;
+            let tag_len: u8 = output
+                .tag
+                .len()
+                .try_into()
+                .with_context(|_| TagTooLongSnafu {
+                    len: output.tag.len(),
                 })?;
 
             let mut bundle = Vec::with_capacity(
@@ -242,8 +249,36 @@ impl<C: AeadEncryptorSelector> AeadSealer for AeadV1Sealer<C> {
     }
 }
 
-fn invalid_bundle() -> Error {
-    Error::new(ErrorKind::Crypto, UnsealError::InvalidBundle)
+/// Errors that occur when values do not fit the v1 bundle format.
+#[non_exhaustive]
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+pub(crate) enum SealError {
+    /// The nonce is longer than the one-byte length field can describe.
+    #[snafu(display("nonce is {len} bytes; the v1 bundle format encodes its length in one byte"))]
+    #[classify(no)]
+    NonceTooLong {
+        /// The length the cipher produced.
+        len: usize,
+        /// The underlying error.
+        source: TryFromIntError,
+    },
+    /// The tag is longer than the one-byte length field can describe.
+    #[snafu(display("tag is {len} bytes; the v1 bundle format encodes its length in one byte"))]
+    #[classify(no)]
+    TagTooLong {
+        /// The length the cipher produced.
+        len: usize,
+        /// The underlying error.
+        source: TryFromIntError,
+    },
+}
+
+/// Converts a framing failure to the general decryption-error path.
+impl From<UnsealError> for DecryptError {
+    #[track_caller]
+    fn from(source: UnsealError) -> Self {
+        Error::from(source).into()
+    }
 }
 
 impl<C: AeadDecryptor> AeadUnsealer for AeadV1Sealer<C> {
@@ -254,16 +289,12 @@ impl<C: AeadDecryptor> AeadUnsealer for AeadV1Sealer<C> {
         kid: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         Box::pin(async move {
-            if bundle.len() < 3 || bundle[0] != 0x01 {
-                return Err(invalid_bundle().into());
-            }
+            ensure!(bundle.len() >= 3 && bundle[0] == 0x01, InvalidBundleSnafu);
 
             let nonce_len = bundle[1] as usize;
             let tag_len = bundle[2] as usize;
 
-            if bundle.len() < 3 + nonce_len + tag_len {
-                return Err(invalid_bundle().into());
-            }
+            ensure!(bundle.len() >= 3 + nonce_len + tag_len, InvalidBundleSnafu);
 
             let nonce = &bundle[3..3 + nonce_len];
             let tag = &bundle[bundle.len() - tag_len..];
@@ -401,14 +432,8 @@ mod tests {
         let DecryptError::Other { source } = err else {
             panic!("expected DecryptError::Other, got {err:?}");
         };
-        assert_eq!(source.kind(), ErrorKind::Crypto);
-        assert_eq!(source.to_string(), "cryptographic operation failed");
-        assert_eq!(
-            std::error::Error::source(source)
-                .expect("source")
-                .to_string(),
-            "invalid bundle"
-        );
+        // The transparent `Error` renders the underlying framing failure.
+        assert_eq!(source.to_string(), "invalid bundle");
     }
 
     #[tokio::test]

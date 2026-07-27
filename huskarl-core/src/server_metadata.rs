@@ -6,23 +6,59 @@
 use bon::bon;
 use http::{HeaderMap, Uri};
 use serde::Deserialize;
+use snafu::prelude::*;
 
-use crate::{
-    EndpointUrl,
-    error::{Error, ErrorKind},
-    http::HttpClient,
-};
+use crate::{EndpointUrl, error::Error, http::HttpClient};
 
-/// Builds the [`ErrorKind::Config`] error returned by the
-/// `builder_from_metadata` constructors when [`AuthorizationServerMetadata`]
-/// lacks a field the target requires.
+/// The cause of an authorization-server metadata failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum ServerMetadataError {
+    /// A required member is absent from the discovery document.
+    #[snafu(display("authorization server metadata has no '{field}'"))]
+    #[classify(no)]
+    MissingField {
+        /// The dotted path of the absent member.
+        field: String,
+    },
+    /// The issuer could not be turned into a well-known URL.
+    #[snafu(display("invalid issuer {issuer:?}"))]
+    #[classify(no)]
+    InvalidIssuer {
+        /// The rejected issuer.
+        issuer: String,
+        /// The underlying error.
+        source: http::Error,
+    },
+    /// The discovery document could not be fetched.
+    #[snafu(display("fetching authorization server metadata from {endpoint}"))]
+    Fetching {
+        /// The discovery endpoint.
+        endpoint: String,
+        /// The underlying error.
+        source: Error,
+    },
+    /// RFC 8414 §3.3: the document's `issuer` must equal the one requested.
+    #[snafu(display("issuer mismatch (RFC 8414 §3.3): expected {expected:?}, got {actual:?}"))]
+    #[classify(no)]
+    IssuerMismatch {
+        /// The issuer that was requested.
+        expected: String,
+        /// The issuer the document declared.
+        actual: String,
+    },
+}
+
+/// Builds the non-retryable error returned when metadata lacks a required field.
 ///
 /// `field` names the absent field as it appears in the discovery document,
 /// dotted for a nested one (`mtls_endpoint_aliases.token_endpoint`).
 #[must_use]
+#[track_caller]
 pub fn missing_field(field: &str) -> Error {
-    Error::from(ErrorKind::Config)
-        .with_context(format!("authorization server metadata has no `{field}`"))
+    Error::from(ServerMetadataError::MissingField {
+        field: field.to_owned(),
+    })
 }
 
 /// mTLS endpoint aliases from AS discovery metadata (RFC 8705 §5.1).
@@ -210,9 +246,8 @@ impl AuthorizationServerMetadata {
     ) -> Result<Self, Error> {
         let configuration_endpoint =
             add_issuer_to_known_path(&issuer, &well_known_path, use_legacy_transformation)
-                .map_err(|source| {
-                    Error::new(ErrorKind::Config, source)
-                        .with_context(format!("invalid issuer {issuer:?}"))
+                .context(InvalidIssuerSnafu {
+                    issuer: issuer.clone(),
                 })?;
 
         let metadata: Self = crate::http::get(
@@ -221,17 +256,16 @@ impl AuthorizationServerMetadata {
             HeaderMap::new(),
         )
         .await
-        .map_err(|err| {
-            err.with_context(format!(
-                "fetching authorization server metadata from {configuration_endpoint}"
-            ))
+        .context(FetchingSnafu {
+            endpoint: configuration_endpoint.to_string(),
         })?;
 
         if metadata.issuer != issuer {
-            return Err(Error::from(ErrorKind::Protocol).with_context(format!(
-                "issuer mismatch (RFC 8414 §3.3): expected {issuer:?}, got {:?}",
-                metadata.issuer
-            )));
+            return Err(ServerMetadataError::IssuerMismatch {
+                expected: issuer.clone(),
+                actual: metadata.issuer.clone(),
+            }
+            .into());
         }
 
         Ok(metadata)

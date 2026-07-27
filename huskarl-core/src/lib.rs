@@ -45,7 +45,7 @@ and explanation in a `_docs` module:
   own typed errors where the variants *are* the API — JWT validation
   ([`JwtValidationError`](jwt::validator::JwtValidationError)), low-level
   verification ([`crypto::verifier`]), and wire encoding
-  ([`oauth_form::Error`]) — design one `From` arm for [`Error`] plus arms for
+  ([`oauth_form::FormError`]) — design one `From` arm for [`Error`] plus arms for
   the subsystem errors you call directly.
 
 ## Guides and explanation
