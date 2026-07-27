@@ -7,8 +7,8 @@ use std::sync::{
 
 use huskarl::{
     authorizer::HttpAuthorizer,
-    cache::RefreshTokenStore,
-    core::{Error, ErrorKind, platform::MaybeSendBoxFuture},
+    cache::{Recovery, RefreshTokenStore, TokenError},
+    core::{Error, RetryAdvice, platform::MaybeSendBoxFuture},
     token::RefreshToken,
     userinfo::UserInfoClient,
 };
@@ -22,8 +22,12 @@ pub struct AppState {
 pub enum AppError {
     #[error("login required")]
     LoginRequired,
+    #[error("temporarily unavailable")]
+    RetryLater(Option<huskarl::core::platform::Duration>, TokenError),
+    #[error("the request needs adjusting")]
+    AdjustRequest(TokenError),
     #[error("authorization failed")]
-    Auth(#[from] Error),
+    Auth(#[from] TokenError),
 }
 
 pub async fn authorized_headers(
@@ -33,8 +37,15 @@ pub async fn authorized_headers(
 ) -> Result<http::HeaderMap, AppError> {
     match state.authorizer.get_headers(method, uri).await {
         Ok(headers) => Ok(headers),
-        Err(err) if err.kind() == ErrorKind::ReauthRequired => Err(AppError::LoginRequired),
-        Err(err) => Err(err.into()),
+        // One match over what to do. The token source decided this while it
+        // still held the alternatives; nothing here re-derives it.
+        Err(err) => match err.recovery() {
+            Recovery::Reauthenticate => Err(AppError::LoginRequired),
+            // One arm, not two: a cooldown is a retry that carries a delay.
+            Recovery::Retry { after } => Err(AppError::RetryLater(after, err)),
+            Recovery::AdjustRequest => Err(AppError::AdjustRequest(err)),
+            _ => Err(AppError::Auth(err)),
+        },
     }
 }
 
@@ -48,6 +59,11 @@ pub struct KeychainStore {
 #[error("keychain is locked")]
 pub struct KeychainLocked;
 
+/// How long this store says to wait — the interval a leaf component knows and
+/// the stack above it does not.
+pub const KEYCHAIN_RELOCK: huskarl::core::platform::Duration =
+    huskarl::core::platform::Duration::from_secs(42);
+
 impl KeychainStore {
     /// Simulates the keychain becoming unavailable.
     pub fn lock(&self) {
@@ -56,9 +72,11 @@ impl KeychainStore {
 
     fn ensure_unlocked(&self) -> Result<(), Error> {
         if self.locked.load(Ordering::Relaxed) {
-            // A locked keychain is a transient condition: classify retryable.
+            // A locked keychain is transient, and this component happens to
+            // know how long: the OS relocks on a fixed timer. Stands in for any
+            // leaf that can name an interval — a KMS returning `Retry-After`.
             Err(Error::new(
-                ErrorKind::Transport { retryable: true },
+                RetryAdvice::retry_after(KEYCHAIN_RELOCK),
                 KeychainLocked,
             ))
         } else {
@@ -232,6 +250,41 @@ mod tests {
         assert!(matches!(err, AppError::LoginRequired), "got {err:?}");
     }
 
+    /// Does an interval named by a user-supplied leaf survive the whole stack
+    /// — store, token source, cache, authorizer — to the caller?
+    #[tokio::test]
+    async fn leaf_supplied_retry_delay_reaches_the_caller() {
+        let store = KeychainStore::default();
+        store.lock();
+        // `NoSource`: no from-scratch exchange to fall through to, so the
+        // store's own verdict is the outcome rather than being combined with
+        // an exchange failure.
+        let source = GrantTokenSource::builder()
+            .grant(grant(MockHttp::default()))
+            .grant_parameters(NoSource)
+            .refresh_store(store)
+            .build();
+        let cache = InMemoryTokenCache::builder().source(source).build();
+        let state = AppState {
+            authorizer: HttpAuthorizer::builder().cache(cache).build(),
+            userinfo: None,
+        };
+        let uri: http::Uri = "https://api.example.com/resource".parse().unwrap();
+
+        let err = authorized_headers(&state, &http::Method::GET, &uri)
+            .await
+            .expect_err("a locked keychain must fail");
+
+        match err {
+            AppError::RetryLater(after, _) => assert_eq!(
+                after,
+                Some(KEYCHAIN_RELOCK),
+                "the leaf's interval must reach the caller intact"
+            ),
+            other => panic!("expected RetryLater, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn locked_keychain_failure_propagates_through_prime() {
         let response = RawTokenResponse::builder()
@@ -252,12 +305,13 @@ mod tests {
             .build();
 
         let err = source.prime(response).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Transport { retryable: true });
+        // The keychain named an interval, and `prime` must not flatten it.
+        assert_eq!(
+            err.retry_advice(),
+            RetryAdvice::retry_after(KEYCHAIN_RELOCK)
+        );
         assert!(
-            std::error::Error::source(&err)
-                .expect("source")
-                .downcast_ref::<KeychainLocked>()
-                .is_some(),
+            err.cause().downcast_ref::<KeychainLocked>().is_some(),
             "source should be the downstream KeychainLocked: {err:?}"
         );
     }

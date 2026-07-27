@@ -17,12 +17,50 @@ use std::sync::Arc;
 use bon::Builder;
 pub use challenge::{Challenge, ChallengePayload, parse_challenges};
 use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri, header::AUTHORIZATION};
+use snafu::prelude::*;
 
-use crate::{
-    cache::TokenCache,
-    core::{Error, ErrorKind},
-    token::AccessToken,
-};
+use crate::{cache::TokenCache, core::Error, token::AccessToken};
+
+/// The cause of a request-authorization failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum AuthorizeError {
+    /// A `DPoP`-bound token was cached but the authorizer has no `DPoP`
+    /// configured to prove possession with — a cache wiring bug.
+    #[snafu(display("received DPoP token but no DPoP configuration present"))]
+    #[classify(no)]
+    MissingDPoPConfiguration,
+    /// The generated `DPoP` proof is not a valid HTTP header value.
+    #[snafu(display("DPoP proof is not a valid header value"))]
+    #[classify(no)]
+    ProofNotAHeaderValue {
+        /// The underlying error.
+        source: http::header::InvalidHeaderValue,
+    },
+    /// The access token is not a valid HTTP header value.
+    #[snafu(display("access token is not a valid header value"))]
+    #[classify(no)]
+    TokenNotAHeaderValue {
+        /// The underlying error.
+        source: http::header::InvalidHeaderValue,
+    },
+    /// RFC 8693 §2.2.1: an `N_A` issuance is not an access token and must never
+    /// be presented as an `Authorization` credential.
+    #[snafu(display(
+        "the cached grant issued a non-access token (token_type N_A); \
+         it cannot authorize resource-server requests"
+    ))]
+    #[classify(no)]
+    NotAnAccessToken,
+}
+
+// Authorizer failures are local configuration errors without automatic recovery.
+impl From<AuthorizeError> for crate::cache::TokenError {
+    #[track_caller]
+    fn from(source: AuthorizeError) -> Self {
+        Error::from(source).into()
+    }
+}
 
 /// Produces authenticated request headers from a [`TokenCache`].
 ///
@@ -71,12 +109,15 @@ impl HttpAuthorizer {
     ///
     /// # Errors
     ///
-    /// Errors follow the crate's three-signal contract — see
-    /// [the error model](crate::core::error). In particular,
-    /// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired) means the
-    /// interactive flow must run again, while retryable transport failures
-    /// keep their own classification.
-    pub async fn get_headers(&self, method: &Method, uri: &Uri) -> Result<HeaderMap, Error> {
+    /// Returns [`TokenError`](crate::cache::TokenError) if token acquisition or
+    /// header construction fails. Match
+    /// [`TokenError::recovery`](crate::cache::TokenError::recovery) to distinguish
+    /// retry, request adjustment, and reauthentication.
+    pub async fn get_headers(
+        &self,
+        method: &Method,
+        uri: &Uri,
+    ) -> Result<HeaderMap, crate::cache::TokenError> {
         let token = self.cache.token().await?;
 
         let mut headers = HeaderMap::new();
@@ -97,46 +138,35 @@ impl HttpAuthorizer {
                     // A DPoP-bound token paired with a proof implementation
                     // that produces no proof indicates a logic bug in the
                     // cache configuration.
-                    return Err(Error::from(ErrorKind::DPoP)
-                        .with_context("received DPoP token but no DPoP configuration present"));
+                    return Err(AuthorizeError::MissingDPoPConfiguration.into());
                 };
 
-                let mut proof_value: HeaderValue =
-                    proof.expose_secret().parse().map_err(|source| {
-                        Error::new(ErrorKind::DPoP, source)
-                            .with_context("DPoP proof is not a valid header value")
-                    })?;
+                let mut proof_value: HeaderValue = proof
+                    .expose_secret()
+                    .parse()
+                    .context(ProofNotAHeaderValueSnafu)?;
                 // The DPoP proof is a short-lived signed credential; keep it out
                 // of the HPACK/QPACK dynamic table and out of header debug output.
                 proof_value.set_sensitive(true);
                 headers.insert("DPoP", proof_value);
 
-                let mut token_value =
-                    dpop_access_token.expose_header_value().map_err(|source| {
-                        Error::new(ErrorKind::Protocol, source)
-                            .with_context("access token is not a valid header value")
-                    })?;
+                let mut token_value = dpop_access_token
+                    .expose_header_value()
+                    .context(TokenNotAHeaderValueSnafu)?;
                 token_value.set_sensitive(true);
                 headers.insert(&self.authorization_header, token_value);
             }
             AccessToken::Bearer(bearer_access_token) => {
-                let mut token_value =
-                    bearer_access_token
-                        .expose_header_value()
-                        .map_err(|source| {
-                            Error::new(ErrorKind::Protocol, source)
-                                .with_context("access token is not a valid header value")
-                        })?;
+                let mut token_value = bearer_access_token
+                    .expose_header_value()
+                    .context(TokenNotAHeaderValueSnafu)?;
                 token_value.set_sensitive(true);
                 headers.insert(&self.authorization_header, token_value);
             }
             AccessToken::NotAccessToken(_) => {
                 // RFC 8693 §2.2.1: an N_A issuance is not an access token and
                 // must never be presented as an Authorization credential.
-                return Err(Error::from(ErrorKind::Config).with_context(
-                    "the cached grant issued a non-access token (token_type N_A); \
-                     it cannot authorize resource-server requests",
-                ));
+                return Err(AuthorizeError::NotAnAccessToken.into());
             }
         }
 
@@ -179,8 +209,9 @@ impl HttpAuthorizer {
         self.cache.resource_server_dpop().update_nonce(uri, nonce);
     }
 
-    /// Records what a resource server response teaches about authorization
-    /// state. Call this with **every** response, success or failure.
+    /// Updates authorization state from response headers.
+    ///
+    /// Call this for every response, including successful responses.
     ///
     /// - Any `DPoP-Nonce` header is recorded for the URI's origin (RFC 9449
     ///   §8.1 — servers may rotate the nonce on any response, and the next
@@ -188,8 +219,8 @@ impl HttpAuthorizer {
     /// - An `invalid_token` challenge (RFC 6750 §3.1) invalidates the cached
     ///   token, so the next [`Self::get_headers`] acquires a fresh one.
     ///
-    /// Bookkeeping only — it never re-sends, and only headers are inspected, not
-    /// the status code. See the [module docs](self) for the request loop, when
+    /// This method does not send a request and does not inspect the status code.
+    /// See the [module docs](self) for the request loop, when
     /// to call [`Self::invalidate`] yourself, and the caveat on relaying an
     /// upstream `WWW-Authenticate` onto a non-`401` response.
     pub fn process_response(&self, uri: &Uri, headers: &HeaderMap) {
@@ -197,7 +228,7 @@ impl HttpAuthorizer {
             self.set_nonce(uri, nonce);
         }
 
-        if challenge::challenge_has_error(headers, "invalid_token") {
+        if challenge::challenge_has_error(headers, &crate::core::OAuthErrorCode::InvalidToken) {
             self.invalidate();
         }
     }
@@ -215,19 +246,19 @@ pub fn extract_dpop_nonce(headers: &HeaderMap) -> Option<String> {
         .map(std::borrow::ToOwned::to_owned)
 }
 
-/// Reports whether a response is the one `DPoP` failure a re-send can fix: a
+/// Returns whether a response is the `DPoP` nonce failure a resend can fix: a
 /// `401` with a `use_dpop_nonce` challenge that carries a fresh `DPoP-Nonce`
 /// header (RFC 9449 §7.2). A challenge without the fresh nonce yields `false`
 /// — a re-send cannot succeed.
 ///
-/// Record the nonce first — [`HttpAuthorizer::process_response`] or
-/// [`HttpAuthorizer::set_nonce`] — so the rebuilt proof carries it. This is
-/// only the `DPoP` fact, not the whole resend decision; see the [module
-/// docs](self) for the request loop.
+/// Before rebuilding headers, record the nonce with
+/// [`HttpAuthorizer::process_response`] or [`HttpAuthorizer::set_nonce`]. This
+/// function does not determine whether resending the application request is
+/// safe.
 #[must_use]
 pub fn dpop_resend_advised(status: StatusCode, headers: &HeaderMap) -> bool {
     status == StatusCode::UNAUTHORIZED
-        && challenge::challenge_has_error(headers, "use_dpop_nonce")
+        && challenge::challenge_has_error(headers, &crate::core::OAuthErrorCode::UseDPoPNonce)
         && extract_dpop_nonce(headers).is_some()
 }
 
@@ -236,7 +267,10 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use super::*;
-    use crate::{core::platform::MaybeSendBoxFuture, grant::core::TokenResponse};
+    use crate::{
+        core::{RetryAdvice, platform::MaybeSendBoxFuture},
+        grant::core::TokenResponse,
+    };
 
     /// A cache stub that records [`TokenCache::invalidate`] calls; the token
     /// acquisition methods are never exercised by these tests.
@@ -245,9 +279,16 @@ mod tests {
         invalidated: Arc<AtomicBool>,
     }
 
+    use crate::cache::TokenError;
+
     impl crate::cache::TokenSource for FakeCache {
-        fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
-            Box::pin(async { Err(Error::from(ErrorKind::Config)) })
+        fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
+            Box::pin(async {
+                Err(TokenError::from(Error::new(
+                    RetryAdvice::No,
+                    "config failure",
+                )))
+            })
         }
 
         // Bearer fake: relies on the `NoDPoP` default for `resource_server_dpop`.

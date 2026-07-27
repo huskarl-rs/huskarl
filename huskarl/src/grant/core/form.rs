@@ -424,6 +424,21 @@ mod tests {
         );
     }
 
+    // Only the token source knows whether another credential is available, so
+    // a rejection alone cannot require reauthentication.
+    #[test]
+    fn a_rejection_never_demands_reauth_by_itself() {
+        let err = parse_oauth2_error_response(
+            http::StatusCode::BAD_REQUEST,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(br#"{"error":"invalid_grant"}"#),
+        );
+        assert_ne!(
+            crate::cache::Recovery::implied_by(&err),
+            crate::cache::Recovery::Reauthenticate
+        );
+    }
+
     // A gateway's `invalid_grant` body must not become a credential verdict.
     #[test]
     fn invalid_grant_in_5xx_body_is_a_retryable_server_condition() {

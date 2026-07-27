@@ -73,7 +73,7 @@ pub trait GrantParametersSource<P>: MaybeSendSync {
     /// freshly re-signed assertion).
     ///
     /// Only the credential-fatal `invalid_grant` triggers this. A request-shape
-    /// rejection ([`RequestRejected`](crate::core::ErrorKind::RequestRejected):
+    /// rejection (a code whose [`parameters_at_fault`](crate::core::OAuthErrorCode::parameters_at_fault):
     /// `invalid_scope`, `invalid_target`, `invalid_resource`) leaves the
     /// credential intact and never spends the source.
     ///

@@ -5,21 +5,8 @@ use std::sync::{Mutex, PoisonError};
 
 use crate::core::platform::{Duration, Instant};
 
-/// Backoff breaker bounding repeated non-recoverable from-scratch acquisitions.
-///
-/// A self-contained state machine: it counts consecutive non-recoverable
-/// failures and, once `threshold` of them accrue, opens for `cooldown`.
-/// [`try_acquire`](Self::try_acquire) then denies permission until the cooldown
-/// elapses, after which it permits one trial (half-open); any success
-/// [`reset`](Self::reset)s it.
-///
-/// The `threshold`/`cooldown` knobs live on the owning
-/// [`GrantTokenSource`](super::GrantTokenSource) (so they sit on its builder)
-/// and are passed in per call — this type owns only the runtime state and its
-/// lock. It is deliberately ignorant of the token error vocabulary: the owner
-/// decides which failures count (see
-/// [`counts_toward_breaker`](super::GrantTokenSource::counts_toward_breaker))
-/// and which error to surface when blocked.
+// Runtime state for the fresh-exchange backoff policy. The owner decides which
+// failures count and maps an open breaker to the public error contract.
 #[derive(Default)]
 pub(super) struct Breaker {
     state: Mutex<BreakerState>,
@@ -34,24 +21,17 @@ struct BreakerState {
 }
 
 impl Breaker {
-    /// Tries to acquire permission for one from-scratch attempt.
-    ///
-    /// Returns `true` if permitted. While cooling down it returns `false`; once
-    /// the cooldown elapses it permits a single trial (half-open) and restarts
-    /// the cooldown in the same locked section, so the trial is exclusive and
-    /// the next one is a full `cooldown` away whatever this one does. Only
-    /// [`reset`](Self::reset) — a success — closes the breaker; the failure
-    /// count is retained meanwhile, so a countable failure re-opens it. A
-    /// `threshold` of `0` disables the breaker (always permits).
-    pub(super) fn try_acquire(&self, threshold: u32, cooldown: Duration) -> bool {
+    // Returns the remaining cooldown while open. After cooldown, exactly one
+    // caller receives the half-open trial permit. A zero threshold disables it.
+    pub(super) fn try_acquire(&self, threshold: u32, cooldown: Duration) -> Result<(), Duration> {
         if threshold == 0 {
-            return true;
+            return Ok(());
         }
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(open_until) = state.open_until {
             let now = Instant::now();
             if now < open_until {
-                return false;
+                return Err(open_until - now);
             }
             // Re-arm as the permit is handed out rather than waiting for the
             // trial to report back: the trial may resolve without calling
@@ -61,12 +41,10 @@ impl Breaker {
             // against concurrent callers.
             state.open_until = Some(now + cooldown);
         }
-        true
+        Ok(())
     }
 
-    /// Records a non-recoverable failure, opening the breaker for `cooldown`
-    /// once `threshold` consecutive failures accrue. A `threshold` of `0`
-    /// disables the breaker.
+    // Opens the breaker after `threshold` consecutive countable failures.
     pub(super) fn record_failure(&self, threshold: u32, cooldown: Duration) {
         if threshold == 0 {
             return;
@@ -78,7 +56,7 @@ impl Breaker {
         }
     }
 
-    /// Resets after any success (or a fresh prime).
+    // Any successful acquisition or fresh prime closes the breaker.
     pub(super) fn reset(&self) {
         *self.state.lock().unwrap_or_else(PoisonError::into_inner) = BreakerState::default();
     }
@@ -94,23 +72,23 @@ mod breaker_tests {
     #[test]
     fn opens_after_threshold_consecutive_failures() {
         let breaker = Breaker::default();
-        assert!(breaker.try_acquire(3, COOLDOWN));
+        assert!(breaker.try_acquire(3, COOLDOWN).is_ok());
         breaker.record_failure(3, COOLDOWN);
         breaker.record_failure(3, COOLDOWN);
         // Below threshold: still permits.
-        assert!(breaker.try_acquire(3, COOLDOWN));
+        assert!(breaker.try_acquire(3, COOLDOWN).is_ok());
         breaker.record_failure(3, COOLDOWN);
         // Threshold reached: open and cooling down — permission denied.
-        assert!(!breaker.try_acquire(3, COOLDOWN));
+        assert!(breaker.try_acquire(3, COOLDOWN).is_err());
     }
 
     #[test]
     fn reset_closes_an_open_breaker() {
         let breaker = Breaker::default();
         breaker.record_failure(1, COOLDOWN);
-        assert!(!breaker.try_acquire(1, COOLDOWN));
+        assert!(breaker.try_acquire(1, COOLDOWN).is_err());
         breaker.reset();
-        assert!(breaker.try_acquire(1, COOLDOWN));
+        assert!(breaker.try_acquire(1, COOLDOWN).is_ok());
     }
 
     #[test]
@@ -119,21 +97,21 @@ mod breaker_tests {
         for _ in 0..10 {
             breaker.record_failure(0, COOLDOWN);
         }
-        assert!(breaker.try_acquire(0, COOLDOWN));
+        assert!(breaker.try_acquire(0, COOLDOWN).is_ok());
     }
 
     #[tokio::test]
     async fn half_opens_one_trial_after_cooldown() {
         let breaker = Breaker::default();
         breaker.record_failure(1, Duration::from_millis(10));
-        assert!(!breaker.try_acquire(1, COOLDOWN));
+        assert!(breaker.try_acquire(1, COOLDOWN).is_err());
 
         crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
         // Cooldown elapsed: the gate permits one trial while retaining the
         // failure count, so a failing trial re-opens at once.
-        assert!(breaker.try_acquire(1, COOLDOWN));
+        assert!(breaker.try_acquire(1, COOLDOWN).is_ok());
         breaker.record_failure(1, COOLDOWN);
-        assert!(!breaker.try_acquire(1, COOLDOWN));
+        assert!(breaker.try_acquire(1, COOLDOWN).is_err());
     }
 
     // The trial permit must be exclusive on its own, without waiting for the
@@ -145,9 +123,12 @@ mod breaker_tests {
         breaker.record_failure(1, Duration::from_millis(10));
         crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
 
-        assert!(breaker.try_acquire(1, COOLDOWN), "the trial is permitted");
         assert!(
-            !breaker.try_acquire(1, COOLDOWN),
+            breaker.try_acquire(1, COOLDOWN).is_ok(),
+            "the trial is permitted"
+        );
+        assert!(
+            breaker.try_acquire(1, COOLDOWN).is_err(),
             "a second caller must not also get through"
         );
     }
@@ -161,13 +142,13 @@ mod breaker_tests {
         breaker.record_failure(1, Duration::from_millis(10));
         crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
 
-        assert!(breaker.try_acquire(1, Duration::from_millis(10)));
+        assert!(breaker.try_acquire(1, Duration::from_millis(10)).is_ok());
         // Trial fails transiently — nothing is recorded.
-        assert!(!breaker.try_acquire(1, Duration::from_millis(10)));
+        assert!(breaker.try_acquire(1, Duration::from_millis(10)).is_err());
 
         // ...and the next cooldown still yields a trial, so it is backoff and
         // not a permanent lockout.
         crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
-        assert!(breaker.try_acquire(1, Duration::from_millis(10)));
+        assert!(breaker.try_acquire(1, Duration::from_millis(10)).is_ok());
     }
 }

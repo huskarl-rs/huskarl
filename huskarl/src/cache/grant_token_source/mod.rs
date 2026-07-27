@@ -6,10 +6,14 @@ use std::sync::{
 use bon::Builder;
 
 use crate::{
-    cache::{GetTokenError, GrantParametersSource, RefreshTokenStore, TokenSource},
+    cache::{
+        Attempt, GetTokenError, GrantParametersSource, Recovery, RefreshTokenStore, TokenError,
+        TokenSource,
+    },
     core::{
-        Error, ErrorKind,
+        Error, OAuthErrorCode, RetryAdvice,
         dpop::ResourceServerDPoP,
+        error::propagation::Classification,
         platform::{Duration, Instant, MaybeSendBoxFuture},
     },
     grant::{
@@ -25,64 +29,49 @@ use breaker::Breaker;
 /// stored refresh token, or running a fresh grant exchange.
 ///
 /// Hand this to an [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache),
-/// which adds caching, single-flight, and expiry on top. Wrap it in an `Arc` and
-/// keep a clone to [`prime`](Self::prime) or inspect it after it is in the cache;
-/// [caching tokens](crate::_docs::guide::caching) shows the full wiring. After an
-/// interactive login, hand the freshly obtained token to a running source with
-/// [`prime`](Self::prime) instead of (or alongside) a parameter source; it is
-/// served once and its refresh token persisted.
+/// which adds caching, single-flight, and expiry on top; [caching
+/// tokens](crate::_docs::guide::caching) shows the full wiring. Keep an `Arc`
+/// clone to [`prime`](Self::prime) it with a freshly obtained token after an
+/// interactive login — it is served once and its refresh token persisted.
 ///
-/// [Token source resolution](crate::_docs::explanation::token_source_resolution)
-/// explains *why* the rules below hold.
+/// See [token source resolution](crate::_docs::explanation::token_source_resolution)
+/// for the rationale behind these rules.
 ///
 /// # Resolution order
 ///
-/// Each [`token`](TokenSource::token) call resolves in strict precedence, first
-/// hit wins:
+/// Each [`token`](TokenSource::token) call uses the first available successful
+/// path in this order:
 ///
 /// 1. A **primed token** from [`prime`](Self::prime), if any.
 /// 2. A **refresh** using the stored refresh token, if any.
 /// 3. A **fresh grant exchange** using parameters from the configured
-///    [`GrantParametersSource`] — consulted only here, after the refresh attempt.
+///    [`GrantParametersSource`] — consulted only here, after the refresh.
 ///
 /// A source built with [`NoSource`](crate::cache::NoSource) performs only
-/// steps 1–2 (it refreshes a [`prime`](Self::prime)d token but never exchanges).
+/// steps 1–2.
 ///
 /// # Credential lifecycle
 ///
-/// A credential is abandoned once it cannot succeed again:
+/// An `invalid_grant` verdict discards a refresh token. It also permanently
+/// spends a fixed parameter source that opts in through
+/// [`discard_after_rejection`](GrantParametersSource::discard_after_rejection).
+/// [`single_use`](crate::cache::single_use) sources are consumed on first use.
 ///
-/// - the **refresh token** is discarded on `invalid_grant`;
-/// - a **fixed parameter source** is spent on `invalid_grant` if it opts in via
-///   [`discard_after_rejection`](GrantParametersSource::discard_after_rejection)
-///   (true for fixed values, false for [`from_fn`](crate::cache::from_fn)).
-///   [`single_use`](crate::cache::single_use) sources are consumed on first use.
+/// Request-parameter verdicts recognized by
+/// [`parameters_at_fault`](crate::core::OAuthErrorCode::parameters_at_fault),
+/// such as `invalid_scope`, do not discard credentials.
 ///
-/// A spent fixed source stays spent for the life of the source; neither
-/// [`prime`](Self::prime) nor [`clear`](TokenSource::clear) revives it. A
-/// **request-shape rejection**
-/// ([`RequestRejected`](crate::core::ErrorKind::RequestRejected):
-/// `invalid_scope`, `invalid_target`, `invalid_resource`) is *not* a credential
-/// failure — the source is kept and the error surfaced unchanged.
-///
-/// The returned error is
-/// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired) **only when no
-/// automatic recovery path remains**; a retryable transport failure, a retained
-/// refresh token, a request-shape rejection, or a live dynamic source each keeps
-/// its own classification. The cause is always a [`GetTokenError`] variant.
+/// Failures report [`Reauthenticate`](crate::cache::Recovery::Reauthenticate)
+/// only when no automatic acquisition path remains. With the `metrics` feature,
+/// the attempted path is reported through the [`TokenOutcome`](crate::TokenOutcome)
+/// label.
 ///
 /// # Backoff
 ///
-/// A source that keeps failing non-recoverably from scratch (most often a
-/// [`from_fn`](crate::cache::from_fn) re-signing against a revoked key) is bounded
-/// by a breaker: after `breaker_threshold` consecutive non-recoverable failures
-/// (transient and request-shape failures don't count) it backs off for
-/// `breaker_cooldown`, then allows one trial per cooldown. Any success or a fresh
-/// [`prime`](Self::prime) resets it; tune both knobs on the builder. The breaker
-/// gates only the from-scratch exchange — a refresh is still attempted first on
-/// every call — and short-circuits with [`GetTokenError::Backoff`] under
-/// [`Backoff`](crate::core::ErrorKind::Backoff), which is deliberately not
-/// [`ReauthRequired`](crate::core::ErrorKind::ReauthRequired).
+/// After `breaker_threshold` consecutive non-recoverable fresh-exchange
+/// failures, the source waits for `breaker_cooldown` before allowing one trial.
+/// Transient and request-shape failures do not count. Refreshes remain available,
+/// and any success or [`prime`](Self::prime) resets the breaker.
 #[derive(Builder)]
 pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     /// The grant this source runs to obtain tokens — refreshes through its
@@ -134,6 +123,10 @@ pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     /// [`can_restore`](Self::can_restore); `None` until first reconciled.
     #[builder(skip)]
     credential_view: Mutex<Option<CredentialView>>,
+    /// Extra labels applied to this source's metrics.
+    #[cfg(feature = "metrics")]
+    #[builder(default)]
+    metric_labels: Vec<::metrics::Label>,
     /// Consecutive non-recoverable from-scratch failures tolerated before the
     /// source backs off (see [Backoff](#backoff)). `0` disables the breaker.
     /// Defaults to `3`.
@@ -154,8 +147,12 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> core::fmt::Debug for GrantTok
 }
 
 impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> TokenSource for GrantTokenSource<G, S> {
-    fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
-        Box::pin(async move { self.token_inner().await.map(Arc::new) })
+    fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
+        Box::pin(async move {
+            let token = self.token_inner().await?;
+            self.emit_success();
+            Ok(Arc::new(token))
+        })
     }
 
     fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
@@ -203,7 +200,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         Ok(())
     }
 
-    async fn token_inner(&self) -> Result<TokenResponse, Error> {
+    async fn token_inner(&self) -> Result<TokenResponse, TokenError> {
         // A primed token is served once, ahead of any network call.
         if let Some(token) = self
             .pending
@@ -223,25 +220,23 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             Err(e) => e,
         };
 
-        // Bound repeated from-scratch failures: if recent attempts kept failing
-        // non-recoverably (e.g. a `from_fn` re-signing against a revoked key),
-        // back off instead of hitting the signer/endpoint every call. Checked
-        // after try_refresh so a usable refresh token still recovers.
-        //
-        // The breaker gates only the from-scratch exchange; it must not mask an
-        // independent recovery path. A retained refresh token whose last failure
-        // was transient can still succeed on a later call, so surface that
-        // (retryable) error rather than the Backoff signal. Mirrors the no-params
-        // branch below.
-        if !self
+        // Gate only fresh exchanges; a retained refresh token remains usable.
+        if let Err(remaining) = self
             .breaker
             .try_acquire(self.breaker_threshold, self.breaker_cooldown)
         {
             return Err(match refresh_error {
-                Some(source) if source.is_retryable() => {
-                    Error::new(source.kind(), GetTokenError::RefreshFailed { source })
+                Some(source) if Recovery::implied_by(&source).leaves_a_live_path() => {
+                    self.propagate_refresh_error(source)
                 }
-                _ => Error::new(ErrorKind::Backoff, GetTokenError::Backoff),
+                // No request was made, so report policy backoff without a verdict.
+                _ => self.failed(
+                    Recovery::Retry {
+                        after: Some(remaining),
+                    },
+                    RetryAdvice::retry_after(remaining).into(),
+                    GetTokenError::Backoff,
+                ),
             });
         }
 
@@ -249,7 +244,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         // after try_refresh — so a usable refresh token avoids re-minting a
         // dynamic source (e.g. re-signing a JWT-bearer assertion). A source
         // already spent by a definitive rejection yields nothing.
-        let retryable = self.grant_parameters.retryable();
+        let source_reusable = self.grant_parameters.retryable();
         let params = if self.params_spent.load(Ordering::Relaxed) {
             None
         } else {
@@ -262,10 +257,10 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
                         self.breaker
                             .record_failure(self.breaker_threshold, self.breaker_cooldown);
                     }
-                    return Err(Self::combine_exchange_error(
+                    return Err(self.combine_exchange_error(
                         refresh_error,
                         exchange_source,
-                        retryable,
+                        source_reusable,
                     ));
                 }
             }
@@ -273,17 +268,17 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
 
         let Some(params) = params else {
             return Err(match refresh_error {
-                // A transient refresh failure is not a reauth signal: the
-                // refresh token was retained and a later call may succeed.
-                // Propagate the refresh error's own retryable classification.
-                Some(source) if source.is_retryable() => {
-                    Error::new(source.kind(), GetTokenError::RefreshFailed { source })
+                // Preserve a refresh failure when its credential remains usable.
+                Some(source) if Recovery::implied_by(&source).leaves_a_live_path() => {
+                    self.propagate_refresh_error(source)
                 }
-                Some(source) => Error::new(
-                    ErrorKind::ReauthRequired,
+                // Preserve the refresh classification while marking all paths exhausted.
+                Some(source) => self.exhausted(
+                    source.classification(),
                     GetTokenError::RefreshFailed { source },
                 ),
-                None => Error::new(ErrorKind::ReauthRequired, GetTokenError::NoTokenSource),
+                // Nothing was available to attempt.
+                None => self.exhausted(RetryAdvice::No.into(), GetTokenError::NoTokenSource),
             });
         };
 
@@ -294,19 +289,11 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
                 Ok(token_response)
             }
             Err(exchange_source) => {
-                // The credential itself was rejected (`invalid_grant`):
-                // replaying it is futile, so spend a fixed source — mirroring
-                // try_refresh discarding a refresh token on invalid_grant. A
-                // dynamic source keeps going; its next value may succeed.
-                //
-                // Crucially this is *not* triggered by a request-shape rejection
-                // (`RequestRejected`: invalid_scope/target/resource): there the
-                // credential is intact and only the request was wrong, so
-                // spending it would burn a good credential and mislead the
-                // caller into re-authenticating. Such errors keep their own
-                // classification (via `source_retryable` below) and the caller
-                // can retry with an adjusted request.
-                let credential_dead = exchange_source.kind() == ErrorKind::InvalidGrant;
+                // Spend fixed parameters only when the server rejects the credential.
+                // Request-shape verdicts leave the credential intact.
+                let credential_dead = exchange_source
+                    .verdict()
+                    .is_some_and(|verdict| verdict.code() == &OAuthErrorCode::InvalidGrant);
                 let spent = credential_dead && self.grant_parameters.discard_after_rejection();
                 if spent {
                     self.params_spent.store(true, Ordering::Relaxed);
@@ -319,85 +306,166 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
                     self.breaker
                         .record_failure(self.breaker_threshold, self.breaker_cooldown);
                 }
-                Err(Self::combine_exchange_error(
+                Err(self.combine_exchange_error(
                     refresh_error,
                     exchange_source,
-                    retryable && !spent,
+                    source_reusable && !spent,
                 ))
             }
         }
     }
 
+    /// Emits a failure with the recovery selected by this token source.
+    #[track_caller]
+    fn failed(
+        &self,
+        recovery: Recovery,
+        classification: Classification,
+        cause: GetTokenError,
+    ) -> TokenError {
+        self.emit(recovery, classification, cause)
+    }
+
+    /// Emits a failure after every acquisition path has been exhausted.
+    #[track_caller]
+    fn exhausted(&self, classification: Classification, cause: GetTokenError) -> TokenError {
+        self.emit(Recovery::Reauthenticate, classification, cause)
+    }
+
+    /// Records the metrics outcome and constructs the token error.
+    #[track_caller]
+    #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_self))]
+    fn emit(
+        &self,
+        recovery: Recovery,
+        classification: Classification,
+        cause: GetTokenError,
+    ) -> TokenError {
+        #[cfg(feature = "metrics")]
+        {
+            let mut labels = self.metric_labels.clone();
+            labels.push(::metrics::Label::new("outcome", cause.outcome().as_str()));
+            ::metrics::counter!("huskarl.token.acquire", labels).increment(1);
+        }
+        TokenError::new(recovery, Error::propagate(classification, cause))
+    }
+
+    /// Records a successful acquisition.
+    #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_self))]
+    fn emit_success(&self) {
+        #[cfg(feature = "metrics")]
+        {
+            let mut labels = self.metric_labels.clone();
+            labels.push(::metrics::Label::new(
+                "outcome",
+                crate::TokenOutcome::Success.as_str(),
+            ));
+            ::metrics::counter!("huskarl.token.acquire", labels).increment(1);
+        }
+    }
+
     /// Combines a fresh-exchange failure with any preceding refresh failure.
     ///
-    /// `source_retryable` is whether the parameter source could still succeed on
-    /// a later call — a reusable or dynamic source, but not a single-use one nor
-    /// a fixed source just spent by a definitive rejection. `ReauthRequired` is
-    /// reported only when no automatic path remains. Several things leave one: a
-    /// retryable transport failure or a request-shape rejection from the
-    /// exchange (on a still-usable source), or a retained refresh token after a
-    /// transient refresh failure — each can succeed on a later call (possibly
-    /// with an adjusted request) without re-running the interactive flow.
+    /// `source_available` indicates whether the parameter source can produce a
+    /// value on a later call. Reauthentication is required only when neither
+    /// the refresh nor exchange path remains viable.
     fn combine_exchange_error(
+        &self,
         refresh_error: Option<Error>,
         exchange_source: Error,
-        source_retryable: bool,
-    ) -> Error {
-        // No refresh was attempted. A source that can still succeed later keeps
-        // the exchange error's own classification (e.g. a retryable transport
-        // failure, or an invalid_grant a dynamic source may recover from).
-        // Otherwise no automatic path remains, so it is the reauth signal.
-        // Either way the exchange error is wrapped as the cause, so callers can
-        // downcast uniformly.
+        source_available: bool,
+    ) -> TokenError {
+        // No refresh was attempted. Preserve the exchange classification while
+        // choosing recovery from whether this source can produce another value.
         let Some(refresh_source) = refresh_error else {
-            let kind = if source_retryable {
-                exchange_source.kind()
-            } else {
-                ErrorKind::ReauthRequired
+            let recovery = Self::recovery_with_available_source(&exchange_source);
+            let classification = exchange_source.classification();
+            let cause = GetTokenError::ExchangeFailed {
+                source: exchange_source,
             };
-            return Error::new(
-                kind,
-                GetTokenError::ExchangeFailed {
-                    source: exchange_source,
-                },
-            );
+            return if source_available {
+                self.failed(recovery, classification, cause)
+            } else {
+                self.exhausted(classification, cause)
+            };
         };
 
-        // Both a refresh and the fresh exchange failed. The exchange points to
-        // its own recovery when it is a transient failure (retry) or a
-        // request-shape rejection (adjust the request) — both independent of the
-        // refresh outcome and preferable to forcing reauth. Otherwise a retained
-        // refresh token may still succeed on a later call; failing that, no
-        // automatic path remains.
-        let exchange_recoverable =
-            exchange_source.is_retryable() || exchange_source.kind() == ErrorKind::RequestRejected;
-        let kind = if source_retryable && exchange_recoverable {
-            exchange_source.kind()
-        } else if refresh_source.is_retryable() {
-            refresh_source.kind()
+        // Prefer the classification of an attempt that leaves a viable path.
+        let implied_exchange_recovery = Recovery::implied_by(&exchange_source);
+        let exchange_recovery = if source_available {
+            Self::recovery_with_available_source(&exchange_source)
         } else {
-            ErrorKind::ReauthRequired
+            implied_exchange_recovery
         };
-        Error::new(
-            kind,
-            GetTokenError::BothFailed {
-                refresh_source,
-                exchange_source,
-            },
+        let refresh_recovery = Recovery::implied_by(&refresh_source);
+        let exchange_viable = source_available && exchange_recovery.leaves_a_live_path();
+        let exchange_failure_is_actionable =
+            source_available && implied_exchange_recovery.leaves_a_live_path();
+        let refresh_viable = refresh_recovery.leaves_a_live_path();
+
+        // Report an attempt that leaves a path when possible. Its complete
+        // classification and the source-level recovery travel independently.
+        let (recovery, reported, other, reported_attempt) =
+            match (exchange_failure_is_actionable, refresh_viable) {
+                (false, true) => (
+                    refresh_recovery,
+                    refresh_source,
+                    exchange_source,
+                    Attempt::Refresh,
+                ),
+                // The exchange is viable, or nothing is; either way it is what
+                // got us here.
+                _ => (
+                    exchange_recovery,
+                    exchange_source,
+                    refresh_source,
+                    Attempt::Exchange,
+                ),
+            };
+        // Preserve both retry advice and the server verdict.
+        let classification = reported.classification();
+        let cause = GetTokenError::BothFailed {
+            reported,
+            other,
+            reported_attempt,
+        };
+        // This layer can determine whether both alternatives are exhausted.
+        if exchange_viable || refresh_viable {
+            self.failed(recovery, classification, cause)
+        } else {
+            self.exhausted(classification, cause)
+        }
+    }
+
+    /// Re-wraps a refresh failure while preserving its classification and
+    /// deriving recovery for the retained refresh path.
+    fn propagate_refresh_error(&self, source: Error) -> TokenError {
+        let recovery = Recovery::implied_by(&source);
+        let classification = source.classification();
+        self.failed(
+            recovery,
+            classification,
+            GetTokenError::RefreshFailed { source },
         )
+    }
+
+    /// Recovery for a failed exchange when the parameter source can produce
+    /// another value. An explicit interaction requirement still wins; a
+    /// terminal failure of this value becomes a retry of token acquisition.
+    fn recovery_with_available_source(error: &Error) -> Recovery {
+        match Recovery::implied_by(error) {
+            Recovery::Fail => Recovery::Retry { after: None },
+            recovery => recovery,
+        }
     }
 
     /// Whether a from-scratch failure should count toward the backoff breaker.
     ///
-    /// A spent source is already permanently handled; transient failures are the
-    /// caller's to retry; request-shape rejections ([`RequestRejected`]) have a
-    /// caller action (adjust the request). Everything else — a credential
-    /// rejected on a still-usable source, or the signer/config failing — is a
-    /// futile from-scratch repeat worth bounding.
-    ///
-    /// [`RequestRejected`]: crate::core::ErrorKind::RequestRejected
+    /// A spent source is already permanently handled. Everything else — a
+    /// credential rejected on a still-usable source, or the signer/config
+    /// failing — is a futile from-scratch repeat worth bounding.
     fn counts_toward_breaker(err: &Error, spent: bool) -> bool {
-        !spent && !err.is_retryable() && err.kind() != ErrorKind::RequestRejected
+        !spent && !Recovery::implied_by(err).leaves_a_live_path()
     }
 
     /// Returns a reference to the underlying grant.
@@ -522,7 +590,15 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
                 Err(err) => err,
             };
 
-            if err.kind() != ErrorKind::InvalidGrant {
+            // Only the server rejecting *this* token retires it. A code a
+            // gateway echoed on a 5xx never reaches `verdict`, which would
+            // otherwise clear a perfectly good refresh token over an outage —
+            // and, having cleared it, leave nothing to fall back to once the
+            // outage lifted.
+            if !err
+                .verdict()
+                .is_some_and(|verdict| verdict.code() == &OAuthErrorCode::InvalidGrant)
+            {
                 return Err(Some(err));
             }
 
@@ -548,10 +624,8 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             return Err(Some(err));
         }
 
-        // Every path in the body either returns or `continue`s, and `continue`
-        // is guarded on `attempt < MAX_ATTEMPTS`, so the loop cannot fall
-        // through — the compiler just cannot see it. A local, compiler-adjacent
-        // invariant with no caller input in it.
+        // Every path returns or `continue`s under `attempt < MAX_ATTEMPTS`, so
+        // the loop cannot fall through.
         #[allow(clippy::unreachable)]
         {
             unreachable!("the final attempt never continues, so the loop always returns");

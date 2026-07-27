@@ -7,7 +7,8 @@
 //! - **[Tutorial](tutorial)** — a start-to-finish lesson: run a local server
 //!   and obtain your first access token.
 //! - **[How-to guides](guide)** — task-oriented recipes for setting up each
-//!   grant, caching tokens, and making authenticated requests.
+//!   grant, caching tokens, making authenticated requests, and implementing
+//!   token infrastructure.
 //! - **[Explanation](explanation)** — understanding-oriented background on how
 //!   the crate works and why it is shaped the way it is.
 //!
@@ -23,7 +24,8 @@ pub mod tutorial {
     pub mod first_token {}
 }
 
-/// Task-oriented recipes for setting up grants and making authenticated requests.
+/// Task-oriented recipes for setting up grants, making authenticated requests,
+/// and implementing token infrastructure.
 pub mod guide {
     #[doc = include_str!("../docs/guide/setup.md")]
     pub mod setup {}
@@ -54,6 +56,12 @@ pub mod guide {
 
     #[doc = include_str!("../docs/guide/caching.md")]
     pub mod caching {}
+
+    #[doc = include_str!("../docs/guide/handling_errors.md")]
+    pub mod handling_errors {}
+
+    #[doc = include_str!("../docs/guide/implementing_token_infrastructure.md")]
+    pub mod implementing_token_infrastructure {}
 
     #[doc = include_str!("../docs/guide/authorizer.md")]
     pub mod authorizer {}
