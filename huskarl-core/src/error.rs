@@ -32,11 +32,6 @@ struct Inner {
     verdict: Option<crate::oauth_error::OAuthError>,
     location: &'static std::panic::Location<'static>,
     cause: BoxedSource,
-    legacy_kind: Option<ErrorKind>,
-    legacy_context: Option<String>,
-    legacy_oauth_code: Option<String>,
-    legacy_oauth_description: Option<String>,
-    legacy_has_source: bool,
 }
 
 impl fmt::Debug for Error {
@@ -47,10 +42,6 @@ impl fmt::Debug for Error {
             .field("verdict", &self.0.verdict)
             .field("location", &self.0.location)
             .field("cause", &self.0.cause)
-            .field("legacy_kind", &self.0.legacy_kind)
-            .field("legacy_context", &self.0.legacy_context)
-            .field("legacy_oauth_code", &self.0.legacy_oauth_code)
-            .field("legacy_oauth_description", &self.0.legacy_oauth_description)
             .finish()
     }
 }
@@ -75,56 +66,6 @@ pub enum RetryAdvice {
     },
     /// Retrying this operation is not expected to help.
     No,
-}
-
-/// Compatibility classification retained while the workspace migrates to
-/// [`RetryAdvice`].
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ErrorKind {
-    /// The grant is no longer valid.
-    InvalidGrant,
-    /// Interactive authorization is required again.
-    ReauthRequired,
-    /// A transport operation failed.
-    Transport {
-        /// Whether repeating the operation may succeed.
-        retryable: bool,
-    },
-    /// A response was malformed or unusable.
-    Protocol,
-    /// Client authentication could not be constructed.
-    Auth,
-    /// `DPoP` proof construction or handling failed.
-    DPoP,
-    /// Configuration is invalid.
-    Config,
-    /// A cryptographic operation failed.
-    Crypto,
-    /// The request parameters were rejected.
-    RequestRejected,
-    /// The operation should wait for a local cooldown.
-    Backoff,
-}
-
-/// Temporary constructor input accepted during the workspace migration.
-#[doc(hidden)]
-pub trait ErrorClassification {
-    /// Converts to the new advice and, for legacy callers, preserves the old
-    /// classification until they have migrated.
-    fn into_parts(self) -> (RetryAdvice, Option<ErrorKind>);
-}
-
-impl ErrorClassification for RetryAdvice {
-    fn into_parts(self) -> (RetryAdvice, Option<ErrorKind>) {
-        (self, None)
-    }
-}
-
-impl ErrorClassification for ErrorKind {
-    fn into_parts(self) -> (RetryAdvice, Option<ErrorKind>) {
-        (self.into(), Some(self))
-    }
 }
 
 impl RetryAdvice {
@@ -157,10 +98,8 @@ impl Error {
     ///
     /// # Panics
     ///
-    /// When `classification` is [`RetryAdvice`], enabling `strict-propagation`
-    /// makes this function panic if the cause chain already contains an
-    /// [`Error`]. The same check runs in this crate's tests. Passing the
-    /// temporary [`ErrorKind`] compatibility type retains the legacy behavior.
+    /// With the `strict-propagation` feature, panics if the cause chain already
+    /// contains an [`Error`]. This check is also enabled in this crate's tests.
     ///
     /// # Examples
     ///
@@ -172,104 +111,15 @@ impl Error {
     /// ```
     #[track_caller]
     #[must_use]
-    pub fn new(classification: impl ErrorClassification, cause: impl Into<BoxedSource>) -> Self {
-        let (retry_advice, legacy_kind) = classification.into_parts();
+    pub fn new(retry_advice: RetryAdvice, cause: impl Into<BoxedSource>) -> Self {
         let cause = cause.into();
-        if legacy_kind.is_none() {
-            assert_not_already_classified(cause.as_ref(), Establishment::New);
-        }
-        let legacy_has_source = legacy_kind.is_some();
+        assert_not_already_classified(cause.as_ref(), Establishment::New);
         Self(Box::new(Inner {
             retry_advice,
             verdict: None,
             location: std::panic::Location::caller(),
             cause,
-            legacy_kind,
-            legacy_context: None,
-            legacy_oauth_code: None,
-            legacy_oauth_description: None,
-            legacy_has_source,
         }))
-    }
-
-    /// Adds legacy display context while callers migrate to cause enums.
-    #[must_use]
-    pub fn with_context(mut self, context: impl Into<String>) -> Self {
-        self.0.legacy_context = Some(match self.0.legacy_context.take() {
-            Some(existing) => format!("{}: {existing}", context.into()),
-            None => context.into(),
-        });
-        self
-    }
-
-    /// Attaches a legacy OAuth error response.
-    ///
-    /// This preserves the old accessors without creating a new-style
-    /// [`verdict`](Self::verdict). Legacy response parsers do not consistently
-    /// distinguish a request verdict from an OAuth-shaped body on a `429` or
-    /// `5xx`; migrated response paths make that distinction before attaching a
-    /// verdict.
-    #[must_use]
-    pub fn with_oauth_error(
-        mut self,
-        code: impl Into<String>,
-        description: Option<String>,
-    ) -> Self {
-        self.0.legacy_oauth_code = Some(code.into());
-        self.0.legacy_oauth_description = description;
-        self
-    }
-
-    /// Returns the legacy classification while callers migrate.
-    #[must_use]
-    pub fn kind(&self) -> ErrorKind {
-        self.0.legacy_kind.unwrap_or_else(|| {
-            if let Some(verdict) = self.verdict() {
-                use crate::oauth_error::OAuthErrorCode;
-                return match verdict.code() {
-                    OAuthErrorCode::InvalidGrant => ErrorKind::InvalidGrant,
-                    OAuthErrorCode::UseDPoPNonce | OAuthErrorCode::InvalidDPoPProof => {
-                        ErrorKind::DPoP
-                    }
-                    code if code.parameters_at_fault() => ErrorKind::RequestRejected,
-                    _ => ErrorKind::Protocol,
-                };
-            }
-            match self.retry_advice() {
-                RetryAdvice::Retry { .. } => ErrorKind::Transport { retryable: true },
-                RetryAdvice::No => ErrorKind::Protocol,
-            }
-        })
-    }
-
-    /// Returns the legacy OAuth error code while callers migrate.
-    #[must_use]
-    pub fn oauth_error_code(&self) -> Option<&str> {
-        self.0
-            .legacy_oauth_code
-            .as_deref()
-            .or_else(|| self.verdict().map(|verdict| verdict.code().as_str()))
-    }
-
-    /// Returns the legacy OAuth error description while callers migrate.
-    #[must_use]
-    pub fn oauth_error_description(&self) -> Option<&str> {
-        self.0.legacy_oauth_description.as_deref().or_else(|| {
-            self.verdict()
-                .and_then(crate::oauth_error::OAuthError::description)
-        })
-    }
-
-    /// Returns whether repeating the operation may succeed.
-    #[must_use]
-    pub fn is_retryable(&self) -> bool {
-        matches!(self.retry_advice(), RetryAdvice::Retry { .. })
-    }
-
-    /// Returns whether the server requested a `DPoP` nonce.
-    #[must_use]
-    pub fn is_dpop_nonce_required(&self) -> bool {
-        self.oauth_error_code() == Some("use_dpop_nonce")
     }
 
     /// Returns the OAuth error from an authorization server rejection.
@@ -329,7 +179,8 @@ impl Error {
 
 /// Returns an error and its sources, outermost first.
 #[must_use]
-pub fn chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Chain<'a> {
+#[cfg(any(test, feature = "strict-propagation"))]
+fn chain<'a>(error: &'a (dyn std::error::Error + 'static)) -> Chain<'a> {
     Chain { next: Some(error) }
 }
 
@@ -387,24 +238,6 @@ impl fmt::Display for Error {
     // The erased cause supplies this layer's message. `{:#}` appends the rest
     // of the source chain, separated by `": "`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(kind) = self.0.legacy_kind {
-            if let Some(context) = &self.0.legacy_context {
-                write!(f, "{context}: ")?;
-            }
-            kind.fmt(f)?;
-            if let Some(code) = self.oauth_error_code() {
-                write!(f, " (oauth error code: {code})")?;
-            }
-            if f.alternate() {
-                for cause in self.chain().skip(1) {
-                    write!(f, ": {cause}")?;
-                }
-            }
-            return Ok(());
-        }
-        if let Some(context) = &self.0.legacy_context {
-            write!(f, "{context}: ")?;
-        }
         // Do not pass the alternate flag through: for `Error`, it means to walk
         // the source chain, not to format the cause in alternate form.
         write!(f, "{}", self.0.cause)?;
@@ -453,60 +286,9 @@ impl std::error::Error for Error {
     // The cause is rendered as this layer, so its source is the next distinct
     // item in the chain.
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        if self.0.legacy_has_source {
-            Some(self.0.cause.as_ref())
-        } else {
-            self.0.cause.source()
-        }
+        self.0.cause.source()
     }
 }
-
-impl From<ErrorKind> for RetryAdvice {
-    fn from(kind: ErrorKind) -> Self {
-        match kind {
-            ErrorKind::Transport { retryable: true } => Self::RETRY,
-            _ => Self::No,
-        }
-    }
-}
-
-impl From<ErrorKind> for Error {
-    #[track_caller]
-    fn from(kind: ErrorKind) -> Self {
-        let mut error = Self::new(kind, LegacyKindCause(kind));
-        error.0.legacy_has_source = false;
-        error
-    }
-}
-
-impl fmt::Display for ErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::InvalidGrant => "the grant is no longer valid",
-            Self::RequestRejected => "the request parameters were rejected",
-            Self::ReauthRequired => "re-authorization is required",
-            Self::Backoff => "backing off after repeated failures",
-            Self::Transport { retryable: true } => "transient transport failure",
-            Self::Transport { retryable: false } => "transport failure",
-            Self::Protocol => "invalid or malformed server response",
-            Self::Auth => "client authentication construction failed",
-            Self::DPoP => "DPoP proof handling failed",
-            Self::Config => "invalid configuration",
-            Self::Crypto => "cryptographic operation failed",
-        })
-    }
-}
-
-#[derive(Debug)]
-struct LegacyKindCause(ErrorKind);
-
-impl fmt::Display for LegacyKindCause {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl std::error::Error for LegacyKindCause {}
 
 #[cfg(test)]
 mod tests {
@@ -591,25 +373,6 @@ mod tests {
         let err = Error::new(RetryAdvice::No, Outer(Underlying));
         assert_eq!(format!("{err}"), "outer");
         assert_eq!(format!("{err:#}"), "outer: underlying");
-    }
-
-    #[test]
-    fn legacy_alternate_display_also_renders_the_whole_chain() {
-        let err = Error::new(ErrorKind::Protocol, Outer(Underlying)).with_context("reading token");
-        assert_eq!(
-            format!("{err:#}"),
-            "reading token: invalid or malformed server response: outer: underlying"
-        );
-    }
-
-    #[test]
-    fn legacy_oauth_metadata_does_not_become_a_verdict() {
-        let err = Error::new(ErrorKind::Protocol, Underlying)
-            .with_oauth_error("invalid_grant", Some("gateway echo".to_owned()));
-
-        assert_eq!(err.oauth_error_code(), Some("invalid_grant"));
-        assert_eq!(err.oauth_error_description(), Some("gateway echo"));
-        assert!(err.verdict().is_none());
     }
 
     // The erased cause is omitted, but its sources remain available.
@@ -743,14 +506,6 @@ mod tests {
             Error::new(RetryAdvice::No, "the breaker is open").to_string(),
             "the breaker is open"
         );
-    }
-
-    #[test]
-    fn legacy_construction_keeps_its_pre_migration_wrapping_behavior() {
-        let inner = Error::new(RetryAdvice::RETRY, "the underlying failure");
-        let err = Error::new(ErrorKind::Protocol, Wrapping(inner));
-
-        assert_eq!(err.kind(), ErrorKind::Protocol);
     }
 
     /// And the correct route is unaffected, which is the whole point: the check

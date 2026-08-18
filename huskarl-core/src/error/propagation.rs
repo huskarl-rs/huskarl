@@ -150,11 +150,6 @@ impl Error {
             verdict,
             location: std::panic::Location::caller(),
             cause: cause.into(),
-            legacy_kind: None,
-            legacy_context: None,
-            legacy_oauth_code: None,
-            legacy_oauth_description: None,
-            legacy_has_source: false,
         }))
     }
 

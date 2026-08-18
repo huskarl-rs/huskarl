@@ -11,10 +11,11 @@ This guide covers the shape common to all of them.
 
 Every extension trait is **dyn-capable**: the library stores implementations
 behind `Arc<dyn Trait>` (or `&dyn Trait`), so async methods return a boxed
-future. Write each body as `Box::pin(async move { ... })`, and map every failure
-onto the one concrete [`Error`](crate::error::Error) using the
-[`ErrorKind`](crate::error::ErrorKind) that tells callers what to do next (see
-[the error model](crate::_docs::explanation::error_handling)).
+future. Write each body as `Box::pin(async move { ... })`. Most seams return the
+concrete [`Error`](crate::error::Error); verification and decryption retain small
+specialized enums because composing layers branch on their variants. See
+[returning errors from an extension](crate::_docs::guide::returning_errors) for
+the leaf, propagation, typed-enum, and specialized-error recipes.
 
 ## Implementing `HttpClient`
 
@@ -43,9 +44,8 @@ impl HttpClient for MyClient {
         idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
         Box::pin(async move {
-            // Translate `request` into your client's call, await it, and read
-            // the full body. On failure, return `ErrorKind::Transport` — see
-            // the note on `idempotency` below.
+            // Translate `request`, await the call, and read a bounded body.
+            // Classify failures using `idempotency` as described below.
             let _ = (request, idempotency);
             Ok(HttpResponse {
                 status: StatusCode::OK,
@@ -57,9 +57,9 @@ impl HttpClient for MyClient {
 }
 ```
 
-Classify request and body-read failures as
-[`ErrorKind::Transport`](crate::error::ErrorKind::Transport), and set
-`retryable` carefully. A failure is retryable only when re-sending is safe:
+Classify request and body-read failures with
+[`RetryAdvice::retry_if`](crate::error::RetryAdvice::retry_if), and decide its
+argument carefully. A failure is retryable only when re-sending is safe:
 either the request provably never reached the server, or the caller declared it
 [`Idempotency::Idempotent`](crate::http::Idempotency::Idempotent) and the failure
 was transient. With [`Idempotency::Unknown`](crate::http::Idempotency::Unknown)
@@ -67,13 +67,19 @@ the server may already have processed a first attempt (consuming a one-shot
 authorization code or rotated refresh token), so only never-delivered failures
 are retryable.
 
-## The cryptographic seams
+Enforce a response-body size limit while streaming from the transport, before
+constructing `HttpResponse`. Return `Error::new(RetryAdvice::No, cause)` for an
+oversized response. Do not read an unbounded body and truncate it afterward,
+because the limit protects memory rather than only diagnostics.
 
-The [`crypto`](crate::crypto) traits follow the same pattern; classify signing,
-verification, and decryption failures as
-[`ErrorKind::Crypto`](crate::error::ErrorKind::Crypto), and a remote keystore's
-transient failure (KMS, HSM) as
-[`ErrorKind::Transport`](crate::error::ErrorKind::Transport):
+## Implementing cryptographic traits
+
+The [`crypto`](crate::crypto) traits use `Error` for signing and encryption. A
+local failure normally carries [`RetryAdvice::No`](crate::error::RetryAdvice::No),
+while a transient remote-keystore failure carries
+[`RetryAdvice::Retry`](crate::error::RetryAdvice::Retry). Verification and
+decryption instead return specialized errors for key-selection and validation
+control flow; their `Other` variants preserve an underlying `Error`:
 
 - [`JwsSigner`](crate::crypto::signer::JwsSigner) /
   [`JwsSignerSelector`](crate::crypto::signer::JwsSignerSelector) — produce JWS

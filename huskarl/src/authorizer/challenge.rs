@@ -107,31 +107,11 @@ pub fn parse_challenges(headers: &HeaderMap) -> Vec<Challenge> {
     out
 }
 
-pub(crate) trait ChallengeCode {
-    fn matches(&self, actual: &OAuthErrorCode) -> bool;
-}
-
-impl ChallengeCode for str {
-    fn matches(&self, actual: &OAuthErrorCode) -> bool {
-        actual.as_str() == self
-    }
-}
-
-impl ChallengeCode for OAuthErrorCode {
-    fn matches(&self, actual: &OAuthErrorCode) -> bool {
-        actual == self
-    }
-}
-
 /// Returns true if any challenge carries the given `error` code.
-pub(crate) fn challenge_has_error<C: ChallengeCode + ?Sized>(
-    headers: &HeaderMap,
-    code: &C,
-) -> bool {
+pub(crate) fn challenge_has_error(headers: &HeaderMap, code: &OAuthErrorCode) -> bool {
     parse_challenges(headers)
         .iter()
-        .filter_map(Challenge::error)
-        .any(|actual| code.matches(&actual))
+        .any(|challenge| challenge.error().as_ref() == Some(code))
 }
 
 // ---------------------------------------------------------------------------

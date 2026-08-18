@@ -109,8 +109,7 @@ let api_key = EnvVarSecret::string("PREFIXED_API_KEY")?
 # }
 ```
 
-A failed transform surfaces as
-[`ErrorKind::Config`](crate::error::ErrorKind::Config); use
+A failed transform surfaces as a non-retryable error; use
 [`with_context`](crate::secrets::MappedSecret::with_context) to name the source
 in the error (`"decoding secret file /run/secrets/key"`). Transforms run on
 every fetch, so wrap the *transformed* secret in
@@ -151,11 +150,17 @@ impl Secret for VaultSecret {
 }
 ```
 
-Classify failures by intent: a transient fetch failure (a vault timeout) as
-[`ErrorKind::Transport`](crate::error::ErrorKind::Transport) with `retryable: true`,
-and a persistent one (missing key, bad permissions, undecodable data) as
-[`ErrorKind::Config`](crate::error::ErrorKind::Config). See [the error
-model](crate::_docs::explanation::error_handling).
+Convert provider failures with [`Error::new`](crate::error::Error::new). Use
+[`RetryAdvice::Retry`](crate::error::RetryAdvice::Retry) for a transient fetch
+failure such as a vault timeout. Use [`RetryAdvice::No`](crate::error::RetryAdvice::No)
+for a missing key, bad permissions, or undecodable data. If the provider reports
+a cooldown, preserve it with
+[`RetryAdvice::retry_after`](crate::error::RetryAdvice::retry_after).
+
+If your provider wraps another component that already returns `Error`, preserve
+that classification instead of constructing a new one. See
+[returning errors from an extension](crate::_docs::guide::returning_errors) for
+the propagation and typed-error-enum patterns.
 
 That one `impl` is the whole integration: the provider composes like the
 built-ins, so [transforms](#transforming-a-secret) chain over it

@@ -99,10 +99,11 @@ a request that presented a token.
 
 ## Reaching a concrete cause
 
-Use [`chain`](crate::core::error::chain) to inspect any validation error and its
-sources. Because wrappers expose their inner errors through
-[`std::error::Error::source`], one walk can reach through a multi-issuer router,
-its selected validator, and the underlying JWT error.
+Use [`Error::chain`](crate::core::Error::chain) to inspect a classified Huskarl
+error and its sources. For other validation errors, follow
+[`std::error::Error::source`]. Because wrappers expose their inner errors this
+way, one walk can reach through a multi-issuer router, its selected validator,
+and the underlying JWT error.
 
 Chain output is operator-facing. The challenge `description` is client-facing
 and must not be treated as a detailed diagnosis. In particular, RFC 7662 §2.2
