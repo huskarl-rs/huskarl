@@ -48,7 +48,7 @@ why not have them? Huskarl makes them accessible with minimal ceremony.
   server-side `DPoP`, `WWW-Authenticate` challenges).
 - **Comfortable to hold.** Strategy traits are dyn-capable, so clients and
   authorizers are plain storable values — no tower of generic parameters —
-  and every operation returns one concrete `Error`/`ErrorKind` that embeds
+  and every operation returns one concrete `Error` that embeds
   cleanly in your own error type. Type-safe builders make missing
   configuration a compile error.
 - **Hardened defaults.** `forbid(unsafe_code)`; `unwrap`/`expect`/`panic`/
@@ -200,7 +200,7 @@ enforced at compile time, irrelevant ones aren't mentioned, and the builder
 machinery disappears after construction.
 
 **One error type.** Every operation returns the same concrete
-`Error`/`ErrorKind` pair, designed to embed in your application's error type
+`Error` pair, designed to embed in your application's error type
 without generics.
 
 The design rationale — the error model, untrusted-key handling, crypto

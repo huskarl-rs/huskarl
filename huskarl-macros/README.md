@@ -13,6 +13,9 @@
 
 cargo-reedme: info-end -->
 
-The [`from_metadata`](https://docs.rs/huskarl-macros/latest/huskarl_macros/attr.from_metadata.html) attribute macro for the huskarl crates.
+Procedural macros for the huskarl crates.
+
+Use [`Classify`](https://docs.rs/huskarl-macros/latest/huskarl_macros/derive.Classify.html) to derive error propagation and
+[`from_metadata`](https://docs.rs/huskarl-macros/latest/huskarl_macros/attr.from_metadata.html) to build configuration from metadata.
 
 <!-- cargo-reedme: end -->
