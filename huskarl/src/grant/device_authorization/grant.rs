@@ -6,7 +6,7 @@ use snafu::{ResultExt as _, Snafu};
 
 use crate::{
     core::{
-        EndpointUrl, Error,
+        EndpointUrl, Error, OAuthError, OAuthErrorCode, RetryAdvice,
         client_auth::{AuthenticationContext, ClientAuthentication},
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
@@ -59,6 +59,18 @@ pub struct DeviceAuthorizationGrant {
     /// Defaults to [`DEFAULT_MIN_POLL_INTERVAL_SECS`] (RFC 8628 §3.2 baseline).
     #[builder(default = DEFAULT_MIN_POLL_INTERVAL_SECS)]
     min_poll_interval_secs: u32,
+
+    /// Maximum consecutive retryable failures absorbed by
+    /// [`poll_to_completion`](Self::poll_to_completion).
+    ///
+    /// Any response from the server, including `authorization_pending`, resets
+    /// the count.
+    ///
+    /// Defaults to [`DEFAULT_MAX_TRANSIENT_POLL_FAILURES`]. Set it to `0` to
+    /// surface the first retryable failure to the caller and drive the retry
+    /// policy yourself.
+    #[builder(default = DEFAULT_MAX_TRANSIENT_POLL_FAILURES)]
+    max_transient_poll_failures: u32,
 
     /// The issuer for tokens created by the authorization server.
     #[from_metadata(path = "issuer")]
@@ -118,14 +130,14 @@ impl core::fmt::Debug for DeviceAuthorizationGrant {
 impl DeviceAuthorizationGrant {
     /// Begin a device authorization request.
     ///
-    /// This sends a request to the device authorization endpoint. The endpoint
-    /// should return state which can be used to wait for the result, as well
-    /// as information to the user on how to authorize the device.
+    /// Sends a request to the device authorization endpoint and returns the
+    /// state needed for polling plus the verification instructions to display.
     ///
     /// # Errors
     ///
-    /// Returns an error if one is returned when attempting to make the device
-    /// authorization request.
+    /// Returns an error if client authentication, `DPoP` proof generation, the
+    /// HTTP request, or response parsing fails, or if the endpoint rejects the
+    /// request.
     pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
         let payload = DeviceAuthorizationRequest {
             scope: crate::grant::core::join_space(start_input.scope.as_deref()),
@@ -187,38 +199,64 @@ impl DeviceAuthorizationGrant {
     /// Poll pending state until there is a result or error, waiting an
     /// appropriate amount of time between requests.
     ///
+    /// Retryable failures are absorbed up to the configured limit. A
+    /// `Retry-After` delay is honored, and any server response resets the
+    /// consecutive-failure count.
+    ///
     /// # Errors
     ///
-    /// Returns an error if one is returned when attempting to poll. This
-    /// can be an error like access denied, token expiry, or an error
-    /// when making the token request.
+    /// Returns [`AccessDenied`](PollError::AccessDenied) or
+    /// [`TokenExpired`](PollError::TokenExpired) when the flow ended for good,
+    /// and [`Exchange`](PollError::Exchange) for a token request that failed
+    /// unretryably, or that stayed retryable for too long.
     pub async fn poll_to_completion(
         &self,
         pending_state: &mut PendingState,
         resource: Option<Vec<String>>,
     ) -> Result<TokenResponse, PollError> {
+        let mut consecutive_failures: u32 = 0;
         loop {
             // Clamp to the configured floor: a server (or a deserialized
             // pending state) can carry `interval: 0`, which would otherwise
             // spin a zero-delay hot loop hammering the token endpoint.
             let interval_secs = pending_state.interval_secs.max(self.min_poll_interval_secs);
-            sleep(Duration::from_secs(interval_secs.into())).await;
+            let interval = Duration::from_secs(interval_secs.into());
+            sleep(interval).await;
 
-            if let PollResult::Complete(token_response) =
-                self.poll(pending_state, resource.clone()).await?
-            {
-                return Ok(*token_response);
+            let err = match self.poll(pending_state, resource.clone()).await {
+                Ok(PollResult::Complete(token_response)) => return Ok(*token_response),
+                // The server answered, so whatever was wrong is over.
+                Ok(PollResult::Pending) => {
+                    consecutive_failures = 0;
+                    continue;
+                }
+                Err(err) => err,
+            };
+
+            // Preserve the retry classification established by the request.
+            let RetryAdvice::Retry { after } = err.retry_advice() else {
+                return Err(err);
+            };
+            consecutive_failures += 1;
+            if consecutive_failures > self.max_transient_poll_failures {
+                return Err(err);
+            }
+            // The next loop already sleeps for `interval`, so wait only the excess.
+            if let Some(after) = after {
+                sleep(after.saturating_sub(interval)).await;
             }
         }
     }
 
-    /// Poll pending state once.
+    /// Polls the token endpoint once for the pending device authorization.
     ///
     /// # Errors
     ///
-    /// Returns an error if one is returned when attempting to poll. This
-    /// can be an error like access denied, token expiry, or an error
-    /// when making the token request.
+    /// Returns [`PollError::AccessDenied`] when the user denies access,
+    /// [`PollError::TokenExpired`] when the device code expires, and
+    /// [`PollError::Exchange`] when the token request fails. The
+    /// `authorization_pending` and `slow_down` responses are returned as
+    /// non-error [`PollResult`] values.
     pub async fn poll(
         &self,
         pending_state: &mut PendingState,
@@ -233,23 +271,20 @@ impl DeviceAuthorizationGrant {
 
         match token_or_err {
             Ok(token) => Ok(PollResult::Complete(Box::new(token))),
-            // The terminal codes end the flow for good, so they are honored only
-            // when the response was actually a verdict. A 5xx is reclassified as
-            // retryable `Transport` whatever its body says (RFC 6749 §5.2 puts
-            // error codes on 4xx), but keeps the code attached — so dispatching
-            // on the code alone would let a 503 carrying `access_denied` kill a
-            // flow the user never denied. The pending codes need no such guard:
-            // they only ever mean "keep waiting".
-            Err(err) => match err.oauth_error_code() {
-                Some("slow_down") => {
-                    pending_state.interval_secs = pending_state.interval_secs.saturating_add(5);
-                    Ok(PollResult::Pending)
+            Err(err) => {
+                // Only genuine verdicts control the device flow. Error-shaped
+                // 429 and 5xx bodies remain exchange failures.
+                match err.verdict().map(OAuthError::code) {
+                    Some(OAuthErrorCode::SlowDown) => {
+                        pending_state.interval_secs = pending_state.interval_secs.saturating_add(5);
+                        Ok(PollResult::Pending)
+                    }
+                    Some(OAuthErrorCode::AuthorizationPending) => Ok(PollResult::Pending),
+                    Some(OAuthErrorCode::AccessDenied) => AccessDeniedSnafu.fail(),
+                    Some(OAuthErrorCode::ExpiredToken) => TokenExpiredSnafu.fail(),
+                    _ => Err(err).context(ExchangeSnafu),
                 }
-                Some("authorization_pending") => Ok(PollResult::Pending),
-                Some("access_denied") if !err.is_retryable() => AccessDeniedSnafu.fail(),
-                Some("expired_token") if !err.is_retryable() => TokenExpiredSnafu.fail(),
-                _ => Err(err).context(ExchangeSnafu),
-            },
+            }
         }
     }
 }
@@ -374,6 +409,14 @@ const fn default_interval() -> u32 {
 /// [`DeviceAuthorizationGrant`]'s `min_poll_interval_secs` builder setter.
 pub const DEFAULT_MIN_POLL_INTERVAL_SECS: u32 = 5;
 
+/// Default number of consecutive retryable failures
+/// [`poll_to_completion`](DeviceAuthorizationGrant::poll_to_completion)
+/// absorbs before giving up.
+///
+/// At the default poll interval, this tolerates roughly half a minute of
+/// transient failures. RFC 8628 does not prescribe a limit.
+pub const DEFAULT_MAX_TRANSIENT_POLL_FAILURES: u32 = 5;
+
 #[derive(Debug, Serialize)]
 struct DeviceAuthorizationRequest<'a> {
     scope: Option<String>,
@@ -428,15 +471,39 @@ impl core::fmt::Debug for PendingState {
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum PollError {
-    /// Access was denied.
+    /// The authorization request was denied (RFC 8628 §3.5 `access_denied`).
+    #[snafu(display(
+        "the user denied the request, or the authorization server refused it on \
+         their behalf (RFC 8628 §3.5 access_denied)"
+    ))]
     AccessDenied,
-    /// The token expired.
+    /// The `device_code` expired before the user finished (RFC 8628 §3.5
+    /// `expired_token`).
+    #[snafu(display(
+        "the device code expired before the user finished (RFC 8628 §3.5 expired_token)"
+    ))]
     TokenExpired,
-    /// There was an error while attempting to exchange the code for a token.
+    /// The token request failed without a terminal verdict on the device flow.
+    /// Use [`retry_advice`](PollError::retry_advice) to decide whether to retry.
+    #[snafu(display("polling the token endpoint"))]
     Exchange {
         /// The underlying error.
         source: Error,
     },
+}
+
+impl PollError {
+    /// Returns whether another poll may help and any minimum delay.
+    ///
+    /// Exchange failures preserve the underlying error's retry advice. Denial
+    /// and expiration are terminal.
+    #[must_use]
+    pub fn retry_advice(&self) -> RetryAdvice {
+        match self {
+            Self::AccessDenied | Self::TokenExpired => RetryAdvice::No,
+            Self::Exchange { source } => source.retry_advice(),
+        }
+    }
 }
 
 /// The result of polling.
@@ -631,9 +698,9 @@ mod tests {
     }
 
     // A 5xx is a server fault, not a verdict on the flow: `form.rs` reclassifies
-    // it as retryable `Transport` while leaving the body's error code attached.
-    // Honoring that code would end a flow the user never denied — and, since the
-    // device code is still live, end it for no reason.
+    // it as retryable while leaving the body's error code attached but not a
+    // verdict. Honoring that code would end a flow the user never denied —
+    // and, since the device code is still live, end it for no reason.
     #[rstest::rstest]
     #[case::access_denied(r#"{"error":"access_denied"}"#)]
     #[case::expired_token(r#"{"error":"expired_token"}"#)]
@@ -646,8 +713,77 @@ mod tests {
             panic!("a 5xx must stay an exchange error, got {err:?}");
         };
         assert!(
-            source.is_retryable(),
-            "the reclassified transport error must reach the caller as retryable"
+            matches!(
+                source.retry_advice(),
+                crate::core::RetryAdvice::Retry { .. }
+            ),
+            "the reclassified server error must reach the caller as retryable"
+        );
+    }
+
+    // A terminal-looking code in a 429 body is not a flow verdict.
+    #[rstest::rstest]
+    #[case::access_denied(r#"{"error":"access_denied"}"#)]
+    #[case::expired_token(r#"{"error":"expired_token"}"#)]
+    #[tokio::test]
+    async fn terminal_code_on_a_429_does_not_end_the_flow(#[case] body: &'static str) {
+        let g = grant(StatusCode::TOO_MANY_REQUESTS, body);
+        let err = g.poll(&mut pending(), None).await.unwrap_err();
+
+        let PollError::Exchange { source } = err else {
+            panic!("a 429 must stay an exchange error, got {err:?}");
+        };
+        assert!(
+            matches!(
+                source.retry_advice(),
+                crate::core::RetryAdvice::Retry { .. }
+            ),
+            "a rate-limited poll must reach the caller as retryable"
+        );
+    }
+
+    // A pending code echoed in a 5xx body must still consume the failure budget.
+    #[tokio::test(start_paused = true)]
+    async fn an_echoed_pending_code_is_an_outage_not_a_wait() {
+        let (g, calls) = scripted_grant(
+            vec![(
+                StatusCode::SERVICE_UNAVAILABLE,
+                r#"{"error":"authorization_pending"}"#,
+            )],
+            2,
+        );
+
+        assert!(matches!(
+            g.poll_to_completion(&mut pending(), None).await,
+            Err(PollError::Exchange { .. })
+        ));
+        // Bounded: a budget of 2 absorbs two, and the third ends it.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+    }
+
+    // Only a genuine `slow_down` verdict changes the poll interval.
+    #[tokio::test]
+    async fn slow_down_echoed_on_a_5xx_does_not_re_pace_the_poll() {
+        let g = grant(StatusCode::SERVICE_UNAVAILABLE, r#"{"error":"slow_down"}"#);
+        let mut state = pending();
+        let err = g.poll(&mut state, None).await.unwrap_err();
+
+        assert!(
+            matches!(err, PollError::Exchange { .. }),
+            "an echoed code leaves it an exchange failure, got {err:?}"
+        );
+        assert_eq!(state.interval_secs, 5, "the interval is untouched");
+    }
+
+    // A 4xx verdict remains terminal even if another layer marked it retryable.
+    #[tokio::test]
+    async fn a_retryable_4xx_verdict_still_ends_the_flow() {
+        let g = grant(StatusCode::BAD_REQUEST, r#"{"error":"access_denied"}"#);
+        let mut state = pending();
+        let err = g.poll(&mut state, None).await.unwrap_err();
+        assert!(
+            matches!(err, PollError::AccessDenied),
+            "a 4xx denial is terminal regardless of advice, got {err:?}"
         );
     }
 
@@ -710,8 +846,7 @@ mod tests {
         assert_eq!(configured.min_poll_interval_secs, 30);
     }
 
-    /// A server-supplied `interval: 0` must not spin a zero-delay hot loop:
-    /// `poll_to_completion` waits at least the configured floor before polling.
+    // A zero server interval must still honor the configured floor.
     #[tokio::test(start_paused = true)]
     async fn poll_to_completion_enforces_interval_floor_on_zero() {
         let g = grant(
@@ -731,5 +866,226 @@ mod tests {
             elapsed >= std::time::Duration::from_secs(DEFAULT_MIN_POLL_INTERVAL_SECS.into()),
             "expected at least the {DEFAULT_MIN_POLL_INTERVAL_SECS}s floor, slept {elapsed:?}"
         );
+    }
+
+    // Repeats the last scripted response and counts requests.
+    struct ScriptedClient {
+        responses: Vec<(StatusCode, &'static str)>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl HttpClient for ScriptedClient {
+        fn execute(
+            &self,
+            _request: Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            let call = self
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let (status, body) = self.responses[call.min(self.responses.len() - 1)];
+            Box::pin(async move {
+                Ok(HttpResponse {
+                    status,
+                    headers: HeaderMap::new(),
+                    body: Bytes::from_static(body.as_bytes()),
+                })
+            })
+        }
+    }
+
+    // Builds a grant and returns its shared request counter.
+    fn scripted_grant(
+        responses: Vec<(StatusCode, &'static str)>,
+        max_transient_poll_failures: u32,
+    ) -> (
+        DeviceAuthorizationGrant,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let grant = DeviceAuthorizationGrant::builder()
+            .client_id("device-client")
+            .http_client(ScriptedClient {
+                responses,
+                calls: Arc::clone(&calls),
+            })
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example/token".parse::<EndpointUrl>().unwrap())
+            .device_authorization_endpoint(
+                "https://as.example/device".parse::<EndpointUrl>().unwrap(),
+            )
+            .max_transient_poll_failures(max_transient_poll_failures)
+            .build();
+        (grant, calls)
+    }
+
+    const TOKEN: &str = r#"{"access_token":"at-123","token_type":"bearer"}"#;
+
+    // One transient failure should not end an otherwise live flow.
+    #[rstest::rstest]
+    #[case::server_error(StatusCode::SERVICE_UNAVAILABLE)]
+    #[case::bad_gateway(StatusCode::BAD_GATEWAY)]
+    #[case::rate_limited(StatusCode::TOO_MANY_REQUESTS)]
+    #[tokio::test(start_paused = true)]
+    async fn a_transient_failure_does_not_end_the_flow(#[case] status: StatusCode) {
+        let (g, _) = scripted_grant(
+            vec![(status, "{}"), (StatusCode::OK, TOKEN)],
+            DEFAULT_MAX_TRANSIENT_POLL_FAILURES,
+        );
+
+        let token = g
+            .poll_to_completion(&mut pending(), None)
+            .await
+            .expect("the flow survives a blip");
+        assert_eq!(token.access_token().token().expose_secret(), "at-123");
+    }
+
+    // A sustained outage returns the underlying failure after the budget.
+    #[tokio::test(start_paused = true)]
+    async fn a_sustained_outage_still_ends_the_flow() {
+        let (g, calls) = scripted_grant(vec![(StatusCode::SERVICE_UNAVAILABLE, "{}")], 2);
+
+        let err = g
+            .poll_to_completion(&mut pending(), None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PollError::Exchange { .. }),
+            "expected the underlying failure, got {err:?}"
+        );
+        // A budget of 2 absorbs two failures; the third ends it.
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 3);
+    }
+
+    // A zero budget lets callers drive their own retry policy.
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_budget_surfaces_the_first_transient_failure() {
+        let (g, _) = scripted_grant(
+            vec![
+                (StatusCode::SERVICE_UNAVAILABLE, "{}"),
+                (StatusCode::OK, TOKEN),
+            ],
+            0,
+        );
+        assert!(matches!(
+            g.poll_to_completion(&mut pending(), None).await,
+            Err(PollError::Exchange { .. })
+        ));
+    }
+
+    // Any server answer resets the consecutive-failure count.
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_resets_the_transient_budget() {
+        const PENDING: &str = r#"{"error":"authorization_pending"}"#;
+        let (g, _) = scripted_grant(
+            vec![
+                (StatusCode::SERVICE_UNAVAILABLE, "{}"),
+                (StatusCode::BAD_REQUEST, PENDING),
+                (StatusCode::SERVICE_UNAVAILABLE, "{}"),
+                (StatusCode::BAD_REQUEST, PENDING),
+                (StatusCode::SERVICE_UNAVAILABLE, "{}"),
+                (StatusCode::OK, TOKEN),
+            ],
+            1,
+        );
+
+        let token = g
+            .poll_to_completion(&mut pending(), None)
+            .await
+            .expect("each blip is a fresh streak of one");
+        assert_eq!(token.access_token().token().expose_secret(), "at-123");
+    }
+
+    // A terminal verdict bypasses the transient-failure budget.
+    #[rstest::rstest]
+    #[case::denied(r#"{"error":"access_denied"}"#)]
+    #[case::expired(r#"{"error":"expired_token"}"#)]
+    #[tokio::test(start_paused = true)]
+    async fn a_verdict_ends_the_flow_immediately(#[case] body: &'static str) {
+        let (g, _) = scripted_grant(
+            vec![(StatusCode::BAD_REQUEST, body), (StatusCode::OK, TOKEN)],
+            DEFAULT_MAX_TRANSIENT_POLL_FAILURES,
+        );
+
+        let err = g
+            .poll_to_completion(&mut pending(), None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PollError::AccessDenied | PollError::TokenExpired),
+            "got {err:?}"
+        );
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
+    }
+
+    // Honor `Retry-After` when it exceeds the normal poll interval.
+    #[tokio::test(start_paused = true)]
+    async fn a_named_interval_is_honoured_before_re_attempting() {
+        // Answers once with `Retry-After: 60`, then issues the token.
+        struct ThrottlingClient(std::sync::atomic::AtomicUsize);
+
+        impl HttpClient for ThrottlingClient {
+            fn execute(
+                &self,
+                _request: Request<Bytes>,
+                _idempotency: Idempotency,
+            ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+                let first = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0;
+                Box::pin(async move {
+                    let mut headers = HeaderMap::new();
+                    if first {
+                        headers.insert("retry-after", http::HeaderValue::from_static("60"));
+                    }
+                    Ok(HttpResponse {
+                        status: if first {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        } else {
+                            StatusCode::OK
+                        },
+                        headers,
+                        body: Bytes::from_static(TOKEN.as_bytes()),
+                    })
+                })
+            }
+        }
+
+        let g = DeviceAuthorizationGrant::builder()
+            .client_id("device-client")
+            .http_client(ThrottlingClient(std::sync::atomic::AtomicUsize::new(0)))
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example/token".parse::<EndpointUrl>().unwrap())
+            .device_authorization_endpoint(
+                "https://as.example/device".parse::<EndpointUrl>().unwrap(),
+            )
+            .build();
+
+        let start = tokio::time::Instant::now();
+        g.poll_to_completion(&mut pending(), None)
+            .await
+            .expect("the flow survives a throttle");
+
+        // The 60s the server asked for, not the 5s poll cadence.
+        assert!(
+            start.elapsed() >= std::time::Duration::from_mins(1),
+            "slept only {:?}; the server's Retry-After was dropped",
+            start.elapsed()
+        );
+    }
+
+    // Poll errors expose terminal and wrapped retry advice consistently.
+    #[test]
+    fn poll_error_reports_the_advice_of_what_failed() {
+        assert_eq!(PollError::AccessDenied.retry_advice(), RetryAdvice::No);
+        assert_eq!(PollError::TokenExpired.retry_advice(), RetryAdvice::No);
+
+        let retryable = PollError::Exchange {
+            source: Error::new(RetryAdvice::RETRY, "the server is unavailable"),
+        };
+        assert_eq!(retryable.retry_advice(), RetryAdvice::RETRY);
+
+        let terminal = PollError::Exchange {
+            source: Error::new(RetryAdvice::No, "config failure"),
+        };
+        assert_eq!(terminal.retry_advice(), RetryAdvice::No);
     }
 }
