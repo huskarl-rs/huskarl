@@ -24,7 +24,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup update stable --no-self-update
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Start conformance suite
         working-directory: integration
         run: docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml up --wait
