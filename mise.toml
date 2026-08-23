@@ -102,5 +102,5 @@ cargo +nightly test --doc --all-features \
 # excluded there (wasm32-only), so regenerate its README explicitly.
 run = [
   "cargo +nightly reedme",
-  "cargo +nightly reedme --manifest-path huskarl-crypto-webcrypto/Cargo.toml",
+  "CARGO_BUILD_TARGET=wasm32-unknown-unknown cargo +nightly reedme --manifest-path huskarl-crypto-webcrypto/Cargo.toml",
 ]
