@@ -1,13 +1,13 @@
-//! Extended documentation: explanation and how-to guides.
+//! Task-oriented and conceptual documentation for resource servers.
 //!
-//! The API items in this crate are the **reference** documentation — they say
-//! what each type and method is. These pages cover the other
-//! [Diátaxis](https://diataxis.fr) quadrants:
+//! Choose a section by what you need:
 //!
-//! - **[Explanation](explanation)** — understanding-oriented background on how
-//!   the crate works and why it is shaped the way it is.
 //! - **[How-to guides](guide)** — task-oriented recipes for wiring a validator
 //!   into a resource server.
+//! - **[Explanation](explanation)** — understanding-oriented background on how
+//!   the crate works and why it is shaped the way it is.
+//! - **Reference** — the crate's API modules describe its types, methods,
+//!   parameters, and return values.
 //!
 //! This module is documentation only; it contains no runnable API. It is gated
 //! on `cfg(docsrs)`, so its code blocks are real doctests that run only under

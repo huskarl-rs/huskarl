@@ -16,16 +16,17 @@
 //! [`AsymmetricPublicKey`](asymmetric::verifier::AsymmetricPublicKey) from a
 //! public JWK (or use [`WebCryptoVerifierPlatform`] over a JWKS).
 //!
-//! # Further reading
+//! # Documentation
 //!
-//! - [Signing a JWT in the browser](crate::_docs::guide::signing_a_jwt) — the
-//!   `async`, non-extractable signing flow.
-//! - [Platform constraints](crate::_docs::explanation::platform_constraints) —
-//!   how this backend differs from `huskarl-crypto-native` and why (no private-key
-//!   import, no `client_secret_jwt`).
+//! - **Solve a task:** [sign a JWT in the browser](crate::_docs::guide::signing_a_jwt)
+//!   with an async, non-extractable key.
+//! - **Understand the design:** read the
+//!   [platform constraints](crate::_docs::explanation::platform_constraints)
+//!   that distinguish this backend from `huskarl-crypto-native`.
+//! - **Look up the API:** use the crate modules and item pages in this reference.
 //!
-//! These pages live in `huskarl-core`, which defines the traits this crate
-//! implements:
+//! Related how-to guides and explanation live in `huskarl-core`, which defines
+//! the traits this crate implements:
 //!
 //! - [Building and signing a JWT](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/signing_a_jwt/index.html)
 //! - [Validating a JWT](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/validating_a_jwt/index.html)

@@ -186,12 +186,24 @@ impl Challenge {
         self
     }
 
-    /// Classifies this challenge for validation observation.
+    /// Returns the default observation outcome for this response metadata.
     ///
-    /// This is the coarse classification implied by the response error. An
-    /// originating [`ToRfc6750Error`] may report a more specific outcome, such
-    /// as [`ValidationOutcome::Expired`], through
-    /// [`ToRfc6750Error::validation_outcome`].
+    /// The result is derived only from [`Self::error`]:
+    ///
+    /// | Response error | Outcome |
+    /// | --- | --- |
+    /// | `invalid_request` | [`ValidationOutcome::ExtractError`] |
+    /// | `invalid_dpop_proof` | [`ValidationOutcome::BindingError`] |
+    /// | `use_dpop_nonce` | [`ValidationOutcome::NonceRequired`] |
+    /// | Any other client error | [`ValidationOutcome::InvalidToken`] |
+    /// | Server error | [`ValidationOutcome::CallError`] |
+    ///
+    /// This groups failures that share a wire response. For example, an
+    /// expired token has an `invalid_token` challenge and therefore maps to
+    /// `InvalidToken` here.
+    ///
+    /// To retain error-specific distinctions, call
+    /// [`ToRfc6750Error::validation_outcome`] with this challenge instead.
     #[must_use]
     pub fn validation_outcome(&self) -> ValidationOutcome {
         match self.error {
@@ -509,13 +521,14 @@ pub trait ToRfc6750Error: std::error::Error + MaybeSendSync {
     /// Returns the response metadata contributed by this error.
     fn challenge(&self) -> Challenge;
 
-    /// Classifies this error for [`ObservedValidator`](crate::validator::observe::ObservedValidator).
+    /// Returns the observation outcome for this error and its challenge.
     ///
-    /// The default uses the challenge's coarse classification. Implementations
-    /// may override it when they can distinguish validation stages or more
-    /// specific outcomes. Accepting the already-built challenge lets callers
-    /// obtain response and observation metadata without constructing its owned
-    /// strings and parameters twice.
+    /// `challenge` must be the value returned by [`Self::challenge`] for this
+    /// error; otherwise the outcome may disagree with the eventual rejection
+    /// response. The default returns [`Challenge::validation_outcome`]. An
+    /// implementation should override it when the error can provide a more
+    /// specific outcome, such as [`ValidationOutcome::Expired`], or identify
+    /// the validation stage that failed.
     fn validation_outcome(&self, challenge: &Challenge) -> ValidationOutcome {
         challenge.validation_outcome()
     }

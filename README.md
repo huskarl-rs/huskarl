@@ -22,6 +22,23 @@ optional extras. Security is not a checkbox for passing regulation; if
 sender-constrained tokens and signed authorization requests are easy to add,
 why not have them? Huskarl makes them accessible with minimal ceremony.
 
+## Documentation
+
+Choose an entry point by what you want to do:
+
+| Goal | Start here |
+| --- | --- |
+| Learn huskarl by building a working client | [Get your first access token](huskarl/docs/tutorial/first_token.md) |
+| Add an OAuth client flow to an application | [Client how-to guides](huskarl/docs/guide/) |
+| Validate tokens at a resource server | [Resource-server how-to guides](huskarl-resource-server/docs/guide/) |
+| Work directly with JWTs, keys, or secrets | [Core how-to guides](huskarl-core/docs/guide/) |
+| Look up crates, modules, types, and methods | [API reference by crate](docs/README.md#reference) |
+| Understand security and design decisions | [Explanation](docs/README.md#explanation) |
+
+The [complete documentation map](docs/README.md) separates tutorials, how-to
+guides, API reference, and explanation, and lists every workspace guide by
+task.
+
 ## Why huskarl
 
 - **Tested against the OpenID conformance suite.** The client passes the test

@@ -1,11 +1,9 @@
 /*!
-Huskarl provides tools for implementing secure `OAuth2` clients in rust.
+An `OAuth2` client toolkit for obtaining, caching, and using access tokens.
 
-This library provides several grant implementations, each driven by grant-specific
-parameters that define how the grant/workflow should progress.
-
-The library also provides a caching layer for token responses; and a HTTP authorizer
-that can be used to make authenticated requests to resource servers.
+Use a grant to obtain a token, wrap it in the cache to manage its lifecycle,
+then use the HTTP authorizer to attach it to outgoing resource requests. Each
+grant exposes only the parameters and interactive steps required by that flow.
 
 ## The huskarl ecosystem
 
@@ -50,14 +48,16 @@ Further grants — CIBA, provider-specific flows — can be implemented in this
 crate or by external crates. The [`registration`] module implements OAuth 2.0
 Dynamic Client Registration (RFC 7591).
 
-## Guides and explanation
+## Documentation
 
-The API items in this crate are the **reference** documentation. For
-task-oriented how-to guides — setting up each grant, choosing [client
-authentication](_docs::guide::client_authentication), sender-constraining
-tokens with [`DPoP`](_docs::guide::dpop), caching tokens, and making
-authenticated requests — and design explanation (error handling, sharing a
-refresh token store, refresh timing), see the [`_docs`] module.
+- **Learn:** [get your first access token](_docs::tutorial::first_token) against
+  a local authorization server.
+- **Solve a task:** use the [how-to guides](_docs::guide) to configure a grant,
+  choose [client authentication](_docs::guide::client_authentication), add
+  [`DPoP`](_docs::guide::dpop), cache tokens, or authorize requests.
+- **Understand the design:** read the [explanation](_docs::explanation) of the
+  error model, refresh timing, token-source resolution, and shared stores.
+- **Look up the API:** use the crate modules and item pages in this reference.
 
 Most applications wrap a grant in an
 [`InMemoryTokenCache`](cache::InMemoryTokenCache) and an

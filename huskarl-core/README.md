@@ -54,24 +54,25 @@ and explanation in a `_docs` module:
   OIDC discovery documents.
 - **Wire encoding** — [`oauth_form`](https://docs.rs/huskarl-core/latest/huskarl_core/oauth_form/) serializes OAuth messages as
   `application/x-www-form-urlencoded`, including structured RFC 9396 values.
-- **Errors** — the flows return the one concrete [`Error`](https://docs.rs/huskarl-core/latest/huskarl_core/error/struct.Error.html)/the error classification,
-  which embeds cleanly in your own error type. A few subsystems return their
+- **Errors** — flows return one concrete [`Error`](https://docs.rs/huskarl-core/latest/huskarl_core/error/struct.Error.html) with a programmatic
+  classification, which embeds cleanly in your own error type. A few subsystems return their
   own typed errors where the variants *are* the API — JWT validation
   ([`JwtValidationError`](https://docs.rs/huskarl-core/latest/huskarl_core/jwt/validator/enum.JwtValidationError.html)), low-level
   verification ([`crypto::verifier`](https://docs.rs/huskarl-core/latest/huskarl_core/crypto/verifier/)), and wire encoding
   ([`oauth_form::FormError`](https://docs.rs/huskarl-core/latest/huskarl_core/oauth_form/enum.FormError.html)) — design one `From` arm for [`Error`](https://docs.rs/huskarl-core/latest/huskarl_core/error/struct.Error.html) plus arms for
   the subsystem errors you call directly.
 
-## Guides and explanation
+## Documentation
 
-The API items here are the **reference** documentation. For task-oriented how-to
-guides — [building](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/signing_a_jwt/) and
-[validating](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/validating_a_jwt/) JWTs,
-[providing secrets](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/providing_secrets/), and
-[implementing a backend](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/implementing_a_backend/) — and design
-explanation — [the error model](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/error_handling/),
-[handling untrusted keys](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/untrusted_keys/), and
-[composing crypto strategies](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/crypto_strategies/) — see the
-[`_docs`](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/) module.
+- **Solve a task:** use the [how-to guides](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/) to
+  [build](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/signing_a_jwt/) or
+  [validate](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/validating_a_jwt/) a JWT,
+  [provide secrets](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/providing_secrets/), or
+  [implement a backend](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/implementing_a_backend/).
+- **Understand the design:** read the [explanation](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/) of the
+  [error model](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/error_handling/),
+  [untrusted keys](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/untrusted_keys/), and
+  [crypto strategy composition](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/crypto_strategies/).
+- **Look up the API:** use the crate modules and item pages in this reference.
 
 <!-- cargo-reedme: end -->

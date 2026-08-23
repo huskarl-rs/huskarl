@@ -1,4 +1,4 @@
-# Platform constraints (parity with `huskarl-crypto-native`)
+# WebCrypto platform constraints
 
 This crate implements the same `huskarl-core` traits as
 [`huskarl-crypto-native`](https://docs.rs/huskarl-crypto-native), but code
