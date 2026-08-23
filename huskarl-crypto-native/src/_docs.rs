@@ -1,12 +1,12 @@
-//! Extended documentation: how-to guides and explanation.
+//! Task-oriented and conceptual documentation for the native crypto backend.
 //!
-//! The API items in this crate are the **reference** documentation — they say
-//! what each type is and how to call it. These pages cover the other
-//! [Diátaxis](https://diataxis.fr) quadrants:
+//! Choose a section by what you need:
 //!
-//! - **[How-to guides](guide)** — task-oriented recipes.
+//! - **[How-to guides](guide)** — task-oriented recipes for loading keys.
 //! - **[Explanation](explanation)** — understanding-oriented background on how
 //!   the crate works and why it is shaped the way it is.
+//! - **Reference** — the crate's API modules describe its key types, algorithms,
+//!   parameters, and return values.
 //!
 //! This module is documentation only; it contains no runnable API.
 

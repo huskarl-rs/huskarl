@@ -139,13 +139,16 @@ impl ValidatorMetadata {
         self.rejection_from(error, &challenge, scope)
     }
 
-    /// Builds a [`Rejection`] using an already-built challenge.
+    /// Builds a [`Rejection`] without calling [`ToRfc6750Error::challenge`].
     ///
-    /// This is the borrowed counterpart to [`Self::rejection`]. Use it when
-    /// the same challenge also supplies observation metadata through
-    /// [`ToRfc6750Error::validation_outcome`], avoiding reconstruction of its
-    /// owned description, parameters, and scope. `challenge` must be the value
-    /// returned by `error`.
+    /// `challenge` must be the value previously returned by `error.challenge()`;
+    /// mixing values from different errors can produce an inconsistent
+    /// response. The challenge supplies the status, retry interval, and
+    /// client-visible details; `error` supplies the attempted authentication
+    /// scheme.
+    ///
+    /// Prefer [`Self::rejection`] unless the challenge has already been built,
+    /// for example to pass it to [`ToRfc6750Error::validation_outcome`].
     #[must_use]
     pub fn rejection_from(
         &self,

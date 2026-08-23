@@ -20,6 +20,8 @@ Provides [`jti::RedisJtiUniquenessChecker`](https://docs.rs/huskarl-redis/latest
 shares its seen-set across server replicas — replay prevention for JWT
 `jti` claims and server-side `DPoP` proofs.
 
+# Example
+
 ```rust
 use std::{sync::Arc, time::Duration};
 

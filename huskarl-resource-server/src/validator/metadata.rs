@@ -196,12 +196,18 @@ impl ValidatorMetadata {
         self.challenges_from(attempted_scheme, challenge.as_ref(), scope, error_uri)
     }
 
-    /// Returns `WWW-Authenticate` field values using an already-built challenge.
+    /// Returns `WWW-Authenticate` field values from explicit challenge parts.
     ///
-    /// This is the borrowed counterpart to [`Self::challenges`]. It is useful
-    /// when a caller also needs to inspect the challenge for response status or
-    /// observation metadata and wants to avoid constructing its owned values
-    /// more than once.
+    /// `attempted_scheme` selects which supported authentication scheme receives
+    /// client error details; `None` adds them to every supported scheme.
+    /// `challenge` supplies those details; `None` produces unauthenticated
+    /// challenges, while a server-error challenge produces no values. The
+    /// challenge's scope takes precedence over `scope`, and `error_uri` is
+    /// included only when client error details are present.
+    ///
+    /// Prefer [`Self::challenges`] when the parts still belong to a
+    /// [`ToRfc6750Error`]. Use this method when a challenge has already been
+    /// built or when the parts come from another source.
     #[must_use]
     pub fn challenges_from(
         &self,

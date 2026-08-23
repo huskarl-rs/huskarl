@@ -5,6 +5,8 @@
 //! shares its seen-set across server replicas — replay prevention for JWT
 //! `jti` claims and server-side `DPoP` proofs.
 //!
+//! # Example
+//!
 //! ```no_run
 //! # async fn wire() -> Result<(), Box<dyn std::error::Error>> {
 //! use std::{sync::Arc, time::Duration};

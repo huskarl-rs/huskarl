@@ -24,6 +24,16 @@ was presented as `Bearer` or `DPoP`, which validation stage failed, or which
 registered issuer was selected. The inner error remains available through
 [`std::error::Error::source`] for diagnostics and downcasting.
 
+A challenge owns its description, parameters, and scope. Code that needs both
+response and observation metadata can build it once, then pass the same value
+to
+[`ToRfc6750Error::validation_outcome`](crate::error::ToRfc6750Error::validation_outcome)
+and
+[`ValidatorMetadata::rejection_from`](crate::validator::metadata::ValidatorMetadata::rejection_from).
+The convenience method
+[`ValidatorMetadata::rejection`](crate::validator::metadata::ValidatorMetadata::rejection)
+does this internally when only a rejection is needed.
+
 ## Client or ours
 
 [`TokenValidationError`](crate::error::TokenValidationError) separates failures

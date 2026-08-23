@@ -53,15 +53,16 @@ To sign, generate or load a
 public JWK (or use [`NativeVerifierPlatform`](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/factory/struct.NativeVerifierPlatform.html) over a JWKS) and hand it to the
 JWT validator. The guides below walk through both.
 
-# Further reading
+# Documentation
 
-- [Loading a signing key](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/_docs/guide/loading_a_signing_key/) — the
-  recommended JWK path, and the PKCS#8 options.
-- [Why JWK is the native key format](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/_docs/explanation/jwk_as_key_format/)
-  — the design behind the loading API.
+- **Solve a task:** [load a signing key](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/_docs/guide/loading_a_signing_key/)
+  from a JWK or PKCS#8 document.
+- **Understand the design:** read
+  [why JWK is the native key format](https://docs.rs/huskarl-crypto-native/latest/huskarl_crypto_native/_docs/explanation/jwk_as_key_format/).
+- **Look up the API:** use the crate modules and item pages in this reference.
 
-These pages live in `huskarl-core`, which defines the traits this crate
-implements:
+Related how-to guides and explanation live in `huskarl-core`, which defines
+the traits this crate implements:
 
 - [Building and signing a JWT](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/signing_a_jwt/index.html)
 - [Validating a JWT](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/validating_a_jwt/index.html)

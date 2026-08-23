@@ -13,7 +13,7 @@
 
 cargo-reedme: info-end -->
 
-# `OAuth2` library for resource servers.
+# `OAuth2` library for resource servers
 
 A resource server has two jobs: validate the access token presented with a
 request, and decide whether that token authorizes the request.
@@ -57,12 +57,18 @@ let validator = Rfc9068Validator::builder()
     .await?;
 ```
 
-## Guides and explanation
+## Documentation
 
-The API items here are the reference docs. For task-oriented how-to guides
-(validating RFC 9068, custom, introspection, and multi-issuer tokens, plus
-`DPoP` enforcement) and design explanation — [the error
-model](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/explanation/error_handling/), choosing a validator, and how
-multi-issuer routing stays safe — see the [`_docs`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/) module.
+- **Solve a task:** use the [how-to guides](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/guide/) to validate
+  [RFC 9068 JWTs](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/guide/rfc9068/),
+  [custom JWTs](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/guide/custom/), or tokens via
+  [introspection](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/guide/introspection/); accept
+  [several issuers](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/guide/multi_issuer/); or enforce
+  [`DPoP`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/guide/dpop/).
+- **Understand the design:** read the [explanation](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/explanation/) of
+  [validator choice](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/explanation/choosing_a_validator/), the
+  [error model](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/explanation/error_handling/), and
+  [multi-issuer routing](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/explanation/multi_issuer_routing/).
+- **Look up the API:** use the crate modules and item pages in this reference.
 
 <!-- cargo-reedme: end -->

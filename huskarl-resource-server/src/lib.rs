@@ -7,7 +7,7 @@
 #![deny(clippy::unreachable)]
 #![warn(clippy::pedantic)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-//! # `OAuth2` library for resource servers.
+//! # `OAuth2` library for resource servers
 //!
 //! A resource server has two jobs: validate the access token presented with a
 //! request, and decide whether that token authorizes the request.
@@ -57,13 +57,19 @@
 //! # }
 //! ```
 //!
-//! ## Guides and explanation
+//! ## Documentation
 //!
-//! The API items here are the reference docs. For task-oriented how-to guides
-//! (validating RFC 9068, custom, introspection, and multi-issuer tokens, plus
-//! `DPoP` enforcement) and design explanation — [the error
-//! model](_docs::explanation::error_handling), choosing a validator, and how
-//! multi-issuer routing stays safe — see the [`_docs`] module.
+//! - **Solve a task:** use the [how-to guides](_docs::guide) to validate
+//!   [RFC 9068 JWTs](_docs::guide::rfc9068),
+//!   [custom JWTs](_docs::guide::custom), or tokens via
+//!   [introspection](_docs::guide::introspection); accept
+//!   [several issuers](_docs::guide::multi_issuer); or enforce
+//!   [`DPoP`](_docs::guide::dpop).
+//! - **Understand the design:** read the [explanation](_docs::explanation) of
+//!   [validator choice](_docs::explanation::choosing_a_validator), the
+//!   [error model](_docs::explanation::error_handling), and
+//!   [multi-issuer routing](_docs::explanation::multi_issuer_routing).
+//! - **Look up the API:** use the crate modules and item pages in this reference.
 
 #[cfg(any(doc, docsrs))]
 pub mod _docs;

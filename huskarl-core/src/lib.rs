@@ -48,17 +48,18 @@ and explanation in a `_docs` module:
   ([`oauth_form::FormError`]) — design one `From` arm for [`Error`] plus arms for
   the subsystem errors you call directly.
 
-## Guides and explanation
+## Documentation
 
-The API items here are the **reference** documentation. For task-oriented how-to
-guides — [building](_docs::guide::signing_a_jwt) and
-[validating](_docs::guide::validating_a_jwt) JWTs,
-[providing secrets](_docs::guide::providing_secrets), and
-[implementing a backend](_docs::guide::implementing_a_backend) — and design
-explanation — [the error model](_docs::explanation::error_handling),
-[handling untrusted keys](_docs::explanation::untrusted_keys), and
-[composing crypto strategies](_docs::explanation::crypto_strategies) — see the
-[`_docs`] module.
+- **Solve a task:** use the [how-to guides](_docs::guide) to
+  [build](_docs::guide::signing_a_jwt) or
+  [validate](_docs::guide::validating_a_jwt) a JWT,
+  [provide secrets](_docs::guide::providing_secrets), or
+  [implement a backend](_docs::guide::implementing_a_backend).
+- **Understand the design:** read the [explanation](_docs::explanation) of the
+  [error model](_docs::explanation::error_handling),
+  [untrusted keys](_docs::explanation::untrusted_keys), and
+  [crypto strategy composition](_docs::explanation::crypto_strategies).
+- **Look up the API:** use the crate modules and item pages in this reference.
 */
 
 #![forbid(unsafe_code)]

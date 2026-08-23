@@ -1,8 +1,6 @@
-//! Extended documentation: how-to guides and explanation.
+//! Task-oriented and conceptual documentation for the shared foundation.
 //!
-//! The API items in this crate are the **reference** documentation — they say
-//! what each utility is and how to call it. These pages cover the other
-//! [Diátaxis](https://diataxis.fr) quadrants:
+//! Choose a section by what you need:
 //!
 //! - **[How-to guides](guide)** — task-oriented recipes for the things people
 //!   reach for this crate to do: building and validating JWTs, providing
@@ -10,6 +8,8 @@
 //!   from an extension.
 //! - **[Explanation](explanation)** — understanding-oriented background on how
 //!   the crate works and why it is shaped the way it is.
+//! - **Reference** — the crate's API modules describe its types, traits,
+//!   parameters, and return values.
 //!
 //! This module is documentation only; it contains no runnable API. It is gated
 //! on `cfg(docsrs)`, so its code blocks are real doctests that run only under
