@@ -36,7 +36,10 @@ pub struct MetricsHttpClient<C> {
 impl<C> MetricsHttpClient<C> {
     /// Creates a new [`MetricsHttpClient`].
     #[builder]
-    pub fn new(inner: C) -> Self {
+    pub fn new(
+        /// HTTP client to instrument.
+        inner: C,
+    ) -> Self {
         Self { inner }
     }
 }

@@ -1,4 +1,4 @@
-//! `OAuth2` grant type implementations.
+//! OAuth 2.0 grant type implementations.
 //!
 //! Choose the grant type that fits your use case:
 //!

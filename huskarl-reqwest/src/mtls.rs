@@ -108,7 +108,7 @@ pub trait MtlsProvider: MaybeSendSync {
         builder: reqwest::ClientBuilder,
     ) -> MaybeSendBoxFuture<'_, Result<ConfiguredBuilder, Error>>;
 
-    /// Returns true if this provider configures mTLS.
+    /// Returns whether this provider configures mTLS.
     fn uses_mtls(&self) -> bool;
 }
 

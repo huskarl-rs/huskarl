@@ -38,6 +38,10 @@ pub(crate) enum ClientSecretError {
 /// `ClientSecret::builder().client_secret(secret).prefer_basic_auth(true).build()`.
 #[derive(Clone, Builder)]
 pub struct ClientSecret {
+    /// Provider that supplies the client secret when a request is authenticated.
+    ///
+    /// The value is fetched for each authentication attempt; wrap the provider
+    /// in [`CachedSecret`](crate::secrets::CachedSecret) when appropriate.
     #[builder(with = |secret: impl Secret<Output = SecretString> + 'static| Arc::new(secret) as Arc<dyn Secret<Output = SecretString>>)]
     client_secret: Arc<dyn Secret<Output = SecretString>>,
     /// Prefer `client_secret_basic` over `client_secret_post` when the server

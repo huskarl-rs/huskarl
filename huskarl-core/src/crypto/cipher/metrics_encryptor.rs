@@ -76,7 +76,13 @@ impl<S> MetricsAeadEncryptorSelector<S> {
     /// `name` is included as a label on every counter to distinguish this
     /// encryptor from others. Typically set to the purpose of the key.
     #[builder]
-    pub fn new(inner: S, #[builder(into)] name: Arc<str>) -> Self {
+    pub fn new(
+        /// Encryptor selector to instrument.
+        inner: S,
+        /// Stable metric-label value identifying this selector.
+        #[builder(into)]
+        name: Arc<str>,
+    ) -> Self {
         Self { inner, name }
     }
 }

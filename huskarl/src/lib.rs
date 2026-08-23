@@ -1,16 +1,36 @@
 /*!
-An `OAuth2` client toolkit for obtaining, caching, and using access tokens.
+An OAuth 2.0 client toolkit for obtaining, caching, and using access tokens.
 
 Use a grant to obtain a token, wrap it in the cache to manage its lifecycle,
 then use the HTTP authorizer to attach it to outgoing resource requests. Each
 grant exposes only the parameters and interactive steps required by that flow.
+
+## Documentation
+
+- **Learn:** [get your first access token](_docs::tutorial::first_token) against
+  a local authorization server.
+- **Solve a task:** use the [how-to guides](_docs::guide) to configure a grant,
+  choose [client authentication](_docs::guide::client_authentication), add
+  [`DPoP`](_docs::guide::dpop), cache tokens, or authorize requests.
+- **Understand the design:** read the [explanation](_docs::explanation) of the
+  error model, refresh timing, token-source resolution, and shared stores.
+- **Look up the API:** use the crate modules and item pages in this reference.
+
+Most applications wrap a grant in an
+[`InMemoryTokenCache`](cache::InMemoryTokenCache) and an
+[`HttpAuthorizer`](authorizer::HttpAuthorizer) for the request path. Most
+operations return [`Error`](core::Error); token acquisition returns
+[`TokenError`], whose [`Recovery`] guides
+application control flow. See [caching tokens and wiring an
+authorizer](_docs::guide::caching) and the [error-handling
+guide](_docs::guide::handling_errors).
 
 ## The huskarl ecosystem
 
 This crate is one of three that fit together. Each carries its own how-to guides
 and explanation in a `_docs` module:
 
-- **`huskarl`** (this crate) — `OAuth2` **clients**: grants, token caching, and
+- **`huskarl`** (this crate) — OAuth 2.0 **clients**: grants, token caching, and
   the request authorizer.
 - [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) —
   **resource servers**: access-token validation and request authorization.
@@ -19,8 +39,8 @@ and explanation in a `_docs` module:
 
 ## Conformance and interoperability
 
-Huskarl's client is verified against the official [`OpenID` conformance
-suite](https://openid.net/certification/). It passes the `OpenID Connect` Core
+Huskarl's client is verified against the official [OpenID conformance
+suite](https://openid.net/certification/). It passes the OpenID Connect Core
 *Basic client* certification plan, plus the **FAPI 2.0 Security Profile** and
 **Message Signing** client plans — these adding `private_key_jwt` client
 authentication, `DPoP` sender-constrained tokens, and signed authorization
@@ -48,25 +68,6 @@ Further grants — CIBA, provider-specific flows — can be implemented in this
 crate or by external crates. The [`registration`] module implements OAuth 2.0
 Dynamic Client Registration (RFC 7591).
 
-## Documentation
-
-- **Learn:** [get your first access token](_docs::tutorial::first_token) against
-  a local authorization server.
-- **Solve a task:** use the [how-to guides](_docs::guide) to configure a grant,
-  choose [client authentication](_docs::guide::client_authentication), add
-  [`DPoP`](_docs::guide::dpop), cache tokens, or authorize requests.
-- **Understand the design:** read the [explanation](_docs::explanation) of the
-  error model, refresh timing, token-source resolution, and shared stores.
-- **Look up the API:** use the crate modules and item pages in this reference.
-
-Most applications wrap a grant in an
-[`InMemoryTokenCache`](cache::InMemoryTokenCache) and an
-[`HttpAuthorizer`](authorizer::HttpAuthorizer) for the request path. Most
-operations return [`Error`](core::Error); token acquisition returns
-[`TokenError`], whose [`Recovery`] guides
-application control flow. See [caching tokens and wiring an
-authorizer](_docs::guide::caching) and the [error-handling
-guide](_docs::guide::handling_errors).
 */
 
 #![forbid(unsafe_code)]

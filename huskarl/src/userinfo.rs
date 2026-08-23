@@ -1,4 +1,4 @@
-//! `OpenID` Connect `UserInfo` endpoint (OIDC Core §5.3).
+//! OpenID Connect `UserInfo` endpoint (OIDC Core §5.3).
 
 use std::{collections::HashMap, str::Utf8Error, sync::Arc};
 
@@ -26,7 +26,7 @@ use crate::{
     token::{AccessToken, id_token::StandardOidcProfileClaims},
 };
 
-/// `OpenID` Connect `UserInfo` client.
+/// OpenID Connect `UserInfo` client.
 ///
 /// Standard claims are returned as typed fields on [`UserInfo`]; any
 /// additional provider-specific claims are stored in [`UserInfo::extra`]. The

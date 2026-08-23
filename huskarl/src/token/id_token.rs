@@ -1,4 +1,4 @@
-//! `OpenID` Connect ID token support.
+//! OpenID Connect ID token support.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -17,7 +17,7 @@ use crate::core::{
     platform::{Duration, SystemTime},
 };
 
-/// An `OpenID` Connect ID token: the compact-JWS string exactly as received.
+/// An OpenID Connect ID token: the compact-JWS string exactly as received.
 ///
 /// Obtained from
 /// [`TokenResponse::id_token`](crate::grant::core::TokenResponse::id_token). It
@@ -54,7 +54,7 @@ impl From<String> for IdToken {
     }
 }
 
-/// Claims for a standard `OpenID` Connect ID token.
+/// Claims for a standard OpenID Connect ID token.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct IdTokenClaims {
@@ -84,12 +84,12 @@ pub struct IdTokenClaims {
     #[serde(flatten)]
     pub profile: StandardOidcProfileClaims,
 
-    /// Extra claims beyond the standard `OpenID` Connect set.
+    /// Extra claims beyond the standard OpenID Connect set.
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-/// Standard `OpenID` Connect profile claims as defined in OIDC Core §5.1.
+/// Standard OpenID Connect profile claims as defined in OIDC Core §5.1.
 ///
 /// Shared between [`IdTokenClaims`] and
 /// [`UserInfo`](crate::userinfo::UserInfo) — the same claim set may be
@@ -162,7 +162,7 @@ pub struct StandardOidcProfileClaims {
     pub updated_at: Option<SystemTime>,
 }
 
-/// Standard `OpenID` Connect address claim as defined in OIDC Core §5.1.1.
+/// Standard OpenID Connect address claim as defined in OIDC Core §5.1.1.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct StandardOidcAddressClaims {
@@ -186,7 +186,7 @@ pub struct StandardOidcAddressClaims {
     pub country: Option<String>,
 }
 
-/// Validates an `OpenID` Connect ID token: signature (via the configured
+/// Validates an OpenID Connect ID token: signature (via the configured
 /// [`JwsVerifier`]), `iss`, and `aud`, plus — when configured — `nonce`,
 /// `max_age`, `acr`, and the set of permitted signature algorithms.
 ///

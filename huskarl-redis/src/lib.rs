@@ -1,4 +1,4 @@
-//! Redis-backed replay prevention for the huskarl (`OAuth2`) ecosystem.
+//! Redis-backed replay prevention for the huskarl (OAuth 2.0) ecosystem.
 //!
 //! Provides [`jti::RedisJtiUniquenessChecker`], a
 //! [`JtiUniquenessChecker`](huskarl_core::jwt::JtiUniquenessChecker) that

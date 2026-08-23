@@ -23,7 +23,7 @@ pub(crate) enum JwtBearerError {
     },
 }
 
-/// Client authentication with a signed JWT assertion (RFC 7521 / 7523, `OpenID`
+/// Client authentication with a signed JWT assertion (RFC 7521 / 7523, OpenID
 /// Connect Core 1.0 §9).
 ///
 /// An asymmetric [`signer`](JwtBearerBuilder::signer) implements `private_key_jwt`
@@ -75,7 +75,7 @@ pub struct JwtBearer {
 /// [`Audience::TokenEndpoint`] (the authorization server's token endpoint, even
 /// for assertions sent elsewhere) is the historically common pattern
 /// "encouraged, or at least allowed" by RFC 7521/7522/7523, RFC 9126 and
-/// `OpenID` Connect Core 1.0 §9 — and is exactly the value an audience-injection
+/// OpenID Connect Core 1.0 §9 — and is exactly the value an audience-injection
 /// attack exploits. Use it only for a legacy server that demands it.
 /// [`Audience::Custom`] pins some other value.
 ///

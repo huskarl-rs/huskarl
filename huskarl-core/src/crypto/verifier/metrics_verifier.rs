@@ -83,7 +83,13 @@ pub struct MetricsJwsVerifier<V> {
 impl<V> MetricsJwsVerifier<V> {
     /// Creates a new [`MetricsJwsVerifier`].
     #[builder]
-    pub fn new(inner: V, #[builder(into)] name: String) -> Self {
+    pub fn new(
+        /// JWS verifier to instrument.
+        inner: V,
+        /// Stable metric-label value identifying this verifier.
+        #[builder(into)]
+        name: String,
+    ) -> Self {
         Self { inner, name }
     }
 }

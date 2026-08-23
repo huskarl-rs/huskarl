@@ -40,7 +40,15 @@ use crate::{
     platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
 
-/// A secret string value that avoids accidental exposure in logs and debug output.
+/// A secret string value that avoids accidental exposure through `Debug`.
+///
+/// # Serialization exposes the secret
+///
+/// Its [`Serialize`] implementation writes the plaintext value so this type can
+/// be used in protocol request bodies. Do not serialize it into logs, telemetry,
+/// or other output that is not intended to contain the credential. Call
+/// [`expose_secret`](Self::expose_secret) only at the boundary that consumes the
+/// secret.
 #[derive(Debug, Clone)]
 pub struct SecretString(secrecy::SecretString);
 
@@ -89,7 +97,7 @@ impl From<&str> for SecretString {
     }
 }
 
-/// A secret byte buffer that avoids accidental exposure in logs and debug output.
+/// A secret byte buffer that avoids accidental exposure through `Debug`.
 #[derive(Debug, Clone)]
 pub struct SecretBytes(secrecy::SecretBox<[u8]>);
 
@@ -107,12 +115,18 @@ impl SecretBytes {
     }
 }
 
-/// Secrets output the underlying secret value
+/// A value retrieved from a [`Secret`], plus an optional stable identity.
+///
+/// The identity is non-secret metadata, such as a vault key version. Crypto
+/// backends may use it as a key ID when the key material does not contain one.
 #[derive(Debug, Clone)]
 pub struct SecretOutput<T: Clone> {
     /// The secret value.
     pub value: T,
-    /// An identity that may be used to derive a key ID when used as key material.
+    /// Stable, non-secret identity metadata, when the source provides it.
+    ///
+    /// When the value is key material, loaders use this as a fallback key ID;
+    /// an ID embedded in the key itself takes precedence.
     pub identity: Option<String>,
 }
 
@@ -217,7 +231,10 @@ impl<T: Secret + ?Sized> Secret for Arc<T> {
     }
 }
 
-/// A wrapper that adds an identity to an existing secret.
+/// A [`Secret`] wrapper that replaces the retrieved value's identity.
+///
+/// Use a stable, non-secret identifier such as a vault key version. The
+/// wrapped value is unchanged.
 #[derive(Debug, Clone)]
 pub struct WithIdentity<S: Secret> {
     inner: S,
@@ -225,7 +242,7 @@ pub struct WithIdentity<S: Secret> {
 }
 
 impl<S: Secret> WithIdentity<S> {
-    /// Creates a new wrapper that adds the given identity to the secret.
+    /// Wraps `inner` and assigns `identity` to every value it retrieves.
     pub fn new(inner: S, identity: impl Into<String>) -> Self {
         Self {
             inner,

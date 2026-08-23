@@ -9,7 +9,7 @@ use std::fmt;
 
 use crate::error::RetryAdvice;
 
-/// The `error` member of an `OAuth2` error response (RFC 6749 §5.2).
+/// The `error` member of an OAuth 2.0 error response (RFC 6749 §5.2).
 ///
 /// Which codes are valid depends on the endpoint. For example,
 /// [`AuthorizationPending`](Self::AuthorizationPending) is defined for a
@@ -295,7 +295,7 @@ impl OAuthErrorCode {
         )
     }
 
-    /// Returns whether an `OpenID` Connect `prompt=none` request requires user
+    /// Returns whether an OpenID Connect `prompt=none` request requires user
     /// interaction to continue.
     ///
     /// # Examples

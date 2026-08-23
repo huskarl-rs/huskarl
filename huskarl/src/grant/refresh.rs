@@ -26,20 +26,27 @@ use crate::{
     token::RefreshToken,
 };
 
-/// An `OAuth2` refresh grant (RFC 6749 §6).
+/// An OAuth 2.0 refresh grant (RFC 6749 §6).
 ///
 /// Exchanges a refresh token from a previous token-endpoint response for a new
 /// access token. See the [module documentation][crate::grant::refresh] for a
 /// usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
-#[builder(on(String, into))]
+#[builder(on(String, into), builder_type(doc {
+    /// Configures a [`RefreshGrant`].
+    ///
+    /// Required and optional inputs are marked on their setter methods. Most
+    /// callers obtain a fully configured refresh grant through
+    /// [`OAuth2ExchangeGrant::to_refresh_grant`]
+    /// instead of building one directly.
+}))]
 pub struct RefreshGrant {
     /// The client ID. Omitted for a client that presents no identification
     /// (e.g. refreshing a token obtained by an anonymous grant).
     client_id: Option<String>,
 
-    /// The HTTP client used for token requests.
+    /// The transport used for token requests.
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
@@ -55,11 +62,14 @@ pub struct RefreshGrant {
     )]
     dpop: Arc<dyn AuthorizationServerDPoP>,
 
-    /// The issuer for tokens created by the authorization server.
+    /// The authorization server's issuer identifier, when known.
+    ///
+    /// Client-authentication methods may use it as the audience of a signed
+    /// assertion. Grants created by `to_refresh_grant` inherit it.
     #[from_metadata(path = "issuer")]
     issuer: Option<String>,
 
-    /// The URL of the token endpoint.
+    /// The canonical token endpoint URL, before mTLS alias resolution.
     #[from_metadata(path = "token_endpoint")]
     token_endpoint: EndpointUrl,
 
@@ -72,8 +82,11 @@ pub struct RefreshGrant {
     #[builder(skip = crate::grant::core::resolve_mtls_alias(http_client.as_ref(), &token_endpoint, mtls_token_endpoint.as_ref()))]
     effective_token_endpoint: EndpointUrl,
 
-    /// Supported endpoint auth methods; used to auto-select basic or
-    /// form auth for client secrets.
+    /// Authentication methods advertised for the token endpoint.
+    ///
+    /// [`ClientSecret`](crate::core::client_auth::ClientSecret) uses this list
+    /// to choose HTTP Basic or form authentication. `None` leaves that choice
+    /// unconstrained by metadata.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
@@ -179,7 +192,7 @@ pub struct RefreshGrantParameters {
 }
 
 impl RefreshGrantParameters {
-    /// Implements a simple set of parameters to the grant including just the refresh token.
+    /// Creates parameters containing only the refresh token.
     ///
     /// This is enough for most use cases; the builder exists as an extensible
     /// API where arbitrary extra fields may be added in future.
@@ -192,9 +205,13 @@ impl RefreshGrantParameters {
 /// Refresh grant body.
 #[derive(Debug, Serialize, Builder)]
 pub struct RefreshGrantForm {
+    /// Fixed OAuth 2.0 grant type: `refresh_token`.
     grant_type: &'static str,
+    /// Refresh token serialized into the outgoing form.
     refresh_token: SecretString,
+    /// Requested downscoping scopes encoded as one space-separated value.
     scope: Option<String>,
+    /// Resource indicators encoded as repeated `resource` fields (RFC 8707).
     resource: Option<Vec<String>>,
     /// RFC 9396 `authorization_details` requested for the issued access token.
     authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,

@@ -13,10 +13,10 @@
 
 A húskarl was a well-paid, well-trained household bodyguard in medieval
 northern Europe. Likewise, huskarl guards access to your services: a suite of
-Rust crates for **requesting** and **validating** `OAuth2` access tokens — the
+Rust crates for **requesting** and **validating** OAuth 2.0 access tokens — the
 two jobs that client authors and service deployers face every day.
 
-Its premise is that the modern `OAuth2` security extensions — often marketed
+Its premise is that the modern OAuth 2.0 security extensions — often marketed
 "for high-security and regulated environments" — should not be treated as
 optional extras. Security is not a checkbox for passing regulation; if
 sender-constrained tokens and signed authorization requests are easy to add,
@@ -42,7 +42,7 @@ task.
 ## Why huskarl
 
 - **Tested against the OpenID conformance suite.** The client passes the test
-  plans used for `OpenID Connect` Core (Basic client) certification, plus the
+  plans used for OpenID Connect Core (Basic client) certification, plus the
   **FAPI 2.0 Security Profile** and **FAPI 2.0 Message Signing** client plans
   (huskarl has not been formally certified — the same suites run locally and
   in CI). The grants also run end-to-end against real authorization servers:
@@ -187,8 +187,8 @@ for the conformance setup.
 
 | Crate | Role |
 |---|---|
-| [`huskarl`](https://docs.rs/huskarl) | `OAuth2` **clients** (OIDC relying parties): grants, token cache, HTTP authorizer, dynamic registration |
-| [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) | `OAuth2` **resource servers**: access-token validation (RFC 9068 and introspection), server-side `DPoP`, `WWW-Authenticate` |
+| [`huskarl`](https://docs.rs/huskarl) | OAuth 2.0 **clients** (OIDC relying parties): grants, token cache, HTTP authorizer, dynamic registration |
+| [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) | OAuth 2.0 **resource servers**: access-token validation (RFC 9068 and introspection), server-side `DPoP`, `WWW-Authenticate` |
 | [`huskarl-core`](https://docs.rs/huskarl-core) | The shared **foundation**: JWT/JWK handling, crypto and secret traits, client authentication, `DPoP` primitives, server metadata, wire encoding, the `Error` type |
 | [`huskarl-crypto-native`](https://docs.rs/huskarl-crypto-native) | Crypto backend built on the RustCrypto crates |
 | [`huskarl-crypto-webcrypto`](https://docs.rs/huskarl-crypto-webcrypto) | Crypto backend built on `WebCrypto`, for WASM environments |

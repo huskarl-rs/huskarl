@@ -51,6 +51,7 @@ impl<S: Secret> CachedSecret<S> {
     /// Without a TTL, the value is cached indefinitely until [`invalidate`](Self::invalidate) is called.
     #[builder]
     pub fn new(
+        /// Underlying provider to load when the cache is empty or stale.
         secret: S,
         /// The cached value is reloaded inline on the next access after the TTL elapses.
         ttl: Option<Duration>,

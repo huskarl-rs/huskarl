@@ -99,7 +99,13 @@ impl<D> MetricsAeadDecryptor<D> {
     /// `name` is included as a label on every counter to distinguish this
     /// decryptor from others. Typically set to the purpose of the key.
     #[builder]
-    pub fn new(inner: D, #[builder(into)] name: String) -> Self {
+    pub fn new(
+        /// Decryptor to instrument.
+        inner: D,
+        /// Stable metric-label value identifying this decryptor.
+        #[builder(into)]
+        name: String,
+    ) -> Self {
         Self { inner, name }
     }
 }

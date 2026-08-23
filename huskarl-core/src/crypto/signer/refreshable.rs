@@ -45,6 +45,8 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> RefreshableSigner<S> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
+        /// Asynchronous source of the current signer selector, called at
+        /// construction and on each explicit refresh.
         factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<S, Error>>>>
         + MaybeSendSync
         + 'static,

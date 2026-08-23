@@ -3,7 +3,7 @@
 //! Two rules exist for deriving a well-known document URL from an identifier:
 //! RFC 8414 §3.1 (and RFC 9728 §3.1, which specifies the same rule) *insert*
 //! the well-known path between the host and the path and/or query components,
-//! while the legacy `OpenID` Connect Discovery 1.0 §4 rule *appends* it after
+//! while the legacy OpenID Connect Discovery 1.0 §4 rule *appends* it after
 //! the path.
 
 use http::Uri;
@@ -30,7 +30,7 @@ pub(crate) fn insert_well_known_path(url: Uri, well_known_path: &str) -> Result<
     with_transformed_path(url, |path| format!("{well_known_path}{path}"))
 }
 
-/// Appends `well_known_path` after the existing path (the legacy `OpenID`
+/// Appends `well_known_path` after the existing path (the legacy OpenID
 /// Connect Discovery 1.0 §4 rule):
 /// `https://example.com/x` → `https://example.com/x/.well-known/…`.
 pub(crate) fn append_well_known_path(url: Uri, well_known_path: &str) -> Result<Uri, http::Error> {

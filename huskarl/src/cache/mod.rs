@@ -1,4 +1,4 @@
-//! Token sources and caching for `OAuth2` tokens.
+//! Token sources and caching for OAuth 2.0 tokens.
 //!
 //! The usual wiring is a chain, built from the inside out: an
 //! [`HttpAuthorizer`] holds an [`InMemoryTokenCache`], which wraps a

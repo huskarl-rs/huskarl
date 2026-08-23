@@ -60,18 +60,33 @@ impl RevocableToken for RefreshToken {
 /// authentication.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
+#[builder(builder_type(doc {
+    /// Configures a [`TokenRevocation`] client.
+    ///
+    /// Required and optional inputs are marked on their setter methods. Prefer
+    /// [`TokenRevocation::builder_from_metadata`] when discovery metadata is
+    /// available; it fills endpoint, issuer, and authentication capability
+    /// inputs before returning this builder.
+}))]
 pub struct TokenRevocation {
     // -- User-supplied fields --
-    /// The client ID.
+    /// The OAuth 2.0 client identifier registered with the authorization
+    /// server.
     #[builder(into)]
     client_id: Cow<'static, str>,
 
-    /// The client authentication method.
+    /// How the client authenticates to the revocation endpoint.
+    ///
+    /// Use [`NoAuth`](crate::core::client_auth::NoAuth) when the server accepts
+    /// an unauthenticated public client.
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Arc<dyn ClientAuthentication>,
 
     // -- Metadata fields --
-    /// The issuer for tokens created by the authorization server.
+    /// The authorization server's issuer identifier, when known.
+    ///
+    /// Client-authentication methods may use it as the audience of a signed
+    /// assertion. The metadata builder supplies it automatically.
     #[builder(into)]
     #[from_metadata(path = "issuer")]
     issuer: Option<String>,
@@ -86,7 +101,7 @@ pub struct TokenRevocation {
     #[from_metadata(path = "token_endpoint")]
     token_endpoint: Option<EndpointUrl>,
 
-    /// The URL of the revocation endpoint.
+    /// The canonical revocation endpoint URL, before mTLS alias resolution.
     #[from_metadata(path = "revocation_endpoint?")]
     revocation_endpoint: EndpointUrl,
 
@@ -94,7 +109,11 @@ pub struct TokenRevocation {
     #[from_metadata(path = "mtls_endpoint_aliases?.revocation_endpoint?")]
     mtls_revocation_endpoint: Option<EndpointUrl>,
 
-    /// Supported endpoint auth methods (RFC 8414).
+    /// Authentication methods advertised for the revocation endpoint.
+    ///
+    /// [`ClientSecret`](crate::core::client_auth::ClientSecret) uses this list
+    /// to choose HTTP Basic or form authentication. `None` leaves that choice
+    /// unconstrained by metadata.
     #[from_metadata(path = "revocation_endpoint_auth_methods_supported")]
     revocation_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
