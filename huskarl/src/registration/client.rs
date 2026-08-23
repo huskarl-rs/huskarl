@@ -4,15 +4,18 @@ use bon::Builder;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use serde::Deserialize;
+use snafu::ResultExt as _;
 
 use super::{
-    error::{RegistrationError, registration_error},
+    error::{
+        AuthHeaderSnafu, DeserializeSnafu, RegistrationError, RequestFailedSnafu, SerializeSnafu,
+    },
     metadata::ClientMetadata,
     response::ClientInformationResponse,
 };
 use crate::core::{
-    EndpointUrl, Error, ErrorKind,
-    http::{HttpClient, Idempotency},
+    EndpointUrl, Error,
+    http::{FailedResponse, HttpClient, Idempotency, TruncatedBody},
     secrets::SecretString,
 };
 
@@ -69,14 +72,9 @@ impl ClientRegistration {
     ///
     /// # Errors
     ///
-    /// Returns an error of kind
-    /// [`ErrorKind::RequestRejected`]
-    /// if the server rejects the request (the raw RFC 7591 §3.2.2 error code is
-    /// preserved on the error),
-    /// [`ErrorKind::Config`] for local request
-    /// problems (an invalid initial access token, a `jwks`/`jwks_uri` conflict),
-    /// and [`ErrorKind::Protocol`] for a
-    /// malformed response; transport failures propagate with their own kind.
+    /// Returns an error if the request fails, the client metadata is invalid,
+    /// or the response is malformed. Server rejections expose their RFC 7591
+    /// error through [`Error::verdict`](crate::core::Error::verdict).
     pub async fn register(
         &self,
         http_client: &impl HttpClient,
@@ -84,7 +82,7 @@ impl ClientRegistration {
     ) -> Result<ClientInformationResponse, Error> {
         // RFC 7591 §2: jwks and jwks_uri MUST NOT both be present.
         if metadata.jwks.is_some() && metadata.jwks_uri.is_some() {
-            return Err(registration_error(RegistrationError::JwksConflict));
+            return Err(Error::from(RegistrationError::JwksConflict));
         }
 
         let endpoint = if http_client.uses_mtls() {
@@ -95,8 +93,7 @@ impl ClientRegistration {
             &self.registration_endpoint
         };
 
-        let body = serde_json::to_vec(metadata)
-            .map_err(|source| registration_error(RegistrationError::Serialize { source }))?;
+        let body = serde_json::to_vec(metadata).context(SerializeSnafu)?;
 
         let (mut parts, ()) = http::Request::new(()).into_parts();
         parts.method = Method::POST;
@@ -107,7 +104,7 @@ impl ClientRegistration {
         );
         if let Some(token) = &self.initial_access_token {
             let mut value = HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
-                .map_err(|source| registration_error(RegistrationError::AuthHeader { source }))?;
+                .context(AuthHeaderSnafu)?;
             value.set_sensitive(true);
             parts.headers.insert(header::AUTHORIZATION, value);
         }
@@ -118,14 +115,17 @@ impl ClientRegistration {
         let response = http_client
             .execute(request, Idempotency::Unknown)
             .await
-            .map_err(|e| e.with_context("client registration request failed"))?;
+            .context(RequestFailedSnafu)?;
 
         if response.status.is_success() {
             ensure_json_content_type(&response.headers)?;
-            serde_json::from_slice(&response.body)
-                .map_err(|source| registration_error(RegistrationError::Deserialize { source }))
+            Ok(serde_json::from_slice(&response.body).context(DeserializeSnafu)?)
         } else {
-            Err(map_error_response(response.status, &response.body))
+            Err(map_error_response(
+                response.status,
+                &response.headers,
+                &response.body,
+            ))
         }
     }
 }
@@ -134,9 +134,9 @@ impl ClientRegistration {
 fn ensure_json_content_type(headers: &HeaderMap) -> Result<(), Error> {
     let ct_value = headers
         .get(header::CONTENT_TYPE)
-        .ok_or_else(|| registration_error(RegistrationError::MissingContentType))?;
+        .ok_or_else(|| Error::from(RegistrationError::MissingContentType))?;
     let ct_str = ct_value.to_str().map_err(|_| {
-        registration_error(RegistrationError::UnexpectedContentType {
+        Error::from(RegistrationError::UnexpectedContentType {
             content_type: String::from_utf8_lossy(ct_value.as_bytes()).into_owned(),
         })
     })?;
@@ -144,11 +144,9 @@ fn ensure_json_content_type(headers: &HeaderMap) -> Result<(), Error> {
     if media_type.eq_ignore_ascii_case("application/json") {
         Ok(())
     } else {
-        Err(registration_error(
-            RegistrationError::UnexpectedContentType {
-                content_type: media_type.to_owned(),
-            },
-        ))
+        Err(Error::from(RegistrationError::UnexpectedContentType {
+            content_type: media_type.to_owned(),
+        }))
     }
 }
 
@@ -161,18 +159,24 @@ struct ErrorBody {
 
 /// Maps a non-success registration response to an [`Error`].
 ///
-/// Any 5xx is a retryable transport failure regardless of body — a gateway's
-/// error JSON must not masquerade as an RFC 7591 rejection (which callers
-/// treat as "fix the metadata", not "retry"). Otherwise a well-formed RFC 7591
-/// §3.2.2 error body maps to the matching typed variant (preserving the raw
-/// error code); anything else becomes a `BadStatus`.
-fn map_error_response(status: StatusCode, body: &[u8]) -> Error {
-    if status.is_server_error() {
-        return Error::new(
-            ErrorKind::Transport { retryable: true },
+/// A 5xx or 429 remains a transient failure regardless of its body. Other
+/// well-formed RFC 7591 error responses become server verdicts.
+#[track_caller]
+fn map_error_response(status: StatusCode, headers: &http::HeaderMap, body: &[u8]) -> Error {
+    let Some(failed) = FailedResponse::new(status, headers) else {
+        return Error::from(RegistrationError::BadStatus {
+            status,
+            body: TruncatedBody::from_bytes(body),
+        });
+    };
+
+    // Do not treat error-shaped gateway responses as registration verdicts.
+    if failed.is_transient() {
+        return failed.into_error(
+            None,
             RegistrationError::BadStatus {
                 status,
-                body: body.to_vec(),
+                body: TruncatedBody::from_bytes(body),
             },
         );
     }
@@ -182,26 +186,22 @@ fn map_error_response(status: StatusCode, body: &[u8]) -> Error {
         error_description: description,
     }) = serde_json::from_slice::<ErrorBody>(body)
     else {
-        return registration_error(RegistrationError::BadStatus {
-            status,
-            body: body.to_vec(),
-        });
+        return failed.into_error(
+            None,
+            RegistrationError::BadStatus {
+                status,
+                body: TruncatedBody::from_bytes(body),
+            },
+        );
     };
 
-    let oauth_description = description.clone();
-    let variant = match error.as_str() {
-        "invalid_redirect_uri" => RegistrationError::InvalidRedirectUri { description },
-        "invalid_client_metadata" => RegistrationError::InvalidClientMetadata { description },
-        "invalid_software_statement" => RegistrationError::InvalidSoftwareStatement { description },
-        "unapproved_software_statement" => {
-            RegistrationError::UnapprovedSoftwareStatement { description }
-        }
-        _ => RegistrationError::ServerError {
-            error: error.clone(),
-            description,
-        },
+    // Preserve registered and extension codes through the same variant.
+    let cause = RegistrationError::OAuthError {
+        verdict: crate::core::OAuthError::new(error).with_description(description),
     };
-    registration_error(variant).with_oauth_error(error, oauth_description)
+    // Use the variant's value so direct conversion and HTTP mapping agree.
+    let verdict = cause.verdict();
+    failed.into_error(verdict, cause)
 }
 
 #[cfg(test)]
@@ -213,7 +213,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        ErrorKind, http::HttpResponse, platform::MaybeSendBoxFuture,
+        http::HttpResponse, platform::MaybeSendBoxFuture,
         server_metadata::AuthorizationServerMetadata,
     };
 
@@ -457,21 +457,21 @@ mod tests {
             .jwks(crate::core::jwk::PublicJwks::new(vec![]))
             .build();
 
-        let err = registration(None)
+        let _err = registration(None)
             .register(&client, &metadata)
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
     }
 
+    /// The four RFC 7591 §3.2.2 codes each name something in the metadata the
+    /// caller can change, so they promise "adjust and retry".
     #[rstest]
     #[case::redirect_uri("invalid_redirect_uri")]
     #[case::client_metadata("invalid_client_metadata")]
     #[case::software_statement("invalid_software_statement")]
     #[case::unapproved("unapproved_software_statement")]
-    #[case::unknown_code("something_else")]
     #[tokio::test]
-    async fn server_error_codes_map_to_request_rejected(#[case] code: &str) {
+    async fn rfc7591_error_codes_map_to_request_rejected(#[case] code: &str) {
         let client = RecordingClient::new(json_response(
             StatusCode::BAD_REQUEST,
             &serde_json::json!({
@@ -485,8 +485,18 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(err.kind(), ErrorKind::RequestRejected);
-        assert_eq!(err.oauth_error_code(), Some(code));
+        // The typed code is what says "fix the metadata and retry".
+        assert!(
+            err.verdict()
+                .is_some_and(|o| o.code().parameters_at_fault())
+        );
+        assert_eq!(err.verdict().map(|v| v.code().as_str()), Some(code));
+        // The gloss travels with its code — both are read off the variant, so
+        // this also pins the round trip through `RegistrationError::verdict`.
+        assert_eq!(
+            err.verdict().and_then(crate::core::OAuthError::description),
+            Some("nope")
+        );
     }
 
     #[tokio::test]
@@ -505,11 +515,10 @@ mod tests {
             .register(&client, &desired_metadata())
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Protocol);
-        assert_eq!(err.oauth_error_code(), None);
+        assert_eq!(err.verdict().map(|v| v.code().as_str()), None);
     }
 
-    /// Regression: a 5xx is a retryable transport failure even when its body
+    /// Regression: a 5xx is a retryable server condition even when its body
     /// parses as an RFC 7591 error shape — a transient outage must not be
     /// classified as "adjust the metadata and retry".
     #[rstest]
@@ -519,7 +528,7 @@ mod tests {
     )]
     #[case::html("<html>boom</html>".to_string())]
     #[tokio::test]
-    async fn server_5xx_is_a_retryable_transport_error(#[case] body: String) {
+    async fn server_5xx_is_retryable_and_unavailable(#[case] body: String) {
         let client = RecordingClient::new(HttpResponse {
             status: StatusCode::SERVICE_UNAVAILABLE,
             headers: HeaderMap::new(),
@@ -530,8 +539,32 @@ mod tests {
             .register(&client, &desired_metadata())
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Transport { retryable: true });
-        assert!(err.is_retryable());
+        assert_eq!(err.retry_advice(), crate::core::RetryAdvice::RETRY);
+        // A 503 is the server's condition, never its verdict on the metadata.
+        assert!(err.verdict().is_none());
+    }
+
+    /// A throttled registration endpoint keeps the interval it named.
+    #[tokio::test]
+    async fn registration_429_keeps_retry_after() {
+        let client = RecordingClient::new(HttpResponse {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            headers: {
+                let mut h = HeaderMap::new();
+                h.insert(header::RETRY_AFTER, HeaderValue::from_static("45"));
+                h
+            },
+            body: Bytes::from_static(b""),
+        });
+
+        let err = registration(None)
+            .register(&client, &desired_metadata())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.retry_advice(),
+            crate::core::RetryAdvice::retry_after(crate::core::platform::Duration::from_secs(45))
+        );
     }
 
     #[tokio::test]
@@ -546,11 +579,10 @@ mod tests {
             body: Bytes::from_static(b"{\"client_id\":\"abc\"}"),
         });
 
-        let err = registration(None)
+        let _err = registration(None)
             .register(&client, &desired_metadata())
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Protocol);
     }
 
     #[tokio::test]
@@ -566,10 +598,9 @@ mod tests {
             body: Bytes::from_static(b"not json"),
         });
 
-        let err = registration(None)
+        let _err = registration(None)
             .register(&client, &desired_metadata())
             .await
             .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Protocol);
     }
 }

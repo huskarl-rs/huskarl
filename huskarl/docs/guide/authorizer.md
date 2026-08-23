@@ -22,6 +22,7 @@ records what each response reveals.
 
 ```rust
 # use huskarl::authorizer::{HttpAuthorizer, parse_challenges};
+# use huskarl::core::OAuthErrorCode;
 # use http::{HeaderMap, Method, StatusCode, Uri};
 # struct Response { status: StatusCode, headers: HeaderMap }
 # async fn send(_headers: HeaderMap) -> Response {
@@ -40,7 +41,7 @@ if response.status == StatusCode::UNAUTHORIZED {
     // re-sending cannot fix it.
     let scope_problem = parse_challenges(&response.headers)
         .iter()
-        .any(|challenge| challenge.error() == Some("insufficient_scope"));
+        .any(|challenge| challenge.error() == Some(OAuthErrorCode::InsufficientScope));
 
     if !scope_problem {
         let headers = authorizer.get_headers(&Method::GET, &uri).await?;

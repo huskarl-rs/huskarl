@@ -23,6 +23,5 @@ mod metadata;
 mod response;
 
 pub use client::*;
-pub use error::RegistrationError;
 pub use metadata::ClientMetadata;
 pub use response::{ClientInformationResponse, ClientSecretExpiry};
