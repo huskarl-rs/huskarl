@@ -88,9 +88,8 @@ pub enum FormError {
     },
 }
 
-/// Compatibility name retained while workspace consumers migrate to
-/// [`FormError`].
-pub type Error = FormError;
+// Private shorthand used by the serde implementations below.
+use self::FormError as Error;
 
 impl FormError {
     fn other(message: impl Into<String>) -> Self {

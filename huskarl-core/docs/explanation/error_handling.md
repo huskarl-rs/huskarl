@@ -1,49 +1,137 @@
 # The error model
 
-Every fallible operation in the huskarl ecosystem returns the one concrete
-[`Error`](crate::error::Error) type. It follows the [`std::io::Error`] model: a
-single non-generic struct carrying a matchable [`ErrorKind`](crate::error::ErrorKind),
-optional context, and a type-erased source. Because it is not generic, it embeds
-cleanly in your own error enum, and a value crossing several layers keeps one
-shape the whole way up.
+This page explains why huskarl separates failure details, retryability, OAuth
+verdicts, and application recovery. For API contracts, see
+[`Error`](crate::error::Error).
 
-Programmatic handling — retry decisions, "re-run the interactive flow", surfacing
-the RFC 6749 error code — goes through [`ErrorKind`](crate::error::ErrorKind) and
-the accessors on [`Error`](crate::error::Error). They are the stable contract;
-the variants are kept deliberately coarse so that additions are non-breaking.
+## Classification is not recovery
 
-## What to do next
+Nearly every fallible operation returns the one concrete
+[`Error`](crate::error::Error). It is not generic, so it embeds in your own error
+enum and keeps one shape across every layer it crosses.
 
-Applications consuming tokens (through a token cache or authorizer) need a small
-set of signals, checked in this order:
+An `Error` carries two classification facts in addition to its cause:
 
-1. **Retry** — [`Error::is_retryable`](crate::error::Error::is_retryable). The
-   failure is transient and the same call may succeed if re-attempted (with
-   backoff). No user involvement is needed; in particular this is *not* a reason
-   to re-run the interactive flow.
-2. **Back off, then retry** — [`ErrorKind::Backoff`](crate::error::ErrorKind::Backoff).
-   No token right now, but the source expects to recover on its own, so a later
-   automatic call may succeed. Like retry, no user involvement is needed; unlike
-   retry, an *immediate* re-attempt will not help — wait for the cooldown first.
-   This is *not* a reason to re-run the interactive flow.
-3. **Adjust the request** — [`ErrorKind::RequestRejected`](crate::error::ErrorKind::RequestRejected).
-   The credential is intact but the request was wrong (e.g. an over-broad scope
-   or a bad resource indicator). Narrow the request and retry with the *same*
-   credential; re-authentication will not help.
-4. **Re-authenticate** — [`ErrorKind::ReauthRequired`](crate::error::ErrorKind::ReauthRequired).
-   No token can be obtained automatically; the interactive flow must run again.
-5. **Fail** — everything else is a genuine failure: log it and surface it. The
-   remaining kinds classify *what* failed (configuration, protocol, crypto, …)
-   for diagnostics and error reports, not what to do next.
+- [`RetryAdvice`](crate::error::RetryAdvice): whether retrying this operation
+  may help, and the minimum delay when one is known.
+- [`verdict`](crate::error::Error::verdict): the OAuth error an authorization
+  server named, if one judged the request.
 
-The three signals that matter to most application code — retry, re-authenticate,
-fail — are the intended consumption pattern. Reach for individual
-[`ErrorKind`](crate::error::ErrorKind) variants only when you need finer control.
+Neither fact chooses an application recovery action. Retrying, changing the
+request, starting interactive authorization, or stopping depends on resources
+held by the caller, such as a refresh token, reusable credentials, or a retry
+budget. Lower layers cannot see those alternatives, so they should not choose
+among them.
 
-## Source chains and downcasting
+Consequently, [`RetryAdvice::No`](crate::error::RetryAdvice::No) means only that
+retrying the same operation is not expected to help. A higher layer may still
+have another operation available.
 
-[`Error::source`](std::error::Error::source) chains preserve the concrete
-underlying error (for example a transport crate's error type) for diagnostics,
-logging, and error-report rendering. Downcasting a source to a concrete type is
-**not** supported API surface: the type behind `source()` may change in any
-release. Match on [`ErrorKind`](crate::error::ErrorKind) instead.
+Some operations still return dedicated error enums when their variants are the
+operation's expected control flow. Device-flow polling is one example: pending,
+denied, and expired are outcomes a caller must handle distinctly rather than
+diagnostic classifications.
+
+## Retry advice is scoped
+
+Retry advice applies to the operation that failed. It does not authorize
+replaying a larger flow. In particular, retrying an idempotent metadata fetch is
+different from replaying a request that may consume an authorization code or
+rotate a refresh token.
+
+An optional delay preserves information available only at the failure site,
+such as `Retry-After` or a backend cooldown. It is a lower bound, not a complete
+retry policy. Callers still need deadlines, attempt limits, jitter, and a total
+retry budget.
+
+## Verdicts require a judgement
+
+RFC 6749 §5.2 puts error codes on ordinary 4xx rejection responses. A `429`
+already says the peer is throttling requests, and a code arriving on a 5xx may
+be a gateway echoing something rather than an authorization server deciding
+anything. Acting on either body as a credential verdict is how throttling or an
+outage becomes a forced re-authentication.
+
+For that reason, only a response whose status permits the body to express a
+request judgement produces a verdict. An OAuth code found in a `429` or 5xx body
+remains diagnostic text but does not become a typed verdict. This prevents
+callers from discarding credentials or starting authorization based on a
+throttle response or an error echoed by a proxy.
+
+The absence of a verdict does not identify the failed component. That detail
+belongs to the cause and source chain; retryability belongs to `RetryAdvice`.
+
+## Transparency
+
+`Error` has no message of its own and is not a distinct layer in a source chain:
+its `Display` renders the failure it wraps, and its `source` is that failure's
+own source.
+
+Reporters such as `snafu::Report`, `anyhow`, and `eyre` walk `source` and render each
+layer independently, knowing nothing about huskarl. A layer that borrowed its
+child's message would print it twice. Transparency preserves one distinct
+message per layer without requiring a huskarl-specific reporter.
+
+[`chain`](crate::error::Error::chain) yields the distinct messages, for
+rendering. [`cause`](crate::error::Error::cause) is the one typed hop to the
+erased backend failure, for callers that need to recover their own concrete type.
+
+## Propagating without dropping
+
+A wrapping layer normally knows more context but no new classification fact. It
+must therefore preserve the inner classification. Reconstructing an error from
+only the fields a wrapper currently knows risks losing a verdict, retry delay,
+or future classification member.
+
+[`Classification`](crate::error::propagation::Classification) makes that one
+value rather than a set of fields to copy. [`Origin`](crate::error::propagation::Origin)
+then makes the distinction explicit per error variant:
+
+- `Propagates` wraps an existing `Error` and carries its classification intact.
+- `Establishes` represents a new failure and supplies a new classification.
+
+`#[derive(Classify)]` can infer propagation from a variant containing `Error`.
+Leaf variants declare the classification they establish:
+
+```text
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+pub(crate) enum ClientSecretError {
+    #[classify(no)]
+    BuildingBasicHeader { source: http::header::InvalidHeaderValue },
+    FetchingSecret { source: Error },   // propagates; nothing to declare
+}
+```
+
+`#[classify(with = path)]` handles decisions that depend on a runtime value,
+such as an I/O error kind, protocol response, or `Error` nested behind another
+public error type. The derive passes references to that variant's fields, in
+declaration order, so the handler cannot receive another variant. Its handler returns `Origin`, explicitly choosing
+`Establishes` or `Propagates`; rebuilding an equal classification is not
+propagation.
+
+### The backstop
+
+Derive-time inspection cannot detect an `Error` hidden behind a type alias or
+another cause enum. The `strict-propagation` feature therefore checks at runtime
+that a newly established classification does not cover an existing classified
+error in the source chain.
+
+That check can inspect only the chain exposed by `std::error::Error::source`.
+A transparent wrapper may delegate `source()` past its contained `Error`, making
+the classified hop genuinely unobservable. Every such internal wrapper must
+therefore return `Origin::Propagates` explicitly and have a test that preserves
+the complete classification.
+
+The workspace enables this check in tests. It is optional for dependents because
+their own public error abstractions may legitimately contain a huskarl error
+without participating in huskarl's internal propagation convention.
+
+## HTTP responses
+
+[`FailedResponse`](crate::http::FailedResponse) keeps status classification,
+`Retry-After`, and OAuth verdict handling together. It cannot be built from a
+2xx response, and
+[`into_error`](crate::http::FailedResponse::into_error) applies the transient
+status rule, retry delay, and judged-versus-echoed distinction in one step.
+Keeping these decisions together prevents different endpoint implementations
+from interpreting the same response differently.

@@ -102,5 +102,5 @@ pub mod server_metadata;
 
 pub use authorization_details::AuthorizationDetail;
 pub use endpoint_url::EndpointUrl;
-pub use error::{Chain, Error, ErrorKind, RetryAdvice};
+pub use error::{Chain, Error, RetryAdvice};
 pub use oauth_error::{OAuthError, OAuthErrorCode, UnknownCode};
