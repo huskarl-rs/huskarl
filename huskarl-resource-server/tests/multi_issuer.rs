@@ -320,9 +320,9 @@ trait TokenErrorCodeExt {
 impl TokenErrorCodeExt for MultiIssuerError {
     fn token_error_code(&self) -> Option<TokenErrorCode> {
         use huskarl_resource_server::error::ToRfc6750Error as _;
-        match self.token_error() {
+        match self.challenge().error {
             TokenValidationError::Client(code) => Some(code),
-            TokenValidationError::Server(_) => None,
+            TokenValidationError::Server { .. } => None,
         }
     }
 }

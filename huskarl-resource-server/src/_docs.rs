@@ -16,6 +16,9 @@
 
 /// Understanding-oriented background on how the crate works and why.
 pub mod explanation {
+    #[doc = include_str!("../docs/explanation/error_handling.md")]
+    pub mod error_handling {}
+
     #[doc = include_str!("../docs/explanation/choosing_a_validator.md")]
     pub mod choosing_a_validator {}
 

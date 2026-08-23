@@ -1,6 +1,6 @@
 //! Turning a validation failure into an HTTP rejection response.
 //!
-//! A standards-compliant rejection has up to three ingredients:
+//! A standards-compliant rejection has up to four ingredients:
 //!
 //! 1. an HTTP **status code** — 400/401/403 for client errors (RFC 6750 §3.1),
 //!    a 5xx code for server-side failures;
@@ -8,9 +8,11 @@
 //!    and description for client errors, and omitted entirely for server
 //!    errors (re-authenticating would not help);
 //! 3. a **`DPoP-Nonce`** header, when the validator issued a fresh nonce the
-//!    client must echo in its next proof (RFC 9449 §8).
+//!    client must echo in its next proof (RFC 9449 §8);
+//! 4. a **`Retry-After`** header, when a server-side failure includes a retry
+//!    interval (RFC 9110 §10.2.3).
 //!
-//! [`Rejection`] bundles all three. Build one directly from a validation
+//! [`Rejection`] bundles all four. Build one directly from a validation
 //! result:
 //!
 //! ```
@@ -59,16 +61,22 @@ pub struct Rejection {
     /// The `WWW-Authenticate` challenge values to include.
     ///
     /// Empty for server-side failures, which must not carry a challenge.
-    /// Per RFC 7235 the values may be sent as separate `WWW-Authenticate`
-    /// headers or joined with `, ` on a single header — both are equivalent.
+    /// Per RFC 9110 §§5.2 and 11.6.1, the values may be sent as separate
+    /// `WWW-Authenticate` fields or combined into one comma-separated field.
     pub www_authenticate: Vec<String>,
     /// A nonce to include in the response `DPoP-Nonce` header, if any.
     pub dpop_nonce: Option<String>,
+    /// How long the client should wait before re-attempting, for the
+    /// `Retry-After` header (RFC 9110 §10.2.3).
+    ///
+    /// [`apply`](Self::apply) emits this as delta-seconds, rounding a non-zero
+    /// fractional second up. `None` omits the header. Client errors always have
+    /// no retry interval.
+    pub retry_after: Option<crate::core::platform::Duration>,
 }
 
 impl Rejection {
-    /// Applies the status code, `WWW-Authenticate` challenges, and
-    /// `DPoP-Nonce` header to a response builder.
+    /// Applies this rejection's status and headers to a response builder.
     ///
     /// Every value this crate produces is a valid header value, so the
     /// builder cannot fail on account of this call.
@@ -95,6 +103,14 @@ impl Rejection {
         if let Some(nonce) = &self.dpop_nonce {
             builder = builder.header("DPoP-Nonce", nonce.as_str());
         }
+        if let Some(after) = self.retry_after {
+            // Delta-seconds avoids clock synchronization. Round fractions up
+            // so a remaining cooldown never renders as `Retry-After: 0`.
+            let seconds = after
+                .as_secs()
+                .saturating_add(u64::from(after.subsec_nanos() > 0));
+            builder = builder.header(http::header::RETRY_AFTER, seconds);
+        }
         builder
     }
 }
@@ -103,24 +119,33 @@ impl ValidatorMetadata {
     /// Builds the [`Rejection`] for a validation or authorization error.
     ///
     /// The status code comes from the error's
-    /// [classification](ToRfc6750Error::token_error), and the
+    /// [`Challenge::error`](crate::error::Challenge::error), and the
     /// `WWW-Authenticate` challenges from [`challenges`](Self::challenges)
     /// (empty for server-side failures). The challenges' `scope` attribute
     /// comes from the error's own
-    /// [`required_scope`](ToRfc6750Error::required_scope) when set — e.g.
+    /// [`Challenge::scope`](crate::error::Challenge::scope) when set — e.g.
     /// [`InsufficientScope::new`](crate::error::InsufficientScope::new) —
     /// falling back to the `scope` argument.
     ///
-    /// The returned rejection has no `DPoP` nonce; when rejecting after a
+    /// Server errors carry no `WWW-Authenticate` challenge and propagate their
+    /// optional `Retry-After` interval. The returned rejection has no `DPoP`
+    /// nonce; when rejecting after a
     /// [`ValidationResult`] that carried one, either use
     /// [`ValidationResult::rejection`] or copy
     /// [`dpop_nonce`](ValidationResult::dpop_nonce) over.
     #[must_use]
     pub fn rejection(&self, error: &dyn ToRfc6750Error, scope: Option<&str>) -> Rejection {
+        let challenge = error.challenge();
         Rejection {
-            status: error.token_error().suggested_status(),
-            www_authenticate: self.challenges(Some(error), scope, None),
+            status: challenge.error.suggested_status(),
+            www_authenticate: self.challenges_from(
+                error.attempted_scheme(),
+                Some(&challenge),
+                scope,
+                None,
+            ),
             dpop_nonce: None,
+            retry_after: challenge.error.retry_after(),
         }
     }
 }
@@ -157,6 +182,9 @@ impl<C, E: ToRfc6750Error> ValidationResult<C, E> {
                 status: http::StatusCode::UNAUTHORIZED,
                 www_authenticate: metadata.unauthenticated_challenges(scope),
                 dpop_nonce: None,
+                // Nothing failed: no credentials were presented. There is no
+                // interval to wait out, only a login to perform.
+                retry_after: None,
             },
             Err(error) => metadata.rejection(error, scope),
         };
@@ -167,10 +195,12 @@ impl<C, E: ToRfc6750Error> ValidationResult<C, E> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
     use crate::{
         TokenType,
-        error::{InsufficientScope, TokenErrorCode, TokenValidationError},
+        error::{Challenge, InsufficientScope, ServerStatus, TokenErrorCode, TokenValidationError},
         validator::ValidatedRequest,
     };
 
@@ -184,21 +214,33 @@ mod tests {
         }
 
         fn server() -> Self {
-            Self(TokenValidationError::Server(http::StatusCode::BAD_GATEWAY))
+            Self(TokenValidationError::server(ServerStatus::BAD_GATEWAY))
+        }
+
+        /// A server-side failure that knows how long it will last.
+        fn unavailable_for(after: crate::core::platform::Duration) -> Self {
+            Self(TokenValidationError::Server {
+                status: ServerStatus::SERVICE_UNAVAILABLE,
+                retry_after: Some(after),
+            })
         }
     }
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("test error")
+        }
+    }
+
+    impl std::error::Error for TestError {}
 
     impl ToRfc6750Error for TestError {
         fn attempted_scheme(&self) -> Option<TokenType> {
             None
         }
 
-        fn token_error(&self) -> TokenValidationError {
-            self.0.clone()
-        }
-
-        fn error_description(&self) -> Option<String> {
-            None
+        fn challenge(&self) -> Challenge {
+            Challenge::new(self.0.clone())
         }
     }
 
@@ -236,6 +278,118 @@ mod tests {
         let rejection = meta().rejection(&TestError::server(), None);
         assert_eq!(rejection.status, http::StatusCode::BAD_GATEWAY);
         assert!(rejection.www_authenticate.is_empty());
+        // Nothing measured an interval, so nothing is claimed.
+        assert_eq!(rejection.retry_after, None);
+    }
+
+    /// The interval a lower layer measured has to reach the wire, or the whole
+    /// chain that carried it — a secret provider's cooldown, an upstream
+    /// `Retry-After`, `RetryAdvice::Retry { after }` — ends in a 503 that tells
+    /// the client to guess.
+    #[test]
+    fn a_server_error_that_named_an_interval_emits_retry_after() {
+        let after = crate::core::platform::Duration::from_secs(30);
+        let rejection = meta().rejection(&TestError::unavailable_for(after), None);
+
+        assert_eq!(rejection.status, http::StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(rejection.retry_after, Some(after));
+
+        let response = rejection
+            .apply(http::Response::builder())
+            .body(())
+            .expect("valid header values");
+        assert_eq!(
+            response.headers().get(http::header::RETRY_AFTER),
+            Some(&http::HeaderValue::from_static("30")),
+        );
+    }
+
+    /// A sub-second remainder rounds up. `Retry-After: 0` is "retry now",
+    /// which is the one thing a source with time left on its cooldown does not
+    /// mean — and truncation is how it would come to say it.
+    #[test]
+    fn a_part_second_interval_never_renders_as_retry_now() {
+        let rejection = meta().rejection(
+            &TestError::unavailable_for(crate::core::platform::Duration::from_millis(100)),
+            None,
+        );
+        let response = rejection
+            .apply(http::Response::builder())
+            .body(())
+            .expect("valid header values");
+        assert_eq!(
+            response.headers().get(http::header::RETRY_AFTER),
+            Some(&http::HeaderValue::from_static("1")),
+        );
+    }
+
+    #[test]
+    fn retry_after_ceiling_saturates_for_duration_max() {
+        let rejection = meta().rejection(
+            &TestError::unavailable_for(crate::core::platform::Duration::MAX),
+            None,
+        );
+        let response = rejection
+            .apply(http::Response::builder())
+            .body(())
+            .expect("valid header values");
+        assert_eq!(
+            response.headers().get(http::header::RETRY_AFTER),
+            Some(&http::HeaderValue::from_static("18446744073709551615")),
+        );
+    }
+
+    #[test]
+    fn metadata_rejection_reads_the_challenge_once() {
+        #[derive(Debug)]
+        struct CountingError(AtomicUsize);
+
+        impl std::fmt::Display for CountingError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("counting error")
+            }
+        }
+
+        impl std::error::Error for CountingError {}
+
+        impl ToRfc6750Error for CountingError {
+            fn attempted_scheme(&self) -> Option<TokenType> {
+                Some(TokenType::Bearer)
+            }
+
+            fn challenge(&self) -> Challenge {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Challenge::new(TokenValidationError::Client(TokenErrorCode::InvalidToken))
+                    .with_description("bad token")
+            }
+        }
+
+        let error = CountingError(AtomicUsize::new(0));
+        let rejection = meta().rejection(&error, None);
+
+        assert_eq!(error.0.load(Ordering::Relaxed), 1);
+        assert_eq!(rejection.status, http::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            rejection.www_authenticate,
+            vec![r#"Bearer realm="api", error="invalid_token", error_description="bad token""#],
+        );
+    }
+
+    /// A client error is a verdict on the token, and no amount of waiting
+    /// makes an invalid one valid — so no header, whatever the challenge says.
+    #[test]
+    fn a_client_error_never_carries_retry_after() {
+        let rejection = meta().rejection(&TestError::client(TokenErrorCode::InvalidToken), None);
+        assert_eq!(rejection.retry_after, None);
+
+        let response = rejection
+            .apply(http::Response::builder())
+            .body(())
+            .expect("valid header values");
+        assert!(
+            response.headers().get(http::header::RETRY_AFTER).is_none(),
+            "an invalid token does not become valid by waiting"
+        );
     }
 
     #[test]

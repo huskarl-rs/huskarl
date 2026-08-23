@@ -79,7 +79,7 @@ pub struct ValidatorMetadata {
 use crate::{
     TokenType,
     core::resource_metadata::ProtectedResourceMetadata,
-    error::{ToRfc6750Error, TokenValidationError, escape_quoted},
+    error::{Challenge, ToRfc6750Error, TokenValidationError, escape_quoted},
 };
 
 impl ValidatorMetadata {
@@ -133,36 +133,36 @@ impl ValidatorMetadata {
         )
     }
 
-    /// Returns the `WWW-Authenticate` challenges for a request.
+    /// Returns `WWW-Authenticate` field values for a request.
     ///
-    /// If `error` is `None`, returns unauthenticated challenges for all supported
-    /// schemes. If `error` is `Some` and the error is a [`TokenValidationError::Client`],
-    /// the attempted scheme's challenge includes error details; other schemes are
-    /// returned as unauthenticated challenges. If the attempted scheme is ambiguous,
-    /// both challenges include error details, as permitted by RFC 9449 §7.1.
+    /// # Behavior
     ///
-    /// The `scope` attribute comes from the error's
-    /// [`required_scope`](ToRfc6750Error::required_scope) when set (it names
-    /// the specific unmet requirement — see
-    /// [`InsufficientScope`](crate::error::InsufficientScope)), falling back
-    /// to the `scope` argument.
+    /// With no error, this returns an unauthenticated challenge for every
+    /// supported scheme. For a client error, error details are added to the
+    /// attempted scheme; if the scheme is unknown, they are added to every
+    /// supported challenge as permitted by RFC 9449 §7.1. Other supported
+    /// schemes remain available without error details.
     ///
-    /// If `error` is `Some` and the error is a [`TokenValidationError::Server`], returns
-    /// an empty `Vec` — server-side failures (e.g. unreachable introspection endpoint) use
-    /// a 5xx status code and no `WWW-Authenticate` header, since re-authenticating would
-    /// not resolve the failure.
+    /// A server error returns an empty vector because re-authentication cannot
+    /// resolve the failure. Use [`rejection`](Self::rejection) to obtain its 5xx
+    /// status and optional retry interval.
     ///
-    /// If both Bearer and `DPoP` are supported, challenges for both are returned, as
-    /// recommended by RFC 9449 §7.1. Per RFC 7235, the challenges may be sent as
-    /// separate `WWW-Authenticate` headers or joined with `, ` on a single header —
-    /// both forms are equivalent.
+    /// When both `Bearer` and `DPoP` are supported, both challenges are returned
+    /// as recommended by RFC 9449 §7.1. They may be sent as separate fields or
+    /// combined according to RFC 9110 §§5.2 and 11.6.1.
     ///
-    /// For the fully assembled response ingredients — status code, challenges,
-    /// and `DPoP-Nonce` together — use [`rejection`](Self::rejection) or
+    /// # Parameters
+    ///
+    /// The error's [`Challenge::scope`](crate::error::Challenge::scope) takes
+    /// precedence over `scope`. `error_uri` is emitted only with client error
+    /// details.
+    ///
+    /// For assembled response metadata, including status, `DPoP-Nonce`, and
+    /// `Retry-After`, use [`rejection`](Self::rejection) or
     /// [`ValidationResult::rejection`](crate::validator::ValidationResult::rejection)
     /// instead.
     ///
-    /// # Example
+    /// # Examples
     ///
     /// ```
     /// # use huskarl_resource_server::validator::metadata::ValidatorMetadata;
@@ -190,27 +190,42 @@ impl ValidatorMetadata {
         scope: Option<&str>,
         error_uri: Option<&str>,
     ) -> Vec<String> {
-        let mut challenges = Vec::new();
         let attempted_scheme =
             error.and_then(super::super::error::ToRfc6750Error::attempted_scheme);
+        let challenge = error.map(super::super::error::ToRfc6750Error::challenge);
+        self.challenges_from(attempted_scheme, challenge.as_ref(), scope, error_uri)
+    }
+
+    pub(crate) fn challenges_from(
+        &self,
+        attempted_scheme: Option<TokenType>,
+        challenge: Option<&Challenge>,
+        scope: Option<&str>,
+        error_uri: Option<&str>,
+    ) -> Vec<String> {
+        let mut challenges = Vec::new();
 
         // The error's own scope requirement (e.g. `InsufficientScope::new`)
         // names the specific unmet requirement, so it wins over the generic
         // `scope` argument.
-        let required_scope = error.and_then(super::super::error::ToRfc6750Error::required_scope);
-        let scope = required_scope.as_deref().or(scope);
+        let scope = challenge.and_then(|c| c.scope.as_deref()).or(scope);
 
         let dpop_supported = self.supports_dpop();
         let bearer_allowed = !self.dpop_bound_access_tokens_required.unwrap_or(false);
 
         // For server errors (5xx), omit WWW-Authenticate entirely — including it would
         // mislead clients into thinking re-authenticating would resolve the failure.
-        if error.is_some_and(|e| matches!(e.token_error(), TokenValidationError::Server(_))) {
+        if matches!(
+            challenge.map(|c| &c.error),
+            Some(TokenValidationError::Server { .. })
+        ) {
             return Vec::new();
         }
 
-        let is_client_error =
-            error.is_some_and(|e| matches!(e.token_error(), TokenValidationError::Client(_)));
+        let is_client_error = matches!(
+            challenge.map(|c| &c.error),
+            Some(TokenValidationError::Client(_))
+        );
 
         let include_in_dpop = dpop_supported
             && is_client_error
@@ -223,7 +238,7 @@ impl ValidatorMetadata {
             challenges.push(self.build_challenge(
                 "Bearer",
                 scope,
-                include_in_bearer.then_some(error).flatten(),
+                include_in_bearer.then_some(challenge).flatten(),
                 error_uri,
             ));
         }
@@ -232,7 +247,7 @@ impl ValidatorMetadata {
             challenges.push(self.build_challenge(
                 "DPoP",
                 scope,
-                include_in_dpop.then_some(error).flatten(),
+                include_in_dpop.then_some(challenge).flatten(),
                 error_uri,
             ));
         }
@@ -257,7 +272,7 @@ impl ValidatorMetadata {
         &self,
         scheme: &str,
         scope: Option<&str>,
-        error: Option<&dyn ToRfc6750Error>,
+        challenge: Option<&Challenge>,
         error_uri: Option<&str>,
     ) -> String {
         let mut parts = Vec::new();
@@ -270,17 +285,21 @@ impl ValidatorMetadata {
             parts.push(format!(r#"scope="{}""#, escape_quoted(scope)));
         }
 
-        if let Some(e) = error
-            && let TokenValidationError::Client(code) = e.token_error()
+        if let Some(c) = challenge
+            && let TokenValidationError::Client(code) = &c.error
         {
             parts.push(format!(r#"error="{}""#, code.as_str()));
-            if let Some(desc) = e.error_description() {
-                parts.push(format!(r#"error_description="{}""#, escape_quoted(&desc)));
+            if let Some(desc) = &c.description {
+                parts.push(format!(r#"error_description="{}""#, escape_quoted(desc)));
             }
             if let Some(uri) = error_uri {
                 parts.push(format!(r#"error_uri="{}""#, escape_quoted(uri)));
             }
-            parts.extend(e.extra_params().into_iter().map(|p| p.format()));
+            parts.extend(
+                c.params
+                    .iter()
+                    .map(super::super::error::ChallengeParam::format),
+            );
         }
 
         if let Some(url) = self.resource_metadata.as_deref() {
@@ -302,7 +321,7 @@ impl ValidatorMetadata {
 
     /// Returns the `WWW-Authenticate` header values for an unauthenticated request.
     ///
-    /// Equivalent to calling [`Self::challenges(None, scope, None)`].
+    /// This is equivalent to `self.challenges(None, scope, None)`.
     #[must_use]
     pub fn unauthenticated_challenges(&self, scope: Option<&str>) -> Vec<String> {
         self.challenges(None, scope, None)
@@ -322,7 +341,13 @@ mod tests {
     use super::*;
     use crate::{
         TokenType,
-        error::{ChallengeParam, TokenErrorCode, TokenValidationError},
+        error::{Challenge, ChallengeParam, ServerStatus, TokenErrorCode, TokenValidationError},
+        introspection::IntrospectionCallError,
+        validator::{
+            binding::{DPoPBindingError, MtlsBindingError},
+            dpop_proof::DPoPProofError,
+            extract::TokenExtractError,
+        },
     };
 
     /// A configurable [`ToRfc6750Error`] test double.
@@ -347,7 +372,7 @@ mod tests {
         fn server() -> Self {
             Self {
                 scheme: None,
-                token_error: TokenValidationError::Server(http::StatusCode::BAD_GATEWAY),
+                token_error: TokenValidationError::server(ServerStatus::BAD_GATEWAY),
                 description: None,
                 extra: Vec::new(),
             }
@@ -369,21 +394,26 @@ mod tests {
         }
     }
 
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("test error")
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
     impl ToRfc6750Error for TestError {
         fn attempted_scheme(&self) -> Option<TokenType> {
             self.scheme
         }
 
-        fn token_error(&self) -> TokenValidationError {
-            self.token_error.clone()
-        }
-
-        fn error_description(&self) -> Option<String> {
-            self.description.clone()
-        }
-
-        fn extra_params(&self) -> Vec<ChallengeParam> {
-            self.extra.clone()
+        fn challenge(&self) -> Challenge {
+            let c = Challenge::new(self.token_error.clone());
+            let c = match &self.description {
+                Some(d) => c.with_description(d.clone()),
+                None => c,
+            };
+            c.with_params(self.extra.clone())
         }
     }
 
@@ -533,6 +563,62 @@ mod tests {
                 "Bearer".to_string(),
                 r#"DPoP error="invalid_dpop_proof", algs="ES256""#.to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn leaf_error_descriptions_reach_authenticate_headers() {
+        let mut m = meta();
+        m.dpop_supported = Some(true);
+
+        assert_eq!(
+            m.challenges(
+                Some(&TokenExtractError::InvalidTokenHeaderFormat),
+                None,
+                None,
+            ),
+            vec![
+                r#"Bearer error="invalid_request", error_description="The access token header format is invalid""#,
+                r#"DPoP error="invalid_request", error_description="The access token header format is invalid""#,
+            ],
+        );
+        assert_eq!(
+            m.challenges(Some(&DPoPBindingError::ThumbprintMismatch), None, None),
+            vec![
+                "Bearer".to_string(),
+                r#"DPoP error="invalid_dpop_proof", error_description="The DPoP key thumbprint does not match the token binding""#.to_string(),
+            ],
+        );
+        assert_eq!(
+            m.challenges(
+                Some(&DPoPBindingError::ProofValidation {
+                    source: DPoPProofError::MissingJwkHeader,
+                }),
+                None,
+                None,
+            ),
+            vec![
+                "Bearer".to_string(),
+                r#"DPoP error="invalid_dpop_proof", error_description="The DPoP proof is missing the JWK header""#.to_string(),
+            ],
+        );
+        assert_eq!(
+            m.challenges(
+                Some(&MtlsBindingError::CertBoundTokenWithoutCert),
+                None,
+                None,
+            ),
+            vec![
+                r#"Bearer error="invalid_token", error_description="The access token is certificate-bound but no client certificate was presented""#,
+                r#"DPoP error="invalid_token", error_description="The access token is certificate-bound but no client certificate was presented""#,
+            ],
+        );
+        assert_eq!(
+            m.challenges(Some(&IntrospectionCallError::TokenInactive), None, None),
+            vec![
+                r#"Bearer error="invalid_token", error_description="The access token is revoked""#,
+                r#"DPoP error="invalid_token", error_description="The access token is revoked""#,
+            ],
         );
     }
 

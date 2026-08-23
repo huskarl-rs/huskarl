@@ -6,7 +6,7 @@ use strum::EnumMessage as _;
 
 use crate::{
     core::secrets::SecretString,
-    error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
+    error::{Challenge, ToRfc6750Error, TokenErrorCode, TokenValidationError},
 };
 
 /// The scheme used to present an access token in an HTTP request.
@@ -31,14 +31,15 @@ pub fn extract_token(
     headers: &HeaderMap,
     token_header: &HeaderName,
 ) -> Result<Option<(TokenType, SecretString)>, TokenExtractError> {
-    // 1. Extract token string from the configured header
-    let Some(token_header) = headers
-        .get(token_header)
-        .map(|hv| hv.to_str().context(TokenNotStringSnafu))
-        .transpose()?
-    else {
+    // Reject duplicate credentials instead of selecting one by header order.
+    let mut values = headers.get_all(token_header).iter();
+    let Some(token_header) = values.next() else {
         return Ok(None);
     };
+    if values.next().is_some() {
+        MultipleTokenHeadersSnafu.fail()?;
+    }
+    let token_header = token_header.to_str().context(TokenNotStringSnafu)?;
 
     let token_header_fields = token_header.split_whitespace().take(3).collect::<Vec<_>>();
     if token_header_fields.len() != 2 {
@@ -59,24 +60,39 @@ pub fn extract_token(
     Ok(Some((token_type, access_token)))
 }
 
-/// Errors that can occur when validating the token string and type.
+/// Errors produced while extracting an access token from a request header.
+///
+/// Every variant is an RFC 6750 `invalid_request` client error. The challenge
+/// includes a client-safe `error_description`; an unsupported recognized
+/// scheme also identifies the attempted scheme.
 // `#[strum(message)]` on each variant carries the client-facing RFC 6750
-// `error_description`; the doc comment is the operator-facing `Display`.
+// `error_description`; the `#[snafu(display)]` is the operator-facing `Display`.
+// The client description is a sentence; `Display` is a source-chain fragment.
 #[derive(Debug, Snafu, strum::EnumMessage)]
 #[non_exhaustive]
 pub enum TokenExtractError {
     /// The token header value is not valid UTF-8.
+    #[snafu(display("the access token header value is not valid UTF-8"))]
     #[strum(message = "The access token header value is not a valid string")]
     TokenNotString {
         /// The underlying string conversion error.
         source: ToStrError,
     },
     /// The token header is not in `<scheme> <token>` format.
+    #[snafu(display("the access token header is not in '<scheme> <token>' format"))]
     #[strum(message = "The access token header format is invalid")]
     InvalidTokenHeaderFormat,
+    /// More than one token header was present.
+    #[snafu(display("request has more than one access token header"))]
+    #[strum(message = "The request has more than one access token header")]
+    MultipleTokenHeaders,
     /// The token scheme is not supported.
     ///
     /// Currently `Bearer` and `DPoP` are supported.
+    #[snafu(display(
+        "unsupported access token scheme '{token_type}'; this resource server \
+         accepts Bearer and DPoP"
+    ))]
     #[strum(message = "The access token type is unsupported")]
     UnsupportedTokenType {
         /// The unrecognised token type scheme.
@@ -85,6 +101,14 @@ pub enum TokenExtractError {
 }
 
 impl ToRfc6750Error for TokenExtractError {
+    fn challenge(&self) -> Challenge {
+        let error = { TokenValidationError::Client(TokenErrorCode::InvalidRequest) };
+        let challenge = Challenge::new(error);
+        match self.get_message() {
+            Some(message) => challenge.with_description(message),
+            None => challenge,
+        }
+    }
     fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
             TokenExtractError::UnsupportedTokenType { token_type } => {
@@ -99,14 +123,6 @@ impl ToRfc6750Error for TokenExtractError {
             _ => None,
         }
     }
-
-    fn token_error(&self) -> TokenValidationError {
-        TokenValidationError::Client(TokenErrorCode::InvalidRequest)
-    }
-
-    fn error_description(&self) -> Option<String> {
-        self.get_message().map(str::to_string)
-    }
 }
 
 #[cfg(test)]
@@ -116,14 +132,14 @@ mod tests {
 
     use super::*;
 
-    /// Builds a `HeaderMap` carrying `value` under the `Authorization` header.
+    // Builds an `Authorization` header map.
     fn auth_headers(value: &'static str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, HeaderValue::from_static(value));
         headers
     }
 
-    /// Runs `extract_token` against the default `Authorization` header.
+    // Extracts from the default `Authorization` header.
     fn extract(
         value: &'static str,
     ) -> Result<Option<(TokenType, SecretString)>, TokenExtractError> {
@@ -173,6 +189,19 @@ mod tests {
         assert!(matches!(extract_token(&headers, &AUTHORIZATION), Ok(None)));
     }
 
+    /// Two credentials in one request must not resolve by header ordering —
+    /// the same rule `MultipleDPoPHeaders` enforces for the `DPoP` header.
+    #[test]
+    fn duplicate_token_headers_are_rejected() {
+        let mut headers = HeaderMap::new();
+        headers.append(AUTHORIZATION, HeaderValue::from_static("Bearer first"));
+        headers.append(AUTHORIZATION, HeaderValue::from_static("Bearer second"));
+        assert!(matches!(
+            extract_token(&headers, &AUTHORIZATION),
+            Err(TokenExtractError::MultipleTokenHeaders)
+        ));
+    }
+
     #[test]
     fn unsupported_scheme_is_rejected() {
         let err = extract("Basic dXNlcjpwYXNz").unwrap_err();
@@ -212,5 +241,16 @@ mod tests {
 
         // ...and the default `Authorization` header is not consulted.
         assert!(matches!(extract_token(&headers, &AUTHORIZATION), Ok(None)));
+    }
+
+    #[test]
+    fn extract_error_challenge_preserves_client_description() {
+        assert_eq!(
+            TokenExtractError::InvalidTokenHeaderFormat
+                .challenge()
+                .description
+                .as_deref(),
+            Some("The access token header format is invalid"),
+        );
     }
 }
