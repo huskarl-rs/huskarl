@@ -5,7 +5,7 @@ use serde::Serialize;
 
 use crate::{
     core::{
-        EndpointUrl, Error, ErrorKind,
+        EndpointUrl, Error, RetryAdvice,
         client_auth::ClientAuthentication,
         crypto::{
             signer::AsymmetricJwsSignerSelector,
@@ -84,6 +84,10 @@ pub struct AuthorizationCodeGrant {
     /// The builder rejects setting this without a
     /// `pushed_authorization_request_endpoint`, so when it is `true` an
     /// endpoint is guaranteed to be present.
+    /// Extra labels applied to this grant's metrics.
+    #[cfg(feature = "metrics")]
+    pub(super) metric_labels: Vec<::metrics::Label>,
+
     pub(super) require_pushed_authorization_requests: bool,
 
     /// Set to true if the provider supports the `iss` parameter in the authorization code callback (RFC 9207).
@@ -177,7 +181,7 @@ async fn resolve_jws_verifier(
     let require_platform = |platform: Option<Arc<dyn JwsVerifierPlatform>>| {
         platform.ok_or_else(|| {
             Error::new(
-                ErrorKind::Config,
+                RetryAdvice::No,
                 super::error::MissingJwsVerifierPlatformSnafu.build(),
             )
         })
@@ -237,6 +241,10 @@ impl AuthorizationCodeGrant {
     /// `oidc(true)` is set without a JWS verifier or issuer.
     #[builder(on(String, into))]
     pub async fn new(
+        /// Extra labels applied to this grant's metrics.
+        #[cfg(feature = "metrics")]
+        #[builder(default)]
+        metric_labels: Vec<::metrics::Label>,
         /// The client ID.
         client_id: String,
         /// The HTTP client used for token and PAR requests.
@@ -414,7 +422,7 @@ impl AuthorizationCodeGrant {
         if require_pushed_authorization_requests && pushed_authorization_request_endpoint.is_none()
         {
             return Err(Error::new(
-                ErrorKind::Config,
+                RetryAdvice::No,
                 super::error::RequiredParEndpointMissingSnafu.build(),
             ));
         }
@@ -425,13 +433,13 @@ impl AuthorizationCodeGrant {
         if oidc == Some(true) {
             if jws_verifier.is_none() {
                 return Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     super::error::OidcRequiresVerifierSnafu.build(),
                 ));
             }
             if issuer.is_none() {
                 return Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     super::error::OidcRequiresIssuerSnafu.build(),
                 ));
             }
@@ -442,13 +450,13 @@ impl AuthorizationCodeGrant {
         if response_mode.is_some_and(ResponseMode::is_jwt_secured) {
             if jws_verifier.is_none() {
                 return Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     super::error::JarmRequiresVerifierSnafu.build(),
                 ));
             }
             if issuer.is_none() {
                 return Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     super::error::JarmRequiresIssuerSnafu.build(),
                 ));
             }
@@ -468,6 +476,8 @@ impl AuthorizationCodeGrant {
             jar,
             authorization_endpoint,
             pushed_authorization_request_endpoint,
+            #[cfg(feature = "metrics")]
+            metric_labels,
             require_pushed_authorization_requests,
             authorization_response_iss_parameter_supported,
             code_challenge_methods_supported,

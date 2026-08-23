@@ -1,5 +1,6 @@
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use snafu::ResultExt as _;
 use subtle::ConstantTimeEq;
 
 #[cfg(all(
@@ -12,7 +13,7 @@ use subtle::ConstantTimeEq;
 use crate::grant::authorization_code::{LoopbackError, loopback};
 use crate::{
     core::{
-        EndpointUrl, Error, ErrorKind,
+        EndpointUrl, Error, RetryAdvice,
         client_auth::AuthenticationContext,
         dpop::AuthorizationServerDPoP,
         jwt::validator::{JwtValidator, ValidatedJwt},
@@ -23,10 +24,13 @@ use crate::{
         authorization_code::{
             AuthorizationCodeGrantParameters,
             error::{
-                CompleteError, IdTokenIssuerNotConfiguredSnafu, IdTokenVerifierNotConfiguredSnafu,
-                IssuerMismatchSnafu, JarmIssuerNotConfiguredSnafu, JarmMissingParameterSnafu,
+                CompleteError, ConstructingAuthorizationUrlSnafu, CreatingRequestObjectSnafu,
+                EncodingParametersSnafu, FlowError, IdTokenIssuerNotConfiguredSnafu,
+                IdTokenVerifierNotConfiguredSnafu, IssuerMismatchSnafu,
+                JarmIssuerNotConfiguredSnafu, JarmMissingParameterSnafu, JarmValidationSnafu,
                 JarmVerifierNotConfiguredSnafu, MissingIdTokenSnafu, MissingIssuerSnafu,
-                MissingJarmResponseSnafu, StateMismatchSnafu, UnexpectedJarmResponseSnafu,
+                MissingJarmResponseSnafu, PushedAuthorizationRequestSnafu, StateMismatchSnafu,
+                UnexpectedJarmResponseSnafu, ValidatingIdTokenSnafu,
             },
             grant::AuthorizationCodeGrant,
             par,
@@ -41,11 +45,6 @@ use crate::{
     },
     token::id_token::IdTokenValidator,
 };
-
-/// Wraps a completion-check failure as a protocol error.
-fn complete_error(source: super::error::CompleteError) -> Error {
-    Error::new(ErrorKind::Protocol, source)
-}
 
 /// Constant-time `state` check — one layer of CSRF protection.
 ///
@@ -63,7 +62,7 @@ fn check_state(pending_state: &PendingState, callback_state: Option<&str>) -> Re
     if matched {
         Ok(())
     } else {
-        Err(complete_error(StateMismatchSnafu.build()))
+        Err(Error::from(StateMismatchSnafu.build()))
     }
 }
 
@@ -137,13 +136,13 @@ impl AuthorizationCodeGrant {
         if is_oidc {
             if self.jws_verifier.is_none() {
                 return Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     super::error::OidcVerifierNotConfiguredSnafu.build(),
                 ));
             }
             if self.issuer.is_none() {
                 return Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     super::error::OidcIssuerNotConfiguredSnafu.build(),
                 ));
             }
@@ -181,7 +180,7 @@ impl AuthorizationCodeGrant {
         let request_object = self
             .request_object(payload.clone())
             .await
-            .map_err(|e| e.with_context("creating JAR request object"))?;
+            .context(CreatingRequestObjectSnafu)?;
 
         let (authorization_url, expires_at) = if let Some(par_url) =
             &self.pushed_authorization_request_endpoint
@@ -280,7 +279,7 @@ impl AuthorizationCodeGrant {
                 form.retain(|(name, _)| *name != "client_id");
             }
 
-            par::make_par_call(
+            Ok(par::make_par_call(
                 self.http_client.as_ref(),
                 par_url,
                 auth_params,
@@ -289,7 +288,7 @@ impl AuthorizationCodeGrant {
                 dpop_jkt,
             )
             .await
-            .map_err(|e| e.with_context("making PAR request"))
+            .context(PushedAuthorizationRequestSnafu)?)
         })?;
 
         let push_payload = par::AuthorizationPushPayload {
@@ -319,11 +318,38 @@ impl AuthorizationCodeGrant {
     /// # Errors
     ///
     /// Returns an error if the callback was an OAuth error response
-    /// ([`OAuthError`](super::CompleteError::OAuthError)), the token request
+    /// (the server's [`verdict`](crate::core::Error::verdict)), the token request
     /// failed, a check failed against the callback parameters, a received ID
     /// token could not be validated, or an OIDC flow's token response carried
-    /// no ID token ([`MissingIdToken`](super::CompleteError::MissingIdToken)).
+    /// no ID token.
     pub async fn complete(
+        &self,
+        pending_state: &PendingState,
+        complete_input: CompleteInput,
+    ) -> Result<CompleteOutput, Error> {
+        let result = self.complete_inner(pending_state, complete_input).await;
+        self.observe_completion(&result);
+        result
+    }
+
+    /// Records the completion's metrics outcome.
+    #[allow(unused_variables)]
+    #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_self))]
+    fn observe_completion(&self, result: &Result<CompleteOutput, Error>) {
+        #[cfg(feature = "metrics")]
+        {
+            use crate::grant::GrantOutcome;
+            let outcome = match result {
+                Ok(_) => GrantOutcome::Success,
+                Err(err) => super::error::completion_outcome(err),
+            };
+            let mut labels = self.metric_labels.clone();
+            labels.push(::metrics::Label::new("outcome", outcome.as_str()));
+            ::metrics::counter!("huskarl.grant.complete", labels).increment(1);
+        }
+    }
+
+    async fn complete_inner(
         &self,
         pending_state: &PendingState,
         complete_input: CompleteInput,
@@ -349,13 +375,12 @@ impl AuthorizationCodeGrant {
             } => {
                 check_state(pending_state, state.as_deref())?;
 
-                let (oauth_code, oauth_description) = (error.clone(), error_description.clone());
-                return Err(complete_error(CompleteError::OAuthError {
-                    error,
-                    error_description,
-                    error_uri,
-                })
-                .with_oauth_error(oauth_code, oauth_description));
+                // Convert the wire fields into the verdict carried by `Error`.
+                return Err(Error::from(CompleteError::OAuthError {
+                    verdict: crate::core::OAuthError::new(error)
+                        .with_description(error_description)
+                        .with_uri(error_uri),
+                }));
             }
         };
 
@@ -367,7 +392,7 @@ impl AuthorizationCodeGrant {
                 // The issuer is public, not a secret, so a constant-time
                 // comparison is not required here (unlike `state` above).
                 if issuer.as_bytes() != config_issuer.as_bytes() {
-                    return Err(complete_error(
+                    return Err(Error::from(
                         IssuerMismatchSnafu {
                             original: config_issuer,
                             callback: issuer,
@@ -377,21 +402,15 @@ impl AuthorizationCodeGrant {
                 }
             } else {
                 // Server claimed to support RFC 9207 but no issuer received.
-                return Err(complete_error(MissingIssuerSnafu.build()));
+                return Err(Error::from(MissingIssuerSnafu.build()));
             }
         }
 
-        // The grant's DPoP key must match the key bound at authorization time
-        // (its thumbprint is the persisted `dpop_jkt`) — catches a wrong session
-        // key bound via `with_session_dpop_key` after the key round-tripped
-        // through the caller's session store, before the code is spent.
+        // Reject a different session key before spending the authorization code.
         if pending_state.dpop_jkt.is_some()
             && self.dpop.get_current_thumbprint().await != pending_state.dpop_jkt
         {
-            return Err(Error::from(ErrorKind::DPoP).with_context(
-                "the grant's DPoP key does not match the key bound at authorization time \
-                 (dpop_jkt); bind the same session key used at start",
-            ));
+            return Err(FlowError::DPoPKeyMismatch.into());
         }
 
         let token = self
@@ -406,9 +425,7 @@ impl AuthorizationCodeGrant {
         self.finalize_id_token(pending_state, token).await
     }
 
-    /// Validates the token response's ID token when present, or enforces the
-    /// OIDC "ID token required" rule when it is absent, folding either outcome
-    /// into a [`CompleteOutput`].
+    /// Validates a returned ID token and enforces the OIDC requirement for one.
     async fn finalize_id_token(
         &self,
         pending_state: &PendingState,
@@ -418,12 +435,12 @@ impl AuthorizationCodeGrant {
             let verifier = self
                 .jws_verifier
                 .as_ref()
-                .ok_or_else(|| complete_error(IdTokenVerifierNotConfiguredSnafu.build()))?
+                .ok_or_else(|| Error::from(IdTokenVerifierNotConfiguredSnafu.build()))?
                 .clone();
             let issuer = self
                 .issuer
                 .as_deref()
-                .ok_or_else(|| complete_error(IdTokenIssuerNotConfiguredSnafu.build()))?
+                .ok_or_else(|| Error::from(IdTokenIssuerNotConfiguredSnafu.build()))?
                 .to_owned();
 
             let validator = IdTokenValidator::builder()
@@ -436,9 +453,7 @@ impl AuthorizationCodeGrant {
             let verified_token = validator
                 .validate(id_token, pending_state.nonce.as_deref())
                 .await
-                .map_err(|e| {
-                    Error::new(ErrorKind::Protocol, e).with_context("validating ID token")
-                })?;
+                .context(ValidatingIdTokenSnafu)?;
 
             Ok(CompleteOutput {
                 token_response: token,
@@ -458,7 +473,7 @@ impl AuthorizationCodeGrant {
                     .as_deref()
                     .is_some_and(|granted| granted.split(' ').all(|s| s != "openid"));
             if expected && !narrowed {
-                return Err(complete_error(MissingIdTokenSnafu.build()));
+                return Err(Error::from(MissingIdTokenSnafu.build()));
             }
             Ok(CompleteOutput {
                 token_response: token,
@@ -488,11 +503,9 @@ impl AuthorizationCodeGrant {
             (CallbackPayload::Jarm { response }, true) => self.validate_jarm(&response).await,
             (CallbackPayload::Plain(response), false) => Ok(response),
             (CallbackPayload::Jarm { .. }, false) => {
-                Err(complete_error(UnexpectedJarmResponseSnafu.build()))
+                Err(Error::from(UnexpectedJarmResponseSnafu.build()))
             }
-            (CallbackPayload::Plain(_), true) => {
-                Err(complete_error(MissingJarmResponseSnafu.build()))
-            }
+            (CallbackPayload::Plain(_), true) => Err(Error::from(MissingJarmResponseSnafu.build())),
         }
     }
 
@@ -512,11 +525,11 @@ impl AuthorizationCodeGrant {
         let verifier = self
             .jws_verifier
             .clone()
-            .ok_or_else(|| complete_error(JarmVerifierNotConfiguredSnafu.build()))?;
+            .ok_or_else(|| Error::from(JarmVerifierNotConfiguredSnafu.build()))?;
         let issuer = self
             .issuer
             .as_deref()
-            .ok_or_else(|| complete_error(JarmIssuerNotConfiguredSnafu.build()))?;
+            .ok_or_else(|| Error::from(JarmIssuerNotConfiguredSnafu.build()))?;
 
         let validator = JwtValidator::builder()
             .verifier(verifier)
@@ -529,7 +542,7 @@ impl AuthorizationCodeGrant {
         let validated: ValidatedJwt<JarmClaims> = validator
             .validate(response)
             .await
-            .map_err(|source| complete_error(CompleteError::JarmValidation { source }))?;
+            .context(JarmValidationSnafu)?;
 
         let claims = validated.claims;
         if let Some(error) = claims.error {
@@ -541,7 +554,7 @@ impl AuthorizationCodeGrant {
             });
         }
         let param = |value: Option<String>, param: &'static str| {
-            value.ok_or_else(|| complete_error(JarmMissingParameterSnafu { param }.build()))
+            value.ok_or_else(|| Error::from(JarmMissingParameterSnafu { param }.build()))
         };
         Ok(AuthorizationResponse::Success {
             code: param(claims.code, "code")?,
@@ -592,9 +605,7 @@ fn build_authorization_payload<'a>(
 }
 
 fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Result<Uri, Error> {
-    let query = crate::core::oauth_form::to_string(&payload).map_err(|e| {
-        Error::new(ErrorKind::Config, e).with_context("encoding authorization request parameters")
-    })?;
+    let query = crate::core::oauth_form::to_string(&payload).context(EncodingParametersSnafu)?;
     let separator = if endpoint.as_uri().query().is_some() {
         '&'
     } else {
@@ -605,11 +616,9 @@ fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Resul
     // well-formed — but `http::Uri` caps the total URI length at u16::MAX,
     // which large parameters (notably `id_token_hint`, an entire JWT) can
     // exceed. PAR is the spec-blessed delivery for oversized requests.
-    uri_string.parse().map_err(|e: http::uri::InvalidUri| {
-        Error::new(ErrorKind::Config, e).with_context(
-            "constructing authorization URL (oversized requests should be delivered via PAR)",
-        )
-    })
+    Ok(uri_string
+        .parse::<Uri>()
+        .context(ConstructingAuthorizationUrlSnafu)?)
 }
 
 #[cfg(test)]
@@ -628,9 +637,31 @@ mod tests {
             platform::MaybeSendBoxFuture,
             server_metadata::AuthorizationServerMetadata,
         },
-        grant::authorization_code::types::{CompleteInput, ResponseMode, StartInput},
+        grant::authorization_code::{
+            error::{BuildError, StartError},
+            types::{CompleteInput, ResponseMode, StartInput},
+        },
         token::AccessToken,
     };
+
+    // Inspect typed causes without depending on display text.
+    fn build_cause(err: &Error) -> &BuildError {
+        err.cause()
+            .downcast_ref()
+            .unwrap_or_else(|| panic!("expected a BuildError cause, got {err:?}"))
+    }
+
+    fn start_cause(err: &Error) -> &StartError {
+        err.cause()
+            .downcast_ref()
+            .unwrap_or_else(|| panic!("expected a StartError cause, got {err:?}"))
+    }
+
+    fn complete_cause(err: &Error) -> &CompleteError {
+        err.cause()
+            .downcast_ref()
+            .unwrap_or_else(|| panic!("expected a CompleteError cause, got {err:?}"))
+    }
 
     /// `start()` with direct delivery performs no HTTP; this client asserts that.
     struct NoHttp;
@@ -854,8 +885,7 @@ mod tests {
             )
             .await;
 
-        let err = result.expect_err("mismatched DPoP key must be rejected");
-        assert_eq!(err.kind(), ErrorKind::DPoP);
+        let _err = result.expect_err("mismatched DPoP key must be rejected");
         let seen = http.seen.lock().unwrap();
         assert!(
             !seen.iter().any(|(p, _)| p.ends_with("/token")),
@@ -961,10 +991,9 @@ mod tests {
             .build()
             .await;
 
-        let err = result
+        let _err = result
             .err()
             .expect("build must fail without a PAR endpoint");
-        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
     }
 
     /// Control: the same requirement with an endpoint configured builds fine.
@@ -1095,9 +1124,8 @@ mod tests {
         let err = result
             .err()
             .expect("oidc(true) with no key source (no jwks_uri, no factory) must not build");
-        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
         assert!(
-            format!("{err:?}").contains("OidcRequiresVerifier"),
+            matches!(build_cause(&err), BuildError::OidcRequiresVerifier),
             "got {err:?}"
         );
     }
@@ -1120,9 +1148,8 @@ mod tests {
         let err = result
             .err()
             .expect("oidc(true) without an issuer must not build");
-        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
         assert!(
-            format!("{err:?}").contains("OidcRequiresIssuer"),
+            matches!(build_cause(&err), BuildError::OidcRequiresIssuer),
             "got {err:?}"
         );
     }
@@ -1282,9 +1309,8 @@ mod tests {
             .start(StartInput::scope(bon::vec!["openid"]))
             .await
             .expect_err("openid scope without a JWS verifier must not start");
-        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
         assert!(
-            format!("{err:?}").contains("OidcVerifierNotConfigured"),
+            matches!(start_cause(&err), StartError::OidcVerifierNotConfigured),
             "got {err:?}"
         );
     }
@@ -1308,9 +1334,8 @@ mod tests {
             .start(StartInput::scope(bon::vec!["openid"]))
             .await
             .expect_err("openid scope without an issuer must not start");
-        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
         assert!(
-            format!("{err:?}").contains("OidcIssuerNotConfigured"),
+            matches!(start_cause(&err), StartError::OidcIssuerNotConfigured),
             "got {err:?}"
         );
     }
@@ -1519,7 +1544,7 @@ mod tests {
             )
             .await;
         assert!(
-            matches!(result, Err(ref err) if err.kind() == ErrorKind::Config),
+            matches!(result, Err(ref err) if err.retry_advice() == RetryAdvice::No),
             "oversized authorization URL should fail with a Config error"
         );
     }
@@ -1629,8 +1654,10 @@ mod tests {
 
         if expect_error {
             let err = result.expect_err("missing ID token must be rejected");
-            assert_eq!(err.kind(), crate::core::ErrorKind::Protocol, "got {err:?}");
-            assert!(format!("{err:?}").contains("MissingIdToken"), "got {err:?}");
+            assert!(
+                matches!(complete_cause(&err), CompleteError::MissingIdToken),
+                "got {err:?}"
+            );
         } else {
             let output = result.expect("completion must succeed");
             assert!(output.id_token.is_none());
@@ -1651,16 +1678,22 @@ mod tests {
             .complete(&pending(false), input)
             .await
             .expect_err("an error payload must not complete");
-        assert_eq!(err.kind(), crate::core::ErrorKind::Protocol, "got {err:?}");
-        assert_eq!(err.oauth_error_code(), Some("access_denied"));
-        assert_eq!(err.oauth_error_description(), Some("user denied"));
+        // The server judged the request and said no; it did not misbehave.
+        assert_eq!(
+            err.verdict().map(|v| v.code().as_str()),
+            Some("access_denied")
+        );
+        assert_eq!(
+            err.verdict()
+                .and_then(huskarl_core::OAuthError::description),
+            Some("user denied")
+        );
 
-        let source: &CompleteError = std::error::Error::source(&err)
-            .and_then(|s| s.downcast_ref())
-            .expect("source is a CompleteError");
+        // The typed cause retains endpoint-specific context.
+        let source: &CompleteError = err.cause().downcast_ref().expect("carries a CompleteError");
         assert!(
-            matches!(source, CompleteError::OAuthError { error_uri, .. }
-                if error_uri.as_deref() == Some("https://as.example.com/doc")),
+            matches!(source, CompleteError::OAuthError { verdict }
+                if verdict.uri() == Some("https://as.example.com/doc")),
             "got {source:?}"
         );
     }
@@ -1672,18 +1705,20 @@ mod tests {
     #[case::absent_state("error=access_denied")]
     #[tokio::test]
     async fn unsolicited_error_payload_is_rejected_as_state_mismatch(#[case] callback: &str) {
-        use std::error::Error as _;
-
         let grant = completing_grant(None, r#"{"access_token":"t","token_type":"bearer"}"#).await;
 
         let err = grant
             .complete(&pending(false), callback.parse().unwrap())
             .await
             .expect_err("an unbound error payload must not complete");
-        assert_eq!(err.oauth_error_code(), None, "got {err:?}");
+        assert_eq!(
+            err.verdict().map(|v| v.code().as_str()),
+            None,
+            "got {err:?}"
+        );
         assert!(
             matches!(
-                err.source().and_then(<dyn std::error::Error>::downcast_ref),
+                err.cause().downcast_ref(),
                 Some(CompleteError::StateMismatch)
             ),
             "got {err:?}"
@@ -1788,7 +1823,10 @@ mod tests {
             .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM error response must not complete");
-        assert_eq!(err.oauth_error_code(), Some("access_denied"));
+        assert_eq!(
+            err.verdict().map(|v| v.code().as_str()),
+            Some("access_denied")
+        );
     }
 
     /// The state check runs on the folded JARM parameters.
@@ -1808,7 +1846,10 @@ mod tests {
             .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM state mismatch must be rejected");
-        assert!(format!("{err:?}").contains("StateMismatch"), "got {err:?}");
+        assert!(
+            matches!(complete_cause(&err), CompleteError::StateMismatch),
+            "got {err:?}"
+        );
     }
 
     /// The state check binds a JARM error to the flow too: one that omits
@@ -1829,8 +1870,15 @@ mod tests {
             .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM error without state must be rejected");
-        assert_eq!(err.oauth_error_code(), None, "got {err:?}");
-        assert!(format!("{err:?}").contains("StateMismatch"), "got {err:?}");
+        assert_eq!(
+            err.verdict().map(|v| v.code().as_str()),
+            None,
+            "got {err:?}"
+        );
+        assert!(
+            matches!(complete_cause(&err), CompleteError::StateMismatch),
+            "got {err:?}"
+        );
     }
 
     /// Requesting JARM and receiving plain parameters — including a forged
@@ -1848,7 +1896,7 @@ mod tests {
             .await
             .expect_err("plain parameters must not satisfy a JARM flow");
         assert!(
-            format!("{err:?}").contains("MissingJarmResponse"),
+            matches!(complete_cause(&err), CompleteError::MissingJarmResponse),
             "got {err:?}"
         );
     }
@@ -1870,7 +1918,7 @@ mod tests {
             .await
             .expect_err("an unrequested JARM response must be rejected");
         assert!(
-            format!("{err:?}").contains("UnexpectedJarmResponse"),
+            matches!(complete_cause(&err), CompleteError::UnexpectedJarmResponse),
             "got {err:?}"
         );
     }
@@ -1892,7 +1940,10 @@ mod tests {
             .complete(&pending_jarm(), input)
             .await
             .expect_err("a JARM response for another client must be rejected");
-        assert!(format!("{err:?}").contains("JarmValidation"), "got {err:?}");
+        assert!(
+            matches!(complete_cause(&err), CompleteError::JarmValidation { .. }),
+            "got {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -1913,18 +1964,21 @@ mod tests {
             .complete(&pending_jarm(), input)
             .await
             .expect_err("an ES256 JARM response must be rejected by a PS256 allowlist");
-        assert!(format!("{err:?}").contains("JarmValidation"), "got {err:?}");
+        assert!(
+            matches!(complete_cause(&err), CompleteError::JarmValidation { .. }),
+            "got {err:?}"
+        );
     }
 
     /// A JWT-secured response mode without the means to validate JARM
     /// responses fails at build time, mirroring the `oidc(true)` checks.
     #[rstest::rstest]
-    #[case::no_verifier(false, "JarmRequiresVerifier")]
-    #[case::no_issuer(true, "JarmRequiresIssuer")]
+    #[case::no_verifier(false, (|e| matches!(e, BuildError::JarmRequiresVerifier)) as fn(&BuildError) -> bool)]
+    #[case::no_issuer(true, (|e| matches!(e, BuildError::JarmRequiresIssuer)) as fn(&BuildError) -> bool)]
     #[tokio::test]
     async fn jarm_mode_requires_validation_config(
         #[case] with_verifier: bool,
-        #[case] expected: &str,
+        #[case] expected: fn(&BuildError) -> bool,
     ) {
         let builder = AuthorizationCodeGrant::builder()
             .client_id("client")
@@ -1946,8 +2000,7 @@ mod tests {
         let err = result
             .err()
             .expect("jarm mode without config must not build");
-        assert_eq!(err.kind(), crate::core::ErrorKind::Config, "got {err:?}");
-        assert!(format!("{err:?}").contains(expected), "got {err:?}");
+        assert!(expected(build_cause(&err)), "got {err:?}");
     }
 
     #[tokio::test]
