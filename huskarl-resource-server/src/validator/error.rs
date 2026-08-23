@@ -166,8 +166,8 @@ impl ToRfc6750Error for ValidateHeadersError {
         }
     }
 
-    fn validation_outcome(&self) -> ValidationOutcome {
-        match self.challenge().error {
+    fn validation_outcome(&self, challenge: &Challenge) -> ValidationOutcome {
+        match challenge.error {
             // Metrics must agree with the wire: a 5xx (e.g. replay store or
             // nonce checker down) is our failure, whichever check tripped it,
             // and a nonce challenge is routine churn, not a binding failure.
@@ -237,15 +237,17 @@ mod tests {
         assert_eq!(wrapped.attempted_scheme(), Some(TokenType::DPoP));
 
         // And which stage failed is the wrapper's to report.
+        let challenge = wrapped.challenge();
         assert_eq!(
-            wrapped.validation_outcome(),
+            wrapped.validation_outcome(&challenge),
             ValidationOutcome::InvalidToken
         );
+        let extract = ValidateHeadersError::Extract {
+            source: TokenExtractError::InvalidTokenHeaderFormat,
+        };
+        let challenge = extract.challenge();
         assert_eq!(
-            ValidateHeadersError::Extract {
-                source: TokenExtractError::InvalidTokenHeaderFormat,
-            }
-            .validation_outcome(),
+            extract.validation_outcome(&challenge),
             ValidationOutcome::ExtractError,
         );
     }

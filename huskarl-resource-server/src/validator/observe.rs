@@ -210,11 +210,14 @@ impl<V: AccessTokenValidator> AccessTokenValidator for ObservedValidator<V> {
                     error: None,
                     iss: None,
                 },
-                Err(e) => ValidationEvent {
-                    outcome: e.validation_outcome(),
-                    error: Some(e),
-                    iss: e.issuer(),
-                },
+                Err(e) => {
+                    let challenge = e.challenge();
+                    ValidationEvent {
+                        outcome: e.validation_outcome(&challenge),
+                        error: Some(e),
+                        iss: e.issuer(),
+                    }
+                }
             };
             self.on_validate.on_validate(&event);
 
@@ -394,7 +397,8 @@ mod tests {
         #[case] error: ValidateHeadersError,
         #[case] expected: ValidationOutcome,
     ) {
-        assert_eq!(error.validation_outcome(), expected);
+        let challenge = error.challenge();
+        assert_eq!(error.validation_outcome(&challenge), expected);
     }
 
     #[test]
@@ -403,7 +407,11 @@ mod tests {
             token_type: crate::TokenType::Bearer,
             source: crate::introspection::IntrospectionCallError::TokenInactive,
         };
-        assert_eq!(error.validation_outcome(), ValidationOutcome::InvalidToken);
+        let challenge = error.challenge();
+        assert_eq!(
+            error.validation_outcome(&challenge),
+            ValidationOutcome::InvalidToken
+        );
     }
 
     /// Multi-issuer failures classify through the boxed inner error and carry
@@ -429,7 +437,8 @@ mod tests {
         #[case] expected: ValidationOutcome,
         #[case] expected_iss: Option<&str>,
     ) {
-        assert_eq!(error.validation_outcome(), expected);
+        let challenge = error.challenge();
+        assert_eq!(error.validation_outcome(&challenge), expected);
         assert_eq!(error.issuer(), expected_iss);
     }
 

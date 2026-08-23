@@ -41,7 +41,7 @@
 //! `use_dpop_nonce` retry on a later request.
 
 use crate::{
-    error::ToRfc6750Error,
+    error::{Challenge, ToRfc6750Error},
     validator::{ValidationResult, metadata::ValidatorMetadata},
 };
 
@@ -136,11 +136,28 @@ impl ValidatorMetadata {
     #[must_use]
     pub fn rejection(&self, error: &dyn ToRfc6750Error, scope: Option<&str>) -> Rejection {
         let challenge = error.challenge();
+        self.rejection_from(error, &challenge, scope)
+    }
+
+    /// Builds a [`Rejection`] using an already-built challenge.
+    ///
+    /// This is the borrowed counterpart to [`Self::rejection`]. Use it when
+    /// the same challenge also supplies observation metadata through
+    /// [`ToRfc6750Error::validation_outcome`], avoiding reconstruction of its
+    /// owned description, parameters, and scope. `challenge` must be the value
+    /// returned by `error`.
+    #[must_use]
+    pub fn rejection_from(
+        &self,
+        error: &dyn ToRfc6750Error,
+        challenge: &Challenge,
+        scope: Option<&str>,
+    ) -> Rejection {
         Rejection {
             status: challenge.error.suggested_status(),
             www_authenticate: self.challenges_from(
                 error.attempted_scheme(),
-                Some(&challenge),
+                Some(challenge),
                 scope,
                 None,
             ),
@@ -200,8 +217,8 @@ mod tests {
     use super::*;
     use crate::{
         TokenType,
-        error::{Challenge, InsufficientScope, ServerStatus, TokenErrorCode, TokenValidationError},
-        validator::ValidatedRequest,
+        error::{InsufficientScope, ServerStatus, TokenErrorCode, TokenValidationError},
+        validator::{ValidatedRequest, observe::ValidationOutcome},
     };
 
     /// A configurable [`ToRfc6750Error`] test double.
@@ -369,6 +386,45 @@ mod tests {
 
         assert_eq!(error.0.load(Ordering::Relaxed), 1);
         assert_eq!(rejection.status, http::StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            rejection.www_authenticate,
+            vec![r#"Bearer realm="api", error="invalid_token", error_description="bad token""#],
+        );
+    }
+
+    #[test]
+    fn one_challenge_supplies_status_observation_and_headers() {
+        #[derive(Debug)]
+        struct CountingError(AtomicUsize);
+
+        impl std::fmt::Display for CountingError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("counting error")
+            }
+        }
+
+        impl std::error::Error for CountingError {}
+
+        impl ToRfc6750Error for CountingError {
+            fn attempted_scheme(&self) -> Option<TokenType> {
+                Some(TokenType::Bearer)
+            }
+
+            fn challenge(&self) -> Challenge {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Challenge::new(TokenValidationError::Client(TokenErrorCode::InvalidToken))
+                    .with_description("bad token")
+            }
+        }
+
+        let error = CountingError(AtomicUsize::new(0));
+        let challenge = error.challenge();
+        let outcome = error.validation_outcome(&challenge);
+        let rejection = meta().rejection_from(&error, &challenge, None);
+
+        assert_eq!(error.0.load(Ordering::Relaxed), 1);
+        assert_eq!(rejection.status, http::StatusCode::UNAUTHORIZED);
+        assert_eq!(outcome, ValidationOutcome::InvalidToken);
         assert_eq!(
             rejection.www_authenticate,
             vec![r#"Bearer realm="api", error="invalid_token", error_description="bad token""#],
