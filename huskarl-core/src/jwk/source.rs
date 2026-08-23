@@ -62,7 +62,7 @@ pub enum JwksStartup {
     /// To instead come up **warm** from a trusted local cache — verifying
     /// immediately while offline — build the verifier with a factory that falls
     /// back to that cache; see
-    /// [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier).
+    /// [`ScheduledRefreshVerifier`].
     SeedEmpty,
 }
 

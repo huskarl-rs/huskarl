@@ -40,8 +40,8 @@ and explanation in a `_docs` module:
   OIDC discovery documents.
 - **Wire encoding** — [`oauth_form`] serializes OAuth messages as
   `application/x-www-form-urlencoded`, including structured RFC 9396 values.
-- **Errors** — the flows return the one concrete [`Error`]/[`ErrorKind`],
-  which embeds cleanly in your own error type. A few subsystems return their
+- **Errors** — flows return one concrete [`Error`] with a programmatic
+  classification, which embeds cleanly in your own error type. A few subsystems return their
   own typed errors where the variants *are* the API — JWT validation
   ([`JwtValidationError`](jwt::validator::JwtValidationError)), low-level
   verification ([`crypto::verifier`]), and wire encoding
@@ -91,6 +91,7 @@ pub mod error;
 pub mod http;
 pub mod jwk;
 pub mod jwt;
+pub mod oauth_error;
 pub mod oauth_form;
 pub mod platform;
 pub mod prelude;
@@ -101,4 +102,5 @@ pub mod server_metadata;
 
 pub use authorization_details::AuthorizationDetail;
 pub use endpoint_url::EndpointUrl;
-pub use error::{Error, ErrorKind};
+pub use error::{Chain, Error, ErrorKind, RetryAdvice};
+pub use oauth_error::{OAuthError, OAuthErrorCode, UnknownCode};
