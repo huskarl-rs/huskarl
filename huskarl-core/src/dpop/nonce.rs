@@ -11,12 +11,24 @@
 use std::sync::Arc;
 
 use bon::Builder;
+use snafu::{ResultExt as _, Snafu};
 
 use crate::{
     crypto::seal::AeadSealerUnsealer,
-    error::{Error, ErrorKind},
-    platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime},
+    error::Error,
+    platform::{Duration, MaybeSendBoxFuture, MaybeSendSync, SystemTime, SystemTimeError},
 };
+
+/// The system clock reads before the Unix epoch, so no issue time can be
+/// encoded.
+///
+/// This supplies domain-specific context missing from [`SystemTimeError`].
+#[derive(Debug, Snafu)]
+#[snafu(display("the system clock is before the Unix epoch"))]
+pub(crate) struct ClockBeforeEpochError {
+    /// The underlying error.
+    source: SystemTimeError,
+}
 
 /// The outcome of a `DPoP` nonce check.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,7 +130,7 @@ impl SealedTimestampNonce {
         use base64::prelude::*;
         let current_time = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
-            .map_err(|e| Error::new(ErrorKind::DPoP, e))?
+            .context(ClockBeforeEpochSnafu)?
             .as_secs()
             .to_be_bytes();
         // `seal` freezes one key snapshot per nonce, even under rotation. The
@@ -166,6 +178,20 @@ impl DPoPNonceChecker for SealedTimestampNonce {
                 _ => Ok(NonceCheck::Invalid(self.generate_nonce().await?)),
             }
         })
+    }
+}
+
+// This single-shape cause always establishes a terminal classification.
+impl crate::error::propagation::Cause for ClockBeforeEpochError {
+    fn origin(&self) -> crate::error::propagation::Origin<'_> {
+        crate::error::propagation::Origin::Establishes(crate::error::RetryAdvice::No.into())
+    }
+}
+
+impl From<ClockBeforeEpochError> for Error {
+    #[track_caller]
+    fn from(source: ClockBeforeEpochError) -> Self {
+        Self::from_cause(source)
     }
 }
 

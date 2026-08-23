@@ -41,11 +41,11 @@ pub trait JwsSignerSelector: std::fmt::Debug + MaybeSendSync {
 ///
 /// # Implementing
 ///
-/// Write the `sign` body as `Box::pin(async move { ... })`. Signing failures
-/// classify as [`ErrorKind::Crypto`](crate::error::ErrorKind::Crypto);
-/// transient failures of a remote keystore (KMS, HSM) as
-/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport) with
-/// `retryable: true`.
+/// Write the `sign` body as `Box::pin(async move { ... })`. A signing failure
+/// carries [`RetryAdvice::No`](crate::error::RetryAdvice::No) — the same input
+/// signs the same way next time — while a transient failure of a remote keystore
+/// (KMS, HSM) carries
+/// [`RetryAdvice::Retry`](crate::error::RetryAdvice::Retry).
 pub trait JwsSigner: std::fmt::Debug + MaybeSendSync {
     /// Returns the JWS algorithm for this signer.
     ///

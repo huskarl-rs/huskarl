@@ -1279,6 +1279,7 @@ dependencies = [
  "http",
  "httpdate",
  "httpmock",
+ "huskarl-macros",
  "metrics",
  "rand 0.10.2",
  "rstest",

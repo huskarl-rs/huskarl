@@ -21,11 +21,49 @@ pub use source::{JwksSource, JwksStartup};
 use zeroize::Zeroize;
 
 use crate::{
-    error::{Error, ErrorKind},
+    error::Error,
     jwk::serde_utils::{
         base64url, base64url_uint, option_base64url, option_base64url_uint, trim_leading_zeros,
     },
 };
+
+/// The cause of a JWK handling failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum JwkError {
+    /// A symmetric key was supplied where an asymmetric one is required.
+    #[snafu(display("expected an asymmetric private JWK, got a symmetric (oct) key"))]
+    #[classify(no)]
+    ExpectedAsymmetric,
+    /// An asymmetric key was supplied where a symmetric one is required.
+    #[snafu(display("expected a symmetric (oct) JWK, got an asymmetric private key"))]
+    #[classify(no)]
+    ExpectedSymmetric,
+    /// The JWK JSON did not parse.
+    #[snafu(display("parsing JWK JSON"))]
+    #[classify(no)]
+    ParsingJson {
+        /// The underlying error.
+        source: serde_json::Error,
+    },
+    /// The JWK parsed but carries no private key material.
+    #[snafu(display("JWK JSON contains no secret key material"))]
+    #[classify(no)]
+    NoSecretKeyMaterial,
+    /// A JWKS exceeded the configured key limit.
+    #[snafu(display("JWKS contains {count} keys, exceeding the limit of {max}"))]
+    #[classify(no)]
+    TooManyKeys {
+        /// How many keys the JWKS carried.
+        count: usize,
+        /// The configured ceiling.
+        max: usize,
+    },
+    /// The platform has no verifier for any key type.
+    #[snafu(display("this platform supports no keys"))]
+    #[classify(no)]
+    NoSupportedKeys,
+}
 
 mod decode;
 mod key;
@@ -314,8 +352,7 @@ impl TryFrom<PrivateJwk> for AsymmetricPrivateJwk {
     fn try_from(value: PrivateJwk) -> Result<Self, Self::Error> {
         match value {
             PrivateJwk::Asymmetric(jwk) => Ok(*jwk),
-            PrivateJwk::Symmetric(_) => Err(Error::from(ErrorKind::Config)
-                .with_context("expected an asymmetric private JWK, got a symmetric (oct) key")),
+            PrivateJwk::Symmetric(_) => Err(JwkError::ExpectedAsymmetric.into()),
         }
     }
 }
@@ -326,8 +363,7 @@ impl TryFrom<PrivateJwk> for SymmetricJwk {
     fn try_from(value: PrivateJwk) -> Result<Self, Self::Error> {
         match value {
             PrivateJwk::Symmetric(jwk) => Ok(jwk),
-            PrivateJwk::Asymmetric(_) => Err(Error::from(ErrorKind::Config)
-                .with_context("expected a symmetric (oct) JWK, got an asymmetric private key")),
+            PrivateJwk::Asymmetric(_) => Err(JwkError::ExpectedSymmetric.into()),
         }
     }
 }

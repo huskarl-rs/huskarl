@@ -210,9 +210,10 @@ mod tests {
                         identity: None,
                     })
                 } else {
-                    Err(Error::from(crate::error::ErrorKind::Transport {
-                        retryable: true,
-                    }))
+                    Err(Error::new(
+                        crate::error::RetryAdvice::RETRY,
+                        "upstream failure",
+                    ))
                 }
             })
         }
@@ -236,7 +237,10 @@ mod tests {
         // The entry is expired and the source now fails: the error propagates
         // rather than serving the stale "initial" value.
         let err = cached.get_secret_value().await.unwrap_err();
-        assert!(err.is_retryable());
+        assert!(matches!(
+            err.retry_advice(),
+            crate::error::RetryAdvice::Retry { .. }
+        ));
         // And the next access retries the source again rather than caching
         // the failure.
         cached.get_secret_value().await.unwrap_err();

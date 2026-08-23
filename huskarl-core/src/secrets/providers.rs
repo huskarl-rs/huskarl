@@ -1,12 +1,67 @@
 use std::ffi::OsString;
 
+use snafu::ResultExt as _;
+
 use crate::{
-    error::{Error, ErrorKind},
+    error::Error,
     platform::{MaybeSendBoxFuture, MaybeSendSync},
     secrets::{
         Secret, SecretBytes, SecretMap, SecretOutput, SecretString, encodings::StringEncoding,
     },
 };
+
+/// The cause of a secret-provider failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[cfg_attr(test, derive(strum::EnumCount))]
+#[non_exhaustive]
+pub(crate) enum ProviderError {
+    /// The environment variable is unset or not readable.
+    #[snafu(display("reading environment variable {name}"))]
+    #[classify(no)]
+    ReadingEnvVar {
+        /// The variable, lossily rendered.
+        name: String,
+        /// The underlying error.
+        source: std::env::VarError,
+    },
+    /// The environment variable's value could not be mapped.
+    #[snafu(display("decoding environment variable {name}"))]
+    DecodingEnvVar {
+        /// The variable, lossily rendered.
+        name: String,
+        /// The underlying error.
+        source: Error,
+    },
+    /// The secret file could not be read.
+    #[cfg(feature = "fs")]
+    #[snafu(display("reading secret file {path}"))]
+    #[classify(with = ProviderError::reading_a_file)]
+    ReadingSecretFile {
+        /// The file that could not be read.
+        path: String,
+        /// The underlying error.
+        source: std::io::Error,
+    },
+}
+
+impl ProviderError {
+    // Classify only transient I/O conditions as retryable.
+    #[cfg(feature = "fs")]
+    fn reading_a_file(
+        _path: &String,
+        io: &std::io::Error,
+    ) -> crate::error::propagation::Origin<'static> {
+        use crate::error::propagation::Origin;
+
+        let advice = match io.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                crate::error::RetryAdvice::RETRY
+            }
+            _ => crate::error::RetryAdvice::No,
+        };
+        Origin::Establishes(advice.into())
+    }
+}
 
 /// Retrieves secrets from environment variables with a configurable mapping.
 ///
@@ -30,27 +85,21 @@ impl<O> EnvVarSecret<O> {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the environment variable doesn't
-    /// exist, or if the value cannot be mapped.
+    /// Returns a non-retryable error if the variable does not exist or its value
+    /// cannot be mapped.
     pub fn new<M: SecretMap<In = SecretBytes, Out = O>>(
         var_name: impl Into<OsString>,
         encoding: &M,
     ) -> Result<Self, Error> {
         let var_name = var_name.into();
 
-        let encoded_value = std::env::var(&var_name).map_err(|source| {
-            Error::new(ErrorKind::Config, source).with_context(format!(
-                "reading environment variable {}",
-                var_name.to_string_lossy()
-            ))
+        let encoded_value = std::env::var(&var_name).with_context(|_| ReadingEnvVarSnafu {
+            name: var_name.to_string_lossy().into_owned(),
         })?;
         let value = encoding
             .apply(SecretBytes::new(encoded_value.into_bytes()))
-            .map_err(|err| {
-                err.with_context(format!(
-                    "decoding environment variable {}",
-                    var_name.to_string_lossy()
-                ))
+            .with_context(|_| DecodingEnvVarSnafu {
+                name: var_name.to_string_lossy().into_owned(),
             })?;
 
         Ok(Self { value })
@@ -62,8 +111,8 @@ impl EnvVarSecret<SecretString> {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the environment variable doesn't
-    /// exist, or if the value isn't valid UTF-8.
+    /// Returns a non-retryable error if the variable does not exist or its value
+    /// is not valid UTF-8.
     pub fn string(var_name: impl Into<OsString>) -> Result<Self, Error> {
         Self::new(var_name, &StringEncoding)
     }
@@ -166,7 +215,7 @@ mod file_secret {
     use std::path::PathBuf;
 
     use crate::{
-        error::{Error, ErrorKind},
+        error::Error,
         platform::MaybeSendBoxFuture,
         secrets::{
             MappedSecret, Secret, SecretBytes, SecretMap, SecretOutput, encodings::StringEncoding,
@@ -205,16 +254,11 @@ mod file_secret {
         ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, Error>> {
             Box::pin(async move {
                 let bytes = tokio::fs::read(&self.path).await.map_err(|source| {
-                    // Transient I/O conditions stay retryable; everything else
-                    // (missing file, permissions) is a configuration problem.
-                    let kind = match source.kind() {
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                            ErrorKind::Transport { retryable: true }
-                        }
-                        _ => ErrorKind::Config,
-                    };
-                    Error::new(kind, source)
-                        .with_context(format!("reading secret file {}", self.path.display()))
+                    // `ProviderError` classifies this from the I/O error kind.
+                    Error::from(super::ProviderError::ReadingSecretFile {
+                        path: self.path.display().to_string(),
+                        source,
+                    })
                 })?;
                 Ok(SecretOutput {
                     value: SecretBytes::new(bytes),
@@ -290,8 +334,7 @@ mod file_secret {
         async fn missing_file_is_config_error() {
             let secret = FileSecret::string("/nonexistent/secret/path");
             let err = secret.get_secret_value().await.unwrap_err();
-            assert_eq!(err.kind(), ErrorKind::Config);
-            assert!(!err.is_retryable());
+            assert_eq!(err.retry_advice(), crate::error::RetryAdvice::No);
         }
 
         /// A decode failure names the offending file in its context, not just a
@@ -303,9 +346,8 @@ mod file_secret {
 
             let secret = FileSecret::new(tmp.path(), Base64Encoding);
             let err = secret.get_secret_value().await.unwrap_err();
-            assert_eq!(err.kind(), ErrorKind::Config);
             assert!(
-                err.to_string().contains(&tmp.path().display().to_string()),
+                format!("{err:#}").contains(&tmp.path().display().to_string()),
                 "decode error should name the file: {err}"
             );
         }
@@ -327,3 +369,77 @@ mod file_secret {
 
 #[cfg(feature = "fs")]
 pub use file_secret::{FileBytes, FileSecret};
+
+#[cfg(test)]
+mod classification {
+    use strum::EnumCount as _;
+
+    use super::*;
+    use crate::error::RetryAdvice;
+
+    // Pin the classification of every variant enabled by the current features.
+    #[test]
+    fn provider_classifications() {
+        #[cfg_attr(not(feature = "fs"), allow(unused_mut))]
+        let mut cases: Vec<(&str, ProviderError, RetryAdvice)> = vec![
+            (
+                "ReadingEnvVar",
+                ProviderError::ReadingEnvVar {
+                    name: String::from("SECRET"),
+                    source: std::env::VarError::NotPresent,
+                },
+                RetryAdvice::No,
+            ),
+            (
+                "DecodingEnvVar",
+                ProviderError::DecodingEnvVar {
+                    name: String::from("SECRET"),
+                    source: Error::new(RetryAdvice::No, "config failure"),
+                },
+                RetryAdvice::No,
+            ),
+        ];
+        #[cfg(feature = "fs")]
+        cases.push((
+            "ReadingSecretFile",
+            ProviderError::ReadingSecretFile {
+                path: String::from("/nope"),
+                source: std::io::Error::from(std::io::ErrorKind::NotFound),
+            },
+            RetryAdvice::No,
+        ));
+
+        assert_eq!(
+            cases.len(),
+            ProviderError::COUNT,
+            "every variant of ProviderError must be pinned here"
+        );
+        for (label, sample, advice) in cases {
+            let err = Error::from(sample);
+            assert_eq!(err.retry_advice(), advice, "{label}: retry advice");
+        }
+    }
+
+    // File-provider retryability depends on the specific I/O error kind.
+    #[cfg(feature = "fs")]
+    #[test]
+    fn a_secret_file_is_retryable_only_when_the_io_was_transient() {
+        let advice_for = |kind| {
+            Error::from(ProviderError::ReadingSecretFile {
+                path: String::from("/secret"),
+                source: std::io::Error::from(kind),
+            })
+            .retry_advice()
+        };
+
+        for kind in [std::io::ErrorKind::WouldBlock, std::io::ErrorKind::TimedOut] {
+            assert_eq!(advice_for(kind), RetryAdvice::RETRY, "{kind:?}");
+        }
+        for kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::PermissionDenied,
+        ] {
+            assert_eq!(advice_for(kind), RetryAdvice::No, "{kind:?}");
+        }
+    }
+}

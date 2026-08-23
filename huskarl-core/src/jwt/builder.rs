@@ -7,7 +7,7 @@ use snafu::prelude::*;
 
 use crate::{
     crypto::signer::JwsSigner,
-    error::{Error, ErrorKind},
+    error::Error,
     jwk::PublicJwk,
     jwt::{
         builder::jwt_builder::{SetClaims, SetExtraHeaders},
@@ -16,6 +16,19 @@ use crate::{
     platform::{Duration, SystemTime, SystemTimeError},
     secrets::SecretString,
 };
+
+/// The cause of a JWT construction failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum JwtBuildError {
+    /// The JWS signing input could not be produced.
+    #[snafu(display("generating JWS signing input"))]
+    #[classify(no)]
+    GeneratingSigningInput {
+        /// The underlying error.
+        source: JwsSigningInputError,
+    },
+}
 
 /// A built JWT, complete except for its signing metadata.
 ///
@@ -167,16 +180,19 @@ where
 #[derive(Debug, Snafu)]
 pub enum JwsSigningInputError {
     /// Failed to encode claims as they could not be converted to JSON.
+    #[snafu(display("encoding the JWT claims as JSON"))]
     EncodeClaims {
         /// The underlying error from `serde_json`.
         source: serde_json::Error,
     },
     /// Failed to encode headers as they could not be converted to JSON.
+    #[snafu(display("encoding the JWT header as JSON"))]
     EncodeHeader {
         /// The underlying error from `serde_json`.
         source: serde_json::Error,
     },
     /// Failed to convert the current time to a JWT-compatible format.
+    #[snafu(display("converting the current time to a JWT timestamp"))]
     Time {
         /// The underlying error.
         source: SystemTimeError,
@@ -194,17 +210,15 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the JWT could not be serialized to
-    /// JSON, or the signer's error if signing failed.
+    /// Returns a non-retryable error if the JWT cannot be serialized to JSON,
+    /// or propagates the signer's error if signing fails.
     pub async fn to_jws_compact(
         &self,
         signer: &(impl JwsSigner + ?Sized),
     ) -> Result<SecretString, Error> {
         let signing_input = self
             .generate_jwt_signing_input(&signer.jws_algorithm(), signer.key_id().as_deref())
-            .map_err(|source| {
-                Error::new(ErrorKind::Config, source).with_context("generating JWS signing input")
-            })?;
+            .context(GeneratingSigningInputSnafu)?;
 
         let signature = signer.sign(signing_input.as_bytes()).await?;
 

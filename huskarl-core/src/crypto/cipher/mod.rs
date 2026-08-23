@@ -86,8 +86,8 @@ impl CipherMatch<'_> {
 /// Trait for AEAD encryption.
 ///
 /// This trait is dyn-capable: consumers store it as `Arc<dyn AeadEncryptor>`.
-/// Write the `encrypt` body as `Box::pin(async move { ... })`; failures
-/// classify as [`ErrorKind::Crypto`](crate::error::ErrorKind::Crypto).
+/// Write the `encrypt` body as `Box::pin(async move { ... })`; a failure is an
+/// [`Error`] whose cause names what the cipher could not do.
 pub trait AeadEncryptor: std::fmt::Debug + MaybeSendSync {
     /// Returns the content encryption algorithm identifier (e.g. `A256GCM`).
     fn enc_algorithm(&self) -> Cow<'_, str>;
@@ -104,7 +104,7 @@ pub trait AeadEncryptor: std::fmt::Debug + MaybeSendSync {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Crypto`](crate::error::ErrorKind::Crypto) if the encryption operation fails.
+    /// Returns an error if the encryption operation fails.
     fn encrypt<'a>(
         &'a self,
         plaintext: &'a [u8],
@@ -165,8 +165,8 @@ pub trait AeadDecryptor: std::fmt::Debug + MaybeSendSync {
     /// Returns [`DecryptError::NoMatchingKey`] if no key matched the selection
     /// criteria — decryption was not attempted, and
     /// [`RetryingDecryptor`] treats this as grounds for a refresh and one
-    /// retry. All other failures — including authentication failure — classify
-    /// as [`ErrorKind::Crypto`](crate::error::ErrorKind::Crypto) via [`DecryptError::Other`].
+    /// retry. All other failures — including authentication failure — arrive as
+    /// [`DecryptError::Other`].
     fn decrypt<'a>(
         &'a self,
         cipher_match: Option<&'a CipherMatch<'a>>,

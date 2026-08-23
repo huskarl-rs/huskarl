@@ -26,11 +26,8 @@ use crate::{
 /// the correct key when available. When no `CipherMatch` is provided, keys are
 /// tried in order.
 ///
-/// Unlike [`MultiKeyVerifier`](crate::crypto::verifier::MultiKeyVerifier), which
-/// fails closed on ambiguity, trying every candidate is safe here: an AEAD tag
-/// self-authenticates, so a wrong key fails decryption rather than risking
-/// wrong-key acceptance. Try-all is standard practice for rotated symmetric
-/// keys (e.g. cookie-key rotation).
+/// Trying every candidate is safe here, unlike the verifier — see [composing
+/// crypto strategies](crate::_docs::explanation::crypto_strategies).
 ///
 /// # Errors
 ///
@@ -127,6 +124,8 @@ impl MultiKeyDecryptor {
             }
         }
 
+        // Prefer a definitive failure from a candidate that attempted
+        // decryption over a retryable failure from one that could not.
         Err(last_non_retryable
             .or(last_retryable)
             .unwrap_or(DecryptError::NoMatchingKey))
@@ -257,7 +256,6 @@ mod tests {
             cipher::AeadOutput,
             seal::{AeadSealer, AeadSealerUnsealer, AeadUnsealer, AeadV1Sealer, SealOutput},
         },
-        error::ErrorKind,
     };
 
     /// What a fake decryptor's `decrypt` returns.
@@ -295,9 +293,11 @@ mod tests {
                     Outcome::Ok(b) => Ok(b.to_vec()),
                     Outcome::NoMatchingKey => Err(DecryptError::NoMatchingKey),
                     Outcome::Retryable => {
-                        Err(Error::from(ErrorKind::Transport { retryable: true }).into())
+                        Err(Error::new(crate::error::RetryAdvice::RETRY, "upstream failure").into())
                     }
-                    Outcome::NonRetryable => Err(Error::from(ErrorKind::Crypto).into()),
+                    Outcome::NonRetryable => {
+                        Err(Error::new(crate::error::RetryAdvice::No, "crypto failure").into())
+                    }
                 }
             })
         }
@@ -613,7 +613,7 @@ mod tests {
                 if opens {
                     Ok(plaintext)
                 } else {
-                    Err(Error::from(ErrorKind::Crypto).into())
+                    Err(Error::new(crate::error::RetryAdvice::No, "crypto failure").into())
                 }
             })
         }

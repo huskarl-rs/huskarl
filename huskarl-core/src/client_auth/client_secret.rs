@@ -3,13 +3,33 @@ use std::sync::Arc;
 use base64::prelude::*;
 use bon::Builder;
 use http::{HeaderMap, HeaderValue};
+use snafu::ResultExt as _;
 
 use crate::{
     client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
-    error::{Error, ErrorKind},
+    error::Error,
     platform::MaybeSendBoxFuture,
     secrets::{Secret, SecretString},
 };
+
+/// The cause of a client-secret authentication failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum ClientSecretError {
+    /// The Basic credentials are not a valid HTTP header value.
+    #[snafu(display("building Basic Authorization header"))]
+    #[classify(no)]
+    BuildingBasicHeader {
+        /// The underlying error.
+        source: http::header::InvalidHeaderValue,
+    },
+    /// The configured secret provider failed.
+    #[snafu(display("fetching client secret"))]
+    FetchingSecret {
+        /// The underlying error.
+        source: Error,
+    },
+}
 
 /// Client Secret authentication (RFC 6749 §2.3.1)
 ///
@@ -58,9 +78,7 @@ impl ClientSecret {
         let credentials = format!("{client_id}:{client_secret}");
         let auth_header = format!("Basic {}", BASE64_STANDARD.encode(credentials.as_bytes()));
 
-        let mut auth_value: HeaderValue = auth_header.parse().map_err(|source| {
-            Error::new(ErrorKind::Auth, source).with_context("building Basic Authorization header")
-        })?;
+        let mut auth_value: HeaderValue = auth_header.parse().context(BuildingBasicHeaderSnafu)?;
         // The base64 blob is the client secret; keep it out of the HPACK/QPACK
         // dynamic table and out of `AuthenticationParams`' derived `Debug`.
         auth_value.set_sensitive(true);
@@ -94,7 +112,7 @@ impl ClientAuthentication for ClientSecret {
                 .client_secret
                 .get_secret_value()
                 .await
-                .map_err(|err| err.with_context("fetching client secret"))?;
+                .context(FetchingSecretSnafu)?;
 
             match select_method(ctx.allowed_methods, self.prefer_basic_auth) {
                 ClientSecretMethod::Basic => {

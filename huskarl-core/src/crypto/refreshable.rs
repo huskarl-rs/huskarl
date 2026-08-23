@@ -312,10 +312,8 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// upstream faster than `min_refresh_interval`, and both honour the
     /// post-failure `failure_backoff`.
     ///
-    /// Deliberately does **not** consider the TTL: the TTL is a *staleness* bound
-    /// (how old a cached value may get before the read path reloads it), not an
-    /// attempt-permission. Folding it in here is what would neuter the
-    /// miss-triggered reload — see [`should_refresh_stale`](Self::should_refresh_stale)
+    /// Does **not** consider the TTL — that is a *staleness* bound, not an
+    /// attempt-permission. See [`should_refresh_stale`](Self::should_refresh_stale)
     /// versus [`policy_permits_miss_refresh`](Self::policy_permits_miss_refresh).
     fn policy_permits_attempt(&self, now: Instant, ts: &RefreshTimestamps) -> bool {
         // Cold: no value has ever loaded, so every request is failing now — recover
@@ -520,13 +518,9 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         if !self.should_refresh_stale() {
             return;
         }
-        // This `.await` is the seam for a future opt-in *async* mode: rather than
-        // the elected caller blocking here on the fetch, it could hand the refresh
-        // to a runtime spawn and return immediately, so the invoking request also
-        // continues (serving the still-in-TTL keyset) while the reload lands for
-        // later reads. That needs an `Arc`-shared inner to own the detached future
-        // and a runtime-agnostic spawner, so it stays opt-in and out of the
-        // default/wasm build; the single-flight lock keeps it duplicate-free.
+        // The seam for a future opt-in *async* mode: the elected caller could
+        // hand this refresh to a runtime spawn and return immediately, serving
+        // the still-in-TTL keyset. Kept as one `.await` so that stays local.
         match self.inner.try_refresh_ahead().await {
             Ok(true) => self.record_refresh(true),
             // Another caller won the single-flight; let them record the attempt.
@@ -695,7 +689,7 @@ mod tests {
                 } else {
                     tokio::task::yield_now().await;
                     Err(Error::new(
-                        crate::error::ErrorKind::Transport { retryable: true },
+                        crate::error::RetryAdvice::RETRY,
                         "upstream down",
                     ))
                 }
@@ -848,7 +842,7 @@ mod tests {
                 let n = calls.fetch_add(1, Ordering::SeqCst);
                 if n == 0 {
                     Err(Error::new(
-                        crate::error::ErrorKind::Transport { retryable: true },
+                        crate::error::RetryAdvice::RETRY,
                         "upstream down at boot",
                     ))
                 } else {

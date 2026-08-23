@@ -124,10 +124,11 @@ pub struct SecretOutput<T: Clone> {
 /// # Implementing
 ///
 /// Write the method body as `Box::pin(async move { ... })`. Transient fetch
-/// failures (a vault timeout, `WouldBlock`) classify as
-/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport) with
-/// `retryable: true`; persistent ones (missing file, bad permissions, bad
-/// data) as [`ErrorKind::Config`](crate::error::ErrorKind::Config).
+/// failures (a vault timeout, `WouldBlock`) carry
+/// [`RetryAdvice::Retry`](crate::error::RetryAdvice::Retry); persistent ones
+/// (missing file, bad permissions, bad data) carry
+/// [`No`](crate::error::RetryAdvice::No). Include actionable context in the
+/// error message.
 pub trait Secret: MaybeSendSync {
     /// The type of secret this source provides.
     type Output: Clone + MaybeSendSync;

@@ -10,15 +10,11 @@ use crate::{
 /// [`NoMatchingKey`](DecryptError::NoMatchingKey) error by calling
 /// [`try_refresh`](AeadDecryptor::try_refresh) on the inner decryptor.
 ///
-/// It covers cross-server key propagation during rotation (one server seals with a
-/// freshly rotated key another has not loaded yet) and is the cipher analogue of
+/// The cipher analogue of
 /// [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier). Wrap the root
-/// decryptor with it so any composition underneath — a
-/// [`ScheduledRefreshCipher`](super::ScheduledRefreshCipher), a
-/// [`MultiKeyDecryptor`](super::MultiKeyDecryptor), or arbitrary nesting — gets one
-/// retry without implementing it. The retry's refresh is gated by the inner layer's
-/// policy, so a burst of unknown-`kid` bundles cannot force a burst of upstream
-/// fetches.
+/// decryptor with it and any composition underneath gets one retry; the refresh
+/// is gated by the inner layer's policy, so a burst of unknown-`kid` bundles
+/// cannot force a burst of upstream fetches.
 ///
 /// The retry fires only on `NoMatchingKey`, so callers must pass a [`CipherMatch`]
 /// with a `kid` **and** register kids on all keys in the set. A key with no
@@ -123,7 +119,7 @@ mod tests {
                 if tag == self.kid.as_bytes() {
                     Ok(ciphertext.to_vec())
                 } else {
-                    Err(Error::from(crate::error::ErrorKind::Crypto).into())
+                    Err(Error::new(crate::error::RetryAdvice::No, "crypto failure").into())
                 }
             })
         }

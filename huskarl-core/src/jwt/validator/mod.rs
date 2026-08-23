@@ -266,32 +266,57 @@ impl JwtValidator {
     }
 }
 
+// Render times as the NumericDate values found in JWT claims instead of using
+// the unrelated `SystemTime` debug representation.
+fn epoch_seconds(time: &SystemTime) -> i64 {
+    match time.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(since) => i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
+        // Negative values are valid NumericDate timestamps before 1970.
+        Err(before) => -i64::try_from(before.duration().as_secs()).unwrap_or(i64::MAX),
+    }
+}
+
 /// Validation errors that can occur while processing a JWT.
+///
+/// Diagnostic messages include the values used in time and claim comparisons.
 #[derive(Debug, Snafu)]
 pub enum JwtValidationError {
     /// The token could not be parsed as a compact JWS.
+    #[snafu(display("parsing the token as a compact JWS"))]
     Parse {
         /// The underlying error.
         source: JwsParseError,
     },
     /// The token signature is invalid.
+    #[snafu(display("verifying the token signature"))]
     Signature {
         /// The underlying error.
         source: VerifyError,
     },
     /// The token is unsigned.
+    #[snafu(display("the token is unsigned"))]
     UnsignedToken,
     /// The token uses a disallowed signature algorithm.
+    #[snafu(display("the token is signed with the disallowed algorithm '{alg}'"))]
     DisallowedAlgorithm {
         /// The algorithm used by the token.
         alg: String,
     },
     /// The token contains unrecognized critical header parameters.
+    #[snafu(display(
+        "the token has unrecognised critical header parameters: {}",
+        params.join(", ")
+    ))]
     UnrecognizedCriticalHeader {
         /// The unrecognized critical header parameters.
         params: Vec<String>,
     },
     /// The token is expired.
+    #[snafu(display(
+        "the token expired at {} (now {})",
+        epoch_seconds(expiration),
+        epoch_seconds(now)
+    ))]
     Expired {
         /// The expiration timestamp of the JWT.
         expiration: SystemTime,
@@ -299,6 +324,11 @@ pub enum JwtValidationError {
         now: SystemTime,
     },
     /// The token is not yet valid.
+    #[snafu(display(
+        "the token is not valid before {} (now {})",
+        epoch_seconds(not_before),
+        epoch_seconds(now)
+    ))]
     NotYetValid {
         /// The not-before timestamp of the JWT.
         not_before: SystemTime,
@@ -306,6 +336,11 @@ pub enum JwtValidationError {
         now: SystemTime,
     },
     /// The token is issued in the future.
+    #[snafu(display(
+        "the token was issued at {}, which is in the future (now {})",
+        epoch_seconds(issued_at),
+        epoch_seconds(now)
+    ))]
     IssuedInFuture {
         /// The issued-at timestamp of the JWT.
         issued_at: SystemTime,
@@ -313,6 +348,10 @@ pub enum JwtValidationError {
         now: SystemTime,
     },
     /// The token is too old.
+    #[snafu(display(
+        "the token was issued at {}, older than the maximum age of {max_token_age:?}",
+        epoch_seconds(issued_at)
+    ))]
     TokenTooOld {
         /// The issued-at timestamp of the JWT.
         issued_at: SystemTime,
@@ -320,11 +359,16 @@ pub enum JwtValidationError {
         max_token_age: Duration,
     },
     /// The token type claim is invalid.
+    #[snafu(display(
+        "the token has an invalid 'typ' header: {}",
+        typ.as_deref().map_or_else(|| "absent".to_owned(), |typ| format!("'{typ}'"))
+    ))]
     InvalidTokenType {
         /// The type of the JWT.
         typ: Option<String>,
     },
     /// A claim did not match the expected value.
+    #[snafu(display("the '{claim}' claim is '{actual}', expected '{expected}'"))]
     ClaimMismatch {
         /// The claim name.
         claim: &'static str,
@@ -334,11 +378,13 @@ pub enum JwtValidationError {
         actual: String,
     },
     /// A required claim is missing from the JWT.
+    #[snafu(display("the token has no '{claim}' claim, which is required"))]
     RequiredClaimMissing {
         /// The missing claim.
         claim: &'static str,
     },
     /// The `jti` claim exceeds the maximum allowed length.
+    #[snafu(display("the 'jti' claim is {len} bytes, over the maximum of {max_len}"))]
     JtiTooLong {
         /// The length of the `jti` value in bytes.
         len: usize,
@@ -346,17 +392,35 @@ pub enum JwtValidationError {
         max_len: usize,
     },
     /// The JTI was required to be unique, but was previously marked as seen.
+    #[snafu(display("the 'jti' claim was required to be unique but has been seen before"))]
     JtiNotUnique,
     /// There was an internal failure when attempting to check for JTI uniqueness.
+    #[snafu(display("checking whether the 'jti' claim is unique"))]
     JtiCheck {
         /// The underlying error.
         source: crate::error::Error,
     },
     /// The token is structurally valid but does not contain the required extra claims.
+    #[snafu(display("deserialising the token's application claims"))]
     ExtraClaims {
         /// The underlying deserialization error.
         source: serde_json::Error,
     },
+}
+
+impl crate::error::propagation::Cause for JwtValidationError {
+    fn origin(&self) -> crate::error::propagation::Origin<'_> {
+        use crate::error::propagation::Origin;
+
+        match self {
+            Self::Signature {
+                source: VerifyError::Other { source },
+            }
+            | Self::JtiCheck { source } => Origin::Propagates(source),
+            Self::Signature { source } => Origin::Establishes(source.retry_advice().into()),
+            _ => Origin::Establishes(crate::error::RetryAdvice::No.into()),
+        }
+    }
 }
 
 #[cfg(test)]

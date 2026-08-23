@@ -40,10 +40,10 @@ use crate::{
 /// # Implementing
 ///
 /// Write the method body as `Box::pin(async move { ... })`. Failures to
-/// construct the credentials classify as
-/// [`ErrorKind::Auth`](crate::error::ErrorKind::Auth); transient failures of
-/// an underlying fetch (e.g. a secret store) as
-/// [`ErrorKind::Transport`](crate::error::ErrorKind::Transport).
+/// construct the credentials carry
+/// [`RetryAdvice::No`](crate::error::RetryAdvice::No) — the same inputs assemble
+/// the same way next time — while a transient failure of an underlying fetch
+/// (such as a secret store) retains that fetch's classification.
 pub trait ClientAuthentication: MaybeSendSync {
     /// Returns the authentication parameters for the request described by
     /// `ctx` (see [`AuthenticationContext`]).

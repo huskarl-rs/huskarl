@@ -6,7 +6,8 @@
 //!
 //! - **[How-to guides](guide)** — task-oriented recipes for the things people
 //!   reach for this crate to do: building and validating JWTs, providing
-//!   secrets, and plugging in a transport or crypto backend.
+//!   secrets, plugging in a transport or crypto backend, and returning errors
+//!   from an extension.
 //! - **[Explanation](explanation)** — understanding-oriented background on how
 //!   the crate works and why it is shaped the way it is.
 //!
@@ -15,8 +16,8 @@
 //! `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly test --doc` (mirroring the
 //! docs.rs build environment); a plain `cargo test --doc` skips them.
 
-/// Task-oriented recipes for building JWTs, handling secrets, and plugging in
-/// backends.
+/// Task-oriented recipes for building JWTs, handling secrets, plugging in
+/// backends, and returning errors from extensions.
 pub mod guide {
     #[doc = include_str!("../docs/guide/signing_a_jwt.md")]
     pub mod signing_a_jwt {}
@@ -32,6 +33,9 @@ pub mod guide {
 
     #[doc = include_str!("../docs/guide/implementing_a_backend.md")]
     pub mod implementing_a_backend {}
+
+    #[doc = include_str!("../docs/guide/returning_errors.md")]
+    pub mod returning_errors {}
 }
 
 /// Understanding-oriented background on how the crate works and why.

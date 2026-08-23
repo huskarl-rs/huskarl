@@ -1,16 +1,48 @@
 use std::sync::Arc;
 
 use futures_util::future::join_all;
+use snafu::prelude::*;
 
 use crate::{
     crypto::{
         KeyMatchStrength,
         verifier::{CreateVerifierError, JwsVerifier, JwsVerifierPlatform, KeyMatch, VerifyError},
     },
-    error::{Error, ErrorKind},
+    error::Error,
     jwk::PublicJwks,
     platform::MaybeSendBoxFuture,
 };
+
+/// The cause of a multi-key verifier construction failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum MultiVerifierError {
+    /// A JWK could not be turned into a verifier.
+    #[snafu(display("creating verifier from JWK"))]
+    #[classify(with = MultiVerifierError::origin_from_the_factory)]
+    CreatingVerifier {
+        /// The underlying error.
+        source: CreateVerifierError,
+    },
+}
+
+impl MultiVerifierError {
+    /// Propagates classifications nested inside [`CreateVerifierError`].
+    fn origin_from_the_factory(
+        source: &CreateVerifierError,
+    ) -> crate::error::propagation::Origin<'_> {
+        use crate::error::propagation::Origin;
+
+        match source {
+            CreateVerifierError::UnsupportedKey { source: verdict }
+            | CreateVerifierError::Other { source: verdict } => Origin::Propagates(verdict),
+            // This leaf establishes a terminal configuration failure.
+            CreateVerifierError::MissingJwksUri => {
+                Origin::Establishes(crate::error::RetryAdvice::No.into())
+            }
+        }
+    }
+}
 
 /// A [`JwsVerifier`] that holds multiple keys and applies RFC 7517 key selection semantics.
 ///
@@ -69,8 +101,7 @@ impl MultiKeyVerifier {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Crypto`] if a supported key fails to construct a
-    /// verifier.
+    /// Returns an error if a supported key fails to construct a verifier.
     pub async fn from_jwks(
         jwks: &PublicJwks,
         platform: &dyn JwsVerifierPlatform,
@@ -88,9 +119,7 @@ impl MultiKeyVerifier {
             Err(e) => Some(Err(e)),
         })
         .collect::<Result<_, _>>()
-        .map_err(|source| {
-            Error::new(ErrorKind::Crypto, source).with_context("creating verifier from JWK")
-        })?;
+        .context(CreatingVerifierSnafu)?;
 
         Ok(Self {
             verifiers,
@@ -146,6 +175,9 @@ impl MultiKeyVerifier {
             }
         }
 
+        // Prefer a definitive result from a verifier that checked the signature
+        // over a retryable failure from one that could not. This also prevents
+        // untrusted tokens from turning a partial cold-keyset failure into a 500.
         Err(last_non_retryable
             .or(last_retryable)
             .unwrap_or(VerifyError::NoMatchingKey))
@@ -195,5 +227,51 @@ impl JwsVerifier for MultiKeyVerifier {
                 .into_iter()
                 .any(|b| b)
         })
+    }
+}
+
+#[cfg(test)]
+mod verdict_propagation {
+    use super::*;
+    use crate::error::RetryAdvice;
+
+    // Verifier construction must preserve a factory's classification.
+    #[test]
+    fn a_factory_verdict_survives_verifier_construction() {
+        let upstream = Error::propagate(
+            crate::error::propagation::Classification::judged(
+                RetryAdvice::retry_after(crate::platform::Duration::from_secs(5)),
+                crate::oauth_error::OAuthError::new("temporarily_unavailable"),
+            ),
+            "verifier factory failed",
+        );
+        let expected = upstream.classification();
+
+        let err = Error::from(MultiVerifierError::CreatingVerifier {
+            source: CreateVerifierError::Other { source: upstream },
+        });
+
+        assert_eq!(err.classification(), expected);
+    }
+
+    // Preserve the classification even on the normally filtered variant.
+    #[test]
+    fn an_unsupported_key_propagates_instead_of_reclassifying() {
+        let upstream = Error::new(RetryAdvice::RETRY, "unsupported by the backend");
+
+        let err = Error::from(MultiVerifierError::CreatingVerifier {
+            source: CreateVerifierError::UnsupportedKey { source: upstream },
+        });
+
+        assert_eq!(err.retry_advice(), RetryAdvice::RETRY);
+    }
+
+    // A missing URI is a terminal configuration failure.
+    #[test]
+    fn a_missing_jwks_uri_is_configuration() {
+        let err = Error::from(MultiVerifierError::CreatingVerifier {
+            source: CreateVerifierError::MissingJwksUri,
+        });
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
 }
