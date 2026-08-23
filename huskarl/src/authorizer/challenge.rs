@@ -107,7 +107,7 @@ pub fn parse_challenges(headers: &HeaderMap) -> Vec<Challenge> {
     out
 }
 
-/// Returns true if any challenge carries the given `error` code.
+/// Returns whether any challenge carries the given `error` code.
 pub(crate) fn challenge_has_error(headers: &HeaderMap, code: &OAuthErrorCode) -> bool {
     parse_challenges(headers)
         .iter()

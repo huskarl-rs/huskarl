@@ -164,7 +164,13 @@ impl ProtectedResourceMetadata {
     /// unusable response. Connection failures retain the transport's
     /// classification.
     #[builder(on(String, into))]
-    pub async fn fetch<C: HttpClient>(http_client: &C, resource: String) -> Result<Self, Error> {
+    pub async fn fetch<C: HttpClient>(
+        /// Transport used to retrieve the metadata document.
+        http_client: &C,
+        /// Exact protected-resource identifier expected in the returned
+        /// document.
+        resource: String,
+    ) -> Result<Self, Error> {
         let metadata_url = well_known_url(&resource)?;
 
         let metadata: Self = crate::http::get(

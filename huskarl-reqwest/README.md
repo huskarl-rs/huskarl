@@ -19,4 +19,12 @@ An [`HttpClient`](https://docs.rs/huskarl_core/latest/huskarl_core/http/trait.Ht
 hand it to a grant, authorizer, or validator. The [`mtls`](https://docs.rs/huskarl-reqwest/latest/huskarl_reqwest/mtls/) module supplies
 the mTLS providers (RFC 8705) for the builder.
 
+# Example
+
+```rust
+use huskarl_reqwest::ReqwestClient;
+
+let http_client = ReqwestClient::builder().build().await?;
+```
+
 <!-- cargo-reedme: end -->

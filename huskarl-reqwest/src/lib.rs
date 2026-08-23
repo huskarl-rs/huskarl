@@ -3,6 +3,18 @@
 //! [`ReqwestClient`] is the entry point — build one with its `builder()` and
 //! hand it to a grant, authorizer, or validator. The [`mtls`] module supplies
 //! the mTLS providers (RFC 8705) for the builder.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use huskarl_reqwest::ReqwestClient;
+//!
+//! # async fn build_transport() -> Result<(), huskarl_core::Error> {
+//! let http_client = ReqwestClient::builder().build().await?;
+//! # let _ = http_client;
+//! # Ok(())
+//! # }
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

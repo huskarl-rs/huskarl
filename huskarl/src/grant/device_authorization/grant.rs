@@ -21,7 +21,7 @@ use crate::{
     },
 };
 
-/// An `OAuth2` device authorization grant.
+/// An OAuth 2.0 device authorization grant.
 ///
 /// This grant is used for devices that either lack a browser or have limited
 /// input capabilities. The device displays a code and a URL to the user, who
@@ -31,16 +31,27 @@ use crate::{
 /// See the [module documentation][crate::grant::device_authorization] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
-#[builder(on(String, into))]
+#[builder(on(String, into), builder_type(doc {
+    /// Configures a [`DeviceAuthorizationGrant`].
+    ///
+    /// Required and optional inputs are marked on their setter methods. Prefer
+    /// [`DeviceAuthorizationGrant::builder_from_metadata`] when discovery
+    /// metadata is available; it fills both endpoint sets, issuer, and
+    /// authentication capability inputs before returning this builder.
+}))]
 pub struct DeviceAuthorizationGrant {
-    /// The client ID.
+    /// The OAuth 2.0 client identifier registered with the authorization
+    /// server.
     client_id: String,
 
-    /// The HTTP client used for token requests.
+    /// The transport used for device authorization and token requests.
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
-    /// The client authentication method.
+    /// How the client identifies or authenticates itself at both endpoints.
+    ///
+    /// Use [`NoAuth`](crate::core::client_auth::NoAuth) for a public device
+    /// client that sends only its `client_id`.
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Arc<dyn ClientAuthentication>,
 
@@ -72,11 +83,14 @@ pub struct DeviceAuthorizationGrant {
     #[builder(default = DEFAULT_MAX_TRANSIENT_POLL_FAILURES)]
     max_transient_poll_failures: u32,
 
-    /// The issuer for tokens created by the authorization server.
+    /// The authorization server's issuer identifier, when known.
+    ///
+    /// Client-authentication methods may use it as the audience of a signed
+    /// assertion. The metadata builder supplies it automatically.
     #[from_metadata(path = "issuer")]
     issuer: Option<String>,
 
-    /// The URL of the token endpoint.
+    /// The canonical token endpoint URL, before mTLS alias resolution.
     #[from_metadata(path = "token_endpoint")]
     token_endpoint: EndpointUrl,
 
@@ -89,8 +103,11 @@ pub struct DeviceAuthorizationGrant {
     #[builder(skip = crate::grant::core::resolve_mtls_alias(http_client.as_ref(), &token_endpoint, mtls_token_endpoint.as_ref()))]
     effective_token_endpoint: EndpointUrl,
 
-    /// Supported endpoint auth methods; used to auto-select basic or
-    /// form auth for client secrets.
+    /// Authentication methods advertised for the token endpoint.
+    ///
+    /// They are also passed to client authentication at the device
+    /// authorization endpoint because RFC 8628 publishes no separate method
+    /// list. `None` leaves method selection unconstrained by metadata.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 
@@ -517,9 +534,17 @@ pub enum PollResult {
 
 /// The input to start the device authorization flow.
 #[derive(Debug, Clone, Builder)]
+#[builder(builder_type(doc {
+    /// Configures the input to a device-authorization flow.
+    ///
+    /// Every setter is optional; calling [`build`](Self::build) with no inputs
+    /// requests the authorization server's default scopes and resource.
+}))]
 pub struct StartInput {
     /// The requested scope(s) for the device authorization request.
     scope: Option<Vec<String>>,
+    /// Resource indicators identifying the APIs the access token should be
+    /// usable at (RFC 8707).
     resource: Option<Vec<String>>,
     /// RFC 9396 Rich Authorization Requests, sent on the device authorization
     /// request alongside (or instead of) `scope`.

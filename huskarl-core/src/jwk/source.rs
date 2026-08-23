@@ -71,6 +71,7 @@ impl JwksSource {
     /// Creates a new [`JwksSource`].
     #[builder]
     pub fn new(
+        /// Transport used to fetch JWKS documents.
         http_client: impl HttpClient + 'static,
         /// Maximum number of keys accepted from a fetched JWKS document before
         /// the fetch is rejected.

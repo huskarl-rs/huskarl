@@ -13,7 +13,7 @@
 
 cargo-reedme: info-end -->
 
-Redis-backed replay prevention for the huskarl (`OAuth2`) ecosystem.
+Redis-backed replay prevention for the huskarl (OAuth 2.0) ecosystem.
 
 Provides [`jti::RedisJtiUniquenessChecker`](https://docs.rs/huskarl-redis/latest/huskarl_redis/jti/struct.RedisJtiUniquenessChecker.html), a
 [`JtiUniquenessChecker`](https://docs.rs/huskarl_core/latest/huskarl_core/jwt/jti/trait.JtiUniquenessChecker.html) that

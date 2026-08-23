@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::secrets::SecretString;
 
-/// An `OAuth2` refresh token, used to obtain new access tokens without
+/// An OAuth 2.0 refresh token, used to obtain new access tokens without
 /// re-running the interactive flow.
 ///
 /// May be `DPoP`-bound (RFC 9449): [`dpop_jkt`](Self::dpop_jkt) carries the

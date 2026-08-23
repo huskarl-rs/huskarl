@@ -61,6 +61,8 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub(crate) async fn new(
+        /// Asynchronous source of the current value, called at construction
+        /// and on each refresh.
         factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,
@@ -241,6 +243,8 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub(crate) async fn new(
+        /// Asynchronous source of the current value, called at construction
+        /// and whenever the refresh policy permits a reload.
         factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,

@@ -1,6 +1,6 @@
 //! Serde helpers for serializing `SystemTime` as Unix seconds.
 //!
-//! OIDC and `OAuth2` wire formats represent timestamps as integer seconds since
+//! OIDC and OAuth 2.0 wire formats represent timestamps as integer seconds since
 //! the Unix epoch. The domain types use `SystemTime` for ergonomic arithmetic,
 //! so these adapters bridge the two via `#[serde(with = "...")]`.
 //!

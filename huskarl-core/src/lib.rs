@@ -1,5 +1,5 @@
 /*!
-The foundational traits and types for the huskarl `OAuth2` ecosystem.
+The foundational traits and types for the huskarl OAuth 2.0 ecosystem.
 
 Most applications depend on the higher-level `huskarl` crate (grants, token
 cache, authorizer) rather than this crate directly. `huskarl-core` is the shared
@@ -7,12 +7,25 @@ base they build on — the utilities below are also useful on their own, whether
 you are writing OAuth tooling or implementing a backend for the rest of the
 ecosystem.
 
+## Documentation
+
+- **Solve a task:** use the [how-to guides](_docs::guide) to
+  [build](_docs::guide::signing_a_jwt) or
+  [validate](_docs::guide::validating_a_jwt) a JWT,
+  [provide secrets](_docs::guide::providing_secrets), or
+  [implement a backend](_docs::guide::implementing_a_backend).
+- **Understand the design:** read the [explanation](_docs::explanation) of the
+  [error model](_docs::explanation::error_handling),
+  [untrusted keys](_docs::explanation::untrusted_keys), and
+  [crypto strategy composition](_docs::explanation::crypto_strategies).
+- **Look up the API:** use the crate modules and item pages in this reference.
+
 ## The huskarl ecosystem
 
 This crate is one of three that fit together. Each carries its own how-to guides
 and explanation in a `_docs` module:
 
-- [`huskarl`](https://docs.rs/huskarl) — `OAuth2` **clients**: grants, token
+- [`huskarl`](https://docs.rs/huskarl) — OAuth 2.0 **clients**: grants, token
   caching, and the request authorizer.
 - [`huskarl-resource-server`](https://docs.rs/huskarl-resource-server) —
   **resource servers**: access-token validation and request authorization.
@@ -48,18 +61,6 @@ and explanation in a `_docs` module:
   ([`oauth_form::FormError`]) — design one `From` arm for [`Error`] plus arms for
   the subsystem errors you call directly.
 
-## Documentation
-
-- **Solve a task:** use the [how-to guides](_docs::guide) to
-  [build](_docs::guide::signing_a_jwt) or
-  [validate](_docs::guide::validating_a_jwt) a JWT,
-  [provide secrets](_docs::guide::providing_secrets), or
-  [implement a backend](_docs::guide::implementing_a_backend).
-- **Understand the design:** read the [explanation](_docs::explanation) of the
-  [error model](_docs::explanation::error_handling),
-  [untrusted keys](_docs::explanation::untrusted_keys), and
-  [crypto strategy composition](_docs::explanation::crypto_strategies).
-- **Look up the API:** use the crate modules and item pages in this reference.
 */
 
 #![forbid(unsafe_code)]

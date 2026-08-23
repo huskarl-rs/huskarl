@@ -1,4 +1,4 @@
-//! `OAuth2` and OIDC tokens.
+//! OAuth 2.0 and OIDC tokens.
 
 mod access_token;
 pub mod id_token;
