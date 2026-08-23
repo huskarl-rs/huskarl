@@ -499,6 +499,34 @@ mod tests {
         );
     }
 
+    /// A code outside that set is still a rejection — but not one we can say
+    /// how to fix, so the caller is told `Fail` rather than "adjust the
+    /// metadata". Nothing in this module decides that: it falls out of the
+    /// code not being `parameters_at_fault`, which is also what makes the
+    /// token endpoint answer the same way.
+    #[tokio::test]
+    async fn an_unrecognised_registration_code_is_a_rejection_we_cannot_act_on() {
+        let client = RecordingClient::new(json_response(
+            StatusCode::BAD_REQUEST,
+            &serde_json::json!({ "error": "something_else" }),
+        ));
+
+        let err = registration(None)
+            .register(&client, &desired_metadata())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            crate::cache::Recovery::implied_by(&err),
+            crate::cache::Recovery::Fail
+        );
+        // The raw code still reaches the caller for its own triage.
+        assert_eq!(
+            err.verdict().map(|v| v.code().as_str()),
+            Some("something_else")
+        );
+    }
+
     #[tokio::test]
     async fn non_json_error_body_is_a_protocol_error() {
         let mut response = HttpResponse {

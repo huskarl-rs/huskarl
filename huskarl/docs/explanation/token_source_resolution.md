@@ -71,7 +71,7 @@ success, or a fresh [`prime`](crate::cache::GrantTokenSource::prime), resets it.
 The breaker gates only the **from-scratch exchange** — a refresh is still
 attempted first on every call, so a usable refresh token always recovers
 independently. While the breaker is open the from-scratch path short-circuits
-with [`GetTokenError::Backoff`](crate::cache::GetTokenError) under
+with `GetTokenError::Backoff` under
 [`Backoff`](crate::core::ErrorKind::Backoff), without re-running the signer or the
 exchange.
 

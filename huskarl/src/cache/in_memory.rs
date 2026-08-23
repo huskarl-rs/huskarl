@@ -5,7 +5,7 @@ use bon::Builder;
 use rand::RngExt as _;
 
 use crate::{
-    cache::{GrantTokenSource, RefreshTokenStore, TokenCache, TokenSource},
+    cache::{GrantTokenSource, RefreshTokenStore, TokenCache, TokenError, TokenSource},
     core::{
         Error,
         dpop::ResourceServerDPoP,
@@ -226,7 +226,7 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
 }
 
 impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
-    fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
+    fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
         Box::pin(async move {
             // A token freshly injected into the source (e.g. via `prime`) must
             // supersede any still-valid cached token, so don't short-circuit on
@@ -317,7 +317,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        core::{platform::SystemTime, secrets::SecretString},
+        core::{RetryAdvice, platform::SystemTime, secrets::SecretString},
         grant::core::token_response::RawTokenResponse,
     };
 
@@ -352,7 +352,7 @@ mod tests {
     // A bearer-token fake: it does not implement `resource_server_dpop`, relying
     // on the trait's `NoDPoP` default.
     impl TokenSource for FakeSource {
-        fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
+        fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             let result = self
                 .results
@@ -365,7 +365,7 @@ mod tests {
                 // joined sibling is polled mid-acquisition — exercising the
                 // single-flight and refresh-ahead non-blocking paths.
                 tokio::task::yield_now().await;
-                result.map(Arc::new)
+                Ok(result.map(Arc::new)?)
             })
         }
 
@@ -498,13 +498,14 @@ mod tests {
     #[tokio::test]
     async fn propagates_source_error() {
         let cache = InMemoryTokenCache::builder()
-            .source(FakeSource::new([Err(Error::from(
-                crate::core::ErrorKind::ReauthRequired,
+            .source(FakeSource::new([Err(Error::new(
+                RetryAdvice::No,
+                "crypto failure",
             ))]))
             .build();
 
         let err = cache.token().await.unwrap_err();
-        assert_eq!(err.kind(), crate::core::ErrorKind::ReauthRequired);
+        assert_eq!(err.as_error().retry_advice(), crate::core::RetryAdvice::No);
     }
 
     #[tokio::test]
@@ -558,7 +559,7 @@ mod tests {
         // request: the error is swallowed and the valid token is served.
         let cache = refresh_ahead_cache([
             Ok(token("t1", 100)),
-            Err(Error::from(crate::core::ErrorKind::ReauthRequired)),
+            Err(Error::new(RetryAdvice::No, "crypto failure")),
         ]);
 
         assert_eq!(access_of(&cache.token().await.unwrap()), "t1");

@@ -61,11 +61,12 @@ refresh token store, refresh timing), see the [`_docs`] module.
 
 Most applications wrap a grant in an
 [`InMemoryTokenCache`](cache::InMemoryTokenCache) and an
-[`HttpAuthorizer`](authorizer::HttpAuthorizer) for the request path; every
-operation returns the one concrete [`Error`](core::Error) type, which embeds
-in your own error enum. See [caching tokens and wiring an
-authorizer](_docs::guide::caching) and [error
-handling](_docs::explanation::error_handling).
+[`HttpAuthorizer`](authorizer::HttpAuthorizer) for the request path. Most
+operations return [`Error`](core::Error); token acquisition returns
+[`TokenError`], whose [`Recovery`] guides
+application control flow. See [caching tokens and wiring an
+authorizer](_docs::guide::caching) and the [error-handling
+guide](_docs::guide::handling_errors).
 */
 
 #![forbid(unsafe_code)]
@@ -100,6 +101,11 @@ use std::sync::Arc;
 #[doc(inline)]
 pub use huskarl_core as core;
 
+#[doc(inline)]
+pub use crate::cache::{Recovery, TokenError, TokenOutcome};
+#[doc(inline)]
+pub use crate::grant::GrantOutcome;
+
 /// A type-erased wrapper around a [`core::crypto::verifier::JwsVerifierPlatform`] for use as a feature-gated default.
 #[derive(Debug, Clone)]
 pub struct DefaultJwsVerifierPlatform(Arc<dyn core::crypto::verifier::JwsVerifierPlatform>);
@@ -131,5 +137,41 @@ impl Default for DefaultJwsVerifierPlatform {
         Self(Arc::new(
             huskarl_crypto_webcrypto::WebCryptoVerifierPlatform::default(),
         ))
+    }
+}
+
+// Keep the list of control-flow error types in one explanatory document.
+#[cfg(test)]
+mod control_flow_error_types {
+    // Public APIs returning these types expect callers to branch on variants.
+    const EXCEPTIONS: &[&str] = &["PollError", "LoopbackError", "ParseCallbackError"];
+
+    const CRATE_MODEL: &str = include_str!("../docs/explanation/error_handling.md");
+    const CORE_MODEL: &str = include_str!("../../huskarl-core/docs/explanation/error_handling.md");
+
+    // Each exception must be discoverable from the error-model explanation.
+    #[test]
+    fn every_exception_is_documented() {
+        for name in EXCEPTIONS {
+            assert!(
+                CRATE_MODEL.contains(name),
+                "{name} is returned instead of `Error` but the error-handling page \
+                 does not mention it — a reader meeting it has nowhere to learn why"
+            );
+        }
+    }
+
+    // Core explains the generic model but does not enumerate this crate's
+    // specialized control-flow errors.
+    #[test]
+    fn the_core_page_does_not_keep_a_second_list() {
+        for name in EXCEPTIONS {
+            assert!(
+                !CORE_MODEL.contains(name),
+                "the core error model names {name}, which puts the list of \
+                 exceptions in two places again — state the rule there and leave \
+                 the enumeration to this crate's page"
+            );
+        }
     }
 }

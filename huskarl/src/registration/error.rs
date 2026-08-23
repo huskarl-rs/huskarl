@@ -160,6 +160,34 @@ mod classification {
         );
     }
 
+    // Recovery is derived from the verdict code rather than the error variant.
+    #[test]
+    fn what_to_do_falls_out_of_the_code_not_the_variant() {
+        for code in [
+            "invalid_redirect_uri",
+            "invalid_client_metadata",
+            "invalid_software_statement",
+            "unapproved_software_statement",
+        ] {
+            let err = Error::from(RegistrationError::OAuthError {
+                verdict: crate::core::OAuthError::new(code),
+            });
+            assert_eq!(
+                crate::cache::Recovery::implied_by(&err),
+                crate::cache::Recovery::AdjustRequest,
+                "{code}"
+            );
+        }
+
+        let bespoke = Error::from(RegistrationError::OAuthError {
+            verdict: crate::core::OAuthError::new("something_bespoke"),
+        });
+        assert_eq!(
+            crate::cache::Recovery::implied_by(&bespoke),
+            crate::cache::Recovery::Fail
+        );
+    }
+
     // Local failures must not invent a server verdict.
     #[test]
     fn a_local_failure_carries_no_verdict() {

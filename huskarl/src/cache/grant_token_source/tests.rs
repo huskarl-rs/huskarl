@@ -7,6 +7,7 @@ use super::*;
 use crate::{
     cache::{InMemoryRefreshTokenStore, NoSource, TokenSource, from_fn, single_use},
     core::{
+        OAuthError,
         client_auth::NoAuth,
         http::{HttpClient, HttpResponse, Idempotency},
         platform::SystemTime,
@@ -130,21 +131,25 @@ fn refresh_token(value: &str) -> RefreshToken {
     RefreshToken::new(SecretString::new(value), None)
 }
 
-fn assert_get_token_error(err: &Error, kind: ErrorKind, matcher: impl Fn(&GetTokenError) -> bool) {
-    assert_eq!(err.kind(), kind);
-    let source = std::error::Error::source(err)
-        .expect("error carries a GetTokenError source")
-        .downcast_ref::<GetTokenError>()
-        .expect("source is a GetTokenError");
-    assert!(matcher(source), "unexpected GetTokenError: {source}");
+fn assert_get_token_error(err: &TokenError, advice: RetryAdvice) {
+    assert_eq!(err.as_error().retry_advice(), advice, "advice");
 }
 
-fn assert_reauth_required(err: &Error, matcher: impl Fn(&GetTokenError) -> bool) {
-    assert_get_token_error(err, ErrorKind::ReauthRequired, matcher);
+/// Asserts on the remedy alone: the error carries whichever underlying failure
+/// exhausted the source, so pinning more would test the upstream failure rather
+/// than the source's own verdict.
+fn assert_reauth_required(err: &TokenError) {
+    assert_eq!(err.recovery(), Recovery::Reauthenticate, "recovery");
 }
 
-fn assert_backoff(err: &Error, matcher: impl Fn(&GetTokenError) -> bool) {
-    assert_get_token_error(err, ErrorKind::Backoff, matcher);
+/// A source in cooldown reports a retry that *carries* the remaining interval,
+/// so assert the shape rather than a wall-clock value.
+fn assert_backoff(err: &TokenError) {
+    assert!(
+        matches!(err.recovery(), Recovery::Retry { after: Some(_) }),
+        "expected a retry carrying a cooldown, got {:?}",
+        err.recovery()
+    );
 }
 
 /// A valid (non-expired) token carrying the given refresh token.
@@ -316,8 +321,7 @@ async fn refresh_response_with_rotated_refresh_token_replaces_existing() {
 
     http.push(
         StatusCode::OK,
-        r#"{"access_token":"new-access-token","token_type":"bearer","expires_in":3600,"refresh_token":"rt-rotated"}"#,
-    );
+        r#"{"access_token":"new-access-token","token_type":"bearer","expires_in":3600,"refresh_token":"rt-rotated"}"#);
 
     source.token().await.unwrap();
 
@@ -339,9 +343,7 @@ async fn transient_refresh_failure_retains_refresh_token() {
     );
 
     let err = source.token().await.unwrap_err();
-    assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
-        matches!(e, GetTokenError::RefreshFailed { .. })
-    });
+    assert_get_token_error(&err, RetryAdvice::RETRY);
 
     assert_eq!(
         stored_refresh_token(&store).await.as_deref(),
@@ -356,6 +358,73 @@ async fn transient_refresh_failure_retains_refresh_token() {
     assert_eq!(access_of(&source.token().await.unwrap()), "recovered");
 }
 
+/// A refresh the AS answered `invalid_scope` is a live path, not an exhausted
+/// one: RFC 6749 §6 permits `scope` on a refresh request, and only
+/// `invalid_grant` retires the stored token — so the credential is still there
+/// and narrowing the request is something the caller can do unaided.
+///
+/// Judging a refresh by `RetryAdvice` alone reported `Reauthenticate` here,
+/// sending a user to log in over a scope. Both alternatives now ask the same
+/// question, so neither is held to a stricter standard than the other.
+#[tokio::test]
+async fn request_shaped_refresh_failure_is_adjustable_not_exhausted() {
+    let store = SharedRefreshStore::default();
+    let http = MockHttpClient::default();
+    // `NoSource`: the refresh token is the only path, so if it is judged
+    // exhausted there is nothing else to mask the verdict.
+    let source = primed_source(store.clone(), http.clone()).await;
+
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_scope"}"#);
+
+    let err = source.token().await.unwrap_err();
+    assert_get_token_error(&err, RetryAdvice::No);
+    assert_eq!(err.recovery(), Recovery::AdjustRequest);
+
+    // The verdict survives, which is what tells the caller *what* to adjust.
+    assert_eq!(
+        err.verdict().map(|v| v.code().as_str()),
+        Some("invalid_scope")
+    );
+
+    // And the claim the recovery rests on: the credential was never retired.
+    assert_eq!(
+        stored_refresh_token(&store).await.as_deref(),
+        Some("rt-original")
+    );
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"narrowed","token_type":"bearer","expires_in":3600}"#,
+    );
+    assert_eq!(access_of(&source.token().await.unwrap()), "narrowed");
+}
+
+/// The same rule where both alternatives failed, and the mirror of
+/// `request_rejection_survives_failed_refresh`: there the adjustable code came
+/// from the exchange, here from the refresh. The two must answer alike.
+#[tokio::test]
+async fn request_shaped_refresh_failure_survives_a_dead_exchange() {
+    let store = SharedRefreshStore::default();
+    let http = MockHttpClient::default();
+    let source = primed_source_with_params(store.clone(), http.clone()).await;
+
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_scope"}"#);
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+
+    let err = source.token().await.unwrap_err();
+    assert_get_token_error(&err, RetryAdvice::No);
+    assert_eq!(err.recovery(), Recovery::AdjustRequest);
+    // The reported failure is the live path's, not the dead exchange's, so the
+    // code names the thing the caller can actually change.
+    assert_eq!(
+        err.verdict().map(|v| v.code().as_str()),
+        Some("invalid_scope")
+    );
+    assert_eq!(
+        stored_refresh_token(&store).await.as_deref(),
+        Some("rt-original")
+    );
+}
+
 #[tokio::test]
 async fn invalid_grant_clears_refresh_token() {
     let store = SharedRefreshStore::default();
@@ -365,10 +434,54 @@ async fn invalid_grant_clears_refresh_token() {
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
 
     let err = source.token().await.unwrap_err();
-    assert_reauth_required(&err, |e| matches!(e, GetTokenError::RefreshFailed { .. }));
+    assert_reauth_required(&err);
+
+    // Exhaustion overrides the *advice* and nothing else. The refresh failure's
+    // whole classification still travels outward, so a caller at the top can
+    // still see what the server decided and on what response — rebuilding this
+    // layer from the advice alone left a rejection that never said what was
+    // rejected, and an `http_status` of `None` on a failure that plainly had
+    // one.
+    assert!(
+        err.verdict()
+            .is_some_and(|v| v.code() == &OAuthErrorCode::InvalidGrant),
+        "the server's verdict must survive exhaustion: {err:?}"
+    );
 
     assert_eq!(stored_refresh_token(&store).await, None);
     assert!(!source.has_refresh_token().await.unwrap());
+}
+
+/// The status-over-body rule, at the site where getting it wrong costs most.
+/// RFC 6749 §5.2 puts error codes on 4xx, so `invalid_grant` in a gateway's
+/// 503 body is an echo and not a verdict on this token. Clearing it would
+/// retire a working credential over an outage — and leave nothing to fall
+/// back to once the outage lifted.
+#[tokio::test]
+async fn invalid_grant_echoed_on_a_5xx_retains_the_refresh_token() {
+    let store = SharedRefreshStore::default();
+    let http = MockHttpClient::default();
+    let source = primed_source(store.clone(), http.clone()).await;
+
+    http.push(
+        StatusCode::SERVICE_UNAVAILABLE,
+        r#"{"error":"invalid_grant"}"#,
+    );
+
+    let err = source.token().await.unwrap_err();
+    assert_get_token_error(&err, RetryAdvice::RETRY);
+
+    assert_eq!(
+        stored_refresh_token(&store).await.as_deref(),
+        Some("rt-original")
+    );
+
+    // And it is still there to succeed with once the outage lifts.
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"recovered","token_type":"bearer","expires_in":3600}"#,
+    );
+    assert_eq!(access_of(&source.token().await.unwrap()), "recovered");
 }
 
 #[tokio::test]
@@ -508,9 +621,7 @@ async fn both_failed_transiently_stays_retryable() {
     );
 
     let err = source.token().await.unwrap_err();
-    assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
-        matches!(e, GetTokenError::BothFailed { .. })
-    });
+    assert_get_token_error(&err, RetryAdvice::RETRY);
 
     http.push(
         StatusCode::OK,
@@ -529,8 +640,141 @@ async fn both_failed_definitively_requires_reauth() {
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
 
     let err = source.token().await.unwrap_err();
-    assert_reauth_required(&err, |e| matches!(e, GetTokenError::BothFailed { .. }));
+    assert_reauth_required(&err);
     assert_eq!(stored_refresh_token(&store).await, None);
+}
+
+/// **The invariant the four-way match in `combine_exchange_error` exists to
+/// hold.** [`Recovery::Reauthenticate`] claims every alternative is spent, so it
+/// may be reported only where neither is — and where one survives, the remedy
+/// must be that survivor's own, or a caller with a path left is sent to fetch a
+/// human anyway.
+///
+/// A table over the cross-product rather than a scenario per arm. It separates
+/// an attempt's actionable classification from a source that can mint a
+/// different credential, while preserving an explicit server demand for human
+/// interaction. Driven directly because the property belongs to the combining
+/// rule, not to any particular pair of responses.
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the cross-product and its expected decision table belong together"
+)]
+fn reauthentication_is_reported_only_when_neither_alternative_is_viable() {
+    fn rejected(code: &str) -> Error {
+        Error::propagate(
+            crate::core::error::propagation::Classification::judged(
+                RetryAdvice::No,
+                OAuthError::new(code),
+            ),
+            "the token endpoint",
+        )
+    }
+
+    /// One failure an attempt can end in, and whether it leaves a path of its
+    /// own. Built per use, since an `Error` is consumed by the combine.
+    #[derive(Clone, Copy)]
+    struct Failure {
+        label: &'static str,
+        build: fn() -> Error,
+        implied_recovery: Recovery,
+        live: bool,
+        source_can_recover: bool,
+    }
+
+    let failures = [
+        Failure {
+            label: "a transport timeout",
+            build: || Error::new(RetryAdvice::RETRY, "the endpoint timed out"),
+            implied_recovery: Recovery::Retry { after: None },
+            live: true,
+            source_can_recover: true,
+        },
+        Failure {
+            label: "an invalid_scope rejection",
+            build: || rejected("invalid_scope"),
+            implied_recovery: Recovery::AdjustRequest,
+            live: true,
+            source_can_recover: true,
+        },
+        Failure {
+            label: "an invalid_grant rejection",
+            build: || rejected("invalid_grant"),
+            implied_recovery: Recovery::Fail,
+            live: false,
+            source_can_recover: true,
+        },
+        Failure {
+            label: "a login_required rejection",
+            build: || rejected("login_required"),
+            implied_recovery: Recovery::Reauthenticate,
+            live: false,
+            source_can_recover: false,
+        },
+    ];
+
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(MockHttpClient::default()))
+        .grant_parameters(ClientCredentialsGrantParameters::new())
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+
+    for exchange in failures {
+        for refresh in failures {
+            for source_available in [true, false] {
+                // A rejected exchange is a path only while the parameter source
+                // could produce something different next time; a retained
+                // refresh token needs no such permission.
+                let anything_left =
+                    (source_available && exchange.source_can_recover) || refresh.live;
+                let expected_attempt = if !(source_available && exchange.live) && refresh.live {
+                    Attempt::Refresh
+                } else {
+                    Attempt::Exchange
+                };
+                let expected_recovery = if anything_left {
+                    match expected_attempt {
+                        Attempt::Refresh => refresh.implied_recovery,
+                        Attempt::Exchange
+                            if source_available && exchange.implied_recovery == Recovery::Fail =>
+                        {
+                            Recovery::Retry { after: None }
+                        }
+                        Attempt::Exchange => exchange.implied_recovery,
+                    }
+                } else {
+                    Recovery::Reauthenticate
+                };
+                let err = source.combine_exchange_error(
+                    Some((refresh.build)()),
+                    (exchange.build)(),
+                    source_available,
+                );
+                let case = format!(
+                    "exchange: {}, refresh: {}, source_available: {source_available}",
+                    exchange.label, refresh.label
+                );
+
+                assert_eq!(err.recovery(), expected_recovery, "wrong recovery — {case}");
+
+                let acquisition_cause = err
+                    .as_error()
+                    .cause()
+                    .downcast_ref::<GetTokenError>()
+                    .expect("combine produces a GetTokenError");
+                let GetTokenError::BothFailed {
+                    reported_attempt, ..
+                } = acquisition_cause
+                else {
+                    panic!("combine with two failures must report BothFailed — {case}")
+                };
+                assert_eq!(
+                    *reported_attempt, expected_attempt,
+                    "wrong attempt selected for reporting — {case}"
+                );
+            }
+        }
+    }
 }
 
 #[tokio::test]
@@ -550,7 +794,25 @@ async fn one_time_parameters_consumed_by_first_exchange() {
     // The spent code must not be replayed: no HTTP call (empty mock would
     // panic), and the error reports that no token source remains.
     let err = source.token().await.unwrap_err();
-    assert_reauth_required(&err, |e| matches!(e, GetTokenError::NoTokenSource));
+    assert_reauth_required(&err);
+}
+
+/// Retry advice describes the failed HTTP operation; recovery describes the
+/// token source after its one-time parameters have been consumed. Preserve both
+/// facts even when they differ.
+#[tokio::test]
+async fn exhausted_one_time_source_preserves_underlying_retry_advice() {
+    let http = MockHttpClient::default();
+    let source = one_time_source(SharedRefreshStore::default(), http.clone()).await;
+
+    http.push(
+        StatusCode::SERVICE_UNAVAILABLE,
+        r#"{"error":"temporarily_unavailable"}"#,
+    );
+    let err = source.token().await.unwrap_err();
+
+    assert_eq!(err.recovery(), Recovery::Reauthenticate);
+    assert_eq!(err.as_error().retry_advice(), RetryAdvice::RETRY);
 }
 
 #[tokio::test]
@@ -570,9 +832,7 @@ async fn one_time_parameters_not_replayed_after_failed_refresh() {
         r#"{"error":"temporarily_unavailable"}"#,
     );
     let err = source.token().await.unwrap_err();
-    assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
-        matches!(e, GetTokenError::RefreshFailed { .. })
-    });
+    assert_get_token_error(&err, RetryAdvice::RETRY);
 
     assert_eq!(stored_refresh_token(&store).await.as_deref(), Some("rt-1"));
 }
@@ -611,12 +871,45 @@ async fn reusable_parameters_discarded_after_invalid_grant() {
 
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
     let err = source.token().await.unwrap_err();
-    assert_reauth_required(&err, |e| matches!(e, GetTokenError::ExchangeFailed { .. }));
+    assert_reauth_required(&err);
 
     // The rejected parameters are spent: a second call must not replay them.
     assert!(!source.has_grant_parameters());
     let err = source.token().await.unwrap_err();
-    assert_reauth_required(&err, |e| matches!(e, GetTokenError::NoTokenSource));
+    assert_reauth_required(&err);
+}
+
+/// The same echo at the exchange. Spending the source here would turn one
+/// gateway outage into a permanent `NoTokenSource` and send the caller to
+/// re-authenticate over a credential nothing ever judged.
+#[tokio::test]
+async fn invalid_grant_echoed_on_a_5xx_retains_the_parameters() {
+    let http = MockHttpClient::default();
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(ClientCredentialsGrantParameters::new())
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+
+    http.push(
+        StatusCode::SERVICE_UNAVAILABLE,
+        r#"{"error":"invalid_grant"}"#,
+    );
+    let err = source.token().await.unwrap_err();
+    assert_get_token_error(&err, RetryAdvice::RETRY);
+    assert_eq!(
+        err.recovery(),
+        Recovery::Retry { after: None },
+        "an outage is something to wait out, not to re-authenticate over"
+    );
+
+    // Not spent: the next call replays them and succeeds once the AS is back.
+    assert!(source.has_grant_parameters());
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"t1","token_type":"bearer","expires_in":3600}"#,
+    );
+    assert_eq!(access_of(&source.token().await.unwrap()), "t1");
 }
 
 #[tokio::test]
@@ -630,9 +923,10 @@ async fn request_rejection_retains_source_and_credential() {
 
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_scope"}"#);
     let err = source.token().await.unwrap_err();
-    assert_get_token_error(&err, ErrorKind::RequestRejected, |e| {
-        matches!(e, GetTokenError::ExchangeFailed { .. })
-    });
+    assert_get_token_error(&err, RetryAdvice::No);
+    // The scope, not the credential, is what the server named — so the caller
+    // is told to adjust rather than to re-authenticate.
+    assert_eq!(err.recovery(), Recovery::AdjustRequest);
     assert!(source.has_grant_parameters());
 
     http.push(
@@ -652,9 +946,8 @@ async fn request_rejection_survives_failed_refresh() {
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_scope"}"#);
 
     let err = source.token().await.unwrap_err();
-    assert_get_token_error(&err, ErrorKind::RequestRejected, |e| {
-        matches!(e, GetTokenError::BothFailed { .. })
-    });
+    assert_get_token_error(&err, RetryAdvice::No);
+    assert_eq!(err.recovery(), Recovery::AdjustRequest);
 }
 
 #[tokio::test]
@@ -671,10 +964,7 @@ async fn reusable_parameters_retained_after_transient_failure() {
         r#"{"error":"temporarily_unavailable"}"#,
     );
     let err = source.token().await.unwrap_err();
-    assert!(err.is_retryable());
-    assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
-        matches!(e, GetTokenError::ExchangeFailed { .. })
-    });
+    assert_get_token_error(&err, RetryAdvice::RETRY);
     assert!(source.has_grant_parameters());
 
     http.push(
@@ -697,9 +987,14 @@ async fn dynamic_source_not_discarded_after_invalid_grant() {
 
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
     let err = source.token().await.unwrap_err();
-    assert_get_token_error(&err, ErrorKind::InvalidGrant, |e| {
-        matches!(e, GetTokenError::ExchangeFailed { .. })
-    });
+    // Not `Reauthenticate`. The next call in this very test succeeds without
+    // any user involvement, so demanding an interactive login here would send
+    // a human through a flow one automatic attempt short of working.
+    assert_get_token_error(&err, RetryAdvice::No);
+    assert!(
+        err.verdict()
+            .is_some_and(|v| v.code() == &OAuthErrorCode::InvalidGrant)
+    );
     assert!(source.has_grant_parameters());
 
     http.push(
@@ -707,6 +1002,70 @@ async fn dynamic_source_not_discarded_after_invalid_grant() {
         r#"{"access_token":"t1","token_type":"bearer","expires_in":3600}"#,
     );
     assert_eq!(access_of(&source.token().await.unwrap()), "t1");
+}
+
+/// A rejected refresh does not turn a subsequent rejection of one dynamically
+/// minted credential into exhaustion. The next mint can still succeed.
+#[tokio::test]
+async fn dynamic_source_survives_invalid_grant_after_failed_refresh() {
+    let store = SharedRefreshStore::default();
+    let http = MockHttpClient::default();
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(from_fn(|| async {
+            Ok::<_, Error>(ClientCredentialsGrantParameters::new())
+        }))
+        .refresh_store(store)
+        .build();
+    source.prime(valid_response("rt-original")).await.unwrap();
+    source.token().await.unwrap();
+
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+    let err = source.token().await.unwrap_err();
+    assert_eq!(err.recovery(), Recovery::Retry { after: None });
+    assert!(
+        err.verdict()
+            .is_some_and(|v| v.code() == &OAuthErrorCode::InvalidGrant)
+    );
+    assert!(source.has_grant_parameters());
+
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"recovered","token_type":"bearer","expires_in":3600}"#,
+    );
+    assert_eq!(access_of(&source.token().await.unwrap()), "recovered");
+}
+
+/// A parameter source can know a retry interval that the token source cannot
+/// reconstruct, such as a KMS throttle returned over gRPC. Preserve it through
+/// combination with a failed refresh.
+#[tokio::test]
+async fn parameter_source_retry_delay_survives_failed_refresh() {
+    let store = SharedRefreshStore::default();
+    let http = MockHttpClient::default();
+    let delay = Duration::from_secs(17);
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(from_fn(move || async move {
+            Err::<ClientCredentialsGrantParameters, _>(Error::new(
+                RetryAdvice::retry_after(delay),
+                "the KMS is throttling signing requests",
+            ))
+        }))
+        .refresh_store(store)
+        .build();
+    source.prime(valid_response("rt-original")).await.unwrap();
+    source.token().await.unwrap();
+
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+    let err = source.token().await.unwrap_err();
+
+    assert_eq!(err.recovery(), Recovery::Retry { after: Some(delay) });
+    assert_eq!(
+        err.as_error().retry_advice(),
+        RetryAdvice::retry_after(delay)
+    );
 }
 
 fn dynamic_source(
@@ -725,10 +1084,22 @@ fn dynamic_source(
         .build()
 }
 
-fn assert_invalid_grant(err: &Error) {
-    assert_get_token_error(err, ErrorKind::InvalidGrant, |e| {
-        matches!(e, GetTokenError::ExchangeFailed { .. })
-    });
+/// A rejected credential on a source that is *not* spent — every caller of
+/// this helper uses a dynamic source, so the source survives the rejection.
+///
+/// Not `Reauthenticate`: no user can fix a signer that keeps producing
+/// assertions the server rejects, and the source may yet recover on its own
+/// (a rotated key, a corrected clock). Once the breaker trips, that "later,
+/// automatically" becomes explicit as a `Retry` carrying the cooldown — see
+/// `assert_backoff`.
+fn assert_invalid_grant(err: &TokenError) {
+    assert_get_token_error(err, RetryAdvice::No);
+    assert_eq!(err.recovery(), Recovery::Retry { after: None });
+    assert!(
+        err.verdict()
+            .is_some_and(|v| v.code() == &OAuthErrorCode::InvalidGrant),
+        "the server's verdict must survive to the caller: {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -744,11 +1115,179 @@ async fn breaker_trips_after_threshold_and_backs_off() {
     assert_invalid_grant(&source.token().await.unwrap_err());
 
     // ...then the breaker is open: the next call backs off without any HTTP
-    // (the empty mock would panic if the endpoint were reached). The kind is
-    // Backoff — "retry later", not ReauthRequired.
-    assert_backoff(&source.token().await.unwrap_err(), |e| {
-        matches!(e, GetTokenError::Backoff)
+    // (the empty mock would panic if the endpoint were reached). The recovery
+    // is a Retry carrying the cooldown — "retry later", not Reauthenticate.
+    assert_backoff(&source.token().await.unwrap_err());
+}
+
+/// Captures the `outcome` label of every `huskarl.token.acquire` increment.
+///
+/// Hand-rolled rather than pulled from `metrics-util`: it is a dozen lines, and
+/// a test-only dependency for one assertion is a poor trade.
+#[cfg(feature = "metrics")]
+#[derive(Clone, Default)]
+struct OutcomeRecorder(Arc<Mutex<Vec<String>>>);
+
+#[cfg(feature = "metrics")]
+struct RecordOutcome {
+    sink: Arc<Mutex<Vec<String>>>,
+    outcome: String,
+}
+
+#[cfg(feature = "metrics")]
+impl ::metrics::CounterFn for RecordOutcome {
+    fn increment(&self, _by: u64) {
+        self.sink.lock().unwrap().push(self.outcome.clone());
+    }
+
+    fn absolute(&self, _value: u64) {}
+}
+
+#[cfg(feature = "metrics")]
+impl ::metrics::Recorder for OutcomeRecorder {
+    fn describe_counter(
+        &self,
+        _: ::metrics::KeyName,
+        _: Option<::metrics::Unit>,
+        _: ::metrics::SharedString,
+    ) {
+    }
+
+    fn describe_gauge(
+        &self,
+        _: ::metrics::KeyName,
+        _: Option<::metrics::Unit>,
+        _: ::metrics::SharedString,
+    ) {
+    }
+
+    fn describe_histogram(
+        &self,
+        _: ::metrics::KeyName,
+        _: Option<::metrics::Unit>,
+        _: ::metrics::SharedString,
+    ) {
+    }
+
+    fn register_counter(
+        &self,
+        key: &::metrics::Key,
+        _: &::metrics::Metadata<'_>,
+    ) -> ::metrics::Counter {
+        if key.name() != "huskarl.token.acquire" {
+            return ::metrics::Counter::noop();
+        }
+        let outcome = key
+            .labels()
+            .find(|label| label.key() == "outcome")
+            .map(|label| label.value().to_owned())
+            .unwrap_or_default();
+        ::metrics::Counter::from_arc(Arc::new(RecordOutcome {
+            sink: Arc::clone(&self.0),
+            outcome,
+        }))
+    }
+
+    fn register_gauge(&self, _: &::metrics::Key, _: &::metrics::Metadata<'_>) -> ::metrics::Gauge {
+        ::metrics::Gauge::noop()
+    }
+
+    fn register_histogram(
+        &self,
+        _: &::metrics::Key,
+        _: &::metrics::Metadata<'_>,
+    ) -> ::metrics::Histogram {
+        ::metrics::Histogram::noop()
+    }
+}
+
+/// **Every failure exit records an outcome, the breaker's included.**
+///
+/// The one that mattered was dark: the backoff path returned
+/// `TokenError::from(..)` directly rather than through the emitting exit, so
+/// `TokenOutcome::Backoff` — the condition a dashboard most needs, a source
+/// that has stopped trying — could never be observed. The table pinning
+/// `GetTokenError::Backoff` to that label passed throughout, because it calls
+/// `outcome()` itself instead of reaching it down a path that emits.
+///
+/// A plain `#[test]` driving a current-thread runtime, because the recorder
+/// guard is thread-local and everything must stay on one thread.
+#[cfg(feature = "metrics")]
+#[test]
+fn every_failure_exit_records_its_outcome() {
+    let recorder = OutcomeRecorder::default();
+    let seen = ::metrics::with_local_recorder(&recorder, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let http = MockHttpClient::default();
+                let source = dynamic_source(http.clone(), 2, std::time::Duration::from_mins(1));
+                http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+                http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+
+                source.token().await.unwrap_err();
+                source.token().await.unwrap_err();
+                // The breaker is now open, so this one reaches no endpoint —
+                // the empty mock would panic if it did.
+                source.token().await.unwrap_err();
+            });
+        recorder.0.lock().unwrap().clone()
     });
+
+    assert_eq!(seen.len(), 3, "one record per failure, got {seen:?}");
+    assert_eq!(
+        seen.last().map(String::as_str),
+        Some(crate::TokenOutcome::Backoff.as_str()),
+        "the backed-off exit records too, got {seen:?}"
+    );
+}
+
+#[cfg(feature = "metrics")]
+#[test]
+fn successful_acquisitions_record_success_outcomes() {
+    let recorder = OutcomeRecorder::default();
+    let seen = ::metrics::with_local_recorder(&recorder, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let store = SharedRefreshStore::default();
+                let http = MockHttpClient::default();
+                let source = GrantTokenSource::builder()
+                    .grant(client_credentials_grant(http.clone()))
+                    .grant_parameters(from_fn(|| async {
+                        Ok::<_, Error>(ClientCredentialsGrantParameters::new())
+                    }))
+                    .refresh_store(store)
+                    .build();
+
+                source.prime(valid_response("rt-original")).await.unwrap();
+                source.token().await.unwrap();
+
+                http.push(
+                    StatusCode::OK,
+                    r#"{"access_token":"refreshed","token_type":"bearer","expires_in":3600}"#,
+                );
+                source.token().await.unwrap();
+
+                source.clear().await.unwrap();
+                http.push(
+                    StatusCode::OK,
+                    r#"{"access_token":"exchanged","token_type":"bearer","expires_in":3600}"#,
+                );
+                source.token().await.unwrap();
+            });
+        recorder.0.lock().unwrap().clone()
+    });
+
+    assert_eq!(
+        seen,
+        vec![crate::TokenOutcome::Success.as_str(); 3],
+        "pending, refresh, and exchange successes must all be emitted"
+    );
 }
 
 #[tokio::test]
@@ -839,9 +1378,7 @@ async fn open_breaker_does_not_mask_retryable_refresh() {
         );
         http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
         let err = source.token().await.unwrap_err();
-        assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
-            matches!(e, GetTokenError::BothFailed { .. })
-        });
+        assert_get_token_error(&err, RetryAdvice::RETRY);
     }
 
     // Breaker is now open. Only one (transient) refresh response is queued:
@@ -852,9 +1389,39 @@ async fn open_breaker_does_not_mask_retryable_refresh() {
         r#"{"error":"temporarily_unavailable"}"#,
     );
     let err = source.token().await.unwrap_err();
-    assert_get_token_error(&err, ErrorKind::Transport { retryable: true }, |e| {
-        matches!(e, GetTokenError::RefreshFailed { .. })
-    });
+    assert_get_token_error(&err, RetryAdvice::RETRY);
+}
+
+#[tokio::test]
+async fn open_breaker_does_not_mask_adjustable_refresh() {
+    let store = SharedRefreshStore::default();
+    let http = MockHttpClient::default();
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(from_fn(|| async {
+            Ok::<_, Error>(ClientCredentialsGrantParameters::new())
+        }))
+        .refresh_store(store)
+        .breaker_threshold(1)
+        .build();
+    source.prime(valid_response("rt-original")).await.unwrap();
+    source.token().await.unwrap();
+
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_scope"}"#);
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+    let err = source.token().await.unwrap_err();
+    assert_eq!(err.recovery(), Recovery::AdjustRequest);
+
+    // The breaker is open, so only refresh is attempted. Its request-shape
+    // verdict remains the actionable result rather than being replaced by
+    // Backoff.
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_scope"}"#);
+    let err = source.token().await.unwrap_err();
+    assert_eq!(err.recovery(), Recovery::AdjustRequest);
+    assert_eq!(
+        err.verdict().map(|verdict| verdict.code().as_str()),
+        Some("invalid_scope")
+    );
 }
 
 /// A session-bound grant powers the whole source chain: the internally-built

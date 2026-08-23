@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::{
+    cache::TokenError,
     core::{
         Error,
         dpop::{NoDPoP, ResourceServerDPoP},
@@ -13,9 +14,9 @@ use crate::{
 
 /// Where a cache obtains its tokens.
 ///
-/// Everything about *how* a token is produced — refreshing, exchanging a grant,
-/// or receiving one from elsewhere — lives behind this one trait, so there is a
-/// single token-production concept. Caching is itself a `TokenSource` (see
+/// Implementations may refresh a credential, exchange a grant, receive a token
+/// from another component, or cache another source. Caching is itself a
+/// `TokenSource` (see
 /// [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache)), layered on top.
 ///
 /// The built-in producer is
@@ -35,7 +36,14 @@ pub trait TokenSource: MaybeSendSync {
     /// request hot path.
     ///
     /// A caching source serves a memoized token; a producer mints a fresh one.
-    fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>>;
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError`] with the recovery action chosen by the source.
+    /// Convert a standalone [`Error`] with [`TokenError::from`], or use
+    /// [`TokenError::new`] when the source knows whether another acquisition
+    /// path remains.
+    fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>>;
 
     /// The `DPoP` binding for resource-server requests made with these tokens.
     ///
@@ -79,7 +87,7 @@ pub trait TokenSource: MaybeSendSync {
 macro_rules! forward_token_source {
     ($wrapper:ty) => {
         impl<T: TokenSource + ?Sized> TokenSource for $wrapper {
-            fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, Error>> {
+            fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
                 (**self).token()
             }
 
