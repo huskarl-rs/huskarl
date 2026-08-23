@@ -2,18 +2,18 @@ use bon::Builder;
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, Uri, header::CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
-use snafu::Snafu;
+use snafu::prelude::*;
 
 use crate::core::{
-    Error, ErrorKind,
+    Error, OAuthError, RetryAdvice,
     client_auth::AuthenticationParams,
     dpop::AuthorizationServerDPoP,
-    http::{HttpClient, Idempotency},
+    http::{FailedResponse, HttpClient, Idempotency, TruncatedBody},
     oauth_form,
 };
 
 #[derive(Builder)]
-pub struct OAuth2FormRequest<'a, F: Serialize> {
+pub(crate) struct OAuth2FormRequest<'a, F: Serialize> {
     uri: &'a Uri,
     form: &'a F,
     auth_params: AuthenticationParams<'a>,
@@ -22,20 +22,19 @@ pub struct OAuth2FormRequest<'a, F: Serialize> {
 }
 
 impl<F: Serialize> OAuth2FormRequest<'_, F> {
-    pub async fn build_request(&self) -> Result<Request<Bytes>, Error> {
+    pub(crate) async fn build_request(&self) -> Result<Request<Bytes>, Error> {
         let headers = self.auth_params.headers.clone().unwrap_or_default();
 
-        let mut body = oauth_form::to_string(self.form)
-            .map_err(|e| serialize_form_error(e).with_context("serializing exchange parameters"))?;
+        let mut body =
+            oauth_form::to_string(self.form).context(SerializingExchangeParametersSnafu)?;
 
         if let Some(kv) = &self.auth_params.form_params {
             if !body.is_empty() {
                 body.push('&');
             }
 
-            oauth_form::push_to_string(&mut body, kv).map_err(|e| {
-                serialize_form_error(e).with_context("serializing authentication parameters")
-            })?;
+            oauth_form::push_to_string(&mut body, kv)
+                .context(SerializingAuthenticationParametersSnafu)?;
         }
 
         let (mut parts, ()) = http::Request::new(()).into_parts();
@@ -47,10 +46,8 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             .proof(&parts.method, &parts.uri, self.dpop_jkt)
             .await?
         {
-            let mut proof_value = HeaderValue::from_str(proof.expose_secret()).map_err(|e| {
-                Error::new(ErrorKind::DPoP, e)
-                    .with_context("DPoP proof is not a valid header value")
-            })?;
+            let mut proof_value =
+                HeaderValue::from_str(proof.expose_secret()).context(ProofNotAHeaderValueSnafu)?;
             proof_value.set_sensitive(true);
             parts.headers.insert("DPoP", proof_value);
         }
@@ -71,26 +68,20 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     /// If the error is `use_dpop_nonce`, no retry is performed — wrap the call site
     /// with [`with_dpop_nonce_retry!`], which retries with freshly generated
     /// `auth_params`.
-    pub async fn execute<R: for<'de> Deserialize<'de>>(
+    pub(crate) async fn execute<R: for<'de> Deserialize<'de>>(
         &self,
         http_client: &dyn HttpClient,
     ) -> Result<R, Error> {
         let request = self.build_request().await?;
-        // Token requests may consume one-shot state (an authorization code,
-        // a rotating refresh token) — never known-idempotent.
+        // The body may consume one-shot state, and replaying it would reuse the
+        // `jti` and DPoP proof. Higher layers must rebuild any retry.
         let response = http_client.execute(request, Idempotency::Unknown).await?;
-
-        let content_type = if response.status.is_success() {
-            None
-        } else {
-            response.headers.get(CONTENT_TYPE).cloned()
-        };
 
         if let Some(nonce) = crate::authorizer::extract_dpop_nonce(&response.headers) {
             self.dpop.update_nonce(nonce);
         }
 
-        parse_oauth2_response(response.status, content_type, &response.body)
+        parse_oauth2_response(response.status, &response.headers, &response.body)
     }
 
     /// Executes the form request, expecting an empty response body on success.
@@ -100,7 +91,10 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     ///
     /// The main current use of this endpoint is the revocation endpoint, which is
     /// not expected to require a `DPoP` nonce.
-    pub async fn execute_empty_response(&self, http_client: &dyn HttpClient) -> Result<(), Error> {
+    pub(crate) async fn execute_empty_response(
+        &self,
+        http_client: &dyn HttpClient,
+    ) -> Result<(), Error> {
         let request = self.build_request().await?;
         let response = http_client.execute(request, Idempotency::Unknown).await?;
 
@@ -108,90 +102,104 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             return Ok(());
         }
 
-        let content_type = response.headers.get(CONTENT_TYPE).cloned();
-
         Err(parse_oauth2_error_response(
             response.status,
-            content_type,
+            &response.headers,
             &response.body,
         ))
     }
 }
-
-fn serialize_form_error(source: oauth_form::Error) -> Error {
-    Error::new(ErrorKind::Config, source)
+/// The cause of a failure assembling an `OAuth2` form request.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum FormError {
+    /// The exchange parameters could not be form-encoded.
+    #[snafu(display("serializing exchange parameters"))]
+    #[classify(no)]
+    SerializingExchangeParameters {
+        /// The underlying error.
+        source: oauth_form::FormError,
+    },
+    /// The client-authentication parameters could not be form-encoded.
+    #[snafu(display("serializing authentication parameters"))]
+    #[classify(no)]
+    SerializingAuthenticationParameters {
+        /// The underlying error.
+        source: oauth_form::FormError,
+    },
+    /// The generated `DPoP` proof is not a valid HTTP header value.
+    #[snafu(display("DPoP proof is not a valid header value"))]
+    #[classify(no)]
+    ProofNotAHeaderValue {
+        /// The underlying error.
+        source: http::header::InvalidHeaderValue,
+    },
 }
 
 /// Parses an error response body as an `OAuth2` error. Always returns an error.
 ///
-/// Any 5xx → retryable [`ErrorKind::Transport`] whatever the body says; else by
-/// code: `invalid_grant` → [`ErrorKind::InvalidGrant`], `invalid_scope`/
-/// `invalid_target`/`invalid_resource` → [`ErrorKind::RequestRejected`],
-/// `use_dpop_nonce` → [`ErrorKind::DPoP`], other → [`ErrorKind::Protocol`].
+/// A well-formed body becomes a verbatim [`OAuthError`] verdict; endpoint code
+/// interprets its meaning. [`FailedResponse::into_error`] combines the code
+/// with the HTTP status and `Retry-After` header.
+///
+/// A `429` or `5xx` body is never a verdict, and an unparseable body produces an
+/// unusable-response error.
 fn parse_oauth2_error_response(
     status: http::StatusCode,
-    content_type: Option<HeaderValue>,
+    headers: &http::HeaderMap,
     body: &Bytes,
 ) -> Error {
+    let content_type = headers.get(CONTENT_TYPE).cloned();
+    // Handle an unexpected success status without panicking.
+    let Some(failed) = FailedResponse::new(status, headers) else {
+        return Error::new(
+            RetryAdvice::No,
+            HandleResponseError::UnparseableSuccessResponse {
+                body: RedactedBody(String::from_utf8_lossy(body).into_owned()),
+                source: serde::de::Error::custom("success status on the error path"),
+            },
+        );
+    };
+
     match serde_json::from_slice::<OAuth2ErrorBody>(body) {
         Ok(error_body) => {
-            let code = error_body.error.clone();
-            let description = error_body.error_description.clone();
-            // 5xx is a server fault, not a verdict on the credential (RFC 6749
-            // §5.2 requires 4xx): don't discard a valid RT on a stray code.
-            let kind = if status.is_server_error() {
-                ErrorKind::Transport { retryable: true }
-            } else {
-                match code.as_str() {
-                    "invalid_grant" => ErrorKind::InvalidGrant,
-                    "invalid_scope" | "invalid_target" | "invalid_resource" => {
-                        ErrorKind::RequestRejected
-                    }
-                    "use_dpop_nonce" => ErrorKind::DPoP,
-                    _ => ErrorKind::Protocol,
-                }
-            };
-            Error::new(
-                kind,
+            let verdict = OAuthError::new(error_body.error.as_str())
+                .with_description(error_body.error_description.clone())
+                .with_uri(error_body.error_uri.clone());
+            failed.into_error(
+                Some(verdict),
                 HandleResponseError::OAuth2 {
                     body: error_body,
                     status,
                     content_type,
                 },
             )
-            .with_oauth_error(code, description)
         }
-        Err(source) => {
-            let kind = if status.is_server_error() {
-                ErrorKind::Transport { retryable: true }
-            } else {
-                ErrorKind::Protocol
-            };
-            Error::new(
-                kind,
-                HandleResponseError::UnparseableErrorResponse {
-                    body: String::from_utf8_lossy(body).into_owned(),
-                    status,
-                    content_type,
-                    source,
-                },
-            )
-        }
+        // An unparseable body supplies no verdict.
+        Err(source) => failed.into_error(
+            None,
+            HandleResponseError::UnparseableErrorResponse {
+                body: TruncatedBody::from_bytes(body),
+                status,
+                content_type,
+                source,
+            },
+        ),
     }
 }
 
 fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
     status: http::StatusCode,
-    content_type: Option<HeaderValue>,
+    headers: &http::HeaderMap,
     body: &Bytes,
 ) -> Result<T, Error> {
     if !status.is_success() {
-        return Err(parse_oauth2_error_response(status, content_type, body));
+        return Err(parse_oauth2_error_response(status, headers, body));
     }
 
     serde_json::from_slice(body).map_err(|source| {
         Error::new(
-            ErrorKind::Protocol,
+            RetryAdvice::No,
             HandleResponseError::UnparseableSuccessResponse {
                 body: RedactedBody(String::from_utf8_lossy(body).into_owned()),
                 source,
@@ -207,7 +215,7 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
 /// wrapping [`Error`]'s source chain — would leak those tokens to logs, so the
 /// body is retained only to construct the error and its contents are never
 /// rendered.
-pub struct RedactedBody(String);
+pub(crate) struct RedactedBody(String);
 
 impl std::fmt::Debug for RedactedBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -215,21 +223,17 @@ impl std::fmt::Debug for RedactedBody {
     }
 }
 
-/// Source vocabulary for `OAuth2` token-endpoint response failures.
-///
-/// Carried as the source of the [`Error`]s produced by the form machinery —
-/// match on [`ErrorKind`] and [`Error::oauth_error_code`] instead of
-/// downcasting to this type.
+/// The cause of an `OAuth2` token-endpoint response failure.
 #[derive(Debug, Snafu)]
-pub enum HandleResponseError {
+pub(crate) enum HandleResponseError {
     /// The response was an error response code, but could not be parsed as an `OAuth2` error.
     #[snafu(display(
-        "Failed to parse error response as OAuth2 error: status={status}, content-type={ct}, body={body}",
+        "failed to parse error response as OAuth2 error: status={status}, content-type={ct}, body={body}",
         ct = content_type.as_ref().map(|s| s.to_str().ok().unwrap_or_default()).unwrap_or_default()
     ))]
     UnparseableErrorResponse {
         /// The body of the response.
-        body: String,
+        body: TruncatedBody,
         /// The status code of the response.
         status: http::StatusCode,
         /// The content type of the response.
@@ -238,15 +242,24 @@ pub enum HandleResponseError {
         source: serde_json::Error,
     },
     /// The response had a success response code but could not be parsed.
-    #[snafu(display("Failed to parse successful response as an OAuth2 payload"))]
+    #[snafu(display("failed to parse successful response as an OAuth2 payload"))]
     UnparseableSuccessResponse {
         /// The unparseable body.
         body: RedactedBody,
         /// The underlying error.
         source: serde_json::Error,
     },
-    /// An `OAuth2` error was returned.
-    #[snafu(display("OAuth2 request failed with an OAuth2 error payload: {body}"))]
+    /// An `OAuth2` error body was returned.
+    ///
+    /// The message includes the status because codes in `5xx` bodies are
+    /// diagnostic rather than [`Error::verdict`] values.
+    #[snafu(display(
+        "the token endpoint returned HTTP {status}: {}{}{}{}",
+        body.error,
+        body.error_description.as_ref().map(|d| format!(": {d}")).unwrap_or_default(),
+        body.error_uri.as_ref().map(|uri| format!(" (see {uri})")).unwrap_or_default(),
+        content_type.as_ref().map(|ct| format!(" (content-type: {})", ct.to_str().unwrap_or_default())).unwrap_or_default()
+    ))]
     OAuth2 {
         /// The `OAuth2` error body.
         body: OAuth2ErrorBody,
@@ -257,28 +270,18 @@ pub enum HandleResponseError {
     },
 }
 
-/// The `OAuth2` error response.
+/// The `OAuth2` error response, as it arrived on the wire.
+///
+/// Read a classified response through [`Error::verdict`], which exposes these
+/// members as a typed [`OAuthError`].
 #[derive(Debug, Clone, Deserialize)]
-pub struct OAuth2ErrorBody {
+pub(crate) struct OAuth2ErrorBody {
     /// The error field from the `OAuth2` error.
-    pub error: String,
+    pub(crate) error: String,
     /// The `error_description` field from the `OAuth2` error.
-    pub error_description: Option<String>,
+    pub(crate) error_description: Option<String>,
     /// The (optional) `error_uri` from the `OAuth2` error.
-    pub error_uri: Option<String>,
-}
-
-impl std::fmt::Display for OAuth2ErrorBody {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.error)?;
-        if let Some(description) = &self.error_description {
-            write!(f, ": {description}")?;
-        }
-        if let Some(uri) = &self.error_uri {
-            write!(f, " (see {uri})")?;
-        }
-        Ok(())
-    }
+    pub(crate) error_uri: Option<String>,
 }
 
 /// Executes a block, retrying once if the error indicates a `DPoP` nonce is required.
@@ -288,8 +291,12 @@ impl std::fmt::Display for OAuth2ErrorBody {
 macro_rules! with_dpop_nonce_retry {
     ($body:block) => {{
         let result = $body;
+        // Fully qualified: this expands at each call site, which need not have
+        // the extension trait in scope.
         if let Err(ref e) = result
-            && e.is_dpop_nonce_required()
+            && $crate::core::Error::verdict(e).is_some_and(|verdict| {
+                *verdict.code() == $crate::core::OAuthErrorCode::UseDPoPNonce
+            })
         {
             $body
         } else {
@@ -302,31 +309,179 @@ pub(crate) use with_dpop_nonce_retry;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use rstest::rstest;
 
-    fn classify(status: u16, body: &str) -> ErrorKind {
-        parse_oauth2_error_response(
+    use super::*;
+    use crate::core::OAuthErrorCode;
+
+    fn classify(status: u16, body: &str) -> RetryAdvice {
+        let err = parse_oauth2_error_response(
             http::StatusCode::from_u16(status).unwrap(),
-            None,
+            &http::HeaderMap::new(),
             &Bytes::copy_from_slice(body.as_bytes()),
-        )
-        .kind()
+        );
+        err.retry_advice()
     }
 
     #[test]
-    fn invalid_grant_on_400_rejects_credential() {
+    fn short_bodies_render_whole() {
+        let body = TruncatedBody::new("upstream is down");
+        assert_eq!(body.to_string(), "upstream is down");
+    }
+
+    // Bound the size of gateway responses in log output.
+    #[test]
+    fn long_bodies_are_truncated_with_their_true_length() {
+        let body = TruncatedBody::new("x".repeat(5000));
+        let rendered = body.to_string();
+        assert!(rendered.len() < 300, "got {rendered}");
+        assert!(rendered.ends_with("… [5000 bytes total]"), "got {rendered}");
+    }
+
+    // Truncation must preserve UTF-8 character boundaries.
+    #[test]
+    fn truncation_does_not_split_a_multibyte_character() {
+        // Each 'é' occupies two bytes.
+        let body = TruncatedBody::new("é".repeat(1000));
+        let rendered = body.to_string();
+        assert!(rendered.ends_with("… [2000 bytes total]"), "got {rendered}");
+    }
+
+    // Preserve every 4xx OAuth code as a typed verdict.
+    #[rstest]
+    #[case::dead_credential("invalid_grant", OAuthErrorCode::InvalidGrant)]
+    #[case::bad_scope("invalid_scope", OAuthErrorCode::InvalidScope)]
+    #[case::bad_client_auth("invalid_client", OAuthErrorCode::InvalidClient)]
+    #[case::dpop_proof("invalid_dpop_proof", OAuthErrorCode::InvalidDPoPProof)]
+    #[case::dpop_nonce("use_dpop_nonce", OAuthErrorCode::UseDPoPNonce)]
+    #[case::device_polling("authorization_pending", OAuthErrorCode::AuthorizationPending)]
+    #[case::grant_not_permitted("unauthorized_client", OAuthErrorCode::UnauthorizedClient)]
+    #[case::extension("something_bespoke", OAuthErrorCode::from("something_bespoke"))]
+    fn every_4xx_verdict_is_a_rejection_carrying_its_code(
+        #[case] wire: &str,
+        #[case] expected: OAuthErrorCode,
+    ) {
+        let err = parse_oauth2_error_response(
+            http::StatusCode::BAD_REQUEST,
+            &http::HeaderMap::new(),
+            &Bytes::from(format!(r#"{{"error":"{wire}"}}"#)),
+        );
+        assert_eq!(err.retry_advice(), RetryAdvice::No, "{wire}");
+        assert_eq!(err.verdict().map(OAuthError::code), Some(&expected));
         assert_eq!(
-            classify(400, r#"{"error":"invalid_grant"}"#),
-            ErrorKind::InvalidGrant
+            err.verdict().map(|v| v.code().as_str()),
+            Some(wire),
+            "verbatim on the wire"
         );
     }
 
+    // The source chain must render each part of the response exactly once.
     #[test]
-    fn invalid_grant_in_5xx_body_is_retryable_transport() {
-        // A stray invalid_grant in a server-error body must not drop the token.
+    fn the_chain_says_the_code_once_and_the_gloss_once() {
+        let err = parse_oauth2_error_response(
+            http::StatusCode::BAD_REQUEST,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(
+                br#"{"error":"invalid_scope",
+                     "error_description":"scope 'admin' is not permitted",
+                     "error_uri":"https://as.example.com/errors"}"#,
+            ),
+        );
+
+        assert_eq!(
+            format!("{err:#}"),
+            "the token endpoint returned HTTP 400 Bad Request: invalid_scope: \
+             scope 'admin' is not permitted (see https://as.example.com/errors)"
+        );
+        assert_eq!(
+            format!("{err:#}").matches("invalid_scope").count(),
+            1,
+            "the code must appear once across the whole chain"
+        );
+
+        // A bare, well-formed OAuth error still renders its code.
+        let bare = parse_oauth2_error_response(
+            http::StatusCode::BAD_REQUEST,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(br#"{"error":"invalid_grant"}"#),
+        );
+        assert_eq!(
+            format!("{bare:#}"),
+            "the token endpoint returned HTTP 400 Bad Request: invalid_grant"
+        );
+    }
+
+    // A gateway's `invalid_grant` body must not become a credential verdict.
+    #[test]
+    fn invalid_grant_in_5xx_body_is_a_retryable_server_condition() {
         assert_eq!(
             classify(503, r#"{"error":"invalid_grant"}"#),
-            ErrorKind::Transport { retryable: true }
+            RetryAdvice::RETRY
+        );
+
+        // Include the status that prevented the body from becoming a verdict.
+        let err = parse_oauth2_error_response(
+            http::StatusCode::BAD_GATEWAY,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(br#"{"error":"invalid_grant"}"#),
+        );
+        assert!(err.verdict().is_none());
+        assert_eq!(
+            format!("{err:#}"),
+            "the token endpoint returned HTTP 502 Bad Gateway: invalid_grant"
+        );
+    }
+
+    // Preserve a throttled endpoint's retry delay.
+    #[test]
+    fn a_429_is_retryable_and_keeps_retry_after() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(http::header::RETRY_AFTER, "20".parse().unwrap());
+        let err = parse_oauth2_error_response(
+            http::StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            &Bytes::from_static(br#"{"error":"slow_down"}"#),
+        );
+        assert_eq!(
+            err.retry_advice(),
+            RetryAdvice::retry_after(crate::core::platform::Duration::from_secs(20))
+        );
+    }
+
+    // The status distinguishes a 4xx verdict from a 5xx server failure.
+    #[test]
+    fn only_a_judged_response_yields_a_verdict() {
+        let err = parse_oauth2_error_response(
+            http::StatusCode::UNAUTHORIZED,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(br#"{"error":"invalid_client"}"#),
+        );
+        assert_eq!(
+            err.verdict().map(|v| v.code().as_str()),
+            Some("invalid_client")
+        );
+
+        // An unparseable gateway response has no verdict.
+        let unparseable = parse_oauth2_error_response(
+            http::StatusCode::BAD_GATEWAY,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(b"<html>nope</html>"),
+        );
+        assert!(unparseable.verdict().is_none());
+    }
+
+    // DPoP nonce retries use the typed verdict, not generic retry advice.
+    #[test]
+    fn dpop_nonce_is_not_generically_retryable() {
+        let err = parse_oauth2_error_response(
+            http::StatusCode::BAD_REQUEST,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(br#"{"error":"use_dpop_nonce"}"#),
+        );
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
+        assert!(
+            err.verdict()
+                .is_some_and(|v| *v.code() == crate::core::OAuthErrorCode::UseDPoPNonce)
         );
     }
 }

@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::{
     core::{
-        EndpointUrl, Error, ErrorKind,
+        EndpointUrl, Error, RetryAdvice,
         client_auth::{AuthenticationContext, AuthenticationParams, ClientAuthentication},
         crypto::verifier::JwsVerifier,
         dpop::AuthorizationServerDPoP,
@@ -120,7 +120,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             // client ID (e.g. the basic-auth username, or the assertion subject).
             let client_id = self.client_id().ok_or_else(|| {
                 Error::new(
-                    ErrorKind::Auth,
+                    RetryAdvice::No,
                     "client authentication requires a client ID",
                 )
             })?;
@@ -167,9 +167,8 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                     .await
             })?;
 
-            raw_token_response
-                .into_token_response(dpop_jkt, crate::core::platform::SystemTime::now())
-                .map_err(|source| Error::new(ErrorKind::Protocol, source))
+            Ok(raw_token_response
+                .into_token_response(dpop_jkt, crate::core::platform::SystemTime::now())?)
         }
     }
 

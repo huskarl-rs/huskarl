@@ -23,6 +23,9 @@ all-features = true
 [features]
 default = ["default-jws-verifier-platform"]
 
+# When enabled, emits counters for grant and token-source outcomes.
+metrics = ["dep:metrics", "huskarl-core/metrics"]
+
 # When enabled, adds support for the platform default crypto implementation.
 default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypto-webcrypto"]
 
@@ -34,6 +37,7 @@ authorization-flow-loopback = ["dep:url", "tokio/net", "tokio/io-util", "tokio/t
 url = ["huskarl-core/url"]
 
 [dependencies]
+metrics = { workspace = true, optional = true }
 huskarl-core = { workspace = true }
 huskarl-macros = { workspace = true }
 
@@ -78,6 +82,9 @@ required-features = ["authorization-flow-loopback"]
 [dev-dependencies]
 huskarl = { path = ".", default-features = true }
 huskarl-core = { workspace = true, features = ["strict-propagation"] }
+# Only for the `EnumCount` exhaustiveness checks, via
+# `#[cfg_attr(test, derive(strum::EnumCount))]` on the cause enums.
+strum = { workspace = true }
 huskarl-crypto-native = { path = "../huskarl-crypto-native" }
 huskarl-resource-server = { path = "../huskarl-resource-server" }
 

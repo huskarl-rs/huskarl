@@ -227,28 +227,22 @@ impl RawTokenResponse {
 }
 
 /// A [`RawTokenResponse`] that cannot be converted into a [`TokenResponse`].
-#[derive(Debug, Clone, PartialEq, Snafu)]
+///
+/// Both variants describe a specification violation that retrying cannot fix.
+#[derive(Debug, Clone, PartialEq, Snafu, huskarl_macros::Classify)]
 #[non_exhaustive]
 pub enum InvalidTokenResponse {
     /// The response is `DPoP`-typed but no `DPoP` key thumbprint was provided.
-    #[snafu(display("No DPoP thumbprint provided"))]
+    #[snafu(display("no DPoP thumbprint provided"))]
+    #[classify(no)]
     NoDPoPThumbprint,
     /// The `token_type` is neither `bearer` nor `DPoP`.
-    #[snafu(display("Invalid token type: {}", token_type))]
+    #[snafu(display("invalid token type: {}", token_type))]
+    #[classify(no)]
     InvalidTokenType {
         /// The unrecognized `token_type` value.
         token_type: String,
     },
-}
-
-impl InvalidTokenResponse {
-    /// Whether retrying the conversion could succeed (it cannot — the
-    /// response itself is malformed).
-    #[must_use]
-    #[allow(clippy::unused_self)]
-    pub fn is_retryable(&self) -> bool {
-        false
-    }
 }
 
 #[cfg(test)]
@@ -533,5 +527,22 @@ mod test {
         );
         // It deserializes into the typed field rather than being swept into `extra`.
         assert!(raw.get_extra("authorization_details").is_none());
+    }
+}
+
+#[cfg(test)]
+mod classification {
+    use super::*;
+    use crate::core::{Error, RetryAdvice};
+
+    // Classification is exposed through the wrapping `Error`.
+    #[test]
+    fn the_verdict_is_read_off_the_wrapping_error() {
+        let err = Error::from(InvalidTokenResponse::InvalidTokenType {
+            token_type: String::from("mac"),
+        });
+        assert_eq!(err.retry_advice(), RetryAdvice::No);
+        // The cause is erased, so it is reached through the test seam.
+        assert!(err.cause().is::<InvalidTokenResponse>());
     }
 }
