@@ -196,7 +196,14 @@ impl ValidatorMetadata {
         self.challenges_from(attempted_scheme, challenge.as_ref(), scope, error_uri)
     }
 
-    pub(crate) fn challenges_from(
+    /// Returns `WWW-Authenticate` field values using an already-built challenge.
+    ///
+    /// This is the borrowed counterpart to [`Self::challenges`]. It is useful
+    /// when a caller also needs to inspect the challenge for response status or
+    /// observation metadata and wants to avoid constructing its owned values
+    /// more than once.
+    #[must_use]
+    pub fn challenges_from(
         &self,
         attempted_scheme: Option<TokenType>,
         challenge: Option<&Challenge>,

@@ -185,6 +185,29 @@ impl Challenge {
         self.scope = Some(scope.into());
         self
     }
+
+    /// Classifies this challenge for validation observation.
+    ///
+    /// This is the coarse classification implied by the response error. An
+    /// originating [`ToRfc6750Error`] may report a more specific outcome, such
+    /// as [`ValidationOutcome::Expired`], through
+    /// [`ToRfc6750Error::validation_outcome`].
+    #[must_use]
+    pub fn validation_outcome(&self) -> ValidationOutcome {
+        match self.error {
+            TokenValidationError::Client(TokenErrorCode::InvalidRequest) => {
+                ValidationOutcome::ExtractError
+            }
+            TokenValidationError::Client(TokenErrorCode::InvalidDPoPProof) => {
+                ValidationOutcome::BindingError
+            }
+            TokenValidationError::Client(TokenErrorCode::UseDPoPNonce) => {
+                ValidationOutcome::NonceRequired
+            }
+            TokenValidationError::Client(_) => ValidationOutcome::InvalidToken,
+            TokenValidationError::Server { .. } => ValidationOutcome::CallError,
+        }
+    }
 }
 
 /// Classifies a token validation failure for an HTTP rejection response.
@@ -488,23 +511,13 @@ pub trait ToRfc6750Error: std::error::Error + MaybeSendSync {
 
     /// Classifies this error for [`ObservedValidator`](crate::validator::observe::ObservedValidator).
     ///
-    /// The default derives a coarse outcome from [`challenge`](Self::challenge).
-    /// Implementations may override it when they can distinguish validation
-    /// stages or more specific outcomes.
-    fn validation_outcome(&self) -> ValidationOutcome {
-        match self.challenge().error {
-            TokenValidationError::Client(TokenErrorCode::InvalidRequest) => {
-                ValidationOutcome::ExtractError
-            }
-            TokenValidationError::Client(TokenErrorCode::InvalidDPoPProof) => {
-                ValidationOutcome::BindingError
-            }
-            TokenValidationError::Client(TokenErrorCode::UseDPoPNonce) => {
-                ValidationOutcome::NonceRequired
-            }
-            TokenValidationError::Client(_) => ValidationOutcome::InvalidToken,
-            TokenValidationError::Server { .. } => ValidationOutcome::CallError,
-        }
+    /// The default uses the challenge's coarse classification. Implementations
+    /// may override it when they can distinguish validation stages or more
+    /// specific outcomes. Accepting the already-built challenge lets callers
+    /// obtain response and observation metadata without constructing its owned
+    /// strings and parameters twice.
+    fn validation_outcome(&self, challenge: &Challenge) -> ValidationOutcome {
+        challenge.validation_outcome()
     }
 
     /// The issuer this validation attempt is attributed to, when the validator
@@ -643,15 +656,19 @@ mod tests {
         let err = JwtValidationError::Signature {
             source: VerifyError::KeysUnavailable,
         };
+        let challenge = err.challenge();
         assert!(matches!(
-            err.challenge().error,
+            challenge.error,
             TokenValidationError::Server {
                 status: ServerStatus::INTERNAL_SERVER_ERROR,
                 retry_after: None,
             }
         ));
-        assert_eq!(err.challenge().description, None);
-        assert_eq!(err.validation_outcome(), ValidationOutcome::CallError);
+        assert_eq!(challenge.description, None);
+        assert_eq!(
+            err.validation_outcome(&challenge),
+            ValidationOutcome::CallError
+        );
     }
 
     // A checked signature mismatch remains an invalid-token client error.
@@ -662,11 +679,15 @@ mod tests {
         let err = JwtValidationError::Signature {
             source: VerifyError::SignatureMismatch,
         };
+        let challenge = err.challenge();
         assert!(matches!(
-            err.challenge().error,
+            challenge.error,
             TokenValidationError::Client(TokenErrorCode::InvalidToken)
         ));
-        assert_eq!(err.validation_outcome(), ValidationOutcome::InvalidToken);
+        assert_eq!(
+            err.validation_outcome(&challenge),
+            ValidationOutcome::InvalidToken
+        );
     }
 
     // Server statuses cannot contain success or redirection codes.

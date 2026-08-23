@@ -95,11 +95,11 @@ impl ToRfc6750Error for MultiIssuerError {
         }
     }
 
-    fn validation_outcome(&self) -> ValidationOutcome {
+    fn validation_outcome(&self, challenge: &Challenge) -> ValidationOutcome {
         match self {
             Self::Extract { .. } => ValidationOutcome::ExtractError,
             Self::UnrecognizedIssuer { .. } => ValidationOutcome::UnrecognizedIssuer,
-            Self::Validation { error, .. } => error.validation_outcome(),
+            Self::Validation { error, .. } => error.validation_outcome(challenge),
         }
     }
 

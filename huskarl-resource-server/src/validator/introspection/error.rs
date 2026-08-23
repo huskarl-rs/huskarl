@@ -82,8 +82,8 @@ impl ToRfc6750Error for IntrospectionValidateError {
         }
     }
 
-    fn validation_outcome(&self) -> ValidationOutcome {
-        match self.challenge().error {
+    fn validation_outcome(&self, challenge: &Challenge) -> ValidationOutcome {
+        match challenge.error {
             // Metrics must agree with the wire: a 5xx (a failed endpoint call,
             // or a nonce checker down) is our failure, whichever check tripped
             // it, and a nonce challenge is routine churn, not a binding failure.
