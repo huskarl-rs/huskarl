@@ -16,9 +16,8 @@ use crate::transport_error;
 /// token-supplied bytes out of the key space and makes keys fixed-size. To
 /// find the entry for a known JTI, hash it the same way.
 ///
-/// This checker is fail-closed: when Redis is unreachable the check errors
-/// ([`ErrorKind::Transport`](huskarl_core::ErrorKind::Transport)) and the
-/// validator rejects the token, so Redis availability gates validation.
+/// This checker fails closed: if Redis is unreachable, it returns a retryable
+/// error and validation rejects the token.
 ///
 /// # TTL sizing
 ///
@@ -82,7 +81,6 @@ impl<C: ConnectionLike + Clone + MaybeSendSync> JtiUniquenessChecker
 
 #[cfg(test)]
 mod tests {
-    use huskarl_core::ErrorKind;
     use redis::{ExistenceCheck, RedisError, SetExpiry, Value};
     use redis_test::{MockCmd, MockRedisConnection};
     use rstest::rstest;
@@ -153,6 +151,6 @@ mod tests {
             .build();
 
         let err = checker.check_and_mark_seen(JTI).await.unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Transport { retryable: true });
+        assert_eq!(err.retry_advice(), huskarl_core::RetryAdvice::RETRY);
     }
 }

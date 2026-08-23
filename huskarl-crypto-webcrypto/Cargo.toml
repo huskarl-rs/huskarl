@@ -16,6 +16,7 @@ readme = "README.md"
 default-target = "wasm32-unknown-unknown"
 
 [dependencies]
+huskarl-macros = { workspace = true }
 huskarl-core = { workspace = true }
 
 serde-wasm-bindgen = { version = "0.6", default-features = false }
@@ -34,6 +35,10 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
+# Turns a dropped classification into a panic during this workspace's tests;
+# off for dependents, whose own causes may legitimately wrap one. See
+# `huskarl_core::Error::propagate`.
+huskarl-core = { workspace = true, features = ["strict-propagation"] }
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 wasm-bindgen-test = "0.3"
 # Interop tests: confirm the WebCrypto cipher and the pure-Rust `aes-gcm` cipher

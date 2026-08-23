@@ -6,7 +6,7 @@ mod sign;
 mod verify;
 
 pub use generate_key::{AsymmetricKeyGenParams, GenerateKeyError, generate_asymmetric_key};
-pub use import_key::{ImportParams, import_key};
+pub use import_key::{ImportKeyError, ImportParams, import_key};
 pub use public_key::{GetPublicJwkError, get_public_jwk};
 use serde::Serialize;
 use serialize::{serialize_ed25519, serialize_hmac, serialize_rsa_pkcs1};

@@ -18,7 +18,7 @@ use std::{array::TryFromSliceError, borrow::Cow, fmt, sync::Arc};
 use aes_gcm::{AeadInOut, KeyInit, aead::Generate};
 use chacha20poly1305::XChaCha20Poly1305;
 use huskarl_core::{
-    Error, ErrorKind,
+    Error,
     crypto::{
         KeyMatchStrength,
         cipher::{
@@ -32,6 +32,51 @@ use huskarl_core::{
 };
 use sha2::digest::array::Array;
 use snafu::prelude::*;
+
+/// The cause of an AEAD key failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum AeadKeyError {
+    /// The JWK names an AEAD algorithm this crate does not implement.
+    #[snafu(display("unsupported AEAD algorithm {alg}"))]
+    #[classify(no)]
+    UnsupportedAlgorithm {
+        /// The requested algorithm.
+        alg: String,
+    },
+    /// AES-GCM key material must be 16, 24, or 32 bytes.
+    #[snafu(display("AES-GCM key material must be 16, 24, or 32 bytes, got {len}"))]
+    #[classify(no)]
+    BadAesGcmKeyLength {
+        /// The length actually presented.
+        len: usize,
+    },
+    /// The declared `alg` disagrees with the length-implied one.
+    #[snafu(display(
+        "JWK algorithm {alg} disagrees with the key length, which selects {selected}"
+    ))]
+    #[classify(no)]
+    AlgorithmLengthMismatch {
+        /// The algorithm the JWK declared.
+        alg: String,
+        /// The algorithm the key length implies.
+        selected: String,
+    },
+    /// The JWK names an algorithm other than `XC20P`.
+    #[snafu(display("JWK algorithm {alg} is not {XC20P}"))]
+    #[classify(no)]
+    NotXChaCha {
+        /// The algorithm the JWK declared.
+        alg: String,
+    },
+    /// `XChaCha20-Poly1305` key material must be 32 bytes.
+    #[snafu(display("XChaCha20-Poly1305 key material must be 32 bytes, got {len}"))]
+    #[classify(no)]
+    BadXChaChaKeyLength {
+        /// The length actually presented.
+        len: usize,
+    },
+}
 
 /// Builds an AEAD cipher from a symmetric JWK, dispatching on its `alg`.
 ///
@@ -49,15 +94,17 @@ use snafu::prelude::*;
 ///
 /// # Errors
 ///
-/// Returns [`ErrorKind::Config`] if `alg` names an AEAD algorithm this crate
+/// Returns an error if `alg` names an AEAD algorithm this crate
 /// does not implement, or if the key material is invalid for the selected
 /// cipher.
 pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Arc<dyn AeadCipher>, Error> {
     match jwk.algorithm.as_deref() {
         Some("A128GCM" | "A192GCM" | "A256GCM") | None => Ok(Arc::new(AesGcmKey::from_jwk(jwk)?)),
         Some(XC20P) => Ok(Arc::new(XChaChaKey::from_jwk(jwk)?)),
-        Some(other) => Err(Error::from(ErrorKind::Config)
-            .with_context(format!("unsupported AEAD algorithm {other}"))),
+        Some(other) => Err(AeadKeyError::UnsupportedAlgorithm {
+            alg: other.to_owned(),
+        }
+        .into()),
     }
 }
 
@@ -70,7 +117,7 @@ pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Arc<dyn AeadCipher>, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`ErrorKind::Config`] if the secret cannot be fetched or decoded, if
+/// Returns an error if the secret cannot be fetched or decoded, if
 /// the JWK is asymmetric rather than symmetric (`oct`), or for the same reasons
 /// as [`from_jwk`].
 pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
@@ -158,16 +205,12 @@ impl AesGcmKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the key material is not 16, 24, or 32
+    /// Returns an error if the key material is not 16, 24, or 32
     /// bytes, or if the JWK's `alg` disagrees with the key length.
     pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         // `new_from_slice` cannot fail inside the matched arms, but mapping the
         // error (rather than unwrapping) keeps this panic-free.
-        let bad_len = |len: usize| {
-            Error::from(ErrorKind::Config).with_context(format!(
-                "AES-GCM key material must be 16, 24, or 32 bytes, got {len}"
-            ))
-        };
+        let bad_len = |len: usize| Error::from(AeadKeyError::BadAesGcmKeyLength { len });
         let len = jwk.key.k.len();
         let key = match len {
             16 => NativeKey::Aes128(Box::new(
@@ -185,10 +228,11 @@ impl AesGcmKey {
         if let Some(alg) = jwk.algorithm.as_deref()
             && alg != key.enc_algorithm()
         {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "JWK algorithm {alg} disagrees with the key length, which selects {}",
-                key.enc_algorithm()
-            )));
+            return Err(AeadKeyError::AlgorithmLengthMismatch {
+                alg: alg.to_owned(),
+                selected: key.enc_algorithm().to_owned(),
+            }
+            .into());
         }
 
         Ok(AesGcmKey {
@@ -209,7 +253,7 @@ impl AesGcmKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
+    /// Returns an error if the secret cannot be fetched or
     /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
     /// it is not a valid AES-GCM key.
     ///
@@ -245,34 +289,36 @@ impl AesGcmKey {
 
 /// Errors that can occur during AEAD operations, shared by both native
 /// ciphers (`aes-gcm` and `chacha20poly1305` report the same [`aead::Error`]).
-#[derive(Debug, Snafu)]
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
 pub enum AeadError {
     /// An error occurred when decrypting the ciphertext.
+    #[snafu(display("decrypting the ciphertext"))]
+    #[classify(no)]
     Decrypt {
         /// The underlying error.
         source: aead::Error,
     },
     /// An error occurred when encrypting the plaintext.
+    #[snafu(display("encrypting the plaintext"))]
+    #[classify(no)]
     Encrypt {
         /// The underlying error.
         source: aead::Error,
     },
     /// The supplied nonce had an invalid length.
+    #[snafu(display("the supplied nonce has the wrong length"))]
+    #[classify(no)]
     InvalidNonce {
         /// The underlying error.
         source: TryFromSliceError,
     },
     /// The supplied tag had an invalid length.
+    #[snafu(display("the supplied authentication tag has the wrong length"))]
+    #[classify(no)]
     InvalidTag {
         /// The underlying error.
         source: TryFromSliceError,
     },
-}
-
-impl From<AeadError> for Error {
-    fn from(value: AeadError) -> Self {
-        Error::new(ErrorKind::Crypto, value)
-    }
 }
 
 impl From<AeadError> for DecryptError {
@@ -442,21 +488,22 @@ impl XChaChaKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the key material is not 32 bytes, or if
+    /// Returns an error if the key material is not 32 bytes, or if
     /// the JWK's `alg` is present and is not `XC20P`.
     pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         if let Some(alg) = jwk.algorithm.as_deref()
             && alg != XC20P
         {
-            return Err(Error::from(ErrorKind::Config)
-                .with_context(format!("JWK algorithm {alg} is not {XC20P}")));
+            return Err(AeadKeyError::NotXChaCha {
+                alg: alg.to_owned(),
+            }
+            .into());
         }
 
         let key = XChaCha20Poly1305::new_from_slice(&jwk.key.k).map_err(|_| {
-            Error::from(ErrorKind::Config).with_context(format!(
-                "XChaCha20-Poly1305 key material must be 32 bytes, got {}",
-                jwk.key.k.len()
-            ))
+            Error::from(AeadKeyError::BadXChaChaKeyLength {
+                len: jwk.key.k.len(),
+            })
         })?;
 
         Ok(XChaChaKey {
@@ -472,7 +519,7 @@ impl XChaChaKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
+    /// Returns an error if the secret cannot be fetched or
     /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
     /// it is not a valid 32-byte key.
     pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
@@ -573,6 +620,7 @@ impl AeadDecryptor for XChaChaKeyInner {
 #[cfg(test)]
 mod tests {
     use huskarl_core::{
+        RetryAdvice,
         platform::MaybeSendBoxFuture,
         secrets::{Secret, SecretBytes, SecretOutput},
     };
@@ -664,8 +712,8 @@ mod tests {
         for len in [0usize, 15, 17, 31, 33, 64] {
             let err = AesGcmKey::from_jwk(oct_jwk(vec![0u8; len])).unwrap_err();
             assert_eq!(
-                err.kind(),
-                ErrorKind::Config,
+                err.retry_advice(),
+                RetryAdvice::No,
                 "{len}-byte key must be rejected"
             );
         }
@@ -675,8 +723,7 @@ mod tests {
     fn alg_must_agree_with_key_length() {
         let mut jwk = oct_jwk(vec![0u8; 32]);
         jwk.algorithm = Some("A128GCM".into());
-        let err = AesGcmKey::from_jwk(jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = AesGcmKey::from_jwk(jwk).unwrap_err();
 
         // A matching alg — and no alg at all — are both fine.
         let mut jwk = oct_jwk(vec![0u8; 32]);
@@ -885,8 +932,8 @@ mod tests {
         for len in [0usize, 16, 24, 31, 33, 64] {
             let err = XChaChaKey::from_jwk(oct_jwk(vec![0u8; len])).unwrap_err();
             assert_eq!(
-                err.kind(),
-                ErrorKind::Config,
+                err.retry_advice(),
+                RetryAdvice::No,
                 "{len}-byte key must be rejected (XChaCha needs exactly 32)"
             );
         }
@@ -897,8 +944,7 @@ mod tests {
     fn xchacha_alg_must_be_xc20p() {
         let mut jwk = oct_jwk(vec![0u8; 32]);
         jwk.algorithm = Some("A256GCM".into());
-        let err = XChaChaKey::from_jwk(jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = XChaChaKey::from_jwk(jwk).unwrap_err();
 
         // A matching alg — and no alg at all — are both fine.
         let mut jwk = oct_jwk(vec![0u8; 32]);
@@ -1070,8 +1116,7 @@ mod tests {
     fn from_jwk_rejects_unsupported_alg() {
         let mut jwk = oct_jwk(vec![1u8; 32]);
         jwk.algorithm = Some("A256CBC-HS512".into());
-        let err = from_jwk(jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = from_jwk(jwk).unwrap_err();
     }
 
     /// One erased `dyn AeadCipher` covers both directions of a round-trip.

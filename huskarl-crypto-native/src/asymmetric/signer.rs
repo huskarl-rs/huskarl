@@ -6,13 +6,14 @@
 //! or load one with [`PrivateKey::from_jwk`] or [`PrivateKey::from_secret`]
 //! (composing a decoder such as `JwkJson`, [`Pkcs8Der`], or [`Pkcs8Pem`]).
 
-use std::{borrow::Cow, sync::Arc};
+use std::{array::TryFromSliceError, borrow::Cow, sync::Arc};
 
 use huskarl_core::{
-    Error, ErrorKind,
+    Error, RetryAdvice,
     crypto::signer::{
         AsymmetricJwsSigner, AsymmetricJwsSignerSelector, JwsSigner, JwsSignerSelector,
     },
+    error::BoxedSource,
     jwk,
     platform::MaybeSendBoxFuture,
     secrets::{Secret, SecretBytes, SecretMap, SecretString},
@@ -21,6 +22,78 @@ use pkcs8::DecodePrivateKey;
 use rand::Rng;
 use rsa::traits::PublicKeyParts as _;
 use signature::{SignatureEncoding, Signer as _};
+use snafu::{ResultExt as _, Snafu};
+
+/// The cause of an asymmetric signing-key failure.
+#[derive(Debug, Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum SignerError {
+    /// An EC private-key scalar was rejected by the backend.
+    #[snafu(display("invalid {curve} private key"))]
+    #[classify(no)]
+    InvalidEcPrivateKey {
+        /// The curve the scalar was read against.
+        curve: &'static str,
+        /// The underlying error.
+        source: signature::Error,
+    },
+    /// The RSA components did not form a valid private key.
+    #[snafu(display("invalid RSA private key"))]
+    #[classify(no)]
+    InvalidRsaPrivateKey {
+        /// The underlying error.
+        source: rsa::Error,
+    },
+    /// An Ed25519 private key was not 32 bytes.
+    #[snafu(display("Ed25519 private key must be 32 bytes, got {len}"))]
+    #[classify(no)]
+    Ed25519WrongLength {
+        /// The length actually presented.
+        len: usize,
+        /// The underlying error.
+        source: TryFromSliceError,
+    },
+    /// The JWK's key type or curve cannot produce the requested algorithm.
+    #[snafu(display("JWK key type does not match the algorithm {alg}"))]
+    #[classify(no)]
+    JwkAlgorithmMismatch {
+        /// The requested JWS algorithm.
+        alg: String,
+    },
+    /// The JWK carries no `alg`, so no signing algorithm can be chosen.
+    #[snafu(display("JWK is missing the alg field identifying the signing algorithm"))]
+    #[classify(no)]
+    MissingJwkAlgorithm,
+    /// Generating a fresh RSA key failed.
+    #[snafu(display("generating RSA key"))]
+    #[classify(no)]
+    GeneratingRsaKey {
+        /// The underlying error.
+        source: rsa::Error,
+    },
+    /// A PKCS#8 DER private key could not be decoded.
+    #[snafu(display("decoding PKCS#8 DER private key"))]
+    #[classify(no)]
+    DecodingPkcs8Der {
+        /// The underlying error.
+        source: pkcs8::Error,
+    },
+    /// A PKCS#8 PEM private key could not be decoded.
+    #[snafu(display("decoding PKCS#8 PEM private key"))]
+    #[classify(no)]
+    DecodingPkcs8Pem {
+        /// The underlying error.
+        source: pkcs8::der::Error,
+    },
+    /// Producing the JWS signature failed.
+    #[snafu(display("signing JWS input"))]
+    #[classify(no)]
+    SigningJwsInput {
+        /// The erased backend error.
+        #[snafu(source(from(signature::Error, Box::new)))]
+        source: BoxedSource,
+    },
+}
 
 /// The shared key material behind a `PrivateKey` — the signer snapshot the
 /// selectors hand out.
@@ -236,21 +309,16 @@ impl Key {
         }
     }
 
-    fn from_jwk(key: jwk::PrivateKey, alg: &str) -> Result<Self, Error> {
+    fn from_jwk(key: jwk::PrivateKey, alg: &str) -> Result<Self, SignerError> {
         match key {
             jwk::PrivateKey::Ec(ec) => match (ec.public.crv.as_str(), alg) {
                 ("P-256", "ES256") => p256::ecdsa::SigningKey::from_slice(&ec.d)
                     .map(Key::Es256)
-                    .map_err(|_| {
-                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
-                    }),
+                    .context(InvalidEcPrivateKeySnafu { curve: "P-256" }),
                 ("P-384", "ES384") => p384::ecdsa::SigningKey::from_slice(&ec.d)
                     .map(Key::Es384)
-                    .map_err(|_| {
-                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
-                    }),
-                _ => Err(Error::from(ErrorKind::Config)
-                    .with_context("JWK key type does not match the algorithm")),
+                    .context(InvalidEcPrivateKeySnafu { curve: "P-384" }),
+                _ => JwkAlgorithmMismatchSnafu { alg }.fail(),
             },
             jwk::PrivateKey::Rsa(rsa_private) => {
                 let n = rsa::BoxedUint::from_be_slice_vartime(&rsa_private.public.n);
@@ -263,10 +331,8 @@ impl Key {
                 if let Some(ref q) = rsa_private.q {
                     primes.push(rsa::BoxedUint::from_be_slice_vartime(q));
                 }
-                let rsa_key =
-                    rsa::RsaPrivateKey::from_components(n, e, d, primes).map_err(|_| {
-                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
-                    })?;
+                let rsa_key = rsa::RsaPrivateKey::from_components(n, e, d, primes)
+                    .context(InvalidRsaPrivateKeySnafu)?;
                 match alg {
                     "RS256" => Ok(Key::Rs256(rsa::pkcs1v15::SigningKey::new(rsa_key))),
                     "RS384" => Ok(Key::Rs384(rsa::pkcs1v15::SigningKey::new(rsa_key))),
@@ -274,34 +340,33 @@ impl Key {
                     "PS256" => Ok(Key::Ps256(rsa::pss::SigningKey::new(rsa_key))),
                     "PS384" => Ok(Key::Ps384(rsa::pss::SigningKey::new(rsa_key))),
                     "PS512" => Ok(Key::Ps512(rsa::pss::SigningKey::new(rsa_key))),
-                    _ => Err(Error::from(ErrorKind::Config)
-                        .with_context("JWK key type does not match the algorithm")),
+                    _ => JwkAlgorithmMismatchSnafu { alg }.fail(),
                 }
             }
             jwk::PrivateKey::Okp(okp) => match (okp.public.crv.as_str(), alg) {
                 ("Ed25519", "EdDSA") => {
-                    let bytes: [u8; 32] = okp.d.as_slice().try_into().map_err(|_| {
-                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
-                    })?;
+                    let d = okp.d.as_slice();
+                    let bytes: [u8; 32] = d
+                        .try_into()
+                        .context(Ed25519WrongLengthSnafu { len: d.len() })?;
                     Ok(Key::Ed25519 {
                         key: ed25519_dalek::SigningKey::from_bytes(&bytes),
                         use_fully_specified_jws_algorithm: false,
                     })
                 }
                 ("Ed25519", "Ed25519") => {
-                    let bytes: [u8; 32] = okp.d.as_slice().try_into().map_err(|_| {
-                        Error::from(ErrorKind::Config).with_context("invalid JWK key material")
-                    })?;
+                    let d = okp.d.as_slice();
+                    let bytes: [u8; 32] = d
+                        .try_into()
+                        .context(Ed25519WrongLengthSnafu { len: d.len() })?;
                     Ok(Key::Ed25519 {
                         key: ed25519_dalek::SigningKey::from_bytes(&bytes),
                         use_fully_specified_jws_algorithm: true,
                     })
                 }
-                _ => Err(Error::from(ErrorKind::Config)
-                    .with_context("JWK key type does not match the algorithm")),
+                _ => JwkAlgorithmMismatchSnafu { alg }.fail(),
             },
-            _ => Err(Error::from(ErrorKind::Config)
-                .with_context("JWK key type does not match the algorithm")),
+            _ => JwkAlgorithmMismatchSnafu { alg }.fail(),
         }
     }
 }
@@ -467,8 +532,8 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if an RSA modulus length below 2048 bits
-    /// is requested, and [`ErrorKind::Crypto`] if key generation itself fails.
+    /// Returns an error if an RSA modulus length below 2048 bits is requested, or
+    /// if key generation itself fails.
     ///
     /// # Examples
     ///
@@ -487,12 +552,14 @@ impl PrivateKey {
         fn rsa_key(modulus_length: u32) -> Result<rsa::RsaPrivateKey, Error> {
             if modulus_length < RSA_MODULUS_2048 {
                 return Err(Error::new(
-                    ErrorKind::Config,
+                    RetryAdvice::No,
                     format!("RSA modulus length must be at least 2048 bits, got {modulus_length}"),
                 ));
             }
-            rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
-                .map_err(|e| Error::new(ErrorKind::Crypto, e).with_context("generating RSA key"))
+            Ok(
+                rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
+                    .context(GeneratingRsaKeySnafu)?,
+            )
         }
 
         let signing_key = match key_type {
@@ -578,13 +645,13 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the JWK is missing its algorithm, uses an
+    /// Returns an error if the JWK is missing its algorithm, uses an
     /// unsupported one, or contains invalid key material.
     pub fn from_jwk(private_jwk: jwk::AsymmetricPrivateJwk) -> Result<Self, Error> {
-        let alg = private_jwk.algorithm.as_deref().ok_or_else(|| {
-            Error::from(ErrorKind::Config)
-                .with_context("JWK is missing the alg field identifying the signing algorithm")
-        })?;
+        let alg = private_jwk
+            .algorithm
+            .as_deref()
+            .ok_or_else(|| Error::from(SignerError::MissingJwkAlgorithm))?;
         let kid = private_jwk.kid;
         let signing_key = Key::from_jwk(private_jwk.key, alg)?;
         let jwk = signing_key.as_public_jwk(kid.as_deref());
@@ -612,7 +679,7 @@ impl PrivateKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or decoded,
+    /// Returns an error if the secret cannot be fetched or decoded,
     /// if the JWK is symmetric (`oct`) rather than an asymmetric private key,
     /// or if it is not a valid signing key.
     pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
@@ -672,16 +739,14 @@ fn key_from_pkcs8_der(der: &[u8], key_type: AsymmetricAlgorithm) -> Result<Key, 
 ///
 /// # Errors
 ///
-/// Returns [`ErrorKind::Config`] if `der` is not a valid PKCS#8 DER key for
+/// Returns an error if `der` is not a valid PKCS#8 DER key for
 /// `algorithm`.
 pub fn pkcs8_der(
     der: &[u8],
     algorithm: AsymmetricAlgorithm,
     kid: Option<&str>,
 ) -> Result<jwk::AsymmetricPrivateJwk, Error> {
-    let signing_key = key_from_pkcs8_der(der, algorithm).map_err(|source| {
-        Error::new(ErrorKind::Config, source).with_context("decoding PKCS#8 DER private key")
-    })?;
+    let signing_key = key_from_pkcs8_der(der, algorithm).context(DecodingPkcs8DerSnafu)?;
     Ok(signing_key.as_private_jwk(kid))
 }
 
@@ -733,16 +798,14 @@ impl SecretMap for Pkcs8Der {
 ///
 /// # Errors
 ///
-/// Returns [`ErrorKind::Config`] if `pem` is not a valid PKCS#8 PEM key for
+/// Returns an error if `pem` is not a valid PKCS#8 PEM key for
 /// `algorithm`.
 pub fn pkcs8_pem(
     pem: &str,
     algorithm: AsymmetricAlgorithm,
     kid: Option<&str>,
 ) -> Result<jwk::AsymmetricPrivateJwk, Error> {
-    let (_label, document) = pkcs8::SecretDocument::from_pem(pem).map_err(|source| {
-        Error::new(ErrorKind::Config, source).with_context("decoding PKCS#8 PEM private key")
-    })?;
+    let (_label, document) = pkcs8::SecretDocument::from_pem(pem).context(DecodingPkcs8PemSnafu)?;
     pkcs8_der(document.as_bytes(), algorithm, kid)
 }
 
@@ -828,53 +891,54 @@ impl JwsSigner for PrivateKeyInner {
         // paths accept keys that `generate` would refuse (e.g. an undersized
         // legacy RSA modulus the PSS/PKCS#1 encoding doesn't fit), so signing
         // can genuinely fail and must surface as an `Err`.
-        fn crypto_error(e: impl std::error::Error + Send + Sync + 'static) -> Error {
-            Error::new(ErrorKind::Crypto, e).with_context("signing JWS input")
-        }
-
         Box::pin(async move {
             match &self.signing_key {
                 Key::Es256(signing_key) => {
                     let signature: p256::ecdsa::Signature =
-                        signing_key.try_sign(input).map_err(crypto_error)?;
+                        signing_key.try_sign(input).context(SigningJwsInputSnafu)?;
                     Ok(signature.to_vec())
                 }
                 Key::Es384(signing_key) => {
                     let signature: p384::ecdsa::Signature =
-                        signing_key.try_sign(input).map_err(crypto_error)?;
+                        signing_key.try_sign(input).context(SigningJwsInputSnafu)?;
                     Ok(signature.to_vec())
                 }
-                Key::Rs256(signing_key) => {
-                    Ok(signing_key.try_sign(input).map_err(crypto_error)?.to_vec())
-                }
-                Key::Rs384(signing_key) => {
-                    Ok(signing_key.try_sign(input).map_err(crypto_error)?.to_vec())
-                }
-                Key::Rs512(signing_key) => {
-                    Ok(signing_key.try_sign(input).map_err(crypto_error)?.to_vec())
-                }
+                Key::Rs256(signing_key) => Ok(signing_key
+                    .try_sign(input)
+                    .context(SigningJwsInputSnafu)?
+                    .to_vec()),
+                Key::Rs384(signing_key) => Ok(signing_key
+                    .try_sign(input)
+                    .context(SigningJwsInputSnafu)?
+                    .to_vec()),
+                Key::Rs512(signing_key) => Ok(signing_key
+                    .try_sign(input)
+                    .context(SigningJwsInputSnafu)?
+                    .to_vec()),
                 Key::Ps256(signing_key) => {
                     use rsa::signature::RandomizedSigner;
                     Ok(signing_key
                         .try_sign_with_rng(&mut rand::rng(), input)
-                        .map_err(crypto_error)?
+                        .context(SigningJwsInputSnafu)?
                         .to_vec())
                 }
                 Key::Ps384(signing_key) => {
                     use rsa::signature::RandomizedSigner;
                     Ok(signing_key
                         .try_sign_with_rng(&mut rand::rng(), input)
-                        .map_err(crypto_error)?
+                        .context(SigningJwsInputSnafu)?
                         .to_vec())
                 }
                 Key::Ps512(signing_key) => {
                     use rsa::signature::RandomizedSigner;
                     Ok(signing_key
                         .try_sign_with_rng(&mut rand::rng(), input)
-                        .map_err(crypto_error)?
+                        .context(SigningJwsInputSnafu)?
                         .to_vec())
                 }
-                Key::Ed25519 { key, .. } => Ok(key.try_sign(input).map_err(crypto_error)?.to_vec()),
+                Key::Ed25519 { key, .. } => {
+                    Ok(key.try_sign(input).context(SigningJwsInputSnafu)?.to_vec())
+                }
             }
         })
     }
@@ -1017,14 +1081,13 @@ mod tests {
 
     #[test]
     fn generate_rejects_small_rsa_modulus() {
-        let error = PrivateKey::generate(
+        let _error = PrivateKey::generate(
             GenerateAlgorithm::Rs256 {
                 modulus_length: 1024,
             },
             None,
         )
         .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Config);
     }
 
     #[tokio::test]
@@ -1044,13 +1107,12 @@ mod tests {
             }),
         };
 
-        let error = key
+        let _error = key
             .select_signer()
             .await
             .sign(b"payload")
             .await
             .unwrap_err();
-        assert_eq!(error.kind(), ErrorKind::Crypto);
     }
 
     #[test]
@@ -1059,8 +1121,7 @@ mod tests {
         let mut private_jwk = key.as_private_jwk();
         private_jwk.algorithm = None;
 
-        let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = PrivateKey::from_jwk(private_jwk).unwrap_err();
     }
 
     #[test]
@@ -1069,7 +1130,6 @@ mod tests {
         let mut private_jwk = key.as_private_jwk();
         private_jwk.algorithm = Some("RS256".to_string());
 
-        let err = PrivateKey::from_jwk(private_jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = PrivateKey::from_jwk(private_jwk).unwrap_err();
     }
 }

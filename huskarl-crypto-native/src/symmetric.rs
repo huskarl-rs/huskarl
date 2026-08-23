@@ -10,7 +10,7 @@ use std::{borrow::Cow, sync::Arc};
 
 use hmac::{Hmac, KeyInit as _, Mac as _};
 use huskarl_core::{
-    Error, ErrorKind,
+    Error,
     crypto::{
         KeyMatchStrength,
         signer::{JwsSigner, JwsSignerSelector},
@@ -21,6 +21,30 @@ use huskarl_core::{
     secrets::{Secret, SecretBytes},
 };
 use sha2::Digest as _;
+
+/// The cause of a symmetric (HMAC) key failure.
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum SymmetricKeyError {
+    /// The JWK's `alg` is absent or names no supported HMAC algorithm.
+    #[snafu(display("unsupported or missing JWK algorithm for an HMAC key: {alg:?}"))]
+    #[classify(no)]
+    UnsupportedAlgorithm {
+        /// The algorithm the JWK declared, if any.
+        alg: Option<String>,
+    },
+    /// The key is shorter than the algorithm's minimum.
+    #[snafu(display("invalid {algorithm} key size: got {actual} bytes, need at least {required}"))]
+    #[classify(no)]
+    KeyTooShort {
+        /// The algorithm selected.
+        algorithm: String,
+        /// The key length presented.
+        actual: usize,
+        /// The minimum the algorithm requires.
+        required: usize,
+    },
+}
 
 /// Encodes which algorithm is used by this key.
 // `UPPERCASE` serialization yields the JWA names (`Hs256` -> `HS256`); `AsRefStr`
@@ -78,7 +102,7 @@ impl SymmetricKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the JWK is missing its algorithm, uses
+    /// Returns an error if the JWK is missing its algorithm, uses
     /// an unsupported one, or the key is shorter than the RFC 7518 §3.2
     /// minimum for the algorithm (the hash output size).
     ///
@@ -102,18 +126,21 @@ impl SymmetricKey {
     pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         let alg = jwk.algorithm.as_deref();
         let Some(algorithm) = alg.and_then(|a| a.parse::<SymmetricAlgorithm>().ok()) else {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "unsupported or missing JWK algorithm for an HMAC key: {alg:?}"
-            )));
+            return Err(SymmetricKeyError::UnsupportedAlgorithm {
+                alg: alg.map(str::to_owned),
+            }
+            .into());
         };
 
         let required_key_size = algorithm.min_key_size();
         let actual = jwk.key.k.len();
         if actual < required_key_size {
-            return Err(Error::from(ErrorKind::Config).with_context(format!(
-                "invalid {} key size: got {actual} bytes, need at least {required_key_size}",
-                algorithm.as_ref()
-            )));
+            return Err(SymmetricKeyError::KeyTooShort {
+                algorithm: algorithm.as_ref().to_owned(),
+                actual,
+                required: required_key_size,
+            }
+            .into());
         }
 
         Ok(Self {
@@ -140,7 +167,7 @@ impl SymmetricKey {
     ///
     /// # Errors
     ///
-    /// Returns [`ErrorKind::Config`] if the secret cannot be fetched or
+    /// Returns an error if the secret cannot be fetched or
     /// decoded, if the JWK is asymmetric rather than symmetric (`oct`), or if
     /// it is not a valid HMAC key.
     pub async fn from_secret<S: Secret<Output = jwk::PrivateJwk>>(
@@ -250,6 +277,7 @@ impl JwsVerifier for SymmetricKeyInner {
 #[cfg(test)]
 mod tests {
     use huskarl_core::{
+        RetryAdvice,
         crypto::{signer::JwsSigner, verifier::JwsVerifier},
         jwk::OctBytes,
         secrets::{ProvidedSecret, SecretString},
@@ -327,8 +355,8 @@ mod tests {
             );
             let err = SymmetricKey::from_jwk(symmetric_jwk(alg, vec![0u8; min - 1])).unwrap_err();
             assert_eq!(
-                err.kind(),
-                ErrorKind::Config,
+                err.retry_advice(),
+                RetryAdvice::No,
                 "{alg}: {}-byte key must be rejected",
                 min - 1
             );
@@ -409,15 +437,13 @@ mod tests {
             .key(jwk::OctKey::builder().k(vec![0u8; 32]).build())
             .build();
 
-        let err = SymmetricKey::from_jwk(jwk).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = SymmetricKey::from_jwk(jwk).unwrap_err();
     }
 
     #[test]
     fn from_jwk_unsupported_algorithm() {
         // A valid JWA algorithm, but not an HMAC one.
-        let err = SymmetricKey::from_jwk(symmetric_jwk("A128KW", vec![0u8; 32])).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::Config);
+        let _err = SymmetricKey::from_jwk(symmetric_jwk("A128KW", vec![0u8; 32])).unwrap_err();
     }
 
     #[tokio::test]

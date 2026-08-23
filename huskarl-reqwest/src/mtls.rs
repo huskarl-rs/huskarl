@@ -1,10 +1,5 @@
 //! mTLS configuration for [`ReqwestClient`](crate::ReqwestClient).
 
-#[cfg(all(
-    not(target_arch = "wasm32"),
-    any(feature = "rustls-tls", feature = "native-tls")
-))]
-use huskarl_core::ErrorKind;
 #[cfg(all(not(target_arch = "wasm32"), feature = "native-tls"))]
 use huskarl_core::secrets::SecretBytes;
 #[cfg(all(
@@ -16,6 +11,37 @@ use huskarl_core::{
     Error,
     platform::{MaybeSendBoxFuture, MaybeSendSync},
 };
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "rustls-tls", feature = "native-tls")
+))]
+use snafu::ResultExt as _;
+
+/// The cause of an mTLS identity failure.
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    any(feature = "rustls-tls", feature = "native-tls")
+))]
+#[derive(Debug, snafu::Snafu, huskarl_macros::Classify)]
+#[non_exhaustive]
+pub(crate) enum MtlsError {
+    /// A configured secret could not be fetched.
+    #[snafu(display("fetching mTLS {what} secret"))]
+    FetchingSecret {
+        /// Which secret was being fetched, e.g. `DER` or `password`.
+        what: &'static str,
+        /// The underlying error.
+        source: Error,
+    },
+    /// `reqwest` rejected the assembled identity.
+    #[snafu(display("parsing mTLS identity"))]
+    // Invalid identity material will fail identically on another attempt.
+    #[classify(no)]
+    ParsingIdentity {
+        /// The underlying error.
+        source: reqwest::Error,
+    },
+}
 
 /// A [`reqwest::ClientBuilder`] with an [`MtlsProvider`]'s configuration
 /// applied, as returned from [`MtlsProvider::apply`].
@@ -68,9 +94,13 @@ impl ConfiguredBuilder {
 ///
 /// This trait is dyn-capable: implement it on your provider type, write the
 /// method body as `Box::pin(async move { ... })`, and return the configured
-/// builder via [`ConfiguredBuilder::new`]. Secret-fetch failures should be
-/// propagated as-is (they are already classified); identity-parse failures
-/// should be classified as [`ErrorKind::Config`](huskarl_core::ErrorKind).
+/// builder via [`ConfiguredBuilder::new`].
+///
+/// Failures are classified as follows:
+///
+/// - Secret-fetch failures preserve the provider's classification.
+/// - Identity-parse failures are not retryable because the same certificate,
+///   key, and password will fail again.
 pub trait MtlsProvider: MaybeSendSync {
     /// Applies the mTLS configuration to the provided builder.
     fn apply(
@@ -129,7 +159,7 @@ impl<S: Secret<Output = SecretString>> MtlsProvider for MtlsPem<S> {
                 .secret
                 .get_secret_value()
                 .await
-                .map_err(|e| e.with_context("fetching mTLS secret"))?;
+                .context(FetchingSecretSnafu { what: "PEM" })?;
             let identity =
                 reqwest::Identity::from_pem(secret_output.value.expose_secret().as_bytes())
                     .map_err(parse_identity_error)?;
@@ -174,12 +204,12 @@ impl<D: Secret<Output = SecretBytes>, P: Secret<Output = SecretString>> MtlsProv
                 .der
                 .get_secret_value()
                 .await
-                .map_err(|e| e.with_context("fetching mTLS DER secret"))?;
+                .context(FetchingSecretSnafu { what: "DER" })?;
             let password = self
                 .password
                 .get_secret_value()
                 .await
-                .map_err(|e| e.with_context("fetching mTLS password secret"))?;
+                .context(FetchingSecretSnafu { what: "password" })?;
             let identity = reqwest::Identity::from_pkcs12_der(
                 der.value.expose_secret(),
                 password.value.expose_secret(),
@@ -228,7 +258,9 @@ impl<K: Secret<Output = SecretString>> MtlsProvider for MtlsPkcs8Pem<K> {
                 .key
                 .get_secret_value()
                 .await
-                .map_err(|e| e.with_context("fetching mTLS private key secret"))?;
+                .context(FetchingSecretSnafu {
+                    what: "private key",
+                })?;
             let identity = reqwest::Identity::from_pkcs8_pem(
                 self.cert_chain.as_bytes(),
                 key.value.expose_secret().as_bytes(),
@@ -247,6 +279,7 @@ impl<K: Secret<Output = SecretString>> MtlsProvider for MtlsPkcs8Pem<K> {
     not(target_arch = "wasm32"),
     any(feature = "rustls-tls", feature = "native-tls")
 ))]
+#[track_caller]
 fn parse_identity_error(source: reqwest::Error) -> Error {
-    Error::new(ErrorKind::Config, source).with_context("parsing mTLS identity")
+    Error::from(MtlsError::ParsingIdentity { source })
 }
