@@ -1277,6 +1277,7 @@ dependencies = [
  "gloo-timers",
  "hex",
  "http",
+ "httpdate",
  "httpmock",
  "metrics",
  "rand 0.10.2",

@@ -86,8 +86,9 @@ impl Classification {
     /// Creates a classification for an authorization server rejection.
     ///
     /// Use this only when the authorization server judged the request. When a
-    /// full HTTP response is available, use the failed-response classifier so
-    /// it can also apply the status and `Retry-After` header.
+    /// full HTTP response is available, use
+    /// [`FailedResponse::classification`](crate::http::FailedResponse::classification)
+    /// so it can also apply the status and `Retry-After` header.
     #[must_use]
     pub fn judged(retry_advice: RetryAdvice, verdict: crate::oauth_error::OAuthError) -> Self {
         Self {
@@ -116,6 +117,19 @@ impl From<RetryAdvice> for Classification {
 }
 
 impl Error {
+    /// Establishes a fresh classification around a cause.
+    ///
+    /// Unlike [`propagate`](Self::propagate), this checks that the cause does
+    /// not already contain a classified [`Error`]. For crate-internal paths
+    /// whose classification is computed as a value rather than by a [`Cause`]
+    /// implementation.
+    #[track_caller]
+    pub(crate) fn establish(classification: Classification, cause: impl Into<BoxedSource>) -> Self {
+        let cause = cause.into();
+        super::assert_not_already_classified(&*cause, super::Establishment::New);
+        Self::propagate(classification, cause)
+    }
+
     /// Creates an error around `cause` with an existing classification.
     ///
     /// Obtain `classification` from [`Error::classification`] before moving the
