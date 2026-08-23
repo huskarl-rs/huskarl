@@ -20,7 +20,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup update stable --no-self-update
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # huskarl-crypto-webcrypto is wasm32-only; the WASM job covers it.
       - run: cargo test --workspace --exclude huskarl-crypto-webcrypto
 
@@ -32,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup update stable --no-self-update && rustup component add clippy
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo clippy-host -- -D warnings
       - run: rustup target add wasm32-unknown-unknown
       - run: cargo clippy-wasm -- -D warnings
@@ -56,7 +56,7 @@ jobs:
           persist-credentials: false
       - run: rustup update stable --no-self-update
       - run: rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo doc --workspace --exclude huskarl-crypto-webcrypto --no-deps --all-features
         env:
           RUSTDOCFLAGS: -D warnings
@@ -77,7 +77,7 @@ jobs:
       # which requires nightly — this mirrors the docs.rs build environment. The
       # stable `test` job above still runs the inline (non-`_docs`) doctests.
       - run: rustup toolchain install nightly --no-self-update --profile minimal
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # huskarl-crypto-webcrypto is wasm32-only; excluded like the test job.
       - run: cargo +nightly test --workspace --exclude huskarl-crypto-webcrypto --doc --all-features
         env:
@@ -91,7 +91,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install 1.92 --no-self-update --profile minimal && rustup default 1.92
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --workspace --exclude huskarl-crypto-webcrypto
 
   # Disable until rustcrypto reaches stable
@@ -116,7 +116,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup update stable --no-self-update && rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo check-wasm
 
   integration:
@@ -127,7 +127,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup update stable --no-self-update
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Runs each test in its own process (isolation + per-test timeouts) — see
       # .config/nextest.toml. Install cargo-binstall first so mise's `cargo:`
       # backend fetches the prebuilt binary instead of compiling; mise then
