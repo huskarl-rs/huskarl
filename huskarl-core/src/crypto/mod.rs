@@ -1,6 +1,6 @@
 //! Cryptographic interfaces and definitions.
 //!
-//! Many `OAuth2` grants and auxiliary interfaces require cryptographic
+//! Many OAuth 2.0 grants and auxiliary interfaces require cryptographic
 //! operations to ensure properties such as integrity, authentication,
 //! confidentiality, and non-repudiation.
 //!

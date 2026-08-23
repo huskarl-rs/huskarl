@@ -13,5 +13,5 @@ mod grant;
 pub use grant::{
     DEFAULT_MAX_TRANSIENT_POLL_FAILURES, DEFAULT_MIN_POLL_INTERVAL_SECS, DeviceAuthorizationGrant,
     DeviceAuthorizationGrantBuilder, DeviceAuthorizationGrantParameters, PendingState, PollError,
-    PollResult, StartInput, StartOutput,
+    PollResult, StartInput, StartInputBuilder, StartOutput,
 };

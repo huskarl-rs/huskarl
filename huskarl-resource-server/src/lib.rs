@@ -7,7 +7,7 @@
 #![deny(clippy::unreachable)]
 #![warn(clippy::pedantic)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-//! # `OAuth2` library for resource servers
+//! # OAuth 2.0 library for resource servers
 //!
 //! A resource server has two jobs: validate the access token presented with a
 //! request, and decide whether that token authorizes the request.
@@ -19,12 +19,26 @@
 //! When validation fails, [`rejection`] turns the failure into the matching
 //! response: status code, `WWW-Authenticate` challenges, and `DPoP-Nonce`.
 //!
+//! ## Documentation
+//!
+//! - **Solve a task:** use the [how-to guides](_docs::guide) to validate
+//!   [RFC 9068 JWTs](_docs::guide::rfc9068),
+//!   [custom JWTs](_docs::guide::custom), or tokens via
+//!   [introspection](_docs::guide::introspection); accept
+//!   [several issuers](_docs::guide::multi_issuer); or enforce
+//!   [`DPoP`](_docs::guide::dpop).
+//! - **Understand the design:** read the [explanation](_docs::explanation) of
+//!   [validator choice](_docs::explanation::choosing_a_validator), the
+//!   [error model](_docs::explanation::error_handling), and
+//!   [multi-issuer routing](_docs::explanation::multi_issuer_routing).
+//! - **Look up the API:** use the crate modules and item pages in this reference.
+//!
 //! ## The huskarl ecosystem
 //!
 //! This crate is one of three that fit together. Each carries its own how-to
 //! guides and explanation in a `_docs` module:
 //!
-//! - [`huskarl`](https://docs.rs/huskarl) — `OAuth2` **clients**: grants, token
+//! - [`huskarl`](https://docs.rs/huskarl) — OAuth 2.0 **clients**: grants, token
 //!   caching, and the request authorizer.
 //! - **`huskarl-resource-server`** (this crate) — **resource servers**:
 //!   access-token validation and request authorization.
@@ -56,21 +70,6 @@
 //! # Ok(())
 //! # }
 //! ```
-//!
-//! ## Documentation
-//!
-//! - **Solve a task:** use the [how-to guides](_docs::guide) to validate
-//!   [RFC 9068 JWTs](_docs::guide::rfc9068),
-//!   [custom JWTs](_docs::guide::custom), or tokens via
-//!   [introspection](_docs::guide::introspection); accept
-//!   [several issuers](_docs::guide::multi_issuer); or enforce
-//!   [`DPoP`](_docs::guide::dpop).
-//! - **Understand the design:** read the [explanation](_docs::explanation) of
-//!   [validator choice](_docs::explanation::choosing_a_validator), the
-//!   [error model](_docs::explanation::error_handling), and
-//!   [multi-issuer routing](_docs::explanation::multi_issuer_routing).
-//! - **Look up the API:** use the crate modules and item pages in this reference.
-
 #[cfg(any(doc, docsrs))]
 pub mod _docs;
 

@@ -134,7 +134,10 @@ impl AccessToken {
         }
     }
 
-    /// Returns `true` if the underlying access token has expired.
+    /// Returns whether the token is stale at the current time.
+    ///
+    /// Uses [`Self::effective_expiry`], including its `default_expires_in` and
+    /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
@@ -201,7 +204,10 @@ impl NonAccessToken {
         effective_expiry(self.received_at, expires_in, expires_margin)
     }
 
-    /// Returns `true` if the underlying token has expired.
+    /// Returns whether the token is stale at the current time.
+    ///
+    /// Uses [`Self::effective_expiry`], including its `default_expires_in` and
+    /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
@@ -278,7 +284,10 @@ impl DPoPAccessToken {
         effective_expiry(self.received_at, expires_in, expires_margin)
     }
 
-    /// Returns `true` if the underlying access token has expired.
+    /// Returns whether the token is stale at the current time.
+    ///
+    /// Uses [`Self::effective_expiry`], including its `default_expires_in` and
+    /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
@@ -341,7 +350,10 @@ impl BearerAccessToken {
         effective_expiry(self.received_at, expires_in, expires_margin)
     }
 
-    /// Returns `true` if the underlying access token has expired.
+    /// Returns whether the token is stale at the current time.
+    ///
+    /// Uses [`Self::effective_expiry`], including its `default_expires_in` and
+    /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
         SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)

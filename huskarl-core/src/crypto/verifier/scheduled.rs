@@ -83,6 +83,8 @@ impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
+        /// Asynchronous source of the current verifier, called at construction
+        /// and whenever the refresh policy permits a reload.
         factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,

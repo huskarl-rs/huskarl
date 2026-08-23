@@ -25,7 +25,7 @@ use crate::{
 mod breaker;
 use breaker::Breaker;
 
-/// A [`TokenSource`] that produces tokens from an `OAuth2` grant — refreshing a
+/// A [`TokenSource`] that produces tokens from an OAuth 2.0 grant — refreshing a
 /// stored refresh token, or running a fresh grant exchange.
 ///
 /// Hand this to an [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache),

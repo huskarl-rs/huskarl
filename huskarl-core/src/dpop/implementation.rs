@@ -32,6 +32,7 @@ impl super::sealed::Sealed for DPoP {}
 /// bound to.
 #[derive(Debug, Clone, Builder)]
 pub struct DPoP {
+    /// Selector for the asymmetric key that signs authorization-server proofs.
     #[builder(with = |signer: impl AsymmetricJwsSignerSelector + 'static| Arc::new(signer) as Arc<dyn AsymmetricJwsSignerSelector>)]
     signer: Arc<dyn AsymmetricJwsSignerSelector>,
     #[builder(skip)]
@@ -194,8 +195,13 @@ impl super::sealed::Sealed for ResourceDPoP {}
 /// `DPoP`-bound access token (RFC 9449).
 #[derive(Debug, Clone, Builder)]
 pub struct ResourceDPoP {
+    /// Selector for the asymmetric key that signs resource-server proofs.
     #[builder(with = |signer: impl AsymmetricJwsSignerSelector + 'static| Arc::new(signer) as Arc<dyn AsymmetricJwsSignerSelector>)]
     signer: Arc<dyn AsymmetricJwsSignerSelector>,
+    /// Shared per-origin nonce cache.
+    ///
+    /// Defaults to an empty cache. Clones already share it; pass an existing
+    /// cache only to coordinate separately built instances.
     #[builder(default)]
     nonces: Arc<RwLock<HashMap<Origin, Arc<String>>>>,
 }

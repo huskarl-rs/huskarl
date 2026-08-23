@@ -1,4 +1,4 @@
-//! Authorizer for `OAuth2` grants.
+//! Authorizer for OAuth 2.0 grants.
 //!
 //! [`HttpAuthorizer`] turns the token machinery (grant, cache, `DPoP`) into
 //! request headers: [`get_headers`](HttpAuthorizer::get_headers) builds the

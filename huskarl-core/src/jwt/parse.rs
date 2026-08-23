@@ -100,10 +100,6 @@ mod tests {
 
     /// Tests the example values from RFC 7519 §3.1.
     #[test]
-    #[expect(
-        clippy::duration_suboptimal_units,
-        reason = "RFC 7519 §3.1 example value"
-    )]
     fn test_rfc_7519_example() {
         #[derive(Debug, Clone, Deserialize, PartialEq)]
         struct TestClaims {
@@ -123,7 +119,8 @@ mod tests {
         assert_eq!(jws.claims.iat, None);
         assert_eq!(
             jws.claims.exp,
-            Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_300_819_380))
+            // The RFC's example `exp` is 1300819380 seconds.
+            Some(SystemTime::UNIX_EPOCH + Duration::from_mins(21_680_323))
         );
         assert_eq!(jws.claims.nbf, None);
         assert_eq!(jws.claims.jti, None);

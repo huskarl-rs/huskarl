@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-/// An `OAuth2` JWT bearer grant (RFC 7523).
+/// An OAuth 2.0 JWT bearer grant (RFC 7523).
 ///
 /// This grant requests an access token by presenting a signed JWT assertion that
 /// vouches for the principal the token is for. The assertion is supplied by the
@@ -41,14 +41,21 @@ use crate::{
 /// See the [module documentation][crate::grant::jwt_bearer] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
-#[builder(on(String, into))]
+#[builder(on(String, into), builder_type(doc {
+    /// Configures a [`JwtBearerGrant`].
+    ///
+    /// Required and optional inputs are marked on their setter methods. Prefer
+    /// [`JwtBearerGrant::builder_from_metadata`] when discovery metadata is
+    /// available; it fills endpoint, issuer, and authentication capability
+    /// inputs before returning this builder.
+}))]
 pub struct JwtBearerGrant {
     /// The client ID. Optional: omit it for an unidentified client (the
     /// assertion's `iss`/`sub` identify the principal; RFC 7523 §3.1 allows a
     /// grant with no client identification).
     client_id: Option<String>,
 
-    /// The HTTP client used for token requests.
+    /// The transport used for token requests.
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
@@ -67,11 +74,14 @@ pub struct JwtBearerGrant {
     )]
     dpop: Arc<dyn AuthorizationServerDPoP>,
 
-    /// The issuer for tokens created by the authorization server.
+    /// The authorization server's issuer identifier, when known.
+    ///
+    /// Client-authentication methods may use it as the audience of a signed
+    /// assertion. The metadata builder supplies it automatically.
     #[from_metadata(path = "issuer")]
     issuer: Option<String>,
 
-    /// The URL of the token endpoint.
+    /// The canonical token endpoint URL, before mTLS alias resolution.
     #[from_metadata(path = "token_endpoint")]
     token_endpoint: EndpointUrl,
 
@@ -84,8 +94,11 @@ pub struct JwtBearerGrant {
     #[builder(skip = crate::grant::core::resolve_mtls_alias(http_client.as_ref(), &token_endpoint, mtls_token_endpoint.as_ref()))]
     effective_token_endpoint: EndpointUrl,
 
-    /// Supported endpoint auth methods; used to auto-select basic or
-    /// form auth for client secrets.
+    /// Authentication methods advertised for the token endpoint.
+    ///
+    /// [`ClientSecret`](crate::core::client_auth::ClientSecret) uses this list
+    /// to choose HTTP Basic or form authentication. `None` leaves that choice
+    /// unconstrained by metadata.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
@@ -227,9 +240,14 @@ impl GrantParametersSource<Self> for JwtBearerGrantParameters {
 /// JWT bearer grant body.
 #[derive(Debug, Serialize, Builder)]
 pub struct JwtBearerGrantForm {
+    /// Fixed OAuth 2.0 grant type:
+    /// `urn:ietf:params:oauth:grant-type:jwt-bearer`.
     grant_type: &'static str,
+    /// Signed JWT assertion serialized into the outgoing form.
     assertion: SecretString,
+    /// Requested scopes encoded as one space-separated value.
     scope: Option<String>,
+    /// Resource indicators encoded as repeated `resource` fields (RFC 8707).
     resource: Option<Vec<String>>,
     /// RFC 9396 `authorization_details` requested for the issued access token.
     authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,

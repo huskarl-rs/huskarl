@@ -1,6 +1,6 @@
 //! Serde helpers for string / array-of-strings duality.
 //!
-//! Several OIDC and `OAuth2` claims (notably JWT `aud`, RFC 7519 §4.1.3) accept
+//! Several OIDC and OAuth 2.0 claims (notably JWT `aud`, RFC 7519 §4.1.3) accept
 //! either a single string or an array of strings on the wire. These adapters
 //! normalize to `Vec<String>` in memory.
 

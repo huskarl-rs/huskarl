@@ -104,7 +104,7 @@ impl TokenResponse {
         self.raw.authorization_details.as_deref()
     }
 
-    /// Gets a non-standard field from the token response.
+    /// Returns a non-standard field from the token response.
     #[must_use]
     pub fn get_extra(&self, key: &str) -> Option<&Value> {
         self.raw.get_extra(key)
@@ -129,7 +129,7 @@ enum ResolvedTokenType {
 }
 
 impl RawTokenResponse {
-    /// Gets a value from the "extra" token fields.
+    /// Returns a value from the extra token fields.
     #[must_use]
     pub fn get_extra(&self, key: &str) -> Option<&Value> {
         self.extra.as_ref().and_then(|extra| extra.get(key))

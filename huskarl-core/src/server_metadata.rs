@@ -86,7 +86,35 @@ pub struct MtlsEndpointAliases {
 /// Fetch it from the issuer's well-known endpoint with [`fetch`](Self::fetch),
 /// or build it directly with the [`builder`](Self::builder) when discovery is
 /// unavailable.
+///
+/// # Required members and defaults
+///
+/// Huskarl requires `issuer`, `token_endpoint`, and `response_types_supported`
+/// when deserializing or building this type. Although RFC 8414 permits omitting
+/// `token_endpoint` for an implicit-only server, huskarl implements token-endpoint
+/// flows and therefore requires it.
+///
+/// When the document omits an RFC-defined member, huskarl applies these defaults:
+///
+/// | Member | Default |
+/// | --- | --- |
+/// | `response_modes_supported` | `query`, `fragment` |
+/// | `grant_types_supported` | `authorization_code`, `implicit` |
+/// | `token_endpoint_auth_methods_supported` | `client_secret_basic` |
+/// | `revocation_endpoint_auth_methods_supported` | `client_secret_basic` |
+/// | Boolean capability members | `false` |
+/// | `code_challenge_methods_supported` | Empty list |
+///
+/// Optional members without a documented default remain `None` when absent.
 #[derive(Debug, Clone, Deserialize, bon::Builder)]
+#[builder(builder_type(doc {
+    /// Builds [`AuthorizationServerMetadata`] without fetching a discovery
+    /// document.
+    ///
+    /// Required and optional inputs, including RFC-defined defaults, are marked
+    /// on their setter methods. Use [`AuthorizationServerMetadata::fetch`] when
+    /// the issuer exposes discovery metadata.
+}))]
 #[non_exhaustive]
 #[allow(clippy::struct_excessive_bools)]
 pub struct AuthorizationServerMetadata {
@@ -97,7 +125,7 @@ pub struct AuthorizationServerMetadata {
     pub authorization_endpoint: Option<EndpointUrl>,
     /// The URL of the authorization server's token endpoint.
     ///
-    /// Required unless only the implicit grant is supported.
+    /// Required by this type; see [required members](Self#required-members-and-defaults).
     pub token_endpoint: EndpointUrl,
     /// The URL of the authorization server's JWK Set.
     pub jwks_uri: Option<EndpointUrl>,
@@ -111,17 +139,25 @@ pub struct AuthorizationServerMetadata {
     /// The `authorization_details` equivalent of [`scopes_supported`](Self::scopes_supported);
     /// a client can consult it to discover which types the server accepts.
     pub authorization_details_types_supported: Option<Vec<String>>,
-    /// Array containing a list of the OAuth 2.0 "`response_type`" values that this authorization server supports.
+    /// OAuth 2.0 `response_type` values supported by this server.
+    ///
+    /// Required in RFC 8414 metadata and by this type.
     pub response_types_supported: Vec<String>,
-    /// Array containing a list of the OAuth 2.0 "`response_mode`" values that this authorization server supports
+    /// OAuth 2.0 `response_mode` values supported by this server.
+    ///
+    /// Defaults to `query` and `fragment` when absent.
     #[serde(default = "default_response_modes_supported")]
     #[builder(default = default_response_modes_supported())]
     pub response_modes_supported: Vec<String>,
-    /// Array containing a list of the OAuth 2.0 grant type values that this authorization server supports.
+    /// OAuth 2.0 grant types supported by this server.
+    ///
+    /// Defaults to `authorization_code` and `implicit` when absent.
     #[serde(default = "default_grant_types_supported")]
     #[builder(default = default_grant_types_supported())]
     pub grant_types_supported: Vec<String>,
-    /// Array containing a list of client authentication methods supported by this token endpoint.
+    /// Client authentication methods supported by the token endpoint.
+    ///
+    /// Defaults to `client_secret_basic` when absent.
     #[serde(default = "default_auth_methods_supported")]
     #[builder(default = default_auth_methods_supported())]
     pub token_endpoint_auth_methods_supported: Vec<String>,
@@ -139,7 +175,9 @@ pub struct AuthorizationServerMetadata {
     pub op_tos_uri: Option<EndpointUrl>,
     /// URL of the authorization server's OAuth 2.0 revocation endpoint.
     pub revocation_endpoint: Option<EndpointUrl>,
-    /// Array containing a list of client authentication methods supported by this revocation endpoint.
+    /// Client authentication methods supported by the revocation endpoint.
+    ///
+    /// Defaults to `client_secret_basic` when absent.
     #[serde(default = "default_auth_methods_supported")]
     #[builder(default = default_auth_methods_supported())]
     pub revocation_endpoint_auth_methods_supported: Vec<String>,
@@ -155,14 +193,17 @@ pub struct AuthorizationServerMetadata {
     /// endpoint for the signature on the JWT used to authenticate the client at the introspection endpoint
     /// for the "`private_key_jwt`" and "`client_secret_jwt`" authentication methods.
     pub introspection_endpoint_auth_signing_alg_values_supported: Option<Vec<String>>,
-    /// Array containing a list of Proof Key for Code Exchange (PKCE) code challenge methods supported
-    /// by this authorization server.
+    /// PKCE code-challenge methods supported by this server.
+    ///
+    /// Empty when absent; an empty list advertises no method.
     #[serde(default = "Vec::new")]
     #[builder(default)]
     pub code_challenge_methods_supported: Vec<String>,
-    /// RFC 8628 - OAuth 2.0 Device Authorization Grant
+    /// The RFC 8628 device authorization endpoint.
     pub device_authorization_endpoint: Option<EndpointUrl>,
-    /// RFC 8705 - OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens
+    /// Whether the server supports RFC 8705 certificate-bound access tokens.
+    ///
+    /// Defaults to `false` when absent.
     #[serde(default)]
     #[builder(default)]
     pub tls_client_certificate_bound_access_tokens: bool,
@@ -172,7 +213,9 @@ pub struct AuthorizationServerMetadata {
     ///
     /// RFC 9126 - OAuth 2.0 Pushed Authorization Requests
     pub pushed_authorization_request_endpoint: Option<EndpointUrl>,
-    /// If true, indicates that pushed authorization requests are required (RFC 9126 §5).
+    /// Whether pushed authorization requests are required (RFC 9126 §5).
+    ///
+    /// Defaults to `false` when absent.
     #[serde(default)]
     #[builder(default)]
     pub require_pushed_authorization_requests: bool,
@@ -236,13 +279,36 @@ pub struct AuthorizationServerMetadata {
 
 #[bon]
 impl AuthorizationServerMetadata {
-    /// Get the authorization server metadata for an issuer.
+    /// Fetches and validates authorization-server metadata for `issuer`.
+    ///
+    /// By default, inserts `/.well-known/oauth-authorization-server` before the
+    /// issuer's path according to RFC 8414. The returned document is accepted
+    /// only when its `issuer` member exactly matches the requested value.
+    ///
+    /// Use [`Self::oidc_fetch`] for `OpenID` Connect's legacy URL transformation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the issuer or derived URL is invalid, the HTTP
+    /// request or metadata decoding fails, a required member is absent, or the
+    /// returned issuer does not exactly match `issuer`.
     #[builder(on(String, into))]
     pub async fn fetch<C: HttpClient>(
+        /// HTTP transport used for the discovery request.
         http_client: &C,
+        /// Expected issuer identifier and base for the well-known URL.
         issuer: String,
-        #[builder(default = "/.well-known/oauth-authorization-server")] well_known_path: String,
-        #[builder(default = false)] use_legacy_transformation: bool,
+        /// Well-known path to insert or append.
+        ///
+        /// Defaults to `/.well-known/oauth-authorization-server`.
+        #[builder(default = "/.well-known/oauth-authorization-server")]
+        well_known_path: String,
+        /// Whether to append the well-known path after the issuer path using
+        /// the legacy `OpenID` Connect transformation.
+        ///
+        /// Defaults to `false`, which uses RFC 8414 path insertion.
+        #[builder(default = false)]
+        use_legacy_transformation: bool,
     ) -> Result<Self, Error> {
         let configuration_endpoint =
             add_issuer_to_known_path(&issuer, &well_known_path, use_legacy_transformation)
@@ -273,9 +339,9 @@ impl AuthorizationServerMetadata {
 }
 
 impl AuthorizationServerMetadata {
-    /// Sets up appropriate fetch parameters via `OpenID` Connect Discovery (RFC 8414 / `OpenID` Connect Discovery 1.0).
+    /// Starts a metadata fetch using `OpenID` Connect Discovery URL rules.
     ///
-    /// Equivalent to calling [`Self::fetch()`](Self::fetch) with
+    /// Equivalent to calling [`Self::fetch`] with
     /// `well_known_path = "/.well-known/openid-configuration"` and `use_legacy_transformation = true`.
     pub fn oidc_fetch<'c, C: HttpClient>() -> AuthorizationServerMetadataFetchBuilder<
         'c,

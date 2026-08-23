@@ -91,6 +91,10 @@ impl TokenIntrospection {
         /// `default-jws-verifier-platform` feature is enabled, defaults to the platform default.
         #[cfg(not(feature = "default-jws-verifier-platform"))]
         jws_verifier_platform: Option<Arc<dyn JwsVerifierPlatform>>,
+        /// JWS verifier platform for JWT response validation.
+        ///
+        /// Defaults to the platform implementation selected by the
+        /// `default-jws-verifier-platform` feature.
         #[cfg(feature = "default-jws-verifier-platform")]
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,

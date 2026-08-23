@@ -43,6 +43,8 @@ impl<V: JwsVerifier + 'static> RefreshableVerifier<V> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
+        /// Asynchronous source of the current verifier, called at construction
+        /// and on each explicit refresh.
         factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<V, Error>>>>
         + MaybeSendSync
         + 'static,

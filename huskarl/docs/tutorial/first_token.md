@@ -1,13 +1,13 @@
 # Get your first access token
 
 This tutorial takes you from nothing to a working program that requests a real
-`OAuth2` access token and prints it. You will start a local authorization
+OAuth 2.0 access token and prints it. You will start a local authorization
 server, write a small Rust program against huskarl, and watch it obtain a token.
 
 By the end you will have run a complete client-credentials flow end to end
 against a live server — the foundation every other grant builds on.
 
-You do not need to know `OAuth2` beforehand, and you do not need an account with
+You do not need to know OAuth 2.0 beforehand, and you do not need an account with
 any provider: everything runs on your machine. Follow the steps in order; each
 one builds on the last.
 
@@ -20,7 +20,7 @@ It should take about ten minutes.
 
 ## 1. Start a local authorization server
 
-An `OAuth2` client needs an authorization server to talk to. You will run
+An OAuth 2.0 client needs an authorization server to talk to. You will run
 [Keycloak](https://www.keycloak.org/) — a widely used open-source server —
 locally in Docker, pre-configured with one client for this tutorial.
 
@@ -150,7 +150,7 @@ Access token: eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSldUIiwia2lkIiA...
 ```
 
 That long string is a real access token, minted by the server just now. You have
-completed a full `OAuth2` client-credentials exchange.
+completed a full OAuth 2.0 client-credentials exchange.
 
 If instead you see an error, check that the Keycloak terminal from step 1 is
 still running and has finished starting, and that `CLIENT_SECRET` is set in the

@@ -14,10 +14,16 @@ use crate::core::{
 
 #[derive(Builder)]
 pub(crate) struct OAuth2FormRequest<'a, F: Serialize> {
+    /// Endpoint receiving the form request.
     uri: &'a Uri,
+    /// Grant- or operation-specific form fields.
     form: &'a F,
+    /// Client-authentication headers and form fields to merge into the request.
     auth_params: AuthenticationParams<'a>,
+    /// `DPoP` implementation used to create a proof for this request.
     dpop: &'a dyn AuthorizationServerDPoP,
+    /// Public-key thumbprint to request a DPoP-bound token with, when needed by
+    /// the grant.
     dpop_jkt: Option<&'a str>,
 }
 
@@ -87,7 +93,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     /// Executes the form request, expecting an empty response body on success.
     ///
     /// On success status codes, returns `Ok(())` after consuming the body.
-    /// On error status codes, attempts to parse the body as an `OAuth2` error.
+    /// On error status codes, attempts to parse the body as an OAuth 2.0 error.
     ///
     /// The main current use of this endpoint is the revocation endpoint, which is
     /// not expected to require a `DPoP` nonce.
@@ -109,7 +115,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
         ))
     }
 }
-/// The cause of a failure assembling an `OAuth2` form request.
+/// The cause of a failure assembling an OAuth 2.0 form request.
 #[derive(Debug, Snafu, huskarl_macros::Classify)]
 #[non_exhaustive]
 pub(crate) enum FormError {
@@ -136,7 +142,7 @@ pub(crate) enum FormError {
     },
 }
 
-/// Parses an error response body as an `OAuth2` error. Always returns an error.
+/// Parses an error response body as an OAuth 2.0 error. Always returns an error.
 ///
 /// A well-formed body becomes a verbatim [`OAuthError`] verdict; endpoint code
 /// interprets its meaning. [`FailedResponse::into_error`] combines the code
@@ -223,10 +229,10 @@ impl std::fmt::Debug for RedactedBody {
     }
 }
 
-/// The cause of an `OAuth2` token-endpoint response failure.
+/// The cause of an OAuth 2.0 token-endpoint response failure.
 #[derive(Debug, Snafu)]
 pub(crate) enum HandleResponseError {
-    /// The response was an error response code, but could not be parsed as an `OAuth2` error.
+    /// The response was an error response code, but could not be parsed as an OAuth 2.0 error.
     #[snafu(display(
         "failed to parse error response as OAuth2 error: status={status}, content-type={ct}, body={body}",
         ct = content_type.as_ref().map(|s| s.to_str().ok().unwrap_or_default()).unwrap_or_default()
@@ -249,7 +255,7 @@ pub(crate) enum HandleResponseError {
         /// The underlying error.
         source: serde_json::Error,
     },
-    /// An `OAuth2` error body was returned.
+    /// An OAuth 2.0 error body was returned.
     ///
     /// The message includes the status because codes in `5xx` bodies are
     /// diagnostic rather than [`Error::verdict`] values.
@@ -261,11 +267,11 @@ pub(crate) enum HandleResponseError {
         content_type.as_ref().map(|ct| format!(" (content-type: {})", ct.to_str().unwrap_or_default())).unwrap_or_default()
     ))]
     OAuth2 {
-        /// The `OAuth2` error body.
+        /// The OAuth 2.0 error body.
         body: OAuth2ErrorBody,
-        /// The status code of the `OAuth2` error response.
+        /// The status code of the OAuth 2.0 error response.
         status: http::StatusCode,
-        /// The content type of the `OAuth2` error response.
+        /// The content type of the OAuth 2.0 error response.
         content_type: Option<http::HeaderValue>,
     },
 }
@@ -283,17 +289,17 @@ impl HandleResponseError {
     }
 }
 
-/// The `OAuth2` error response, as it arrived on the wire.
+/// The OAuth 2.0 error response, as it arrived on the wire.
 ///
 /// Read a classified response through [`Error::verdict`], which exposes these
 /// members as a typed [`OAuthError`].
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct OAuth2ErrorBody {
-    /// The error field from the `OAuth2` error.
+    /// The error field from the OAuth 2.0 error.
     pub(crate) error: String,
-    /// The `error_description` field from the `OAuth2` error.
+    /// The `error_description` field from the OAuth 2.0 error.
     pub(crate) error_description: Option<String>,
-    /// The (optional) `error_uri` from the `OAuth2` error.
+    /// The (optional) `error_uri` from the OAuth 2.0 error.
     pub(crate) error_uri: Option<String>,
 }
 

@@ -1,4 +1,4 @@
-//! `OAuth2` client authentication support.
+//! OAuth 2.0 client authentication support.
 //!
 //! This module includes base types and implementations for different ways
 //! clients can authenticate to an authorization server inside the request.

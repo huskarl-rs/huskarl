@@ -27,7 +27,7 @@ use crate::{
     },
 };
 
-/// An `OAuth2` client credentials grant.
+/// An OAuth 2.0 client credentials grant.
 ///
 /// This grant is used for machine-to-machine authentication where no user
 /// interaction is required. The client authenticates directly with the
@@ -36,16 +36,27 @@ use crate::{
 /// See the [module documentation][crate::grant::client_credentials] for a usage guide.
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Builder)]
-#[builder(on(String, into))]
+#[builder(on(String, into), builder_type(doc {
+    /// Configures a [`ClientCredentialsGrant`].
+    ///
+    /// Required and optional inputs are marked on their setter methods. Prefer
+    /// [`ClientCredentialsGrant::builder_from_metadata`] when discovery
+    /// metadata is available; it fills endpoint, issuer, and authentication
+    /// capability inputs before returning this builder.
+}))]
 pub struct ClientCredentialsGrant {
-    /// The client ID.
+    /// The OAuth 2.0 client identifier registered with the authorization
+    /// server.
     client_id: String,
 
-    /// The HTTP client used for token requests.
+    /// The transport used for token requests.
     #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
     http_client: Arc<dyn HttpClient>,
 
-    /// The client authentication method.
+    /// How the client authenticates to the token endpoint.
+    ///
+    /// Client authentication is required for this grant because the client's
+    /// credentials are the grant (RFC 6749 §4.4).
     #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
     client_auth: Arc<dyn ClientAuthentication>,
 
@@ -56,11 +67,14 @@ pub struct ClientCredentialsGrant {
     )]
     dpop: Arc<dyn AuthorizationServerDPoP>,
 
-    /// The issuer for tokens created by the authorization server.
+    /// The authorization server's issuer identifier, when known.
+    ///
+    /// Client-authentication methods may use it as the audience of a signed
+    /// assertion. The metadata builder supplies it automatically.
     #[from_metadata(path = "issuer")]
     issuer: Option<String>,
 
-    /// The URL of the token endpoint.
+    /// The canonical token endpoint URL, before mTLS alias resolution.
     #[from_metadata(path = "token_endpoint")]
     token_endpoint: EndpointUrl,
 
@@ -73,8 +87,11 @@ pub struct ClientCredentialsGrant {
     #[builder(skip = crate::grant::core::resolve_mtls_alias(http_client.as_ref(), &token_endpoint, mtls_token_endpoint.as_ref()))]
     effective_token_endpoint: EndpointUrl,
 
-    /// Supported endpoint auth methods; used to auto-select basic or
-    /// form auth for client secrets.
+    /// Authentication methods advertised for the token endpoint.
+    ///
+    /// [`ClientSecret`](crate::core::client_auth::ClientSecret) uses this list
+    /// to choose HTTP Basic or form authentication. `None` leaves that choice
+    /// unconstrained by metadata.
     #[from_metadata(path = "token_endpoint_auth_methods_supported")]
     token_endpoint_auth_methods_supported: Option<Vec<String>>,
 }
@@ -198,8 +215,11 @@ impl GrantParametersSource<Self> for ClientCredentialsGrantParameters {
 /// Client credentials grant body.
 #[derive(Debug, Serialize, Builder)]
 pub struct ClientCredentialsGrantForm {
+    /// Fixed OAuth 2.0 grant type: `client_credentials`.
     grant_type: &'static str,
+    /// Requested scopes encoded as one space-separated value.
     scope: Option<String>,
+    /// Resource indicators encoded as repeated `resource` fields (RFC 8707).
     resource: Option<Vec<String>>,
     /// RFC 9396 `authorization_details` requested for the issued access token.
     authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,

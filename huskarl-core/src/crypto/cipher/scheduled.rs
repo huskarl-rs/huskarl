@@ -65,6 +65,8 @@ impl<C: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshCipher<C> {
     /// Returns an error if the initial factory call fails.
     #[builder]
     pub async fn new(
+        /// Asynchronous source of the current cipher selector, called at
+        /// construction and by scheduled refreshes.
         factory: impl Fn() -> Pin<Box<dyn MaybeSendFuture<Output = Result<C, Error>>>>
         + MaybeSendSync
         + 'static,

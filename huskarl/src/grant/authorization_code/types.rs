@@ -66,8 +66,30 @@ pub struct AuthorizationPayloadWithClientId<'a> {
 /// ([`device_authorization::StartInput`](crate::grant::device_authorization::StartInput))
 /// with the same [`scope`](Self::scope) convenience constructor; when
 /// wiring both flows in one module, qualify or alias the imports.
+///
+/// # Example
+///
+/// ```
+/// use huskarl::grant::authorization_code::{Display, Prompt, StartInput};
+///
+/// let input = StartInput::builder()
+///     .scope(vec!["openid".into(), "profile".into()])
+///     .display(Display::Popup)
+///     .prompt(Prompt::Login)
+///     .build();
+/// # let _ = input;
+/// ```
 #[derive(Debug, Clone, Builder)]
-#[builder(finish_fn(vis = "", name = build_internal), on(String, into))]
+#[builder(
+    finish_fn(vis = "", name = build_internal),
+    on(String, into),
+    builder_type(doc {
+        /// Configures the input to an authorization-code flow.
+        ///
+        /// Every setter is optional. [`build`](Self::build) generates fresh,
+        /// cryptographically random `state` and `nonce` values.
+    })
+)]
 pub struct StartInput {
     #[builder(finish_fn)]
     pub(super) state: String,
@@ -75,19 +97,26 @@ pub struct StartInput {
     pub(super) nonce: String,
     /// The requested scope(s) for the authorization request.
     pub(super) scope: Option<Vec<String>>,
+    /// Resource indicators identifying the APIs the access token should be
+    /// usable at (RFC 8707).
     pub(super) resource: Option<Vec<String>>,
     /// RFC 9396 Rich Authorization Requests: fine-grained authorization
     /// requirements expressed as typed authorization-details objects.
     pub(super) authorization_details: Option<Vec<AuthorizationDetail>>,
 
     // OIDC Core parameters.
-    /// Specifies how the Authorization Server displays the authentication and consent user interface pages to the End-User.
+    /// How the authorization server should present its authentication and
+    /// consent interface.
     pub(super) display: Option<Display>,
-    /// Specifies whether the Authorization Server prompts the End-User for reauthentication and consent.
+    /// Which interaction the authorization server should require from the
+    /// end-user.
     pub(super) prompt: Option<Prompt>,
-    /// Specifies the allowable elapsed time since the last time the End-User was actively authenticated by the OP.
+    /// Maximum acceptable age of the end-user's existing authentication.
+    ///
+    /// The duration is serialized as whole seconds.
     pub(super) max_age: Option<Duration>,
-    /// End-User's preferred languages and scripts for the user interface, ordered by preference.
+    /// The end-user's preferred UI languages, ordered from most to least
+    /// preferred and serialized as a space-separated list.
     pub(super) ui_locales: Option<Vec<String>>,
     /// ID token previously issued by the Authorization Server, passed as a hint
     /// about the End-User's authenticated session (OIDC Core 1.0 §3.1.2.1).
@@ -95,9 +124,10 @@ pub struct StartInput {
     /// Typically paired with `prompt=none`. The AS need not be listed as an
     /// audience of this ID token when it is used as a hint.
     pub(super) id_token_hint: Option<IdToken>,
-    /// Hint to the Authorization Server about the login identifier the End-User might use to log in (if necessary)
+    /// A login identifier hint, such as an email address or username.
     pub(super) login_hint: Option<String>,
-    /// Requested Authentication Context Class Reference values.
+    /// Requested Authentication Context Class Reference values, ordered by
+    /// preference and serialized as a space-separated list.
     pub(super) acr_values: Option<Vec<String>>,
 }
 
@@ -135,32 +165,55 @@ impl ResponseMode {
     }
 }
 
+/// How the authorization server should present its authentication and consent
+/// interface (`display`, `OpenID` Connect Core §3.1.2.1).
+///
+/// This is a presentation hint, not a security control. An authorization
+/// server may ignore it. Omit the builder option to let the server choose.
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub enum Display {
+    /// A full browser page. This is the `OpenID` Connect default.
     #[serde(rename = "page")]
     Page,
+    /// A popup window sized for authentication and consent.
     #[serde(rename = "popup")]
     Popup,
+    /// A touch-oriented interface.
     #[serde(rename = "touch")]
     Touch,
+    /// An interface suitable for a feature phone or similar limited browser.
     #[serde(rename = "wap")]
     Wap,
+    /// An authorization-server-specific extension value.
     #[serde(untagged)]
     Other(String),
 }
 
+/// Interaction requested from the authorization server (`prompt`, `OpenID`
+/// Connect Core §3.1.2.1).
+///
+/// Omit the builder option for the server's normal interaction policy.
 #[derive(Debug, Clone, Serialize)]
 #[non_exhaustive]
 pub enum Prompt {
+    /// Do not display authentication or consent UI.
+    ///
+    /// The server returns an interaction-required error when it cannot complete
+    /// the request silently. This value must not be combined with another
+    /// prompt value.
     #[serde(rename = "none")]
     None,
+    /// Require the end-user to authenticate again.
     #[serde(rename = "login")]
     Login,
+    /// Require the end-user to grant consent again.
     #[serde(rename = "consent")]
     Consent,
+    /// Ask the end-user to select an account.
     #[serde(rename = "select_account")]
     SelectAccount,
+    /// An authorization-server-specific extension value.
     #[serde(untagged)]
     Other(String),
 }
@@ -184,6 +237,9 @@ impl StartInput {
 }
 
 impl<S: start_input_builder::IsComplete> StartInputBuilder<S> {
+    /// Builds the input and generates fresh, cryptographically random `state`
+    /// and `nonce` values.
+    #[must_use]
     pub fn build(self) -> StartInput {
         self.build_internal(generate_random_value(), generate_random_value())
     }
@@ -325,9 +381,17 @@ impl CompleteInput {
     /// framework-typed query parameters).
     #[builder]
     pub fn new(
-        #[builder(into)] code: String,
-        #[builder(into)] state: String,
-        #[builder(into)] iss: Option<String>,
+        /// The temporary authorization code received in the callback.
+        #[builder(into)]
+        code: String,
+        /// The callback `state` value, which completion compares with the
+        /// persisted [`PendingState`].
+        #[builder(into)]
+        state: String,
+        /// The RFC 9207 response issuer, when the callback includes one.
+        #[builder(into)]
+        iss: Option<String>,
+        /// Resource indicators to repeat in the token request (RFC 8707).
         resource: Option<Vec<String>>,
     ) -> Self {
         Self {
@@ -344,7 +408,9 @@ impl CompleteInput {
     }))]
     fn callback(
         #[builder(start_fn)] payload: CallbackPayload,
-        #[builder(setters(vis = "pub"))] resource: Option<Vec<String>>,
+        /// Resource indicators to repeat in the token request (RFC 8707).
+        #[builder(setters(vis = "pub"))]
+        resource: Option<Vec<String>>,
     ) -> Self {
         Self { payload, resource }
     }

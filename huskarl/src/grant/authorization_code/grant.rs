@@ -226,7 +226,7 @@ async fn resolve_jws_verifier(
 )]
 #[bon::bon]
 impl AuthorizationCodeGrant {
-    /// Creates a new [`AuthorizationCodeGrant`] instance.
+    /// Configures an [`AuthorizationCodeGrant`].
     ///
     /// Callers use [`Self::builder()`], or [`Self::builder_from_metadata()`]
     /// to pre-populate the endpoint fields from server metadata.
@@ -238,19 +238,33 @@ impl AuthorizationCodeGrant {
     /// fails, if `require_pushed_authorization_requests` is set without a
     /// `pushed_authorization_request_endpoint` (honoring the requirement would
     /// be impossible, and ignoring it would silently downgrade PAR), or if
-    /// `oidc(true)` is set without a JWS verifier or issuer.
-    #[builder(on(String, into))]
+    /// `oidc(true)` or a JWT-secured `response_mode` is set without a JWS
+    /// verifier or issuer.
+    #[builder(on(String, into), builder_type(doc {
+        /// Configures an [`AuthorizationCodeGrant`].
+        ///
+        /// Required and optional inputs are marked on their setter methods.
+        /// Prefer [`AuthorizationCodeGrant::builder_from_metadata`] when
+        /// discovery metadata is available; it fills endpoints, issuer,
+        /// supported algorithms, and protocol capability switches before
+        /// returning this builder.
+    }))]
     pub async fn new(
         /// Extra labels applied to this grant's metrics.
         #[cfg(feature = "metrics")]
         #[builder(default)]
         metric_labels: Vec<::metrics::Label>,
-        /// The client ID.
+        /// The OAuth 2.0 client identifier registered with the authorization
+        /// server.
         client_id: String,
-        /// The HTTP client used for token and PAR requests.
+        /// The transport used for discovery-backed JWKS loading, PAR, and token
+        /// requests.
         #[builder(with = |client: impl HttpClient + 'static| Arc::new(client) as Arc<dyn HttpClient>)]
         http_client: Arc<dyn HttpClient>,
-        /// The client authentication method.
+        /// How the client authenticates to the token and PAR endpoints.
+        ///
+        /// Use [`NoAuth`](crate::core::client_auth::NoAuth) for a public client
+        /// that sends only its `client_id`.
         #[builder(with = |auth: impl ClientAuthentication + 'static| Arc::new(auth) as Arc<dyn ClientAuthentication>)]
         client_auth: Arc<dyn ClientAuthentication>,
         /// The `DPoP` signer. Defaults to [`NoDPoP`] (no token sender-constraining).
@@ -259,17 +273,25 @@ impl AuthorizationCodeGrant {
             default = Arc::new(NoDPoP),
         )]
         dpop: Arc<dyn AuthorizationServerDPoP>,
-        /// The issuer for tokens created by the authorization server.
+        /// The authorization server's exact issuer identifier.
+        ///
+        /// It is required for OIDC, JARM, RFC 9207 response-issuer validation,
+        /// and client-authentication methods that use the issuer as an
+        /// assertion audience. [`builder_from_metadata`](Self::builder_from_metadata)
+        /// supplies it from discovery metadata.
         #[from_metadata(path = "issuer")]
         issuer: Option<String>,
-        /// The URL of the token endpoint.
+        /// The canonical token endpoint URL, before mTLS alias resolution.
         #[from_metadata(path = "token_endpoint")]
         token_endpoint: EndpointUrl,
         /// The mTLS alias for the token endpoint (RFC 8705 §5).
         #[from_metadata(path = "mtls_endpoint_aliases?.token_endpoint?")]
         mtls_token_endpoint: Option<EndpointUrl>,
-        /// Supported endpoint auth methods; used to auto-select basic or
-        /// form auth for client secrets.
+        /// Authentication methods advertised for the token endpoint.
+        ///
+        /// [`ClientSecret`](crate::core::client_auth::ClientSecret) uses this
+        /// list to choose HTTP Basic or form authentication. `None` leaves that
+        /// choice unconstrained by metadata.
         #[from_metadata(path = "token_endpoint_auth_methods_supported")]
         token_endpoint_auth_methods_supported: Option<Vec<String>>,
         /// The [`Jar`] implementation used to JWT-secure the authorization
@@ -280,21 +302,47 @@ impl AuthorizationCodeGrant {
             default = Arc::new(NoJar),
         )]
         jar: Arc<dyn Jar>,
-        #[from_metadata(path = "jwks_uri?")] jwks_uri: Option<EndpointUrl>,
-        #[from_metadata(path = "authorization_endpoint?")] authorization_endpoint: EndpointUrl,
+        /// The authorization server's JWKS endpoint.
+        ///
+        /// The default verifier loads keys from this endpoint. It may be
+        /// omitted when a custom `jws_verifier_factory` supplies its own keys,
+        /// or when neither OIDC nor JARM validation is used.
+        #[from_metadata(path = "jwks_uri?")]
+        jwks_uri: Option<EndpointUrl>,
+        /// The endpoint to which the user agent is redirected to begin
+        /// authorization.
+        #[from_metadata(path = "authorization_endpoint?")]
+        authorization_endpoint: EndpointUrl,
+        /// The PAR endpoint (RFC 9126), when the server offers one.
         #[from_metadata(path = "pushed_authorization_request_endpoint?")]
         pushed_authorization_request_endpoint: Option<EndpointUrl>,
+        /// The mTLS alias for the PAR endpoint (RFC 8705 §5).
         #[from_metadata(path = "mtls_endpoint_aliases?.pushed_authorization_request_endpoint?")]
         mtls_pushed_authorization_request_endpoint: Option<EndpointUrl>,
+        /// Whether every authorization request must use PAR.
+        ///
+        /// Defaults to `false`. Building fails when this is `true` and no PAR
+        /// endpoint is configured.
         #[from_metadata(path = "require_pushed_authorization_requests")]
         #[builder(default)]
         require_pushed_authorization_requests: bool,
+        /// Whether the server promises RFC 9207 response-issuer support.
+        ///
+        /// Defaults to `false`. When enabled, every successful callback must
+        /// contain `iss`, and it must exactly match `issuer`.
         #[from_metadata(path = "authorization_response_iss_parameter_supported")]
         #[builder(default)]
         authorization_response_iss_parameter_supported: bool,
+        /// PKCE transformation methods the server advertises.
+        ///
+        /// Defaults to `S256`. `S256` is preferred whenever available; `plain`
+        /// is used only when it is advertised without `S256`.
         #[from_metadata(path = "code_challenge_methods_supported")]
         #[builder(default = vec!["S256".to_string()])]
         code_challenge_methods_supported: Vec<String>,
+        /// A redirect URI registered for this client.
+        ///
+        /// The same value is sent in the authorization and token requests.
         redirect_uri: String,
         /// Set to true to disable PKCE (RFC 7636) entirely.
         ///
@@ -322,7 +370,12 @@ impl AuthorizationCodeGrant {
         /// ([`ResponseMode`]). `None` (the default) omits it, leaving the
         /// server's default for the flow — `query` for the code flow.
         response_mode: Option<ResponseMode>,
-        #[builder(default = true)] prefer_pushed_authorization_requests: bool,
+        /// Whether to use PAR whenever an endpoint is available.
+        ///
+        /// Defaults to `true`. Set it to `false` to send a normal authorization
+        /// request unless the server requires PAR.
+        #[builder(default = true)]
+        prefer_pushed_authorization_requests: bool,
         /// Restricts accepted ID token signature algorithms to this set: the
         /// [`IdTokenValidator`](crate::token::id_token::IdTokenValidator) rejects
         /// any ID token whose `alg` header is not listed. Use a single-element
@@ -370,9 +423,15 @@ impl AuthorizationCodeGrant {
             maybe
         )]
         allowed_authorization_signed_response_algs: Option<HashSet<String>>,
-        #[cfg(not(feature = "default-jws-verifier-platform"))] jws_verifier_platform: Option<
-            Arc<dyn JwsVerifierPlatform>,
-        >,
+        /// Platform operations used by the JWS verifier.
+        ///
+        /// Required when the default verifier must load and verify keys and
+        /// the crate has no platform-default verifier feature enabled.
+        #[cfg(not(feature = "default-jws-verifier-platform"))]
+        jws_verifier_platform: Option<Arc<dyn JwsVerifierPlatform>>,
+        /// Platform operations used by the JWS verifier.
+        ///
+        /// Defaults to [`DefaultJwsVerifierPlatform`](crate::DefaultJwsVerifierPlatform).
         #[cfg(feature = "default-jws-verifier-platform")]
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
