@@ -1,0 +1,5 @@
+error: this variant wraps no classified error, so it must say what it establishes: `#[classify(no)]`, `#[classify(retry)]`, or `#[classify(with = path)]`
+ --> tests/ui/fail_classify_unclassified_leaf.rs:3:5
+  |
+3 |     Invalid,
+  |     ^^^^^^^
