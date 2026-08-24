@@ -19,9 +19,10 @@ stacking layers rather than configuring one large type.
   [`AeadDecryptor`](crate::crypto::cipher::AeadDecryptor) for content encryption
   with one key.
 
-Concrete key implementations of these traits live in the platform crypto crates
-(for example the native and WebCrypto backends), not in `huskarl-core`, which
-defines only the traits and the wrappers that compose them.
+Concrete key implementations of these traits live in the backend crates — the
+native and WebCrypto platforms, and remote backends such as `huskarl-google-cloud`
+for Cloud KMS — not in `huskarl-core`, which defines only the traits and the
+wrappers that compose them.
 
 Verification carries one piece of machinery the other directions don't. Its key
 material *arrives as data* — a JWKS fetched at runtime — so each key has to be

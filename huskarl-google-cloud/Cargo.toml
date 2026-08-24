@@ -1,0 +1,59 @@
+[package]
+name = "huskarl-google-cloud"
+version = "0.7.0"
+edition = "2024"
+rust-version = "1.92"
+description = "Google Cloud cryptographic integrations for the huskarl ecosystem."
+repository = "https://github.com/huskarl-rs/huskarl"
+homepage = "https://github.com/huskarl-rs/huskarl"
+documentation = "https://docs.rs/huskarl-google-cloud"
+license = "MIT OR Apache-2.0"
+keywords = ["oauth2", "security", "authentication", "gcp", "google"]
+categories = ["authentication"]
+readme = "README.md"
+
+[package.metadata.docs.rs]
+# Render the `_docs` module (gated on `cfg(docsrs)`) and enable `doc_cfg`.
+# `cargo docs-rs` reads this block too.
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
+[features]
+default = ["kms", "secretmanager"]
+
+# When enabled, adds Cloud KMS signers, verifiers, and AEAD ciphers.
+kms = ["dep:google-cloud-kms-v1", "dep:google-cloud-gax", "dep:p256", "dep:p384", "dep:der", "dep:pem-rfc7468", "dep:spki", "dep:futures-util"]
+
+# When enabled, adds a secret provider backed by Secret Manager.
+secretmanager = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax", "dep:futures-util"]
+
+[dependencies]
+huskarl-core = { workspace = true }
+
+bon = { workspace = true }
+der = { version = "0.8", optional = true, default-features = false, features = ["derive"] }
+futures-util = { version = "0.3", optional = true, default-features = false, features = ["alloc"] }
+# A direct dependency is needed to inspect the `RetryInfo` detail on a failed
+# RPC. Both service clients re-export their `Error` from this crate.
+google-cloud-gax = { version = "1", optional = true, default-features = false }
+google-cloud-kms-v1 = { version = "1.4", optional = true, default-features = false }
+google-cloud-secretmanager-v1 = { version = "1.4", optional = true, default-features = false }
+p256 = { version = "0.14", optional = true, default-features = false, features = ["ecdsa", "pem"] }
+p384 = { version = "0.14", optional = true, default-features = false, features = ["ecdsa", "pem"] }
+pem-rfc7468 = { version = "1", optional = true, default-features = false }
+snafu = { workspace = true }
+spki = { version = "0.8", optional = true, default-features = false }
+
+[dev-dependencies]
+# Turns a dropped classification into a panic during this workspace's tests;
+# off for dependents, whose own causes may legitimately wrap one. See
+# `huskarl_core::Error::propagate`.
+huskarl-core = { workspace = true, features = ["strict-propagation"] }
+google-cloud-rpc = { version = "1", default-features = false }
+google-cloud-wkt = { version = "1", default-features = false }
+# Local in-memory key types (`AesGcmKey` and `SymmetricKey`) verify that
+# multi-version secret sources compose into ciphers and verifiers whose `kid`
+# is derived from the secret version.
+huskarl-crypto-native = { workspace = true }
+rstest = { version = "0.26", default-features = false }
+tokio = { version = "1", default-features = false, features = ["macros", "rt"] }

@@ -5,6 +5,7 @@ members = [
   "huskarl-core",
   "huskarl-crypto-native",
   "huskarl-crypto-webcrypto",
+  "huskarl-google-cloud",
   "huskarl-macros",
   "huskarl-redis",
   "huskarl-reqwest",
@@ -21,6 +22,7 @@ default-members = [
   "huskarl",
   "huskarl-core",
   "huskarl-crypto-native",
+  "huskarl-google-cloud",
   "huskarl-macros",
   "huskarl-redis",
   "huskarl-reqwest",
@@ -40,6 +42,7 @@ huskarl-redis = { version = "0.2", path = "./huskarl-redis" }
 huskarl-reqwest = { version = "0.8", path = "./huskarl-reqwest" }
 huskarl-crypto-native = { version = "0.10", path = "./huskarl-crypto-native" }
 huskarl-crypto-webcrypto = { version = "0.10", path = "./huskarl-crypto-webcrypto" }
+huskarl-google-cloud = { version = "0.7", path = "./huskarl-google-cloud" }
 huskarl-resource-server = { version = "0.10", path = "./huskarl-resource-server" }
 
 bon = { version = "3.9", default-features = false, features = [

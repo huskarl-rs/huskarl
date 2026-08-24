@@ -55,6 +55,13 @@ guides to adapt that path to your application.
 - [Load a native signing key](../huskarl-crypto-native/docs/guide/loading_a_signing_key.md)
 - [Sign a JWT in the browser](../huskarl-crypto-webcrypto/docs/guide/signing_a_jwt.md)
 
+### Use Google Cloud keys and secrets
+
+- [Sign JWS and serve JWKS with an asymmetric KMS key](../huskarl-google-cloud/docs/guide/asymmetric_signing.md)
+- [Encrypt and sign with symmetric KMS keys](../huskarl-google-cloud/docs/guide/symmetric_crypto.md)
+- [Keep keys fresh under rotation](../huskarl-google-cloud/docs/guide/refreshing_keys.md)
+- [Read secrets from Secret Manager](../huskarl-google-cloud/docs/guide/secret_manager.md)
+
 ## Reference
 
 Use the API reference when you know the crate or type you need:
@@ -68,6 +75,7 @@ Use the API reference when you know the crate or type you need:
 | `huskarl-crypto-webcrypto` | [docs.rs](https://docs.rs/huskarl-crypto-webcrypto) | WebCrypto-backed signing, verification, and AEAD |
 | `huskarl-reqwest` | [docs.rs](https://docs.rs/huskarl-reqwest) | `reqwest` HTTP transport and mTLS configuration |
 | `huskarl-redis` | [docs.rs](https://docs.rs/huskarl-redis) | Redis-backed replay prevention |
+| `huskarl-google-cloud` | [docs.rs](https://docs.rs/huskarl-google-cloud) | Cloud KMS signing, verification, and AEAD, and Secret Manager secrets |
 | `huskarl-macros` | [docs.rs](https://docs.rs/huskarl-macros) | Error-classification and metadata-builder macros |
 
 The [supported-specifications list](../README.md#supported-specifications) is
@@ -99,6 +107,9 @@ trade-off.
 - [Composing cryptographic strategies](../huskarl-core/docs/explanation/crypto_strategies.md)
 - [Why JWK is the native key format](../huskarl-crypto-native/docs/explanation/jwk_as_key_format.md)
 - [WebCrypto platform constraints](../huskarl-crypto-webcrypto/docs/explanation/platform_constraints.md)
+- [Key versions and rotation in Google Cloud](../huskarl-google-cloud/docs/explanation/versions_and_rotation.md)
+- [How Google Cloud keys derive a `kid`](../huskarl-google-cloud/docs/explanation/key_ids.md)
+- [The Google Cloud error model](../huskarl-google-cloud/docs/explanation/error_handling.md)
 
 ## Project and interoperability documentation
 

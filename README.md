@@ -9,7 +9,8 @@
 [![huskarl-crypto-native](https://img.shields.io/crates/v/huskarl-crypto-native.svg?label=huskarl-crypto-native)](https://crates.io/crates/huskarl-crypto-native) [![docs.rs](https://img.shields.io/docsrs/huskarl-crypto-native)](https://docs.rs/huskarl-crypto-native)\
 [![huskarl-crypto-webcrypto](https://img.shields.io/crates/v/huskarl-crypto-webcrypto.svg?label=huskarl-crypto-webcrypto)](https://crates.io/crates/huskarl-crypto-webcrypto) [![docs.rs](https://img.shields.io/docsrs/huskarl-crypto-webcrypto)](https://docs.rs/huskarl-crypto-webcrypto)\
 [![huskarl-reqwest](https://img.shields.io/crates/v/huskarl-reqwest.svg?label=huskarl-reqwest)](https://crates.io/crates/huskarl-reqwest) [![docs.rs](https://img.shields.io/docsrs/huskarl-reqwest)](https://docs.rs/huskarl-reqwest)\
-[![huskarl-redis](https://img.shields.io/crates/v/huskarl-redis.svg?label=huskarl-redis)](https://crates.io/crates/huskarl-redis) [![docs.rs](https://img.shields.io/docsrs/huskarl-redis)](https://docs.rs/huskarl-redis)
+[![huskarl-redis](https://img.shields.io/crates/v/huskarl-redis.svg?label=huskarl-redis)](https://crates.io/crates/huskarl-redis) [![docs.rs](https://img.shields.io/docsrs/huskarl-redis)](https://docs.rs/huskarl-redis)\
+[![huskarl-google-cloud](https://img.shields.io/crates/v/huskarl-google-cloud.svg?label=huskarl-google-cloud)](https://crates.io/crates/huskarl-google-cloud) [![docs.rs](https://img.shields.io/docsrs/huskarl-google-cloud)](https://docs.rs/huskarl-google-cloud)
 
 A húskarl was a well-paid, well-trained household bodyguard in medieval
 northern Europe. Likewise, huskarl guards access to your services: a suite of
@@ -32,6 +33,7 @@ Choose an entry point by what you want to do:
 | Add an OAuth client flow to an application | [Client how-to guides](huskarl/docs/guide/) |
 | Validate tokens at a resource server | [Resource-server how-to guides](huskarl-resource-server/docs/guide/) |
 | Work directly with JWTs, keys, or secrets | [Core how-to guides](huskarl-core/docs/guide/) |
+| Keep keys and secrets in Google Cloud | [Google Cloud how-to guides](huskarl-google-cloud/docs/guide/) |
 | Look up crates, modules, types, and methods | [API reference by crate](docs/README.md#reference) |
 | Understand security and design decisions | [Explanation](docs/README.md#explanation) |
 
@@ -194,6 +196,7 @@ for the conformance setup.
 | [`huskarl-crypto-webcrypto`](https://docs.rs/huskarl-crypto-webcrypto) | Crypto backend built on `WebCrypto`, for WASM environments |
 | [`huskarl-reqwest`](https://docs.rs/huskarl-reqwest) | [`reqwest`](https://docs.rs/reqwest)-backed HTTP client for the crates above |
 | [`huskarl-redis`](https://docs.rs/huskarl-redis) | Redis-backed replay prevention: shares the JWT/`DPoP` `jti` seen-set across server replicas |
+| [`huskarl-google-cloud`](https://docs.rs/huskarl-google-cloud) | Google Cloud backends: Cloud KMS signing, verification, and AEAD, plus Secret Manager secrets |
 
 A rule of thumb for the split: if both a resource server and a client might
 need it, it lives in `huskarl-core`.

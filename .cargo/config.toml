@@ -5,7 +5,8 @@ runner = "wasmtime"
 # - huskarl-crypto-webcrypto is wasm32-only (its futures are !Send)
 # - the integration harness crates (tokio net, uuid) are host-only
 # - huskarl-redis is host-only (the redis crate does not build for wasm)
+# - huskarl-google-cloud is host-only (its gRPC clients need tokio net)
 [alias]
-check-wasm = "check --target wasm32-unknown-unknown --workspace --exclude huskarl-conformance --exclude huskarl-integration --exclude huskarl-testkit --exclude huskarl-redis"
+check-wasm = "check --target wasm32-unknown-unknown --workspace --exclude huskarl-conformance --exclude huskarl-integration --exclude huskarl-testkit --exclude huskarl-redis --exclude huskarl-google-cloud"
 clippy-wasm = "clippy -p huskarl-crypto-webcrypto --target wasm32-unknown-unknown --all-features --all-targets"
 clippy-host = "clippy --workspace --exclude huskarl-crypto-webcrypto --all-features --all-targets"
