@@ -52,34 +52,6 @@ for p in json.load(sys.stdin)["packages"]:
 '
 )
 
-# Publishable dependency edges, as "dependent<TAB>dependency". Dev-dependencies
-# are excluded: they never reach a downstream user. Unlike `crates` above this
-# keeps huskarl-crypto-webcrypto — unverifiable on the host, but still draggable.
-edges="$(
-  cargo metadata --no-deps --format-version 1 | python3 -c '
-import json, sys
-pkgs = json.load(sys.stdin)["packages"]
-pub = {p["name"] for p in pkgs if p.get("publish") != []}
-edges = {
-    (p["name"], d["name"])
-    for p in pkgs if p["name"] in pub
-    for d in p["dependencies"] if d["kind"] in (None, "build") and d["name"] in pub
-}
-for dependent, dependency in sorted(edges):
-    print(dependent, dependency, sep="\t")
-'
-)"
-
-# Manifest directory per publishable crate, keyed by name.
-dirs="$(
-  cargo metadata --no-deps --format-version 1 | python3 -c '
-import json, sys
-for p in json.load(sys.stdin)["packages"]:
-    if p.get("publish") != []:
-        print(p["name"], p["manifest_path"].rsplit("/", 1)[0], sep="\t")
-'
-)"
-
 # Full messages of the commits in base_rev..tip that touch a crate's directory.
 crate_messages() {
   local dir="$1"
@@ -106,7 +78,6 @@ crate_declares_break() {
 rows=""
 any_break=0
 mismatch=0
-breaking_crates=""
 printf '%-26s %s\n' "CRATE" "VERDICT"
 printf '%-26s %s\n' "-----" "-------"
 
@@ -117,7 +88,6 @@ for entry in "${crates[@]}"; do
 
   if grep -q "requires new" <<<"$out"; then
     any_break=1
-    breaking_crates+="$crate"$'\n'
     if crate_declares_break "$dir"; then
       verdict="breaking — declared (has \`!\`/BREAKING CHANGE)"
       row="| \`$crate\` | ⚠️ breaking | ✅ declared |"
@@ -137,57 +107,6 @@ for entry in "${crates[@]}"; do
   rows+="$row"$'\n'
 done
 
-# A crate that exposes a broken dependency's types breaks too, even though its
-# own API is textually unchanged: its requirement moves out of range, so a
-# downstream pinned to the old version compiles against two incompatible copies.
-# cargo-semver-checks sees one crate at a time and reads that as "patch"
-# (cargo-semver-checks#447, blocked on cross-crate items #638; release-plz#1599
-# punted to it). Distinguishing exposure from internal use needs the same
-# introspection, so flag every dependent and let the author confirm.
-propagation="$(
-  EDGES="$edges" BREAKING="$breaking_crates" python3 -c '
-import collections, os
-breaking = {line for line in os.environ["BREAKING"].splitlines() if line}
-if not breaking:
-    raise SystemExit
-dependents = collections.defaultdict(set)
-for line in filter(None, os.environ["EDGES"].splitlines()):
-    dependent, dependency = line.split("\t")
-    dependents[dependency].add(dependent)
-# Breadth-first over the reverse graph, seeded with the crates that broke on
-# their own account — those already bump incompatibly, so they are not results.
-cause, queue = {}, sorted(breaking)
-while queue:
-    crate = queue.pop(0)
-    for dependent in sorted(dependents[crate]):
-        if dependent not in breaking and dependent not in cause:
-            cause[dependent] = crate
-            queue.append(dependent)
-for crate in sorted(cause):
-    print(crate, cause[crate], sep="\t")
-'
-)"
-
-propagation_lines=""
-propagation_rows=""
-while IFS=$'\t' read -r crate cause; do
-  [[ -n "$crate" ]] || continue
-  dir="$(grep -m1 "^$crate"$'\t' <<<"$dirs" | cut -f2)"
-  # A crate whose own commits declare a break already bumps incompatibly; only
-  # the ones release-plz would silently patch-bump are worth listing.
-  if [[ -n "$dir" ]] && crate_declares_break "$dir"; then
-    continue
-  fi
-  propagation_lines+="$(printf '  %-24s incompatible bump needed — depends on %s' "$crate" "$cause")"$'\n'
-  propagation_rows+="| \`$crate\` | \`$cause\` |"$'\n'
-done <<<"$propagation"
-
-if [[ -n "$propagation_rows" ]]; then
-  echo
-  echo "Dependents of a breaking crate (cargo-semver-checks cannot see these):"
-  printf '%s' "$propagation_lines"
-fi
-
 echo
 if [[ $mismatch -eq 1 ]]; then
   echo "RESULT: semver-affecting; at least one commit type understates a breaking change."
@@ -195,9 +114,6 @@ elif [[ $any_break -eq 1 ]]; then
   echo "RESULT: semver-affecting; breaking changes are correctly declared."
 else
   echo "RESULT: not semver-affecting (no breaking API changes vs $base_rev)."
-fi
-if [[ -n "$propagation_rows" ]]; then
-  echo "        Dependents listed above need an incompatible bump too."
 fi
 
 if [[ -n "${SEMVER_REPORT:-}" ]]; then
@@ -220,20 +136,7 @@ if [[ -n "${SEMVER_REPORT:-}" ]]; then
       echo "No breaking API changes detected. Not semver-affecting."
     fi
     echo
-    if [[ -n "$propagation_rows" ]]; then
-      echo "#### ⛓️ Breaks that must propagate"
-      echo
-      echo "These crates' own APIs are unchanged, so release-plz will patch-bump them —"
-      echo "but their in-workspace requirement moves to an incompatible range. Any that"
-      echo "expose the broken crate's types in their own API need a minor bump too, or a"
-      echo "downstream \`cargo update\` silently pulls in two incompatible copies."
-      echo
-      echo "| Crate | Depends on |"
-      echo "| --- | --- |"
-      printf '%s' "$propagation_rows"
-      echo
-    fi
-    echo "<sub>cargo-semver-checks detects breaking changes only; it can't tell \`feat\` from \`fix\` when neither breaks the API, and it can't see a break arriving through a dependency ([#447](https://github.com/obi1kenobi/cargo-semver-checks/issues/447)) — that last part is what the propagation table covers.</sub>"
+    echo "<sub>cargo-semver-checks detects breaking changes only; it can't tell \`feat\` from \`fix\` when neither breaks the API.</sub>"
   } >"$SEMVER_REPORT"
 fi
 
