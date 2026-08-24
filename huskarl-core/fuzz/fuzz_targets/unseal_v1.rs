@@ -5,10 +5,14 @@
 //! tag check on every input.
 #![no_main]
 
-use huskarl_core::crypto::KeyMatchStrength;
-use huskarl_core::crypto::cipher::{AeadDecryptor, CipherMatch, DecryptError};
-use huskarl_core::crypto::seal::{AeadUnsealer, AeadV1Sealer};
-use huskarl_core::platform::MaybeSendBoxFuture;
+use huskarl_core::{
+    crypto::{
+        KeyMatchStrength,
+        cipher::{AeadDecryptor, CipherMatch, DecryptError},
+        seal::{AeadUnsealer, AeadV1Sealer},
+    },
+    platform::MaybeSendBoxFuture,
+};
 use libfuzzer_sys::fuzz_target;
 
 #[derive(Debug)]

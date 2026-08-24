@@ -10,6 +10,7 @@ members = [
   "huskarl-redis",
   "huskarl-reqwest",
   "huskarl-resource-server",
+  "huskarl-sqlite",
   "integration/huskarl-conformance",
   "integration/huskarl-downstream",
   "integration/huskarl-integration",
@@ -27,6 +28,7 @@ default-members = [
   "huskarl-redis",
   "huskarl-reqwest",
   "huskarl-resource-server",
+  "huskarl-sqlite",
   "integration/huskarl-conformance",
   "integration/huskarl-downstream",
   "integration/huskarl-integration",
@@ -40,6 +42,7 @@ huskarl-core = { version = "0.10", path = "./huskarl-core" }
 huskarl-macros = { version = "0.4", path = "./huskarl-macros" }
 huskarl-redis = { version = "0.3", path = "./huskarl-redis" }
 huskarl-reqwest = { version = "0.9", path = "./huskarl-reqwest" }
+huskarl-sqlite = { version = "0.1.0", path= "./huskarl-sqlite" }
 huskarl-crypto-native = { version = "0.11", path = "./huskarl-crypto-native" }
 huskarl-crypto-webcrypto = { version = "0.11", path = "./huskarl-crypto-webcrypto" }
 huskarl-google-cloud = { version = "0.8", path = "./huskarl-google-cloud" }

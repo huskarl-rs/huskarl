@@ -46,8 +46,9 @@
           devShells.default = pkgs.mkShell {
             packages = [
               fmtt
-              pkgs.cargo-msrv
               pkgs.cargo-llvm-cov
+              pkgs.cargo-msrv
+              pkgs.cargo-readme
               pkgs.nixd
               pkgs.sqlite
               pkgs.sqlite-analyzer
