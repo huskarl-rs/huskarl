@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-native-v0.10.1...huskarl-crypto-native-v0.11.0) - 2026-08-24
+
+### Fixed
+
+- Improve the panic story of the crate. ([#275](https://github.com/huskarl-rs/huskarl/pull/275))
+
+### Other
+
+- [**breaking**] Update dependencies and update crate descriptions. ([#304](https://github.com/huskarl-rs/huskarl/pull/304))
+- Improve docs discovery ([#300](https://github.com/huskarl-rs/huskarl/pull/300))
+- explain classified errors and recovery ([#297](https://github.com/huskarl-rs/huskarl/pull/297))
+- *(adapters)* propagate classified backend errors ([#289](https://github.com/huskarl-rs/huskarl/pull/289))
+- *(core)* [**breaking**] migrate internal errors to classifications ([#288](https://github.com/huskarl-rs/huskarl/pull/288))
+
 ## [0.10.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-native-v0.10.0...huskarl-crypto-native-v0.10.1) - 2026-07-20
 
 ### Other

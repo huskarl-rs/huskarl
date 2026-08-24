@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-crypto-native"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.92"
 description = "Native crypto for the huskarl OAuth2 ecosystem."

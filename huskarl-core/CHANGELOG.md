@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.9.1...huskarl-core-v0.10.0) - 2026-08-24
+
+### Added
+
+- *(core)* [**breaking**] classify failed HTTP responses ([#287](https://github.com/huskarl-rs/huskarl/pull/287))
+- *(macros)* add Classify derive ([#285](https://github.com/huskarl-rs/huskarl/pull/285))
+- *(core)* introduce retry advice and OAuth verdicts ([#283](https://github.com/huskarl-rs/huskarl/pull/283))
+- [**breaking**] Make builder_from_metadata/etc. return Result instead of Option ([#282](https://github.com/huskarl-rs/huskarl/pull/282))
+- *(client)* [**breaking**] Default jws_verifier_factory to a JwksSource ([#269](https://github.com/huskarl-rs/huskarl/pull/269))
+- *(core)* [**breaking**] Add capability for verifier loading to fail without failing startup. ([#268](https://github.com/huskarl-rs/huskarl/pull/268))
+- *(core)* Add more syntax extension traits to the prelude. ([#266](https://github.com/huskarl-rs/huskarl/pull/266))
+- *(core)* Update the list of tracked verifier algs in metrics. ([#265](https://github.com/huskarl-rs/huskarl/pull/265))
+- *(core)* Use a monotonic clock for CachedSecret TTL. ([#263](https://github.com/huskarl-rs/huskarl/pull/263))
+- *(client)* [**breaking**] Support signed JARM authorization responses ([#259](https://github.com/huskarl-rs/huskarl/pull/259))
+- *(core)* [**breaking**] Carry error_description alongside the OAuth error code ([#257](https://github.com/huskarl-rs/huskarl/pull/257))
+
+### Fixed
+
+- *(core)* Handle exp time uniformly on WASM and native ([#278](https://github.com/huskarl-rs/huskarl/pull/278))
+- Improve the panic story of the crate. ([#275](https://github.com/huskarl-rs/huskarl/pull/275))
+- *(core)* Implement PartialEq for oct keys in constant time. ([#271](https://github.com/huskarl-rs/huskarl/pull/271))
+- *(auth)* Set more headers as sensitive if they have sensitive information. ([#270](https://github.com/huskarl-rs/huskarl/pull/270))
+- *(core)* Reject malformed JWS part counts without allocating. ([#262](https://github.com/huskarl-rs/huskarl/pull/262))
+
+### Other
+
+- [**breaking**] Update dependencies and update crate descriptions. ([#304](https://github.com/huskarl-rs/huskarl/pull/304))
+- *(google-cloud)* Import huskarl-google-cloud into this workspace. ([#303](https://github.com/huskarl-rs/huskarl/pull/303))
+- Improve some documentation ([#302](https://github.com/huskarl-rs/huskarl/pull/302))
+- Improve docs discovery ([#300](https://github.com/huskarl-rs/huskarl/pull/300))
+- explain classified errors and recovery ([#297](https://github.com/huskarl-rs/huskarl/pull/297))
+- [**breaking**] remove error migration compatibility ([#296](https://github.com/huskarl-rs/huskarl/pull/296))
+- *(core)* [**breaking**] migrate internal errors to classifications ([#288](https://github.com/huskarl-rs/huskarl/pull/288))
+- *(core)* Add tests for aud parsing code ([#280](https://github.com/huskarl-rs/huskarl/pull/280))
+- *(core)* Add explicit thumbprint tests
+- *(client)* Remove stray file
+
 ## [0.9.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.9.0...huskarl-core-v0.9.1) - 2026-07-20
 
 ### Other

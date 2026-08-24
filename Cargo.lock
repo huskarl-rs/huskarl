@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1650,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-core"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-native"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -1712,7 +1712,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-webcrypto"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "base64 0.23.1",
  "huskarl-core",
@@ -1742,7 +1742,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-google-cloud"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bon",
  "der",
@@ -1783,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-macros"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "bon",
  "darling 0.24.1",
@@ -1798,7 +1798,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-redis"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bon",
  "hex",
@@ -1813,7 +1813,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-reqwest"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bon",
  "bytes",
@@ -1828,7 +1828,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "base64 0.23.1",
  "bon",
