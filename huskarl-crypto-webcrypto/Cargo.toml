@@ -3,7 +3,7 @@ name = "huskarl-crypto-webcrypto"
 version = "0.10.1"
 edition = "2024"
 rust-version = "1.92"
-description = "WebCrypto support for huskarl (OAuth2 client) ecosystem."
+description = "WebCrypto support for the huskarl OAuth2 ecosystem."
 repository = "https://github.com/huskarl-rs/huskarl"
 license = "MIT OR Apache-2.0"
 keywords = ["oauth2", "security", "authentication", "wasm"]
@@ -39,7 +39,7 @@ web-sys = { version = "0.3", features = [
 # off for dependents, whose own causes may legitimately wrap one. See
 # `huskarl_core::Error::propagate`.
 huskarl-core = { workspace = true, features = ["strict-propagation"] }
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+base64 = { workspace = true }
 wasm-bindgen-test = "0.3"
 # Interop tests: confirm the WebCrypto cipher and the pure-Rust `aes-gcm` cipher
 # agree on the AES-256-GCM wire format. Native sealing on wasm needs getrandom's

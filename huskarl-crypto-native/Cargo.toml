@@ -3,7 +3,7 @@ name = "huskarl-crypto-native"
 version = "0.10.1"
 edition = "2024"
 rust-version = "1.92"
-description = "Native crypto for huskarl (OAuth2 client) ecosystem."
+description = "Native crypto for the huskarl OAuth2 ecosystem."
 repository = "https://github.com/huskarl-rs/huskarl"
 license = "MIT OR Apache-2.0"
 keywords = ["oauth2", "security", "authentication"]
@@ -38,6 +38,6 @@ aead = { version = "0.6", default-features = false }
 # off for dependents, whose own causes may legitimately wrap one. See
 # `huskarl_core::Error::propagate`.
 huskarl-core = { workspace = true, features = ["strict-propagation"] }
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+base64 = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt"] }
 serde = { version = "1", default-features = false, features = ["derive", "std"] }

@@ -3,7 +3,7 @@ name = "huskarl-resource-server"
 version = "0.10.1"
 edition = "2024"
 rust-version = "1.92"
-description = "OAuth2 resource server (JWT validation) support for the huskarl ecosystem."
+description = "Resource server (JWT validation) support for the huskarl OAuth2 ecosystem."
 repository = "https://github.com/huskarl-rs/huskarl"
 homepage = "https://github.com/huskarl-rs/huskarl"
 documentation = "https://docs.rs/huskarl-resource-server"
@@ -35,7 +35,7 @@ serde_json = { workspace = true }
 snafu = { workspace = true }
 strum = { workspace = true }
 sha2 = { workspace = true }
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+base64 = { workspace = true }
 
 
 ### Dependencies available on all platforms except WASM-not-WASI
