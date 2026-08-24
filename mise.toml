@@ -84,7 +84,7 @@ run = 'scripts/semver-report.sh "${usage_baseline}"'
 run = '''
 for crate in huskarl-core huskarl huskarl-macros huskarl-crypto-native \
              huskarl-crypto-webcrypto huskarl-reqwest huskarl-redis \
-             huskarl-resource-server; do
+             huskarl-resource-server huskarl-google-cloud; do
   cargo +nightly docs-rs -p "$crate"
 done
 '''
@@ -94,7 +94,8 @@ env = { RUSTDOCFLAGS = "--cfg docsrs" }
 run = """
 cargo +nightly test --doc --all-features \
   -p huskarl-core -p huskarl -p huskarl-macros -p huskarl-crypto-native \
-  -p huskarl-reqwest -p huskarl-redis -p huskarl-resource-server
+  -p huskarl-reqwest -p huskarl-redis -p huskarl-resource-server \
+  -p huskarl-google-cloud
 """
 
 [tasks."docs:readme"]

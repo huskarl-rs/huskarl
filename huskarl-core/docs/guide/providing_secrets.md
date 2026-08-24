@@ -45,6 +45,10 @@ let signing_key = FileBytes::new("/run/secrets/signing_key").mapped(Base64Encodi
 # let _ = (client_secret, signing_key);
 ```
 
+A managed store needs a provider crate: `huskarl-google-cloud` implements
+`Secret` for Google Cloud Secret Manager, including a multi-version source for
+rotated keys ([guide](https://docs.rs/huskarl-google-cloud/latest/huskarl_google_cloud/_docs/guide/secret_manager/index.html)).
+
 ## A secret you already hold
 
 [`ProvidedSecret`](crate::secrets::ProvidedSecret) wraps a value the process
