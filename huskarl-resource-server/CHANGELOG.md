@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.10.1...huskarl-resource-server-v0.11.0) - 2026-08-24
+
+### Added
+
+- *(resource-server)* Classify the outcome of a challenge ([#299](https://github.com/huskarl-rs/huskarl/pull/299))
+- [**breaking**] Make builder_from_metadata/etc. return Result instead of Option ([#282](https://github.com/huskarl-rs/huskarl/pull/282))
+
+### Fixed
+
+- Improve the panic story of the crate. ([#275](https://github.com/huskarl-rs/huskarl/pull/275))
+
+### Other
+
+- [**breaking**] Update dependencies and update crate descriptions. ([#304](https://github.com/huskarl-rs/huskarl/pull/304))
+- Improve some documentation ([#302](https://github.com/huskarl-rs/huskarl/pull/302))
+- Improve docs discovery ([#300](https://github.com/huskarl-rs/huskarl/pull/300))
+- explain classified errors and recovery ([#297](https://github.com/huskarl-rs/huskarl/pull/297))
+- [**breaking**] remove error migration compatibility ([#296](https://github.com/huskarl-rs/huskarl/pull/296))
+- *(resource-server)* [**breaking**] adopt classified errors ([#295](https://github.com/huskarl-rs/huskarl/pull/295))
+
 ## [0.10.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.10.0...huskarl-resource-server-v0.10.1) - 2026-07-20
 
 ### Added

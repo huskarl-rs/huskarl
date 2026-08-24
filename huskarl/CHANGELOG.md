@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.10.1...huskarl-v0.11.0) - 2026-08-24
+
+### Added
+
+- *(device)* apply retry advice while polling ([#294](https://github.com/huskarl-rs/huskarl/pull/294))
+- *(cache)* [**breaking**] expose token recovery decisions ([#293](https://github.com/huskarl-rs/huskarl/pull/293))
+- *(core)* introduce retry advice and OAuth verdicts ([#283](https://github.com/huskarl-rs/huskarl/pull/283))
+- [**breaking**] Make builder_from_metadata/etc. return Result instead of Option ([#282](https://github.com/huskarl-rs/huskarl/pull/282))
+- *(userinfo)* [**breaking**] from_grant becomes a builder accepting verifier, can require signing ([#281](https://github.com/huskarl-rs/huskarl/pull/281))
+- *(client)* [**breaking**] Default jws_verifier_factory to a JwksSource ([#269](https://github.com/huskarl-rs/huskarl/pull/269))
+- *(client)* Make auth code redirect_uri public. ([#267](https://github.com/huskarl-rs/huskarl/pull/267))
+- *(client)* [**breaking**] Carry error_uri alongside the OAuth error code ([#261](https://github.com/huskarl-rs/huskarl/pull/261))
+- *(client)* [**breaking**] Return CompleteOutput from auth completion. ([#260](https://github.com/huskarl-rs/huskarl/pull/260))
+- *(client)* [**breaking**] Support signed JARM authorization responses ([#259](https://github.com/huskarl-rs/huskarl/pull/259))
+- *(core)* [**breaking**] Carry error_description alongside the OAuth error code ([#257](https://github.com/huskarl-rs/huskarl/pull/257))
+
+### Fixed
+
+- *(cache)* Use monotonic Instant instead of SystemTime ([#279](https://github.com/huskarl-rs/huskarl/pull/279))
+- *(client)* Redact secret fields from Debug of CompleteInput. ([#277](https://github.com/huskarl-rs/huskarl/pull/277))
+- *(client)* Be more careful about choosing IPv4 vs IPv6 loopback. ([#276](https://github.com/huskarl-rs/huskarl/pull/276))
+- Improve the panic story of the crate. ([#275](https://github.com/huskarl-rs/huskarl/pull/275))
+- *(client)* Don't fail device auth flow on 5xx ([#274](https://github.com/huskarl-rs/huskarl/pull/274))
+- *(client)* Forward normal and mtls token endpoints to refresh grant. ([#273](https://github.com/huskarl-rs/huskarl/pull/273))
+- *(cache)* Improve circuit breaker handling. ([#272](https://github.com/huskarl-rs/huskarl/pull/272))
+- *(auth)* Set more headers as sensitive if they have sensitive information. ([#270](https://github.com/huskarl-rs/huskarl/pull/270))
+
+### Other
+
+- [**breaking**] Update dependencies and update crate descriptions. ([#304](https://github.com/huskarl-rs/huskarl/pull/304))
+- Improve some documentation ([#302](https://github.com/huskarl-rs/huskarl/pull/302))
+- Improve docs discovery ([#300](https://github.com/huskarl-rs/huskarl/pull/300))
+- explain classified errors and recovery ([#297](https://github.com/huskarl-rs/huskarl/pull/297))
+- [**breaking**] remove error migration compatibility ([#296](https://github.com/huskarl-rs/huskarl/pull/296))
+- *(huskarl)* [**breaking**] classify registration and userinfo failures ([#292](https://github.com/huskarl-rs/huskarl/pull/292))
+- *(huskarl)* [**breaking**] classify authorization flow failures ([#291](https://github.com/huskarl-rs/huskarl/pull/291))
+- *(huskarl)* [**breaking**] classify token endpoint failures ([#290](https://github.com/huskarl-rs/huskarl/pull/290))
+- *(core)* [**breaking**] migrate internal errors to classifications ([#288](https://github.com/huskarl-rs/huskarl/pull/288))
+- *(client)* [**breaking**] Implement authorization code callback handling implementation. ([#258](https://github.com/huskarl-rs/huskarl/pull/258))
+- *(client)* Fix doc building on docs.rs ([#255](https://github.com/huskarl-rs/huskarl/pull/255))
+
 ## [0.10.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.10.0...huskarl-v0.10.1) - 2026-07-20
 
 ### Added

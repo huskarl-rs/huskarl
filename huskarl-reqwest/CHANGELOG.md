@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-reqwest-v0.8.0...huskarl-reqwest-v0.9.0) - 2026-08-24
+
+### Fixed
+
+- Improve the panic story of the crate. ([#275](https://github.com/huskarl-rs/huskarl/pull/275))
+
+### Other
+
+- [**breaking**] Update dependencies and update crate descriptions. ([#304](https://github.com/huskarl-rs/huskarl/pull/304))
+- Improve some documentation ([#302](https://github.com/huskarl-rs/huskarl/pull/302))
+- *(adapters)* propagate classified backend errors ([#289](https://github.com/huskarl-rs/huskarl/pull/289))
+
 ## [0.8.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-reqwest-v0.7.1...huskarl-reqwest-v0.8.0) - 2026-07-19
 
 ### Added
