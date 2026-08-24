@@ -3,7 +3,7 @@ name = "huskarl-core"
 version = "0.9.1"
 edition = "2024"
 rust-version = "1.92"
-description = "Base library for huskarl (OAuth2 client) ecosystem."
+description = "Base library for the huskarl OAuth2 ecosystem."
 repository = "https://github.com/huskarl-rs/huskarl"
 homepage = "https://github.com/huskarl-rs/huskarl"
 documentation = "https://docs.rs/huskarl-core"
@@ -38,7 +38,7 @@ strict-propagation = []
 huskarl-macros = { workspace = true }
 arc-swap = "1"
 metrics = { workspace = true, optional = true }
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+base64 = { workspace = true }
 bon = { workspace = true }
 bytes = { version = "1", default-features = false }
 form_urlencoded = { workspace = true }

@@ -23,7 +23,7 @@ bon = { workspace = true }
 http = "1"
 # Custom `harness = false` test harness for the per-provider `tests/*.rs`.
 libtest-mimic = "0.8"
-pem = "3"
+pem = "4"
 reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
 serde_json = { workspace = true }
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "time"] }

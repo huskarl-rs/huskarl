@@ -45,6 +45,7 @@ huskarl-crypto-webcrypto = { version = "0.10", path = "./huskarl-crypto-webcrypt
 huskarl-google-cloud = { version = "0.7", path = "./huskarl-google-cloud" }
 huskarl-resource-server = { version = "0.10", path = "./huskarl-resource-server" }
 
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 bon = { version = "3.9", default-features = false, features = [
   "alloc",
   "experimental-generics-setters",

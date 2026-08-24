@@ -42,7 +42,7 @@ huskarl-core = { workspace = true }
 huskarl-macros = { workspace = true }
 
 arc-swap = "1"
-base64 = { version = "0.22", default-features = false, features = ["std"] }
+base64 = { workspace = true }
 bon = { workspace = true }
 bytes = { version = "1", default-features = false }
 form_urlencoded = { workspace = true }
