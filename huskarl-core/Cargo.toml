@@ -40,11 +40,11 @@ arc-swap = "1"
 metrics = { workspace = true, optional = true }
 base64 = { workspace = true }
 bon = { workspace = true }
-bytes = { version = "1", default-features = false }
+bytes = { workspace = true }
 form_urlencoded = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 hex = { workspace = true }
-http = { version = "1", default-features = false, features = ["std"] }
+http = { workspace = true, features = ["std"] }
 httpdate = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
@@ -52,29 +52,29 @@ serde_json = { workspace = true }
 sha2 = { workspace = true, default-features = false }
 snafu = { workspace = true }
 strum = { workspace = true }
-subtle = { version = "2.6.1", default-features = false }
-tokio = { version = "1", default-features = false, features = ["sync"] }
+subtle = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 url = { workspace = true, optional = true }
-zeroize = { version = "1.6", default-features = false, features = ["alloc"] }
+zeroize = { version = "1.8", default-features = false, features = ["alloc"] }
 
 ### Dependencies available on native and WASI (not browser WASM)
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
-tokio = { version = "1", default-features = false, features = ["time"] }
+tokio = { workspace = true, features = ["time"] }
 
 ### Dependencies available on browser WASM (wasm32-unknown-unknown)
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
 gloo-timers = { version = "0.4", default-features = false, features = ["futures"] }
-web-time = { version = "1", default-features = false, features = ["serde"] }
+web-time = { version = "1.1", default-features = false, features = ["serde"] }
 
 [dev-dependencies]
-rstest = { version = "0.26.1", default-features = false }
+rstest = { workspace = true }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
 
 ### Integration tests require multi-threaded runtime and network access.
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 httpmock = "0.8.3"
-tempfile = "3"
+tempfile = "3.23"

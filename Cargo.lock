@@ -261,27 +261,25 @@ dependencies = [
 
 [[package]]
 name = "bon"
-version = "3.9.3"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a602c73c7b0148ec6d12af6fd5cc7a46e2eacc8878271a999abac56eed12f561"
+checksum = "9e3fac94a66da67200398458a25412bcc3f9b6443b5119a6cad9cf3ccfcd8cc6"
 dependencies = [
  "bon-macros",
- "rustversion",
 ]
 
 [[package]]
 name = "bon-macros"
-version = "3.9.3"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dee98b0db6a962de883bf5d20362dee4d7ca0d12fe39a7c6c73c844e1cd7c1f"
+checksum = "d4654961ad0494e4774c5c60b4cb4cd0ae9b9d92d039d901638b1dba97ebebf5"
 dependencies = [
- "darling 0.23.0",
+ "darling 0.24.1",
  "ident_case",
  "prettyplease",
  "proc-macro2",
  "quote",
- "rustversion",
- "syn 2.0.119",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -1441,9 +1439,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.18"
+version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "839c0e8a181239723652be9062bb56ca5bf5f64011f73b623f6f4fc59086a228"
+checksum = "ef8e5e5a340588f4452631496976cf8636d4a7ecf600239fdc27615d2530bc16"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -1821,7 +1819,6 @@ dependencies = [
  "huskarl-macros",
  "reqwest",
  "snafu",
- "strum",
  "tokio",
 ]
 
@@ -2708,12 +2705,12 @@ dependencies = [
 
 [[package]]
 name = "prettyplease"
-version = "0.2.37"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
+checksum = "2bfe0f4c752e450fc2faf62654f1c134747922825d5b04ca717b8874f41a40c0"
 dependencies = [
  "proc-macro2",
- "syn 2.0.119",
+ "syn 3.0.4",
 ]
 
 [[package]]
