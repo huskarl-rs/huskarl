@@ -14,10 +14,10 @@ pub mod cipher;
 pub mod signer;
 
 use google_cloud_kms_v1::model::crypto_key_version::CryptoKeyVersionAlgorithm;
+use huskarl_core::RetryAdvice;
 use snafu::prelude::*;
 
 use super::version::VersionResolutionError;
-use huskarl_core::RetryAdvice;
 
 /// An error returned while building a [`cipher::KeyVersion`] or
 /// [`signer::KeyVersion`] directly.

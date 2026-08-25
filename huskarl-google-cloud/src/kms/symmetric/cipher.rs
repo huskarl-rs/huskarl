@@ -1,29 +1,30 @@
 //! Encryption and decryption with symmetric AEAD Cloud KMS keys.
 
-use std::borrow::Cow;
-use std::sync::Arc;
+use std::{borrow::Cow, sync::Arc};
 
 use bon::bon;
 use google_cloud_kms_v1::{
     client::KeyManagementService, model::crypto_key_version::CryptoKeyVersionAlgorithm,
 };
-use huskarl_core::RetryAdvice;
-use huskarl_core::crypto::KeyMatchStrength;
-use huskarl_core::crypto::cipher::{
-    AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, AeadOutput, CipherMatch, DecryptError,
-    MultiKeyDecryptor,
+use huskarl_core::{
+    RetryAdvice,
+    crypto::{
+        KeyMatchStrength,
+        cipher::{
+            AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, AeadOutput, CipherMatch,
+            DecryptError, MultiKeyDecryptor,
+        },
+    },
+    platform::MaybeSendBoxFuture,
 };
-use huskarl_core::platform::MaybeSendBoxFuture;
 use snafu::prelude::*;
 
-use super::super::version::{self, VersionStrategy};
-use super::setup;
 use super::{
+    super::version::{self, VersionStrategy},
     GetCryptoKeyVersionSnafu, ListCryptoKeyVersionsSnafu, NoEnabledCryptoKeyVersionsSnafu,
-    ResolveVersionSnafu, UnsupportedAlgorithmSnafu,
+    ResolveVersionSnafu, UnsupportedAlgorithmSnafu, setup,
 };
 pub use super::{KeyError, SetupError};
-
 use crate::kid::VersionKid;
 
 /// An error returned while encrypting with a symmetric KMS key.
@@ -132,10 +133,10 @@ impl From<DecryptionError> for huskarl_core::Error {
 /// # async fn example() -> Result<(), Box<dyn std::error::Error + 'static>> {
 /// let kms_client = KeyManagementService::builder().build().await?;
 /// let key = KeyVersion::builder()
-///   .resource_name("projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
-///   .kms_client(kms_client)
-///   .build()
-///   .await?;
+///     .resource_name("projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
+///     .kms_client(kms_client)
+///     .build()
+///     .await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -283,11 +284,11 @@ impl AeadDecryptor for KeyVersion {
 /// # async fn example() -> Result<(), Box<dyn std::error::Error + 'static>> {
 /// let kms_client = KeyManagementService::builder().build().await?;
 /// let key = EncryptionKey::builder()
-///   .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
-///   .kms_client(kms_client)
-///   .strategy(VersionStrategy::ByLabel("active_version".into()))
-///   .build()
-///   .await?;
+///     .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
+///     .kms_client(kms_client)
+///     .strategy(VersionStrategy::ByLabel("active_version".into()))
+///     .build()
+///     .await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -369,10 +370,10 @@ impl AeadEncryptor for EncryptionKey {
 /// # async fn example() -> Result<(), Box<dyn std::error::Error + 'static>> {
 /// let kms_client = KeyManagementService::builder().build().await?;
 /// let key = DecryptionKey::builder()
-///   .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
-///   .kms_client(kms_client)
-///   .build()
-///   .await?;
+///     .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
+///     .kms_client(kms_client)
+///     .build()
+///     .await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -469,11 +470,11 @@ impl AeadDecryptor for DecryptionKey {
 /// # async fn example() -> Result<(), Box<dyn std::error::Error + 'static>> {
 /// let kms_client = KeyManagementService::builder().build().await?;
 /// let key = CipherKey::builder()
-///   .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
-///   .kms_client(kms_client)
-///   .strategy(VersionStrategy::ByLabel("active_version".into()))
-///   .build()
-///   .await?;
+///     .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
+///     .kms_client(kms_client)
+///     .strategy(VersionStrategy::ByLabel("active_version".into()))
+///     .build()
+///     .await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -718,13 +719,11 @@ fn get_enc_algorithm(algorithm: &CryptoKeyVersionAlgorithm) -> Option<&'static s
 mod tests {
     use std::future::Future;
 
-    use google_cloud_gax::Result as GaxResult;
-    use google_cloud_gax::options::RequestOptions;
-    use google_cloud_gax::response::Response;
-    use google_cloud_kms_v1::model::{
-        RawDecryptRequest, RawDecryptResponse, RawEncryptRequest, RawEncryptResponse,
+    use google_cloud_gax::{Result as GaxResult, options::RequestOptions, response::Response};
+    use google_cloud_kms_v1::{
+        model::{RawDecryptRequest, RawDecryptResponse, RawEncryptRequest, RawEncryptResponse},
+        stub::KeyManagementService as KmsStub,
     };
-    use google_cloud_kms_v1::stub::KeyManagementService as KmsStub;
     use rstest::rstest;
 
     use super::*;

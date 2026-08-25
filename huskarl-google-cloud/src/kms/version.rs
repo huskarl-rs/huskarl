@@ -2,8 +2,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use google_cloud_kms_v1::client::KeyManagementService;
-use google_cloud_kms_v1::model::CryptoKeyVersion;
+use google_cloud_kms_v1::{client::KeyManagementService, model::CryptoKeyVersion};
 use huskarl_core::RetryAdvice;
 use snafu::prelude::*;
 

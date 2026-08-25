@@ -6,8 +6,10 @@
 //!
 //! [AIP-193]: https://google.aip.dev/193
 
-use google_cloud_gax::error::Error;
-use google_cloud_gax::error::rpc::{Code, StatusDetails};
+use google_cloud_gax::error::{
+    Error,
+    rpc::{Code, StatusDetails},
+};
 use huskarl_core::RetryAdvice;
 
 /// Returns retry advice for a failed Google Cloud API call.

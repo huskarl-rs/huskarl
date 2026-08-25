@@ -2,17 +2,13 @@
 
 use bon::bon;
 use google_cloud_kms_v1::client::KeyManagementService;
-use huskarl_core::RetryAdvice;
-use huskarl_core::jwk::PublicJwks;
+use huskarl_core::{RetryAdvice, jwk, jwk::PublicJwks};
 use snafu::prelude::*;
-
-use huskarl_core::jwk;
-
-use crate::kid::VersionKid;
 
 use super::signer::{
     PublicKeyParseError, get_jwe_algorithm, get_jws_algorithm, parse_public_key_pem,
 };
+use crate::kid::VersionKid;
 
 /// Fetches the public keys for all enabled versions of a Cloud KMS
 /// `CryptoKey` as a [`PublicJwks`].
@@ -28,9 +24,9 @@ use super::signer::{
 /// # async fn example() -> Result<(), Box<dyn std::error::Error + 'static>> {
 /// let kms_client = KeyManagementService::builder().build().await?;
 /// let jwks = Jwks::builder()
-///   .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
-///   .kms_client(kms_client)
-///   .build();
+///     .key_name("projects/p/locations/l/keyRings/r/cryptoKeys/k")
+///     .kms_client(kms_client)
+///     .build();
 ///
 /// let public_jwks = jwks.fetch().await?;
 /// # Ok(())

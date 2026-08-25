@@ -1,12 +1,13 @@
 use bon::Builder;
 use google_cloud_secretmanager_v1::client::SecretManagerService;
-use huskarl_core::RetryAdvice;
-use huskarl_core::secrets::{Secret, SecretBytes, SecretOutput};
+use huskarl_core::{
+    RetryAdvice,
+    secrets::{Secret, SecretBytes, SecretOutput},
+};
 use snafu::prelude::*;
 
-use crate::kid::VersionKid;
-
 use super::SecretVersionBytes;
+use crate::kid::VersionKid;
 
 /// An error returned while resolving or listing secret versions.
 #[derive(Debug, Snafu)]
@@ -327,29 +328,29 @@ impl SecretVersions {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod crypto_composition {
-    use std::collections::BTreeMap;
-    use std::future::Future;
-    use std::sync::Arc;
+    use std::{collections::BTreeMap, future::Future, sync::Arc};
 
-    use google_cloud_gax::Result as GaxResult;
-    use google_cloud_gax::options::RequestOptions;
-    use google_cloud_gax::response::Response;
-    use google_cloud_secretmanager_v1::model::{
-        AccessSecretVersionRequest, AccessSecretVersionResponse, GetSecretVersionRequest,
-        ListSecretVersionsRequest, ListSecretVersionsResponse, SecretPayload,
-        SecretVersion as SecretVersionModel,
+    use google_cloud_gax::{Result as GaxResult, options::RequestOptions, response::Response};
+    use google_cloud_secretmanager_v1::{
+        model::{
+            AccessSecretVersionRequest, AccessSecretVersionResponse, GetSecretVersionRequest,
+            ListSecretVersionsRequest, ListSecretVersionsResponse, SecretPayload,
+            SecretVersion as SecretVersionModel,
+        },
+        stub::SecretManagerService as SmStub,
     };
-    use google_cloud_secretmanager_v1::stub::SecretManagerService as SmStub;
-    use huskarl_core::crypto::cipher::{
-        AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, CipherMatch, MultiKeyDecryptor,
+    use huskarl_core::{
+        crypto::{
+            cipher::{
+                AeadDecryptor, AeadEncryptor, AeadEncryptorSelector, CipherMatch, MultiKeyDecryptor,
+            },
+            signer::{JwsSigner, JwsSignerSelector},
+            verifier::{JwsVerifier, KeyMatch, MultiKeyVerifier},
+        },
+        jwk::{JwkJson, OctBytes},
+        secrets::{Secret, encodings::StringEncoding},
     };
-    use huskarl_core::crypto::signer::{JwsSigner, JwsSignerSelector};
-    use huskarl_core::crypto::verifier::{JwsVerifier, KeyMatch, MultiKeyVerifier};
-    use huskarl_core::jwk::{JwkJson, OctBytes};
-    use huskarl_core::secrets::Secret;
-    use huskarl_core::secrets::encodings::StringEncoding;
-    use huskarl_crypto_native::aead::AesGcmKey;
-    use huskarl_crypto_native::symmetric::SymmetricKey;
+    use huskarl_crypto_native::{aead::AesGcmKey, symmetric::SymmetricKey};
 
     use super::*;
 

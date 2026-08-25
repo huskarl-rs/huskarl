@@ -54,7 +54,7 @@ and explanation in a `_docs` module:
 ## Conformance and interoperability
 
 Huskarl’s client is verified against the official [OpenID conformance
-suite](https://openid.net/certification/). It passes the OpenID Connect Core
+suite](https://openid.net/certification/). It passes the `OpenID` Connect Core
 *Basic client* certification plan, plus the **FAPI 2.0 Security Profile** and
 **Message Signing** client plans — these adding `private_key_jwt` client
 authentication, `DPoP` sender-constrained tokens, and signed authorization
