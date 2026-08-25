@@ -15,14 +15,14 @@ proc-macro = true
 doc = false
 
 [dependencies]
-darling = "0.24"
-proc-macro2 = "1"
+darling = "0.24.1"
+proc-macro2 = "1.0.91"
 proc-macro-crate = "3"
-quote = "1"
-syn = { version = "3", features = ["full"] }
+quote = "1.0.37"
+syn = { version = "3.0.3", features = ["full"] }
 
 [dev-dependencies]
 bon = { workspace = true }
 huskarl-core = { path = "../huskarl-core" }
-rustversion = "1"
-trybuild = { version = "1", features = ["diff"] }
+rustversion = "1.0.6"
+trybuild = { version = "1.0.86", features = ["diff"] }

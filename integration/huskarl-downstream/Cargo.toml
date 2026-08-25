@@ -9,9 +9,9 @@ description = "Scratch downstream consumer — verifies ergonomics from outside 
 [dependencies]
 huskarl = { workspace = true }
 
-bytes = { version = "1", default-features = false }
-http = { version = "1", default-features = false, features = ["std"] }
-thiserror = "2"
+bytes = { workspace = true }
+http = { workspace = true, features = ["std"] }
+thiserror = "2.0.12"
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
