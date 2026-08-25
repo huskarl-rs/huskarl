@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.0...huskarl-core-v0.10.1) - 2026-08-25
+
+### Other
+
+- *(core)* Remove secrecy from dependencies. ([#307](https://github.com/huskarl-rs/huskarl/pull/307))
+
 ## [0.10.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.9.1...huskarl-core-v0.10.0) - 2026-08-24
 
 ### Added
