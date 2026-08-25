@@ -32,8 +32,8 @@ pub use mapped::{FnMap, MappedSecret, TryFnMap};
 pub use providers::{EnvVarSecret, ProvidedSecret};
 #[cfg(feature = "fs")]
 pub use providers::{FileBytes, FileSecret};
-use secrecy::ExposeSecret as _;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::{
     error::Error,
@@ -49,8 +49,14 @@ use crate::{
 /// or other output that is not intended to contain the credential. Call
 /// [`expose_secret`](Self::expose_secret) only at the boundary that consumes the
 /// secret.
-#[derive(Debug, Clone)]
-pub struct SecretString(secrecy::SecretString);
+#[derive(Clone)]
+pub struct SecretString(Zeroizing<Box<str>>);
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretString([REDACTED])")
+    }
+}
 
 impl<'de> Deserialize<'de> for SecretString {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -67,7 +73,7 @@ impl Serialize for SecretString {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(self.0.expose_secret())
+        serializer.serialize_str(self.0.as_ref())
     }
 }
 
@@ -75,13 +81,13 @@ impl SecretString {
     /// Creates a new `SecretString`.
     #[must_use]
     pub fn new(secret: impl AsRef<str>) -> Self {
-        SecretString(secret.as_ref().into())
+        SecretString(Zeroizing::new(secret.as_ref().into()))
     }
 
     /// Exposes the secret string value.
     #[must_use]
     pub fn expose_secret(&self) -> &str {
-        self.0.expose_secret()
+        self.0.as_ref()
     }
 }
 
@@ -98,20 +104,26 @@ impl From<&str> for SecretString {
 }
 
 /// A secret byte buffer that avoids accidental exposure through `Debug`.
-#[derive(Debug, Clone)]
-pub struct SecretBytes(secrecy::SecretBox<[u8]>);
+#[derive(Clone)]
+pub struct SecretBytes(Zeroizing<Box<[u8]>>);
+
+impl std::fmt::Debug for SecretBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretBytes([REDACTED])")
+    }
+}
 
 impl SecretBytes {
     /// Creates a new `SecretBytes`.
     #[must_use]
     pub fn new(secret: Vec<u8>) -> Self {
-        SecretBytes(secrecy::SecretBox::new(secret.into_boxed_slice()))
+        SecretBytes(Zeroizing::new(secret.into_boxed_slice()))
     }
 
     /// Exposes the secret byte slice.
     #[must_use]
     pub fn expose_secret(&self) -> &[u8] {
-        self.0.expose_secret()
+        self.0.as_ref()
     }
 }
 
@@ -268,6 +280,15 @@ impl<S: Secret> Secret for WithIdentity<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_debug_output_is_redacted() {
+        let string = SecretString::new("string-secret");
+        let bytes = SecretBytes::new(b"bytes-secret".to_vec());
+
+        assert_eq!(format!("{string:?}"), "SecretString([REDACTED])");
+        assert_eq!(format!("{bytes:?}"), "SecretBytes([REDACTED])");
+    }
 
     #[tokio::test]
     async fn test_with_identity() {
