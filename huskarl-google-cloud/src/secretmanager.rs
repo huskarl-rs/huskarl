@@ -7,17 +7,17 @@
 
 use bon::Builder;
 use google_cloud_secretmanager_v1::client::SecretManagerService;
-use huskarl_core::RetryAdvice;
-use huskarl_core::platform::MaybeSendBoxFuture;
-use huskarl_core::secrets::encodings::StringEncoding;
-use huskarl_core::secrets::{MappedSecret, Secret, SecretBytes, SecretMap, SecretOutput};
+use huskarl_core::{
+    RetryAdvice,
+    platform::MaybeSendBoxFuture,
+    secrets::{
+        MappedSecret, Secret, SecretBytes, SecretMap, SecretOutput, encodings::StringEncoding,
+    },
+};
 use snafu::prelude::*;
+pub use versions::{ActiveSecretVersions, SecretVersions, SecretVersionsError};
 
 use crate::kid::VersionKid;
-
-pub use versions::ActiveSecretVersions;
-pub use versions::SecretVersions;
-pub use versions::SecretVersionsError;
 
 mod versions;
 
@@ -86,10 +86,10 @@ impl From<SecretError> for huskarl_core::Error {
 /// # use huskarl_google_cloud::secretmanager::SecretVersionBytes;
 /// # use google_cloud_secretmanager_v1::client::SecretManagerService;
 /// # async fn setup(secret_manager: SecretManagerService) {
-///     let bytes = SecretVersionBytes::builder()
-///         .client(secret_manager)
-///         .resource_name("projects/boogawooga/secrets/my-private-secret/versions/1")
-///         .build();
+/// let bytes = SecretVersionBytes::builder()
+///     .client(secret_manager)
+///     .resource_name("projects/boogawooga/secrets/my-private-secret/versions/1")
+///     .build();
 /// # }
 /// ```
 #[derive(Debug, Clone, Builder)]
@@ -162,12 +162,12 @@ impl Secret for SecretVersionBytes {
 /// # use huskarl_google_cloud::secretmanager::{SecretVersion, SecretVersionBytes};
 /// # use google_cloud_secretmanager_v1::client::SecretManagerService;
 /// # async fn setup(secret_manager: SecretManagerService) {
-///     let text = SecretVersion::string(
-///         SecretVersionBytes::builder()
-///             .client(secret_manager)
-///             .resource_name("projects/boogawooga/secrets/my-private-secret/versions/1")
-///             .build(),
-///     );
+/// let text = SecretVersion::string(
+///     SecretVersionBytes::builder()
+///         .client(secret_manager)
+///         .resource_name("projects/boogawooga/secrets/my-private-secret/versions/1")
+///         .build(),
+/// );
 /// # }
 /// ```
 #[derive(Debug, Clone)]
@@ -209,13 +209,11 @@ impl<M: SecretMap<In = SecretBytes>> Secret for SecretVersion<M> {
 mod tests {
     use std::future::Future;
 
-    use google_cloud_gax::Result as GaxResult;
-    use google_cloud_gax::options::RequestOptions;
-    use google_cloud_gax::response::Response;
-    use google_cloud_secretmanager_v1::model::{
-        AccessSecretVersionRequest, AccessSecretVersionResponse, SecretPayload,
+    use google_cloud_gax::{Result as GaxResult, options::RequestOptions, response::Response};
+    use google_cloud_secretmanager_v1::{
+        model::{AccessSecretVersionRequest, AccessSecretVersionResponse, SecretPayload},
+        stub::SecretManagerService as SmStub,
     };
-    use google_cloud_secretmanager_v1::stub::SecretManagerService as SmStub;
     use rstest::rstest;
 
     use super::*;
