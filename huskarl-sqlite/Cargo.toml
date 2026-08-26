@@ -2,6 +2,13 @@
 name = "huskarl-sqlite"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.92"
+description = "SQLite-backed replay prevention for the huskarl OAuth2 ecosystem."
+repository = "https://github.com/huskarl-rs/huskarl"
+license = "MIT OR Apache-2.0"
+keywords = ["oauth2", "security", "authentication", "sqlite"]
+categories = ["authentication"]
+readme = "README.md"
 
 [features]
 default = ["bundled"]
