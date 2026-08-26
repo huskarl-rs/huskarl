@@ -95,19 +95,21 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo test --workspace --exclude huskarl-crypto-webcrypto
 
-  # Disable until rustcrypto reaches stable
-  #minimal-versions:
-  #  name: Minimal versions
-  #  runs-on: ubuntu-latest
-  #  steps:
-  #    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-  #      with:
-  #        persist-credentials: false
-  #    - run: rustup toolchain install nightly --no-self-update --profile minimal
-  #    - run: rustup update stable --no-self-update
-  #    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-  #    - run: cargo +nightly update -Z minimal-versions
-  #    - run: cargo build --workspace --exclude huskarl-crypto-webcrypto --no-default-features
+  minimal-versions:
+    name: Minimal versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - run: rustup update stable --no-self-update && rustup target add wasm32-unknown-unknown
+      - run: rustup toolchain install nightly --no-self-update --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: cargo-bins/cargo-binstall@732870f031d2fb36309d0deaf36abcc704a7be65 # v1.20.1
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          install_args: "cargo:cargo-hack cargo:cargo-minimal-versions"
+      - run: mise run --skip-tools minimal-versions --direct
 
   wasm:
     name: WASM
@@ -129,12 +131,6 @@ jobs:
           persist-credentials: false
       - run: rustup update stable --no-self-update
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Runs each test in its own process (isolation + per-test timeouts) — see
-      # .config/nextest.toml. Install cargo-binstall first so mise's `cargo:`
-      # backend fetches the prebuilt binary instead of compiling; mise then
-      # installs the same `cargo:cargo-nextest` declared in mise.toml (scoped via
-      # install_args so the rest of the dev toolchain isn't pulled in), keeping
-      # local and CI on one source of truth. Both actions are SHA-pinned.
       - uses: cargo-bins/cargo-binstall@732870f031d2fb36309d0deaf36abcc704a7be65 # v1.20.1
       - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
