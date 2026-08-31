@@ -71,8 +71,7 @@ fn main() {
     let propagated: huskarl_core::Error = QualifiedCause::Core(inner).into();
     assert_eq!(propagated.retry_advice(), huskarl_core::RetryAdvice::RETRY);
 
-    let io: huskarl_core::Error =
-        QualifiedCause::Io(std::io::Error::other("leaf")).into();
+    let io: huskarl_core::Error = QualifiedCause::Io(std::io::Error::other("leaf")).into();
     assert_eq!(io.retry_advice(), huskarl_core::RetryAdvice::No);
 
     let foreign: huskarl_core::Error = QualifiedCause::Foreign(foreign::Error).into();

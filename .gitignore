@@ -1,2 +1,9 @@
 target/
 /conformance
+
+result
+result-*
+.direnv/
+.dir-locals.el
+
+.DS_Store

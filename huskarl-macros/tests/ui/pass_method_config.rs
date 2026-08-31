@@ -87,6 +87,9 @@ fn main() {
         .endpoint("https://manual.example.com")
         .unwrap()
         .build();
-    assert_eq!(client.endpoint, Url("https://manual.example.com".to_owned()));
+    assert_eq!(
+        client.endpoint,
+        Url("https://manual.example.com".to_owned())
+    );
     assert_eq!(client.issuer, None);
 }
