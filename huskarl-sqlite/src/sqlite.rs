@@ -68,16 +68,15 @@ impl SqliteClient {
     ///
     /// Returns a tuple (now, expiry) of the unix epoch timestamp of the time
     /// the expiry was calculated, and the expiry itself.
-    ///
-    /// An over-long TTL saturates rather than erroring: `now + ttl` clamps to
-    /// `i64::MAX` millis (the JTI effectively never expires), mirroring the
-    /// Redis backend's clamp of an over-long TTL.
+    // TODO(dmd): Is below the correct method of handling some clock/time
+    // weirdness? huskarl-redis sets the expiry to be 1 ms if the u128 -> u64
+    // conversion fails, so I'm maintaining that behavior, but when do we just want to exist w/ error?
     fn expiry_millis(&self, ttl: Duration) -> Result<(i64, i64), SqliteClientError> {
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map_err(SqliteClientError::Sync)?;
         let now = i64::try_from(now.as_millis())?;
-        let ttl = i64::try_from(ttl.as_millis()).unwrap_or(i64::MAX);
+        let ttl = i64::try_from(ttl.as_millis()).unwrap_or_default();
         let expiry = now.saturating_add(ttl);
         Ok((now, expiry))
     }
