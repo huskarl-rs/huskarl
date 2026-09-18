@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Mutex, atomic::AtomicUsize},
+};
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, StatusCode};
@@ -17,6 +20,11 @@ use crate::{
         authorization_code::{AuthorizationCodeGrant, AuthorizationCodeGrantParameters},
         client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
         core::token_response::RawTokenResponse,
+        device_authorization::DeviceAuthorizationGrant,
+        jwt_bearer::{JwtBearerGrant, JwtBearerGrantParameters},
+        token_exchange::{
+            SecurityToken, SecurityTokenType, TokenExchangeGrant, TokenExchangeGrantParameters,
+        },
     },
     token::RefreshToken,
 };
@@ -31,6 +39,7 @@ struct MockResponse {
 #[derive(Clone, Default)]
 struct MockHttpClient {
     responses: Arc<Mutex<VecDeque<MockResponse>>>,
+    request_bodies: Arc<Mutex<Vec<Bytes>>>,
 }
 
 impl MockHttpClient {
@@ -40,14 +49,22 @@ impl MockHttpClient {
             body: Bytes::copy_from_slice(body.as_bytes()),
         });
     }
+
+    fn request_bodies(&self) -> Vec<Bytes> {
+        self.request_bodies.lock().unwrap().clone()
+    }
 }
 
 impl HttpClient for MockHttpClient {
     fn execute(
         &self,
-        _request: http::Request<Bytes>,
+        request: http::Request<Bytes>,
         _idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+        self.request_bodies
+            .lock()
+            .unwrap()
+            .push(request.body().clone());
         let response = self
             .responses
             .lock()
@@ -185,12 +202,101 @@ fn client_credentials_grant(http: MockHttpClient) -> ClientCredentialsGrant {
         .build()
 }
 
+fn jwt_bearer_grant(http: MockHttpClient) -> JwtBearerGrant {
+    JwtBearerGrant::builder()
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .http_client(http)
+        .build()
+}
+
+fn token_exchange_grant(http: MockHttpClient) -> TokenExchangeGrant {
+    TokenExchangeGrant::builder()
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .http_client(http)
+        .build()
+}
+
+fn token_exchange_parameters(subject_token: impl Into<String>) -> TokenExchangeGrantParameters {
+    TokenExchangeGrantParameters::builder()
+        .subject(
+            SecurityToken::builder()
+                .token(subject_token.into())
+                .token_type(SecurityTokenType::AccessToken)
+                .build(),
+        )
+        .build()
+}
+
+async fn authorization_code_grant(http: MockHttpClient) -> AuthorizationCodeGrant {
+    AuthorizationCodeGrant::builder()
+        .client_id("client")
+        .client_auth(NoAuth)
+        .http_client(http)
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+        .redirect_uri("http://127.0.0.1/cb")
+        .build()
+        .await
+        .unwrap()
+}
+
+fn device_authorization_grant(http: MockHttpClient) -> DeviceAuthorizationGrant {
+    DeviceAuthorizationGrant::builder()
+        .client_id("device-client")
+        .client_auth(NoAuth)
+        .http_client(http)
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .device_authorization_endpoint("https://as.example.com/device".parse().unwrap())
+        .build()
+}
+
 fn access_of(token: &TokenResponse) -> String {
     token
         .raw_token_response()
         .access_token
         .expose_secret()
         .to_owned()
+}
+
+fn form_values(http: &MockHttpClient, name: &str) -> Vec<String> {
+    http.request_bodies()
+        .iter()
+        .filter_map(|body| std::str::from_utf8(body).ok())
+        .flat_map(|body| form_urlencoded::parse(body.as_bytes()))
+        .filter_map(|(key, value)| (key == name).then(|| value.into_owned()))
+        .collect()
+}
+
+async fn assert_primed_flow_refreshes<G>(grant: G, http: &MockHttpClient)
+where
+    G: OAuth2ExchangeGrant,
+{
+    let source = GrantTokenSource::builder()
+        .grant(grant)
+        .grant_parameters(NoSource)
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+
+    source.prime(valid_response("rt-primed")).await.unwrap();
+    assert_eq!(http.request_bodies(), [] as [Bytes; 0]);
+
+    // The workflow's completed response is served without repeating its
+    // one-time authorization operation.
+    assert_eq!(
+        access_of(&source.token().await.unwrap()),
+        "primed-access-token"
+    );
+    assert_eq!(http.request_bodies(), [] as [Bytes; 0]);
+
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"refreshed","token_type":"bearer","expires_in":3600}"#,
+    );
+    assert_eq!(access_of(&source.token().await.unwrap()), "refreshed");
+
+    assert_eq!(form_values(http, "grant_type"), ["refresh_token"]);
+    assert_eq!(form_values(http, "refresh_token"), ["rt-primed"]);
+    assert!(!source.has_grant_parameters());
 }
 
 /// A grant source seeded (via `prime`) with the refresh token `"rt-original"`
@@ -230,16 +336,7 @@ async fn one_time_source(
     store: SharedRefreshStore,
     http: MockHttpClient,
 ) -> GrantTokenSource<AuthorizationCodeGrant, SharedRefreshStore> {
-    let grant = AuthorizationCodeGrant::builder()
-        .client_id("client")
-        .client_auth(NoAuth)
-        .http_client(http)
-        .token_endpoint("https://as.example.com/token".parse().unwrap())
-        .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
-        .redirect_uri("http://127.0.0.1/cb")
-        .build()
-        .await
-        .unwrap();
+    let grant = authorization_code_grant(http).await;
 
     GrantTokenSource::builder()
         .grant(grant)
@@ -287,6 +384,22 @@ async fn prime_serves_token_then_refreshes() {
         r#"{"access_token":"refreshed","token_type":"bearer","expires_in":3600}"#,
     );
     assert_eq!(access_of(&source.token().await.unwrap()), "refreshed");
+}
+
+#[tokio::test]
+async fn authorization_code_result_is_primed_then_refreshed() {
+    let http = MockHttpClient::default();
+    let grant = authorization_code_grant(http.clone()).await;
+
+    assert_primed_flow_refreshes(grant, &http).await;
+}
+
+#[tokio::test]
+async fn device_result_is_primed_then_refreshed() {
+    let http = MockHttpClient::default();
+    let grant = device_authorization_grant(http.clone());
+
+    assert_primed_flow_refreshes(grant, &http).await;
 }
 
 #[tokio::test]
@@ -858,6 +971,124 @@ async fn reusable_parameters_allow_repeated_exchange() {
     source.token().await.unwrap();
     assert_eq!(access_of(&source.token().await.unwrap()), "t2");
     assert!(source.has_grant_parameters());
+}
+
+#[tokio::test]
+async fn jwt_bearer_from_fn_mints_a_new_assertion_per_exchange() {
+    let http = MockHttpClient::default();
+    let mint_count = Arc::new(AtomicUsize::new(0));
+    let count_for_source = mint_count.clone();
+    let source = GrantTokenSource::builder()
+        .grant(jwt_bearer_grant(http.clone()))
+        .grant_parameters(from_fn(move || {
+            let sequence = count_for_source.fetch_add(1, Ordering::Relaxed) + 1;
+            async move {
+                Ok::<_, Error>(
+                    JwtBearerGrantParameters::builder()
+                        .assertion(format!("assertion-{sequence}"))
+                        .build(),
+                )
+            }
+        }))
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+
+    for access_token in ["t1", "t2"] {
+        http.push(
+            StatusCode::OK,
+            &format!(
+                r#"{{"access_token":"{access_token}","token_type":"bearer","expires_in":3600}}"#
+            ),
+        );
+        source.token().await.unwrap();
+    }
+
+    assert_eq!(mint_count.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        form_values(&http, "assertion"),
+        ["assertion-1", "assertion-2"]
+    );
+}
+
+#[tokio::test]
+async fn fixed_jwt_bearer_assertion_is_spent_after_invalid_grant() {
+    let http = MockHttpClient::default();
+    let source = GrantTokenSource::builder()
+        .grant(jwt_bearer_grant(http.clone()))
+        .grant_parameters(
+            JwtBearerGrantParameters::builder()
+                .assertion("fixed-assertion")
+                .build(),
+        )
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+    assert_reauth_required(&source.token().await.unwrap_err());
+    assert!(!source.has_grant_parameters());
+
+    // No response is queued: replaying the rejected assertion would panic in
+    // the mock before this second error could be returned.
+    assert_reauth_required(&source.token().await.unwrap_err());
+    assert_eq!(form_values(&http, "assertion"), ["fixed-assertion"]);
+}
+
+#[tokio::test]
+async fn token_exchange_fixed_subject_is_reusable_until_rejected() {
+    let http = MockHttpClient::default();
+    let source = GrantTokenSource::builder()
+        .grant(token_exchange_grant(http.clone()))
+        .grant_parameters(token_exchange_parameters("fixed-subject"))
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"t1","token_type":"bearer","expires_in":3600,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}"#,
+    );
+    source.token().await.unwrap();
+
+    http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
+    assert_reauth_required(&source.token().await.unwrap_err());
+    assert!(!source.has_grant_parameters());
+
+    // The rejected subject token is not sent a third time.
+    assert_reauth_required(&source.token().await.unwrap_err());
+    assert_eq!(
+        form_values(&http, "subject_token"),
+        ["fixed-subject", "fixed-subject"]
+    );
+}
+
+#[tokio::test]
+async fn token_exchange_from_fn_reacquires_the_subject_token() {
+    let http = MockHttpClient::default();
+    let acquire_count = Arc::new(AtomicUsize::new(0));
+    let count_for_source = acquire_count.clone();
+    let source = GrantTokenSource::builder()
+        .grant(token_exchange_grant(http.clone()))
+        .grant_parameters(from_fn(move || {
+            let sequence = count_for_source.fetch_add(1, Ordering::Relaxed) + 1;
+            async move { Ok::<_, Error>(token_exchange_parameters(format!("subject-{sequence}"))) }
+        }))
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+
+    for access_token in ["t1", "t2"] {
+        http.push(
+            StatusCode::OK,
+            &format!(
+                r#"{{"access_token":"{access_token}","token_type":"bearer","expires_in":3600,"issued_token_type":"urn:ietf:params:oauth:token-type:access_token"}}"#
+            ),
+        );
+        source.token().await.unwrap();
+    }
+
+    assert_eq!(acquire_count.load(Ordering::Relaxed), 2);
+    assert_eq!(
+        form_values(&http, "subject_token"),
+        ["subject-1", "subject-2"]
+    );
 }
 
 #[tokio::test]
