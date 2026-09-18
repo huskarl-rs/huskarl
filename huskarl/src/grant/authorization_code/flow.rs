@@ -279,7 +279,7 @@ impl AuthorizationCodeGrant {
                 form.retain(|(name, _)| *name != "client_id");
             }
 
-            Ok(par::make_par_call(
+            par::make_par_call(
                 self.http_client.as_ref(),
                 par_url,
                 auth_params,
@@ -288,8 +288,8 @@ impl AuthorizationCodeGrant {
                 dpop_jkt,
             )
             .await
-            .context(PushedAuthorizationRequestSnafu)?)
-        })?;
+        })
+        .context(PushedAuthorizationRequestSnafu)?;
 
         let push_payload = par::AuthorizationPushPayload {
             client_id: &self.client_id,
@@ -623,8 +623,12 @@ fn add_payload_to_uri<T: Serialize>(endpoint: &EndpointUrl, payload: T) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
 
+    use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
     use bytes::Bytes;
     use rstest::rstest;
 
@@ -749,6 +753,61 @@ mod tests {
                     body: Bytes::from_static(
                         br#"{"request_uri":"urn:ietf:params:oauth:request_uri:abc","expires_in":90}"#,
                     ),
+                })
+            })
+        }
+    }
+
+    /// Challenges the first PAR request for a `DPoP` nonce, then accepts a retry
+    /// only when its freshly generated proof carries that nonce.
+    #[derive(Clone, Default)]
+    struct NonceParHttp {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl HttpClient for NonceParHttp {
+        fn execute(
+            &self,
+            request: http::Request<Bytes>,
+            _idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            let attempt = self.attempts.fetch_add(1, Ordering::Relaxed);
+            let proof = request
+                .headers()
+                .get("DPoP")
+                .expect("PAR request should carry a DPoP proof")
+                .to_str()
+                .unwrap();
+            let claims: serde_json::Value = serde_json::from_slice(
+                &BASE64_URL_SAFE_NO_PAD
+                    .decode(proof.split('.').nth(1).unwrap())
+                    .unwrap(),
+            )
+            .unwrap();
+
+            let mut headers = http::HeaderMap::new();
+            let (status, body) = if attempt == 0 {
+                assert!(claims.get("nonce").is_none());
+                headers.insert("DPoP-Nonce", "fresh-nonce".parse().unwrap());
+                (
+                    http::StatusCode::BAD_REQUEST,
+                    Bytes::from_static(br#"{"error":"use_dpop_nonce"}"#),
+                )
+            } else {
+                assert_eq!(claims["nonce"], "fresh-nonce");
+                (
+                    http::StatusCode::CREATED,
+                    Bytes::from_static(
+                        br#"{"request_uri":"urn:ietf:params:oauth:request_uri:abc","expires_in":90}"#,
+                    ),
+                )
+            };
+
+            Box::pin(async move {
+                Ok(HttpResponse {
+                    status,
+                    headers,
+                    body,
                 })
             })
         }
@@ -935,6 +994,37 @@ mod tests {
             expires_at >= lower && expires_at <= upper,
             "expected within [{lower:?}, {upper:?}], got {expires_at:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn par_retries_once_with_the_server_dpop_nonce() {
+        use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+        let http = NonceParHttp::default();
+        let grant = AuthorizationCodeGrant::builder()
+            .client_id("client")
+            .http_client(http.clone())
+            .client_auth(NoAuth)
+            .dpop(
+                crate::core::dpop::DPoP::builder()
+                    .signer(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
+                    .build(),
+            )
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .pushed_authorization_request_endpoint("https://as.example.com/par".parse().unwrap())
+            .prefer_pushed_authorization_requests(true)
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+
+        grant
+            .start(StartInput::scope(bon::vec!["profile"]))
+            .await
+            .unwrap();
+
+        assert_eq!(http.attempts.load(Ordering::Relaxed), 2);
     }
 
     #[tokio::test]
