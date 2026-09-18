@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.0...huskarl-v0.11.1) - 2026-09-18
+
+### Fixed
+
+- *(client)* Retry PAR call when DPoP nonce is received. ([#313](https://github.com/huskarl-rs/huskarl/pull/313))
+
+### Other
+
+- cargo fmt ([#308](https://github.com/huskarl-rs/huskarl/pull/308))
+
 ## [0.11.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.10.1...huskarl-v0.11.0) - 2026-08-24
 
 ### Added
