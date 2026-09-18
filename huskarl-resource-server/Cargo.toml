@@ -67,9 +67,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 httpmock = "0.8.3"
 rstest = { version = "0.26", default-features = false }
 
-# The example uses dev-dependencies, so rustdoc skips scraping it unless we
-# opt in explicitly. docs.rs scrapes examples, so this surfaces `basic` as a
-# usage example on the items it exercises (and silences the scrape warning).
+# The example relies on dev-dependencies that are not available when docs.rs
+# builds the published package.
 [[example]]
 name = "basic"
-doc-scrape-examples = true
+doc-scrape-examples = false
