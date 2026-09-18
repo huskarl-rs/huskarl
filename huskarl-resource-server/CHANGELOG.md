@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.0...huskarl-resource-server-v0.11.1) - 2026-09-18
+
+### Other
+
+- *(resource-server)* Stop scraping example in docs ([#314](https://github.com/huskarl-rs/huskarl/pull/314))
+
 ## [0.11.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.10.1...huskarl-resource-server-v0.11.0) - 2026-08-24
 
 ### Added
