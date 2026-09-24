@@ -11,7 +11,7 @@ use crate::{
     TokenType,
     core::{
         Error,
-        dpop::{DPoPNonceChecker, NonceCheck, hash_access_token_for_dpop, normalize_uri_for_dpop},
+        dpop::{DPoPNonceChecker, NonceCheck, hash_access_token_for_dpop},
         jwt::ConfirmationClaim,
         secrets::SecretString,
     },
@@ -248,9 +248,7 @@ fn verify_claims_and_binding(
                 }
             );
             ensure!(
-                *htu == normalize_uri_for_dpop(uri)
-                    .context(MalformedUrlSnafu)?
-                    .to_string(),
+                super::dpop_uri::htu_matches(htu, uri),
                 ProofClaimMismatchSnafu {
                     claim: "htu",
                     expected: uri.to_string(),
@@ -479,7 +477,7 @@ mod tests {
     fn valid_claims() -> ProofClaims {
         ProofClaims {
             htm: Some("POST".to_string()),
-            htu: Some(normalize_uri_for_dpop(&req_uri()).unwrap().to_string()),
+            htu: Some(req_uri().to_string()),
             ath: Some(hash_access_token_for_dpop(ACCESS_TOKEN)),
             nonce: None,
         }
@@ -646,6 +644,20 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn normalized_htu_in_signed_proof_is_accepted() {
+        let signer = es256();
+        let claims = ProofClaims {
+            htu: Some("HTTPS://RS.EXAMPLE.COM:443/a/../%72esource".to_string()),
+            ..valid_claims()
+        };
+        let result = run(&signer, claims, Some(matching_jkt(&signer)), None, false).await;
+        assert!(
+            result.is_ok(),
+            "expected normalized htu to match, got {result:?}"
+        );
+    }
+
     #[rstest]
     #[case::htm(ProofClaims { htm: None, ..valid_claims() }, "htm")]
     #[case::htu(ProofClaims { htu: None, ..valid_claims() }, "htu")]
@@ -668,6 +680,10 @@ mod tests {
     #[rstest]
     #[case::htm(ProofClaims { htm: Some("GET".to_string()), ..valid_claims() }, "htm")]
     #[case::htu(ProofClaims { htu: Some("https://evil.example/other".to_string()), ..valid_claims() }, "htu")]
+    #[case::relative_htu(ProofClaims { htu: Some("/resource".to_string()), ..valid_claims() }, "htu")]
+    #[case::malformed_htu(ProofClaims { htu: Some("https://rs.example.com/%GG".to_string()), ..valid_claims() }, "htu")]
+    #[case::query_htu(ProofClaims { htu: Some("https://rs.example.com/resource?q=1".to_string()), ..valid_claims() }, "htu")]
+    #[case::fragment_htu(ProofClaims { htu: Some("https://rs.example.com/resource#fragment".to_string()), ..valid_claims() }, "htu")]
     #[case::ath(ProofClaims { ath: Some("not-the-token-hash".to_string()), ..valid_claims() }, "ath")]
     #[tokio::test]
     async fn proof_claim_mismatch_is_rejected(

@@ -32,6 +32,15 @@ from a configured public base URL, or from forwarded headers you trust. A
 non-absolute URI surfaces as a server-side integration error rather than
 per-request mismatches.
 
+Before comparing `htu`, the server applies RFC 3986 syntax-based and
+scheme-based normalization to both URIs: scheme and host case, percent-encoded
+unreserved characters, percent-escape case, dot segments, empty paths, and
+default HTTP/HTTPS ports. IPv6 addresses are also canonicalized.
+Path case, encoded reserved characters (such as `%2F`), repeated slashes, and
+non-root trailing slashes remain significant.
+The request's query is ignored; the proof's `htu` must omit query and fragment
+components, as required by RFC 9449 §4.2.
+
 ## Requiring DPoP
 
 To reject plain Bearer tokens outright — every token must be sender-bound —
