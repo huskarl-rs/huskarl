@@ -14,6 +14,7 @@ mod binding;
 mod common;
 pub mod custom;
 pub mod dpop_proof;
+mod dpop_uri;
 pub mod error;
 pub mod extract;
 pub mod introspection;
