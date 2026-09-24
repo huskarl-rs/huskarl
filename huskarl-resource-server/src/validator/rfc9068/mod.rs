@@ -19,6 +19,8 @@ use crate::{
         EndpointUrl, Error,
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         dpop::DPoPNonceChecker,
+        http::HttpClient,
+        jwk::JwksSource,
         jwt::{
             JtiUniquenessChecker,
             validator::{ClaimCheck, JwtValidator},
@@ -53,6 +55,28 @@ pub struct Rfc9068Validator<Claims = ()> {
     realm: Option<String>,
     resource_metadata: Option<String>,
     _phantom: PhantomData<Claims>,
+}
+
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: rfc9068_validator_builder::State>
+    Rfc9068ValidatorBuilder<Claims, S>
+{
+    /// Uses the authorization server's JWKS URI to verify signatures with a
+    /// default [`JwksSource`] backed by this HTTP client.
+    ///
+    /// This sets the same field as `jws_verifier_factory`; choose one of the two.
+    /// For custom refresh or startup settings, pass a configured [`JwksSource`]
+    /// to `jws_verifier_factory` instead.
+    pub fn jwks_source(
+        self,
+        http_client: impl HttpClient + 'static,
+    ) -> Rfc9068ValidatorBuilder<Claims, rfc9068_validator_builder::SetJwsVerifierFactory<S>>
+    where
+        S::JwsVerifierFactory: rfc9068_validator_builder::IsUnset,
+    {
+        self.jws_verifier_factory(Arc::new(
+            JwksSource::builder().http_client(http_client).build(),
+        ))
+    }
 }
 
 #[bon::bon]

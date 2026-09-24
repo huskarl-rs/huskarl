@@ -13,6 +13,7 @@ use crate::{
         client_auth::{AuthenticationContext, ClientAuthentication},
         crypto::verifier::{JwsVerifierFactory, JwsVerifierPlatform},
         http::{FailedResponse, HttpClient, HttpResponse, Idempotency, TruncatedBody},
+        jwk::JwksSource,
         jwt::{
             ConfirmationClaim,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
@@ -40,6 +41,26 @@ pub struct TokenIntrospection {
     client_auth: Arc<dyn ClientAuthentication>,
     request_jwt_response: bool,
     jwt_validator: Option<JwtValidator>,
+}
+
+impl<S: token_introspection_builder::State> TokenIntrospectionBuilder<S> {
+    /// Uses the authorization server's JWKS URI to verify signatures with a
+    /// default [`JwksSource`] backed by this HTTP client.
+    ///
+    /// This sets the same field as `jws_verifier_factory`; choose one of the two.
+    /// For custom refresh or startup settings, pass a configured [`JwksSource`]
+    /// to `jws_verifier_factory` instead.
+    pub fn jwks_source(
+        self,
+        http_client: impl HttpClient + 'static,
+    ) -> TokenIntrospectionBuilder<token_introspection_builder::SetJwsVerifierFactory<S>>
+    where
+        S::JwsVerifierFactory: token_introspection_builder::IsUnset,
+    {
+        self.jws_verifier_factory(Arc::new(
+            JwksSource::builder().http_client(http_client).build(),
+        ))
+    }
 }
 
 #[bon::bon]
@@ -75,12 +96,12 @@ impl TokenIntrospection {
         request_jwt_response: bool,
         /// JWKS URI for RFC 9701 JWT response validation.
         ///
-        /// Must be provided together with `jws_verifier_factory` to enable JWT response
-        /// validation.
+        /// Required by the default JWKS source. Custom factories may supply
+        /// their own keys and omit this URI.
         jwks_uri: Option<EndpointUrl>,
         /// JWS verifier factory for RFC 9701 JWT response validation.
         ///
-        /// When provided (along with `jwks_uri`), a [`JwtValidator`] is built that validates
+        /// When provided, a [`JwtValidator`] is built that validates
         /// the outer JWT of introspection responses with content type
         /// `application/token-introspection+jwt`. If the AS returns a JWT response without a
         /// validator configured, [`IntrospectionCallError::UnexpectedJwtResponse`] is returned.
@@ -109,7 +130,6 @@ impl TokenIntrospection {
 
         let jwt_validator = if let Some(jws_verifier_platform) = jws_verifier_platform
             && let Some(factory) = jws_verifier_factory
-            && jwks_uri.is_some()
         {
             let verifier = factory
                 .build(jwks_uri.as_ref(), jws_verifier_platform)
@@ -828,5 +848,93 @@ mod call_classification {
             "the tail of an echoed request reached the source chain: {rendered}"
         );
         assert!(rendered.contains("bytes total"), "got {rendered}");
+    }
+}
+
+#[cfg(all(test, feature = "default-jws-verifier-platform"))]
+mod factory_tests {
+    use super::*;
+    use crate::core::{
+        client_auth::NoAuth, crypto::verifier::JwsVerifier, platform::MaybeSendBoxFuture,
+    };
+
+    struct FailingFactory;
+
+    impl JwsVerifierFactory for FailingFactory {
+        fn build(
+            &self,
+            jwks_uri: Option<&EndpointUrl>,
+            _platform: Arc<dyn JwsVerifierPlatform>,
+        ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
+            assert!(jwks_uri.is_none());
+            Box::pin(async { Err(Error::new(RetryAdvice::No, "custom factory invoked")) })
+        }
+    }
+
+    struct LocalFactory;
+
+    impl JwsVerifierFactory for LocalFactory {
+        fn build(
+            &self,
+            jwks_uri: Option<&EndpointUrl>,
+            _platform: Arc<dyn JwsVerifierPlatform>,
+        ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
+            assert!(jwks_uri.is_none());
+            Box::pin(async {
+                Ok(
+                    Arc::new(crate::core::crypto::verifier::MultiKeyVerifier::new(vec![]))
+                        as Arc<dyn JwsVerifier>,
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn factory_without_jwks_uri_enables_jwt_validation() {
+        let client = TokenIntrospection::builder()
+            .client_id("resource")
+            .client_auth(NoAuth)
+            .introspection_endpoint("https://issuer.example/introspect".parse().unwrap())
+            .jws_verifier_factory(Arc::new(LocalFactory))
+            .build()
+            .await
+            .unwrap();
+        assert!(client.jwt_validator.is_some());
+    }
+
+    #[tokio::test]
+    async fn wrapper_honors_custom_factory_without_jwks_uri() {
+        let http = huskarl_reqwest::ReqwestClient::builder()
+            .build()
+            .await
+            .unwrap();
+        let result = crate::validator::introspection::IntrospectionValidator::builder()
+            .client_id("resource")
+            .client_auth(NoAuth)
+            .aud("resource")
+            .http_client(http)
+            .introspection_endpoint("https://issuer.example/introspect".parse().unwrap())
+            .jws_verifier_factory(Arc::new(FailingFactory))
+            .build()
+            .await;
+        let Err(error) = result else {
+            panic!("custom factory must be invoked")
+        };
+        assert_eq!(error.cause().to_string(), "custom factory invoked");
+    }
+
+    #[tokio::test]
+    async fn factory_without_jwks_uri_is_invoked_and_errors_propagate() {
+        let result = TokenIntrospection::builder()
+            .client_id("resource")
+            .client_auth(NoAuth)
+            .introspection_endpoint("https://issuer.example/introspect".parse().unwrap())
+            .jws_verifier_factory(Arc::new(FailingFactory))
+            .build()
+            .await;
+        let Err(error) = result else {
+            panic!("custom factory must be invoked")
+        };
+        assert_eq!(error.cause().to_string(), "custom factory invoked");
     }
 }

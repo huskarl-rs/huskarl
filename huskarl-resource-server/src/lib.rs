@@ -48,10 +48,8 @@
 //! ## Example with RFC 9068 token validation:
 //!
 //! ```
-//! use std::sync::Arc;
-//!
 //! use huskarl_resource_server::{
-//!     core::{http::HttpClient, jwk::JwksSource},
+//!     core::http::HttpClient,
 //!     validator::rfc9068::Rfc9068Validator,
 //! };
 //!
@@ -61,9 +59,8 @@
 //! let validator = Rfc9068Validator::builder()
 //!     .issuer("https://issuer")
 //!     .audience("audience")
-//!     .jws_verifier_factory(Arc::new(
-//!         JwksSource::builder().http_client(http_client).build(),
-//!     ))
+//!     .jwks_uri("https://issuer/jwks.json".parse().unwrap())
+//!     .jwks_source(http_client)
 //!     .build()
 //!     .await?;
 //! # let _ = validator;

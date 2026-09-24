@@ -4,13 +4,10 @@ fn main() {}
 #[cfg(not(target_family = "wasm"))]
 #[tokio::main]
 pub async fn main() {
-    use std::sync::Arc;
-
     use http::{HeaderValue, Method, header::AUTHORIZATION};
     use huskarl_reqwest::ReqwestClient;
     use huskarl_resource_server::{
-        core::{jwk::JwksSource, server_metadata::AuthorizationServerMetadata},
-        validator::rfc9068::Rfc9068Validator,
+        core::server_metadata::AuthorizationServerMetadata, validator::rfc9068::Rfc9068Validator,
     };
 
     let http_client = ReqwestClient::builder().build().await.unwrap();
@@ -23,11 +20,7 @@ pub async fn main() {
         .unwrap();
 
     let validator = Rfc9068Validator::builder_from_metadata(&authorization_server_metadata)
-        .jws_verifier_factory(Arc::new(
-            JwksSource::builder()
-                .http_client(http_client.clone())
-                .build(),
-        ))
+        .jwks_source(http_client.clone())
         .audience("api://client")
         .build()
         .await

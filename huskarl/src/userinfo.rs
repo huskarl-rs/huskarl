@@ -16,6 +16,7 @@ use crate::{
         crypto::verifier::{JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform},
         dpop::{NoDPoP, ResourceServerDPoP},
         http::{FailedResponse, HttpClient, Idempotency, TruncatedBody},
+        jwk::JwksSource,
         jwt::{
             JwsParseError, parse_compact_jws,
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
@@ -78,6 +79,26 @@ impl core::fmt::Debug for UserInfoClient {
     }
 }
 
+impl<S: user_info_client_builder::State> UserInfoClientBuilder<S> {
+    /// Uses the authorization server's JWKS URI to verify signatures with a
+    /// default [`JwksSource`] backed by this HTTP client.
+    ///
+    /// This sets the same field as `jws_verifier_factory`; choose one of the two.
+    /// For custom refresh or startup settings, pass a configured [`JwksSource`]
+    /// to `jws_verifier_factory` instead.
+    pub fn jwks_source(
+        self,
+        http_client: impl HttpClient + 'static,
+    ) -> UserInfoClientBuilder<user_info_client_builder::SetJwsVerifierFactory<S>>
+    where
+        S::JwsVerifierFactory: user_info_client_builder::IsUnset,
+    {
+        self.jws_verifier_factory(Arc::new(
+            JwksSource::builder().http_client(http_client).build(),
+        ))
+    }
+}
+
 #[huskarl_macros::from_metadata(
     metadata = crate::core::server_metadata::AuthorizationServerMetadata
 )]
@@ -111,13 +132,13 @@ impl UserInfoClient {
         dpop: Arc<dyn ResourceServerDPoP>,
         /// JWKS URI for `application/jwt` `UserInfo` response validation.
         ///
-        /// Must be provided together with `jws_verifier_factory` to enable JWT response
-        /// validation.
+        /// Required by the default JWKS source. Custom factories may supply
+        /// their own keys and omit this URI.
         #[from_metadata(path = "jwks_uri?")]
         jwks_uri: Option<EndpointUrl>,
         /// JWS verifier factory for JWT response validation.
         ///
-        /// When provided (along with `jwks_uri`), a [`JwtValidator`] is built that validates
+        /// When provided, a [`JwtValidator`] is built that validates
         /// signed `UserInfo` responses. If the provider returns a JWT response without a
         /// validator configured, [`UserInfoError::JwtResponseNotSupported`] is returned.
         ///
@@ -158,12 +179,10 @@ impl UserInfoClient {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
-        // The factory branch needs a `jwks_uri` to read keys from.
         let verifier = if let Some(verifier) = jws_verifier {
             Some(verifier)
         } else if let Some(jws_verifier_platform) = jws_verifier_platform
             && let Some(factory) = jws_verifier_factory
-            && jwks_uri.is_some()
         {
             Some(
                 factory
@@ -465,7 +484,7 @@ pub(crate) enum UserInfoBuildError {
     /// `require_signed_response` was set without JWT validation configured.
     #[snafu(display(
         "require_signed_response is set but no JWT validator is configured for UserInfo; \
-         supply 'jwks_uri' and 'jws_verifier_factory', or unset the requirement — no \
+         supply 'jws_verifier' or 'jws_verifier_factory', or unset the requirement — no \
          response of either content type could be accepted"
     ))]
     #[classify(no)]
@@ -492,8 +511,8 @@ pub(crate) enum UserInfoError {
     },
     /// The `UserInfo` endpoint returned `application/jwt` but no JWT validator was configured.
     ///
-    /// Provide `jwks_uri` and `jws_verifier_factory` when building the client to enable
-    /// JWT response validation.
+    /// Configure `jwks_source` with a `jwks_uri`, a custom `jws_verifier_factory`,
+    /// or an already-resolved `jws_verifier` to enable JWT response validation.
     #[snafu(display(
         "UserInfo endpoint returned application/jwt but no JWT validator was configured"
     ))]
@@ -1555,6 +1574,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.sub, "user1");
+    }
+
+    #[tokio::test]
+    async fn factory_without_jwks_uri_validates_signed_response() {
+        let client = UserInfoClient::builder()
+            .userinfo_endpoint("https://op.example.com/userinfo".parse().unwrap())
+            .jws_verifier_factory(Arc::new(AcceptAllFactory))
+            .issuer("https://op.example.com")
+            .client_id("my-client")
+            .require_signed_response(true)
+            .build()
+            .await
+            .unwrap();
+        let jwt = build_test_jwt(
+            &serde_json::json!({"alg": "RS256"}),
+            &serde_json::json!({
+                "sub": "user1", "iss": "https://op.example.com", "aud": "my-client"
+            }),
+        );
+        let http = MockHttpClient::new(jwt_response(&jwt));
+        assert_eq!(
+            client
+                .get(&http, &bearer_token("tok"), "user1")
+                .await
+                .unwrap()
+                .sub,
+            "user1"
+        );
     }
 
     // --- builder_from_grant validator derivation ---

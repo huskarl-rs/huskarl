@@ -5,8 +5,8 @@
 //! This enables validation of opaque tokens and authoritative revocation status checks.
 //!
 //! Optionally supports RFC 9701 (JWT Response for Introspection) when a
-//! `jwks_uri` is configured (together with a `jws_verifier_factory`, which has
-//! a default).
+//! `jwks_uri` is configured or a custom `jws_verifier_factory` is supplied.
+//! A URI enables the default JWKS source; custom factories may use their own keys.
 //!
 //! For a step-by-step setup walkthrough (including client authentication) see
 //! the [introspection guide](crate::_docs::guide::introspection); for picking
@@ -54,8 +54,8 @@ use crate::{
 /// endpoint.
 ///
 /// Supports both opaque tokens and JWT tokens. Optionally supports RFC 9701
-/// (JWT Response for Introspection) when configured with a `jwks_uri` (together
-/// with a `jws_verifier_factory`, which has a default).
+/// (JWT Response for Introspection) when configured with a `jwks_uri` or a custom
+/// `jws_verifier_factory`. A URI enables the default JWKS source.
 ///
 /// Supports `DPoP` token binding validation when configured with a `jws_verifier_platform`.
 ///
@@ -156,8 +156,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         require_mtls: bool,
         /// JWKS URI for RFC 9701 JWT response validation.
         ///
-        /// Must be provided together with `jws_verifier_factory` to enable JWT response
-        /// validation.
+        /// Enables the default JWKS source. Custom factories may supply their
+        /// own keys and omit this URI.
         jwks_uri: Option<EndpointUrl>,
         /// Cryptographic platform for JWS verification.
         ///
@@ -174,7 +174,9 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// JWS verifier factory for RFC 9701 JWT response validation.
         ///
-        /// When provided (along with `jwks_uri`), a [`JwtValidator`] is built that validates
+        /// Defaults to a [`JwksSource`] using `http_client` when `jwks_uri` is set.
+        /// A custom factory is used even without a URI.
+        /// When a factory is available, a [`JwtValidator`] is built that validates
         /// the outer JWT of introspection responses with content type
         /// `application/token-introspection+jwt`. If the AS returns a JWT response without a
         /// validator configured,
@@ -182,8 +184,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// is returned.
         ///
         /// [`JwtValidator`]: crate::core::jwt::validator::JwtValidator
-        #[builder(default = Arc::new(JwksSource::builder().http_client(http_client.clone()).build()))]
-        jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
+        jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
         /// The HTTP header to extract the access token from.
         ///
         /// Defaults to `Authorization`.
@@ -202,6 +203,15 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// document (RFC 9728 §5.1).
         resource_metadata: Option<String>,
     ) -> Result<Self, Error> {
+        let jws_verifier_factory = jws_verifier_factory.or_else(|| {
+            jwks_uri.as_ref().map(|_| {
+                Arc::new(
+                    JwksSource::builder()
+                        .http_client(http_client.clone())
+                        .build(),
+                ) as Arc<dyn JwsVerifierFactory>
+            })
+        });
         let token_introspection = TokenIntrospection::builder()
             .client_id(client_id.clone())
             .maybe_issuer(issuer.clone())
@@ -210,7 +220,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             .client_auth(client_auth)
             .request_jwt_response(request_jwt_response)
             .maybe_jwks_uri(jwks_uri)
-            .jws_verifier_factory(jws_verifier_factory)
+            .maybe_jws_verifier_factory(jws_verifier_factory)
             .jws_verifier_platform(jws_verifier_platform.clone())
             .clock_leeway(clock_leeway)
             .build()
