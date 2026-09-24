@@ -81,7 +81,25 @@ pub struct DPoPProofValidator {
     /// Allowed signing algorithms. `None` permits any asymmetric algorithm.
     allowed_signing_algorithms: Option<Vec<String>>,
     /// Optional JTI uniqueness checker for replay protection.
+    #[builder(
+            with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>,
+            setters(option_fn(name = "maybe_jti_checker_internal", vis = "")),
+        )]
     jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
+}
+
+impl<S: d_po_p_proof_validator_builder::State> DPoPProofValidatorBuilder<S> {
+    /// _**Optional** ([Some](Self::jti_checker()) / [Option](Self::maybe_jti_checker()) setters)._
+    /// Optional JTI uniqueness checker for replay protection.
+    pub fn maybe_jti_checker(
+        self,
+        checker: Option<Arc<dyn JtiUniquenessChecker>>,
+    ) -> DPoPProofValidatorBuilder<d_po_p_proof_validator_builder::SetJtiChecker<S>>
+    where
+        S::JtiChecker: d_po_p_proof_validator_builder::IsUnset,
+    {
+        self.maybe_jti_checker_internal(checker)
+    }
 }
 
 impl DPoPProofValidator {
@@ -130,7 +148,7 @@ impl DPoPProofValidator {
             .max_token_age(self.max_proof_age)
             .clock_leeway(self.clock_leeway)
             .require_jti(self.jti_checker.is_some())
-            .maybe_jti_checker(self.jti_checker.clone())
+            .maybe_token_jti_checker(self.jti_checker.clone())
             .build();
 
         let validated = validator

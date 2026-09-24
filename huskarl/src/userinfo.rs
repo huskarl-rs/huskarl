@@ -93,9 +93,25 @@ impl<S: user_info_client_builder::State> UserInfoClientBuilder<S> {
     where
         S::JwsVerifierFactory: user_info_client_builder::IsUnset,
     {
-        self.jws_verifier_factory(Arc::new(
-            JwksSource::builder().http_client(http_client).build(),
-        ))
+        self.jws_verifier_factory(JwksSource::builder().http_client(http_client).build())
+    }
+
+    /// _**Optional** ([Some](Self::jws_verifier_factory()) / [Option](Self::maybe_jws_verifier_factory()) setters)._
+    /// JWS verifier factory for JWT response validation.
+    ///
+    /// When provided, a [`JwtValidator`] is built that validates
+    /// signed `UserInfo` responses. If the provider returns a JWT response without a
+    /// validator configured, the response is rejected.
+    ///
+    /// Ignored when `jws_verifier` is set.
+    pub fn maybe_jws_verifier_factory(
+        self,
+        factory: Option<Arc<dyn JwsVerifierFactory>>,
+    ) -> UserInfoClientBuilder<user_info_client_builder::SetJwsVerifierFactory<S>>
+    where
+        S::JwsVerifierFactory: user_info_client_builder::IsUnset,
+    {
+        self.maybe_jws_verifier_factory_internal(factory)
     }
 }
 
@@ -141,9 +157,13 @@ impl UserInfoClient {
         ///
         /// When provided, a [`JwtValidator`] is built that validates
         /// signed `UserInfo` responses. If the provider returns a JWT response without a
-        /// validator configured, [`UserInfoError::JwtResponseNotSupported`] is returned.
+        /// validator configured, the response is rejected.
         ///
         /// Ignored when `jws_verifier` is set.
+        #[builder(
+            with = |factory: impl JwsVerifierFactory + 'static| Arc::new(factory) as Arc<dyn JwsVerifierFactory>,
+            setters(option_fn(name = "maybe_jws_verifier_factory_internal", vis = "")),
+        )]
         jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
         /// An already-resolved JWS verifier for JWT response validation.
         ///

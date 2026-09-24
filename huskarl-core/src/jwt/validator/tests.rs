@@ -654,7 +654,7 @@ impl JtiUniquenessChecker for InMemoryJtiChecker {
 async fn temporally_invalid_token_does_not_burn_jti() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
-        .jti_checker(InMemoryJtiChecker::default())
+        .token_jti_checker(InMemoryJtiChecker::default())
         .build();
 
     let now = SystemTime::now()

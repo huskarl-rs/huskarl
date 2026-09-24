@@ -76,7 +76,13 @@ pub struct JwtValidator {
     max_jti_len: usize,
     /// Optional checker used to reject replayed `jti` values; see
     /// [`JtiUniquenessChecker`].
-    #[builder(with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>)]
+    #[builder(
+        with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>,
+        setters(
+            some_fn(name = "token_jti_checker"),
+            option_fn(name = "maybe_jti_checker_internal", vis = ""),
+        ),
+    )]
     jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
     /// Maximum token age to validate against.
     max_token_age: Option<Duration>,
@@ -100,6 +106,57 @@ pub struct JwtValidator {
     /// Regardless of this setting, the algorithm `"none"` is always rejected.
     #[builder(with = FromIterator::from_iter)]
     allowed_algorithms: Option<HashSet<String>>,
+}
+
+impl<S: jwt_validator_builder::State> JwtValidatorBuilder<S> {
+    /// _**Optional** ([Some](Self::jti_checker()) / [Option](Self::maybe_jti_checker()) setters)._
+    /// Optional checker used to reject replayed `jti` values; see
+    /// [`JtiUniquenessChecker`].
+    #[deprecated(
+        since = "0.10.2",
+        note = "Use token_jti_checker; scheduled for removal in the next breaking release"
+    )]
+    pub fn jti_checker(
+        self,
+        checker: impl JtiUniquenessChecker + 'static,
+    ) -> JwtValidatorBuilder<jwt_validator_builder::SetJtiChecker<S>>
+    where
+        S::JtiChecker: jwt_validator_builder::IsUnset,
+    {
+        self.token_jti_checker(checker)
+    }
+
+    /// _**Optional** ([Some](Self::jti_checker()) / [Option](Self::maybe_jti_checker()) setters)._
+    /// Optional checker used to reject replayed `jti` values; see
+    /// [`JtiUniquenessChecker`].
+    #[deprecated(
+        since = "0.10.2",
+        note = "Use maybe_token_jti_checker; scheduled for removal in the next breaking release"
+    )]
+    pub fn maybe_jti_checker(
+        self,
+        checker: Option<impl JtiUniquenessChecker + 'static>,
+    ) -> JwtValidatorBuilder<jwt_validator_builder::SetJtiChecker<S>>
+    where
+        S::JtiChecker: jwt_validator_builder::IsUnset,
+    {
+        self.maybe_token_jti_checker(
+            checker.map(|checker| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>),
+        )
+    }
+
+    /// _**Optional** ([Some](Self::token_jti_checker()) / [Option](Self::maybe_token_jti_checker()) setters)._
+    /// Optional checker used to reject replayed `jti` values; see
+    /// [`JtiUniquenessChecker`].
+    pub fn maybe_token_jti_checker(
+        self,
+        checker: Option<Arc<dyn JtiUniquenessChecker>>,
+    ) -> JwtValidatorBuilder<jwt_validator_builder::SetJtiChecker<S>>
+    where
+        S::JtiChecker: jwt_validator_builder::IsUnset,
+    {
+        self.maybe_jti_checker_internal(checker)
+    }
 }
 
 impl JwtValidator {

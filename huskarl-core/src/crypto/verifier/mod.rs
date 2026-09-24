@@ -202,6 +202,16 @@ pub trait JwsVerifierFactory: MaybeSendSync {
     ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>>;
 }
 
+impl<T: JwsVerifierFactory + ?Sized> JwsVerifierFactory for Arc<T> {
+    fn build(
+        &self,
+        jwks_uri: Option<&EndpointUrl>,
+        platform: Arc<dyn JwsVerifierPlatform>,
+    ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
+        (**self).build(jwks_uri, platform)
+    }
+}
+
 impl<F> JwsVerifierFactory for F
 where
     F: Fn(

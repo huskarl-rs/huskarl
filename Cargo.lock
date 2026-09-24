@@ -1752,6 +1752,7 @@ dependencies = [
  "bytes",
  "http",
  "huskarl",
+ "huskarl-resource-server",
  "thiserror",
  "tokio",
 ]
