@@ -66,6 +66,11 @@ impl<S: token_introspection_builder::State> TokenIntrospectionBuilder<S> {
 #[bon::bon]
 impl TokenIntrospection {
     /// Creates a new [`TokenIntrospection`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a factory is supplied without a verifier platform,
+    /// or when the factory fails to build a verifier.
     #[builder(on(String, into))]
     pub async fn new(
         /// The client ID of this resource server, used for authenticating to the introspection
@@ -128,9 +133,10 @@ impl TokenIntrospection {
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
-        let jwt_validator = if let Some(jws_verifier_platform) = jws_verifier_platform
-            && let Some(factory) = jws_verifier_factory
-        {
+        let jwt_validator = if let Some(factory) = jws_verifier_factory {
+            let jws_verifier_platform = jws_verifier_platform.ok_or_else(|| {
+                Error::new(RetryAdvice::No, MissingJwsVerifierPlatformSnafu.build())
+            })?;
             let verifier = factory
                 .build(jwks_uri.as_ref(), jws_verifier_platform)
                 .await?;
@@ -490,6 +496,15 @@ struct IntrospectionErrorBody {
     error: String,
     error_description: Option<String>,
 }
+
+/// The cause of a [`TokenIntrospection`] build failure.
+#[derive(Debug, Snafu)]
+#[snafu(display(
+    "jws_verifier_factory was set but no JWS verifier platform is configured; \
+     enable the 'default-jws-verifier-platform' feature or call \
+     '.jws_verifier_platform(...)' on the builder"
+))]
+struct MissingJwsVerifierPlatform;
 
 /// Error returned by [`TokenIntrospection::introspect`].
 ///

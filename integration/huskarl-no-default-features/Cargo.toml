@@ -1,0 +1,15 @@
+[package]
+name = "huskarl-no-default-features"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Keep feature unification with workspace dev-dependencies from enabling the
+# default verifier platform in these regression tests.
+[workspace]
+
+[dependencies]
+huskarl = { path = "../../huskarl", default-features = false }
+huskarl-resource-server = { path = "../../huskarl-resource-server", default-features = false }
+huskarl-crypto-native = { path = "../../huskarl-crypto-native" }
+tokio = { version = "1", features = ["macros", "rt"] }
