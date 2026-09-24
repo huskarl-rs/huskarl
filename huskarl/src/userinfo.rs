@@ -111,7 +111,8 @@ impl UserInfoClient {
     ///
     /// # Errors
     ///
-    /// Returns an error when a configured verifier has no `issuer` or
+    /// Returns an error when a factory is used without a verifier platform,
+    /// when a configured verifier has no `issuer` or
     /// `client_id`, when `require_signed_response` is enabled without a
     /// verifier, or when the verifier cannot be built from `jwks_uri`.
     #[builder(on(String, into))]
@@ -181,9 +182,9 @@ impl UserInfoClient {
 
         let verifier = if let Some(verifier) = jws_verifier {
             Some(verifier)
-        } else if let Some(jws_verifier_platform) = jws_verifier_platform
-            && let Some(factory) = jws_verifier_factory
-        {
+        } else if let Some(factory) = jws_verifier_factory {
+            let jws_verifier_platform =
+                jws_verifier_platform.context(MissingJwsVerifierPlatformSnafu)?;
             Some(
                 factory
                     .build(jwks_uri.as_ref(), jws_verifier_platform)
@@ -473,6 +474,14 @@ pub struct UserInfo {
 #[derive(Debug, Snafu, huskarl_macros::Classify)]
 #[non_exhaustive]
 pub(crate) enum UserInfoBuildError {
+    /// A factory was supplied without a verifier platform.
+    #[snafu(display(
+        "jws_verifier_factory was set but no JWS verifier platform is configured; \
+         enable the 'default-jws-verifier-platform' feature or call \
+         '.jws_verifier_platform(...)' on the builder"
+    ))]
+    #[classify(no)]
+    MissingJwsVerifierPlatform,
     /// `issuer` is required when JWT validation is configured.
     #[snafu(display("issuer is required when JWT validation is configured for UserInfo"))]
     #[classify(no)]
