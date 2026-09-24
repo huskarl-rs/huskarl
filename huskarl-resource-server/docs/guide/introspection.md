@@ -5,8 +5,11 @@ validates access tokens by calling an authorization server's RFC 7662 token
 introspection endpoint, rather than verifying JWT signatures locally. This
 enables validation of opaque tokens and authoritative revocation-status checks.
 It optionally supports RFC 9701 (JWT Response for Introspection) when a
-`jwks_uri` is configured (together with a `jws_verifier_factory`, which has a
-default). See [choosing a
+`jwks_uri` is configured or a custom `jws_verifier_factory` is supplied.
+A URI enables the default JWKS source; custom factories may supply their own
+keys without a URI. The low-level `TokenIntrospection` builder offers
+`.jwks_source(http_client)` to select a default JWKS source explicitly.
+See [choosing a
 validator](crate::_docs::explanation::choosing_a_validator) for the trade-offs.
 
 ## 1. Set up your HTTP client

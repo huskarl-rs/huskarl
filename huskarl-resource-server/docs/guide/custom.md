@@ -135,3 +135,9 @@ To turn a failed or unauthenticated result into the HTTP response — status
 code, `WWW-Authenticate` challenges, and `DPoP-Nonce` header — see [rejecting
 a request](crate::_docs::guide::rfc9068#4-reject-a-request) and the
 [`rejection`](crate::rejection) module.
+
+Use `.jwks_source(http_client)` as shorthand for a default `JwksSource` factory.
+It uses the `jwks_uri` from metadata or the builder. Choose either this setter
+or `.jws_verifier_factory(...)`; custom factories can supply their own keys
+without a JWKS URI. Keep explicit `JwksSource` construction when customizing
+refresh or startup settings.

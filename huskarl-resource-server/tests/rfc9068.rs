@@ -1,17 +1,10 @@
 #![cfg(not(target_family = "wasm"))]
 
-use std::sync::Arc;
-
 use httpmock::prelude::*;
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 use huskarl_reqwest::ReqwestClient;
 use huskarl_resource_server::{
-    core::{
-        EndpointUrl,
-        crypto::signer::AsymmetricJwsSignerSelector,
-        jwk::{JwksSource, PublicJwks},
-        jwt::Jwt,
-    },
+    core::{EndpointUrl, crypto::signer::AsymmetricJwsSignerSelector, jwk::PublicJwks, jwt::Jwt},
     validator::rfc9068::Rfc9068Validator,
 };
 
@@ -47,11 +40,7 @@ async fn test_rfc9068_validator() {
         .realm("api")
         .resource_metadata("https://api.example/.well-known/oauth-protected-resource")
         .jwks_uri(jwks_uri)
-        .jws_verifier_factory(Arc::new(
-            JwksSource::builder()
-                .http_client(http_client.clone())
-                .build(),
-        ))
+        .jwks_source(http_client.clone())
         .build()
         .await
         .unwrap();

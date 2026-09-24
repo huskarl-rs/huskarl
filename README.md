@@ -128,10 +128,8 @@ And a resource server validating RFC 9068 JWT access tokens against the
 issuer's JWKS (`cargo add huskarl-resource-server huskarl-reqwest`):
 
 ```rust
-use std::sync::Arc;
-
 use huskarl_resource_server::{
-    core::{Error, jwk::JwksSource},
+    core::Error,
     validator::rfc9068::Rfc9068Validator,
 };
 
@@ -141,9 +139,8 @@ async fn build_validator(
     Rfc9068Validator::builder()
         .issuer("https://as.example.com")
         .audience("https://api.example.com")
-        .jws_verifier_factory(Arc::new(
-            JwksSource::builder().http_client(http_client).build(),
-        ))
+        .jwks_uri("https://as.example.com/jwks.json".parse().unwrap())
+        .jwks_source(http_client)
         .build()
         .await
 }
