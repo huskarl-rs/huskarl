@@ -13,6 +13,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CONFORMANCE_INSECURE_TLS: "true"
+  CONFORMANCE_EVIDENCE_DIR: ${{ github.workspace }}/target/conformance
 
 jobs:
   conformance:
@@ -27,9 +29,22 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Start conformance suite
         working-directory: integration
-        run: docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml up --wait
+        run: docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml up --pull always --wait
       - name: Run conformance tests
         run: cargo test -p huskarl-conformance --features conformance-suite-tests -- --nocapture
+      - name: Capture container evidence
+        if: always()
+        run: |
+          mkdir -p target/conformance
+          docker compose -f integration/huskarl-conformance/docker/docker-compose-prebuilt.yml images --format json > target/conformance/images.json
+          docker compose -f integration/huskarl-conformance/docker/docker-compose-prebuilt.yml logs --no-color > target/conformance/containers.log
+      - name: Upload conformance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: conformance-evidence
+          path: target/conformance/
+          retention-days: 14
       - name: Stop conformance suite
         working-directory: integration
         if: always()

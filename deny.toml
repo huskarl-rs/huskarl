@@ -37,8 +37,18 @@ allow = [
   "ISC",
   "Unicode-3.0",
   "Unlicense",
+  "Zlib",
 ]
 confidence-threshold = 0.9
+# MPL-2.0 dependencies of scraper used by the unpublished conformance tooling.
+# Keep exceptions crate-specific so new MPL dependencies require review.
+# Distributing binaries requires providing access to the covered source.
+exceptions = [
+  { name = "cssparser", allow = ["MPL-2.0"] },
+  { name = "cssparser-macros", allow = ["MPL-2.0"] },
+  { name = "dtoa-short", allow = ["MPL-2.0"] },
+  { name = "selectors", allow = ["MPL-2.0"] },
+]
 
 [bans]
 # Duplicate transitive versions are common and not a security issue on their

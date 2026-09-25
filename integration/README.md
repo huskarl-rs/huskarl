@@ -143,13 +143,14 @@ mise run node-oidc:down
 
 Tests in `huskarl-conformance/` that validate huskarl against the
 [OpenID Foundation Conformance Suite](https://gitlab.com/openid/conformance-suite).
-Runs the official test plans for OIDC Basic RP certification and FAPI 2.0 Security
-Profile.
+Runs the official test plans for OIDC Basic and Configuration RP certification, FAPI 2.0 Security
+Profile Final, and FAPI 2.0 Message Signing Final with plain and JARM responses.
+The FAPI plans run with both OIDC and plain-OAuth clients.
 
 ```sh
 mise run conformance:test         # starts suite, runs all tests
-mise run conformance:test:oidc    # OIDC Basic RP certification only
-mise run conformance:test:fapi2   # FAPI 2.0 Security Profile only
+mise run conformance:test:oidc    # OIDC Basic + Configuration RP certification
+mise run conformance:test:fapi2   # FAPI 2.0 Security Profile + Message Signing (plain/JARM)
 mise run conformance:down         # stop when done
 ```
 
@@ -161,7 +162,7 @@ Or manually:
 
 ```sh
 mise run conformance:up
-cargo test -p huskarl-conformance --features conformance-suite-tests -- --nocapture
+CONFORMANCE_INSECURE_TLS=true cargo test -p huskarl-conformance --features conformance-suite-tests -- --nocapture
 ```
 
 ### Environment variables
@@ -171,3 +172,7 @@ cargo test -p huskarl-conformance --features conformance-suite-tests -- --nocapt
 | `CONFORMANCE_SUITE_BASE` | `https://localhost.emobix.co.uk:8443` | Base URL of the conformance suite |
 | `CONFORMANCE_CLIENT_ID` | `client` | Client ID for OIDC basic tests |
 | `CONFORMANCE_CLIENT_SECRET` | `client-secret` | Client secret for OIDC basic tests |
+
+For hosted-suite API tokens, TLS settings, timeouts, and per-plan evidence exports,
+see [the conformance harness guide](huskarl-conformance/README.md). Local `mise`
+tasks explicitly enable self-signed TLS; direct Cargo runs verify TLS by default.

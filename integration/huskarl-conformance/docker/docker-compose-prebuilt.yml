@@ -12,6 +12,8 @@ services:
     image: registry.gitlab.com/openid/conformance-suite/nginx:${IMAGE_TAG:-latest}
     ports:
      - "8443:8443"
+     - "8444:8444"
+     - "8445:8445"
     depends_on:
      - server
     logging:

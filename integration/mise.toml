@@ -92,13 +92,16 @@ run = "docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml 
 run = "docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml down"
 
 [tasks."conformance:test"]
+env.CONFORMANCE_INSECURE_TLS = "true"
 run = "cargo test -p huskarl-conformance --features conformance-suite-tests -- --nocapture"
 depends = ["conformance:up"]
 
 [tasks."conformance:test:oidc"]
+env.CONFORMANCE_INSECURE_TLS = "true"
 run = "cargo test -p huskarl-conformance --test oidc --features conformance-suite-tests -- --nocapture"
 depends = ["conformance:up"]
 
 [tasks."conformance:test:fapi2"]
-run = "cargo test -p huskarl-conformance --test fapi2 --features conformance-suite-tests -- --nocapture"
+env.CONFORMANCE_INSECURE_TLS = "true"
+run = "cargo test -p huskarl-conformance --test fapi2 --test client_credentials --features conformance-suite-tests -- --nocapture"
 depends = ["conformance:up"]

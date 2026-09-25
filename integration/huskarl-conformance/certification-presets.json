@@ -1,0 +1,90 @@
+{
+  "oidc-basic": {
+    "description": "OIDC basic; static registration, client_secret_basic, code",
+    "plan": "oidcc-client-basic-certification-test-plan",
+    "test_binary": "oidc",
+    "test": "oidcc_client_basic_certification_test_plan_basic",
+    "variant": {
+      "client_registration": "static_client",
+      "request_type": "plain_http_request"
+    }
+  },
+  "oidc-configuration": {
+    "description": "OIDC configuration; static registration, client_secret_basic, code",
+    "plan": "oidcc-client-config-certification-test-plan",
+    "test_binary": "oidc",
+    "test": "oidcc_client_config_certification_test_plan",
+    "variant": {
+      "client_registration": "static_client",
+      "request_type": "plain_http_request",
+      "client_auth_type": "client_secret_basic",
+      "response_mode": "default"
+    }
+  },
+  "oidc-form-post": {
+    "description": "OIDC form-post; static registration, client_secret_basic, code",
+    "plan": "oidcc-client-formpost-basic-certification-test-plan",
+    "test_binary": "oidc",
+    "test": "oidcc_client_formpost_basic_certification_test_plan",
+    "variant": {
+      "client_registration": "static_client",
+      "request_type": "plain_http_request"
+    }
+  },
+  "fapi2-security": {
+    "description": "fapi2-security; private_key_jwt, DPoP, OIDC authorization code",
+    "plan": "fapi2-security-profile-final-client-test-plan",
+    "test_binary": "fapi2",
+    "test": "fapi2_security_profile_plain",
+    "variant": {
+      "authorization_request_type": "simple",
+      "client_auth_type": "private_key_jwt",
+      "sender_constrain": "dpop",
+      "fapi_client_type": "oidc",
+      "fapi_profile": "plain_fapi"
+    }
+  },
+  "fapi2-message-signing": {
+    "description": "fapi2-message-signing; private_key_jwt, DPoP, OIDC authorization code",
+    "plan": "fapi2-message-signing-final-client-test-plan",
+    "test_binary": "fapi2",
+    "test": "fapi2_message_signing_plain",
+    "variant": {
+      "authorization_request_type": "simple",
+      "client_auth_type": "private_key_jwt",
+      "sender_constrain": "dpop",
+      "fapi_client_type": "oidc",
+      "fapi_profile": "plain_fapi",
+      "fapi_request_method": "signed_non_repudiation",
+      "fapi_response_mode": "plain_response"
+    }
+  },
+  "fapi2-message-signing-jarm": {
+    "description": "fapi2-message-signing-jarm; private_key_jwt, DPoP, OIDC authorization code",
+    "plan": "fapi2-message-signing-final-client-test-plan",
+    "test_binary": "fapi2",
+    "test": "fapi2_message_signing_jarm",
+    "variant": {
+      "authorization_request_type": "simple",
+      "client_auth_type": "private_key_jwt",
+      "sender_constrain": "dpop",
+      "fapi_client_type": "oidc",
+      "fapi_profile": "plain_fapi",
+      "fapi_request_method": "signed_non_repudiation",
+      "fapi_response_mode": "jarm"
+    }
+  },
+  "fapi2-client-credentials": {
+    "description": "fapi2-client-credentials; private_key_jwt, DPoP, OAuth client credentials",
+    "plan": "fapi2-security-profile-final-client-test-plan",
+    "test_binary": "client_credentials",
+    "test": "fapi2_client_credentials_private_key_jwt_dpop",
+    "variant": {
+      "authorization_request_type": "simple",
+      "client_auth_type": "private_key_jwt",
+      "sender_constrain": "dpop",
+      "fapi_client_type": "plain_oauth",
+      "fapi_profile": "fapi_client_credentials_grant"
+    }
+  }
+}
