@@ -63,6 +63,46 @@ let grant: AuthorizationCodeGrant = AuthorizationCodeGrant::builder()
 # }
 ```
 
+## 2c. What the builder configures
+
+With discovery metadata, the application supplies its client ID,
+authentication, HTTP client, and redirect URI. Metadata supplies server
+endpoints and capabilities. `builder_from_metadata` reads the supplied value;
+the preceding metadata `.fetch().call().await` performs discovery.
+
+| Setting | Default behavior | When to configure it |
+| --- | --- | --- |
+| PKCE | Enabled; prefers `S256` | A provider requires different behavior |
+| OIDC | Inferred from `openid` in the scope passed to `start()` | Use `.oidc(true)` or `.oidc(false)` to declare the flow explicitly |
+| PAR | Used when an endpoint is available; required when the server requires it | Set `.prefer_pushed_authorization_requests(false)` to opt out of optional PAR |
+| JAR and JARM | No request object or JWT response mode selected | Supply `.jar(...)` or a JWT-secured `.response_mode(...)` |
+| DPoP | Disabled | Supply `.dpop(...)` to use sender-constrained tokens |
+| Signature verification | Uses `jwks_uri` and the grant's HTTP client when needed | Supply `.jws_verifier_factory(...)` for custom keys, refresh, or startup policy |
+
+Metadata-populated fields are already set on the returned builder. Use
+`builder()` when configuring those fields yourself. Choose additional policy
+settings before `.build().await`; per-login scopes and other request inputs
+belong to `start()`.
+
+## 2d. What happens during construction
+
+`.build().await` checks the configuration and builds the verifier. When using
+the default JWKS source, it attempts an initial key fetch:
+
+- With `.oidc(true)` or a JWT-secured response mode, a failed fetch fails construction.
+- With OIDC inferred from scope, a failed fetch is tolerated. Validation retries
+  fetching keys when needed; a token cannot pass verification without usable keys.
+- With `.oidc(false)` and no JARM, or without a JWKS URI, no default key fetch occurs.
+
+A supplied factory controls its own startup behavior and is called even without
+a JWKS URI. With `default-jws-verifier-platform` disabled, provide
+`.jws_verifier_platform(...)` whenever a verifier is needed.
+
+Build a grant once and reuse it for multiple authorization flows. Construction
+does not start a login or exchange a code. `start()` may send a PAR request;
+`complete()` exchanges the code at the token endpoint. Key refresh can also
+perform HTTP requests when signatures are verified.
+
 ## 3. Start the authorization flow
 
 Call `start()` to get the URL to redirect the user to and the pending state
@@ -139,21 +179,15 @@ unless the server narrowed `openid` out of the granted scope. `complete()`
 returns the validated ID token on `CompleteOutput::id_token` alongside the
 token response whenever the flow is OIDC.
 
-Validation is zero-config: given a `jwks_uri` — which `builder_from_metadata`
-fills in from the server's metadata — the grant builds a default `JwksSource`
-that fetches the signing keys over its `http_client`. The fetch is eager, so
-`build()` performs network I/O and live requests stay warm; for an `oidc(true)`
-or JARM grant an unreachable JWKS fails the build, while an inferred flow
-tolerates a cold start and self-heals. Set `jws_verifier_factory` only to
-customize this: a different refresh TTL, or a key source other than a JWKS
-endpoint (a KMS, or a static set). With no `jwks_uri` and no factory the grant
-has no verifier — fine for a plain-OAuth flow, and caught at build or start
-when the flow actually requires one.
+When metadata provides `jwks_uri`, the grant configures signature verification
+using its HTTP client. See [construction behavior](#2d-what-happens-during-construction)
+for initial fetch failures and custom factories. Without a URI or custom
+factory, an OIDC flow fails at build or start when verification is required.
 
 The `oidc` builder setting overrides this inference for non-standard
 servers. `oidc(false)` treats `openid` as an ordinary OAuth scope — for
-pure-OAuth servers whose scope merely happens to use that name. It builds no
-default verifier and fetches no JWKS; supply `jws_verifier_factory` to still
+pure-OAuth servers whose scope merely happens to use that name. Without JARM,
+it builds no default verifier and fetches no JWKS; supply `jws_verifier_factory` to still
 validate an ID token the server returns anyway. `oidc(true)` applies
 OIDC semantics regardless of scope — for servers that issue ID tokens on
 their own rules — and a missing ID token is then an error even if the

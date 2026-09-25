@@ -14,7 +14,7 @@ validator](crate::_docs::explanation::choosing_a_validator) for the trade-offs.
 
 ## 1. Set up your HTTP client
 
-A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+Use an HTTP client for discovery and introspection requests:
 
 ```rust
 use huskarl_reqwest::ReqwestClient;
@@ -106,6 +106,33 @@ let validator = IntrospectionValidator::builder()
 # Ok(())
 # }
 ```
+
+## 3c. Construction and defaults
+
+`builder_from_metadata` copies the issuer, endpoint URLs, and JWKS URI from
+the supplied metadata without making HTTP requests. The client ID and
+credentials authenticate this resource server to the introspection endpoint;
+`.aud(...)` identifies the API the access token must authorize. These values
+need not be the same. Pass `ClaimCheck::NoCheck` explicitly if your deployment
+does not check token audiences.
+
+`.build().await` does not call the introspection endpoint. If a JWKS URI is
+configured, it builds a default `JwksSource` using `http_client` and fetches
+keys for signed introspection responses. A failed initial fetch fails
+construction. Without a URI or custom factory, there is no key fetch and
+only JSON introspection responses can be processed.
+
+`.request_jwt_response(true)` asks for a signed response. Its default is
+`false`, and enabling it does not require the server to return a JWT.
+Use `.jws_verifier_factory(...)` to configure key refresh or startup policy,
+or to supply keys without a URI. With `default-jws-verifier-platform`
+disabled, supply `.jws_verifier_platform(...)` explicitly.
+
+Reuse the constructed validator. Each authenticated validation attempt calls
+the introspection endpoint; signed responses can also trigger key refresh.
+Bearer tokens are accepted unless `.require_dpop(true)` is set. A
+`.dpop_jti_checker(...)` can reject reused proofs independently of the
+access token's reuse.
 
 ## 4. Validate a request
 
