@@ -110,6 +110,53 @@ let token: &AccessToken = response.access_token();
 # }
 ```
 
+## Validate an ID token returned by refresh
+
+For an OpenID Connect sign-in, retain the validated ID-token claims returned in
+[`CompleteOutput::id_token`](crate::grant::authorization_code::CompleteOutput::id_token)
+by the initial authorization-code flow. Use those original claims for every
+refresh; do not replace them with the claims from a refreshed token.
+
+Configure an [`IdTokenValidator`](crate::token::id_token::IdTokenValidator) for
+the same provider, client, and accepted signing algorithms as the initial
+sign-in. If you configure `max_age`, it also limits how long ago the user signed
+in during refresh. See [ID tokens and sign-in state across
+refreshes](crate::_docs::explanation::oidc_refresh) for choosing that policy.
+
+After exchanging the refresh token, check whether the response contains an ID
+token and validate it before using its claims:
+
+```rust
+use huskarl::{
+    core::jwt::validator::ValidatedJwt,
+    grant::core::TokenResponse,
+    token::id_token::{IdTokenClaims, IdTokenValidationError, IdTokenValidator},
+};
+
+async fn validate_refreshed_identity(
+    response: &TokenResponse,
+    validator: &IdTokenValidator,
+    original: &ValidatedJwt<IdTokenClaims>,
+) -> Result<Option<ValidatedJwt<IdTokenClaims>>, IdTokenValidationError> {
+    let Some(id_token) = response.id_token() else {
+        // Refresh can succeed without returning a new ID token.
+        return Ok(None);
+    };
+
+    let claims = validator.validate_refresh(id_token, original).await?;
+    Ok(Some(claims))
+}
+```
+
+`None` means no new ID token was returned, not that validation succeeded. If
+your integration requires a fresh ID token, handle that outcome explicitly,
+for example by obtaining new authorization. Keep the original validated claims
+as the reference even if the original token has expired.
+
+The refresh grant and token cache do not call this validator automatically;
+the application must perform this step when it needs validated identity claims.
+For bound ID-token types, also configure the flag described below.
+
 ## Refresh tokens when using DPoP
 
 Retain the returned [`RefreshToken`](crate::token::RefreshToken). If saving it,

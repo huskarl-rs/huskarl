@@ -108,6 +108,7 @@ trade-off.
 - [DPoP bindings and client authentication](../huskarl/docs/explanation/dpop_bindings.md)
 - [The client error model](../huskarl/docs/explanation/error_handling.md)
 - [How a grant token source resolves a token](../huskarl/docs/explanation/token_source_resolution.md)
+- [ID tokens and sign-in state across refreshes](../huskarl/docs/explanation/oidc_refresh.md)
 - [InMemoryTokenCache refresh-ahead and jitter](../huskarl/docs/explanation/refresh_timing.md)
 - [Sharing a refresh token store](../huskarl/docs/explanation/sharing_a_token_store.md)
 - [Why the prelude is trait-only](../huskarl/docs/explanation/prelude.md)

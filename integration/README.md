@@ -175,7 +175,8 @@ uses `http://127.0.0.1:9002/callback` and enables `openid`, `bound_key`, and
 with an ES256 key, completes PKCE login, and checks the signed ID token has
 `typ: dpop+id_token` and the requested public key in `cnf.jwk`. It then restores
 serialized refresh-token state and refreshes twice, validating the returned ID
-tokens and retained binding. Access tokens remain Bearer throughout, as specified
+tokens against the original authentication with `validate_refresh` and checking
+the retained binding. Access tokens remain Bearer throughout, as specified
 by [Authentik's key-binding implementation](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/key-binding/).
 This is provider interoperability coverage; it adds no consumer proof-of-possession
 validation to Huskarl.
@@ -184,7 +185,8 @@ The `device::bound_key_refresh` variant uses the same client with its device
 authorization grant enabled. The blueprint configures the brand's device-code
 flow. The test restores serialized pending state, polls before approval, logs in
 and enters the user code through the flow executor API, then completes polling
-and refreshes twice. It explicitly validates the returned ID tokens and checks
+and refreshes twice. It validates both refreshed ID tokens against the original
+authentication with `validate_refresh` and checks
 binding and Bearer access tokens; the library's device grant still exposes the
 raw ID token without automatic validation.
 
