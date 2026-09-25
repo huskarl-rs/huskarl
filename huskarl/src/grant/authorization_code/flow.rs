@@ -225,12 +225,19 @@ impl AuthorizationCodeGrant {
             struct JarRedirect<'a> {
                 client_id: &'a str,
                 request: &'a str,
+                // OIDC Core §6.1 requires these outside the request object too.
+                // Copy the signed values so both representations agree.
+                response_type: &'a str,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                scope: Option<&'a str>,
             }
             add_payload_to_uri(
                 &self.authorization_endpoint,
                 JarRedirect {
                     client_id: &self.client_id,
                     request: request_jwt.expose_secret(),
+                    response_type: payload.rest.response_type,
+                    scope: payload.rest.scope.as_deref(),
                 },
             )?
         } else {
@@ -681,6 +688,84 @@ mod tests {
     }
 
     type Grant = AuthorizationCodeGrant;
+
+    #[tokio::test]
+    async fn direct_request_object_repeats_required_oidc_parameters() {
+        use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+        let mut grant = Grant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .jar(key)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+        make_oidc_capable(&mut grant);
+        let output = grant
+            .start(StartInput::scope(bon::vec!["openid", "profile"]))
+            .await
+            .unwrap();
+        let query: std::collections::HashMap<String, String> =
+            crate::core::oauth_form::from_str(output.authorization_url.query().unwrap()).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(query["request"].split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        for (name, expected) in [
+            ("client_id", "client"),
+            ("response_type", "code"),
+            ("scope", "openid profile"),
+        ] {
+            assert_eq!(query[name], expected);
+            assert_eq!(claims[name], expected);
+        }
+        // Session parameters remain within the signed request object.
+        assert!(!query.contains_key("nonce"));
+        assert!(!query.contains_key("state"));
+        assert!(claims["nonce"].is_string());
+        assert!(claims["state"].is_string());
+    }
+
+    #[tokio::test]
+    async fn direct_request_object_omits_absent_scope() {
+        use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+        let grant = Grant::builder()
+            .client_id("client")
+            .http_client(NoHttp)
+            .client_auth(NoAuth)
+            .jar(key)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+            .redirect_uri("http://127.0.0.1/cb")
+            .build()
+            .await
+            .unwrap();
+        let output = grant.start(StartInput::builder().build()).await.unwrap();
+        let query: std::collections::HashMap<String, String> =
+            crate::core::oauth_form::from_str(output.authorization_url.query().unwrap()).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(query["request"].split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(!query.contains_key("scope"));
+        assert!(claims.get("scope").is_none());
+        for (name, expected) in [("client_id", "client"), ("response_type", "code")] {
+            assert_eq!(query[name], expected);
+            assert_eq!(claims[name], expected);
+        }
+    }
 
     async fn start_url(grant: &Grant) -> String {
         grant
