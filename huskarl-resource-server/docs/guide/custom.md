@@ -11,7 +11,7 @@ validator](crate::_docs::explanation::choosing_a_validator).
 
 ## 1. Set up your HTTP client
 
-A HTTP client needs to be configured. Using the `huskarl_reqwest` crate:
+Use an HTTP client to fetch discovery metadata and signing keys:
 
 ```rust
 use huskarl_reqwest::ReqwestClient;
@@ -25,13 +25,8 @@ let client: ReqwestClient = ReqwestClient::builder().build().await?;
 ## 2a. Build the validator from authorization server metadata
 
 ```rust
-use std::sync::Arc;
-
 use huskarl_resource_server::{
-    core::{
-        jwk::JwksSource,
-        server_metadata::AuthorizationServerMetadata,
-    },
+    core::server_metadata::AuthorizationServerMetadata,
     validator::custom::CustomValidator,
 };
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -44,12 +39,9 @@ let metadata = AuthorizationServerMetadata::fetch()
     .await?;
 
 let validator = CustomValidator::builder_from_metadata(&metadata)
+    .iss(metadata.issuer.clone())
     .aud("api://my-resource")
-    .jws_verifier_factory(Arc::new(
-        JwksSource::builder()
-            .http_client(http_client.clone())
-            .build(),
-    ))
+    .jwks_source(http_client.clone())
     .build()
     .await?;
 # Ok(())
@@ -59,29 +51,56 @@ let validator = CustomValidator::builder_from_metadata(&metadata)
 ## 2b. Alternative: Build without authorization server metadata
 
 ```rust
-use std::sync::Arc;
-
-use huskarl_resource_server::{
-    core::jwk::JwksSource,
-    validator::custom::CustomValidator,
-};
+use huskarl_resource_server::validator::custom::CustomValidator;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
 
 let validator = CustomValidator::builder()
     .authorization_server("https://my-issuer")
+    .iss("https://my-issuer")
     .aud("api://my-resource")
     .jwks_uri("https://my-issuer/.well-known/jwks.json".parse()?)
-    .jws_verifier_factory(Arc::new(
-        JwksSource::builder()
-            .http_client(http_client.clone())
-            .build(),
-    ))
+    .jwks_source(http_client.clone())
     .build()
     .await?;
 # Ok(())
 # }
 ```
+
+## 2c. Choose claim checks
+
+`builder_from_metadata` copies `jwks_uri` and `authorization_server` into the
+builder. `authorization_server` identifies the server in this resource's
+metadata; it does not set the token's issuer check. Set `.iss(...)` and
+`.aud(...)` to the values your API expects, as in the examples above.
+
+The default rules require `iss`, `sub`, `exp`, `iat`, and `jti` to be present.
+They do not require a particular issuer, audience, or token type. A string
+passed to `.iss(...)`, `.aud(...)`, `.sub(...)`, or `.typ(...)` requires the
+claim to be present and equal to that string. Use
+[`ClaimCheck`](crate::core::jwt::validator::ClaimCheck) for other policies,
+such as accepting several audiences or explicitly disabling a check.
+
+Set individual rules on the builder, or supply a complete
+[`AccessTokenValidationRules`](crate::validator::custom::AccessTokenValidationRules)
+with `.rules(...)`. Order matters: `.rules(...)` replaces all previously set
+claim rules; individual rule setters after it adjust that supplied policy.
+Requiring a `jti` claim does not enable replay rejection. That requires a
+checker; see [choosing replay checks](crate::_docs::guide::rfc9068#2e-choose-replay-checks).
+
+## 2d. Construction and key sources
+
+Creating the builder does no HTTP work. With `.jwks_source(http_client)`,
+`.build().await` fetches the initial JWKS and fails if the URI is missing or
+the fetch fails. Build once and reuse the validator across requests; key
+refresh can perform HTTP requests during validation.
+
+Use `.jws_verifier_factory(...)` instead of `.jwks_source(...)` for a configured
+`JwksSource` or a custom key source. A custom factory may supply its own keys
+without a URI. See [customizing the key source](crate::_docs::guide::rfc9068#2d-customize-the-key-source)
+for TTL and startup settings. Factory and checker setters accept concrete
+implementations or shared implementations in `Arc`. With
+`default-jws-verifier-platform` disabled, supply `.jws_verifier_platform(...)`.
 
 ## 3. Validate a request
 
@@ -103,16 +122,21 @@ configured public base URL or from forwarded headers you trust. A
 non-absolute URI fails every DPoP validation with an integration error.
 
 ```rust
-# use std::sync::Arc;
-# use huskarl_resource_server::core::{
-#     jwk::JwksSource,
-#     server_metadata::AuthorizationServerMetadata,
-# };
+# use huskarl_resource_server::core::server_metadata::AuthorizationServerMetadata;
 # use huskarl_resource_server::validator::custom::CustomValidator;
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
-# let metadata = AuthorizationServerMetadata::fetch().http_client(&http_client).issuer("https://my-issuer").call().await?;
-# let validator = CustomValidator::builder_from_metadata(&metadata).aud("api://my-resource").jws_verifier_factory(Arc::new(JwksSource::builder().http_client(http_client.clone()).build())).build().await?;
+# let metadata = AuthorizationServerMetadata::fetch()
+#     .http_client(&http_client)
+#     .issuer("https://my-issuer")
+#     .call()
+#     .await?;
+# let validator = CustomValidator::builder_from_metadata(&metadata)
+#     .iss(metadata.issuer.clone())
+#     .aud("api://my-resource")
+#     .jwks_source(http_client.clone())
+#     .build()
+#     .await?;
 use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
 
 let mut headers = http::HeaderMap::new();
@@ -135,15 +159,3 @@ To turn a failed or unauthenticated result into the HTTP response — status
 code, `WWW-Authenticate` challenges, and `DPoP-Nonce` header — see [rejecting
 a request](crate::_docs::guide::rfc9068#4-reject-a-request) and the
 [`rejection`](crate::rejection) module.
-
-Use `.jwks_source(http_client)` as shorthand for a default `JwksSource` factory.
-It uses the `jwks_uri` from metadata or the builder. Choose either this setter
-or `.jws_verifier_factory(...)`; custom factories can supply their own keys
-without a JWKS URI. Keep explicit `JwksSource` construction when customizing
-refresh or startup settings.
-
-Factory and JTI checker setters accept concrete implementations or shared
-implementations in `Arc`.
-Use `.token_jti_checker(checker)` for access-token replay checks and
-`.dpop_jti_checker(checker)` for proof replay checks. The `maybe_*` setters
-take optional shared implementations, including an unannotated `None`.

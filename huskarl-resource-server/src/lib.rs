@@ -48,10 +48,7 @@
 //! ## Example with RFC 9068 token validation:
 //!
 //! ```
-//! use huskarl_resource_server::{
-//!     core::http::HttpClient,
-//!     validator::rfc9068::Rfc9068Validator,
-//! };
+//! use huskarl_resource_server::{core::http::HttpClient, validator::rfc9068::Rfc9068Validator};
 //!
 //! # async fn setup_resource_server(
 //! #     http_client: impl HttpClient + Clone + 'static,
