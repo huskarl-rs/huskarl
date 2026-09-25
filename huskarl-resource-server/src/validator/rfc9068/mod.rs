@@ -73,9 +73,72 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: rfc9068_validator_b
     where
         S::JwsVerifierFactory: rfc9068_validator_builder::IsUnset,
     {
-        self.jws_verifier_factory(Arc::new(
-            JwksSource::builder().http_client(http_client).build(),
-        ))
+        self.jws_verifier_factory(JwksSource::builder().http_client(http_client).build())
+    }
+}
+
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: rfc9068_validator_builder::State>
+    Rfc9068ValidatorBuilder<Claims, S>
+{
+    /// _**Optional** ([Some](Self::jti_checker()) / [Option](Self::maybe_jti_checker()) setters)._
+    /// Access token JTI uniqueness checker.
+    #[deprecated(
+        since = "0.11.2",
+        note = "Use maybe_token_jti_checker; scheduled for removal in the next breaking release"
+    )]
+    pub fn maybe_jti_checker(
+        self,
+        checker: Option<Arc<dyn JtiUniquenessChecker>>,
+    ) -> Rfc9068ValidatorBuilder<Claims, rfc9068_validator_builder::SetJtiChecker<S>>
+    where
+        S::JtiChecker: rfc9068_validator_builder::IsUnset,
+    {
+        self.maybe_token_jti_checker(checker)
+    }
+
+    /// _**Optional** ([Some](Self::dpop_jti_checker()) / [Option](Self::maybe_dpop_jti_checker()) setters)._
+    /// Uniqueness checker for the `jti` of `DPoP` proofs (replay protection) —
+    /// the proof-level counterpart to `token_jti_checker`.
+    pub fn maybe_dpop_jti_checker(
+        self,
+        checker: Option<Arc<dyn JtiUniquenessChecker>>,
+    ) -> Rfc9068ValidatorBuilder<Claims, rfc9068_validator_builder::SetDpopJtiChecker<S>>
+    where
+        S::DpopJtiChecker: rfc9068_validator_builder::IsUnset,
+    {
+        self.maybe_dpop_jti_checker_internal(checker)
+    }
+}
+
+impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: rfc9068_validator_builder::State>
+    Rfc9068ValidatorBuilder<Claims, S>
+{
+    /// _**Optional** ([Some](Self::jti_checker()) / [Option](Self::maybe_jti_checker()) setters)._
+    /// Access token JTI uniqueness checker.
+    #[deprecated(
+        since = "0.11.2",
+        note = "Use token_jti_checker; scheduled for removal in the next breaking release"
+    )]
+    pub fn jti_checker(
+        self,
+        checker: impl JtiUniquenessChecker + 'static,
+    ) -> Rfc9068ValidatorBuilder<Claims, rfc9068_validator_builder::SetJtiChecker<S>>
+    where
+        S::JtiChecker: rfc9068_validator_builder::IsUnset,
+    {
+        self.token_jti_checker(checker)
+    }
+
+    /// _**Optional** ([Some](Self::token_jti_checker()) / [Option](Self::maybe_token_jti_checker()) setters)._
+    /// Access token JTI uniqueness checker.
+    pub fn maybe_token_jti_checker(
+        self,
+        checker: Option<Arc<dyn JtiUniquenessChecker>>,
+    ) -> Rfc9068ValidatorBuilder<Claims, rfc9068_validator_builder::SetJtiChecker<S>>
+    where
+        S::JtiChecker: rfc9068_validator_builder::IsUnset,
+    {
+        self.maybe_jti_checker_internal(checker)
     }
 }
 
@@ -134,6 +197,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         /// JWKS URI for fetching the authorization server's signing keys.
         jwks_uri: Option<EndpointUrl>,
         /// Factory for creating JWS verifiers for access token signature verification.
+        #[builder(with = |factory: impl JwsVerifierFactory + 'static| Arc::new(factory) as Arc<dyn JwsVerifierFactory>)]
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
         /// Cryptographic platform for JWS verification.
         ///
@@ -142,6 +206,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
         /// Access token JTI uniqueness checker.
+        #[builder(
+            with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>,
+            setters(
+                some_fn(name = "token_jti_checker"),
+                option_fn(name = "maybe_jti_checker_internal", vis = ""),
+            ),
+        )]
         jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// Optional server-side `DPoP` nonce enforcement (RFC 9449 §8). When set,
         /// proofs must carry a nonce this checker accepts; omitting it disables
@@ -149,7 +220,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
         #[builder(with = |checker: impl DPoPNonceChecker + 'static| Arc::new(checker) as Arc<dyn DPoPNonceChecker>)]
         dpop_nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
         /// Uniqueness checker for the `jti` of `DPoP` proofs (replay protection) —
-        /// the proof-level counterpart to `jti_checker`.
+        /// the proof-level counterpart to `token_jti_checker`.
+        #[builder(
+            with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>,
+            setters(option_fn(name = "maybe_dpop_jti_checker_internal", vis = "")),
+        )]
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// The HTTP header to extract the access token from.
         ///
@@ -183,7 +258,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
             .require_iat(true)
             .sub(ClaimCheck::present())
             .require_jti(jti_checker.is_some())
-            .maybe_jti_checker(jti_checker)
+            .maybe_token_jti_checker(jti_checker)
             .clock_leeway(clock_leeway)
             .build();
 

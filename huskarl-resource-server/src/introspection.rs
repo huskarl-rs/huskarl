@@ -57,9 +57,24 @@ impl<S: token_introspection_builder::State> TokenIntrospectionBuilder<S> {
     where
         S::JwsVerifierFactory: token_introspection_builder::IsUnset,
     {
-        self.jws_verifier_factory(Arc::new(
-            JwksSource::builder().http_client(http_client).build(),
-        ))
+        self.jws_verifier_factory(JwksSource::builder().http_client(http_client).build())
+    }
+
+    /// _**Optional** ([Some](Self::jws_verifier_factory()) / [Option](Self::maybe_jws_verifier_factory()) setters)._
+    /// JWS verifier factory for RFC 9701 JWT response validation.
+    ///
+    /// When provided, a [`JwtValidator`] is built that validates
+    /// the outer JWT of introspection responses with content type
+    /// `application/token-introspection+jwt`. If the AS returns a JWT response without a
+    /// validator configured, [`IntrospectionCallError::UnexpectedJwtResponse`] is returned.
+    pub fn maybe_jws_verifier_factory(
+        self,
+        factory: Option<Arc<dyn JwsVerifierFactory>>,
+    ) -> TokenIntrospectionBuilder<token_introspection_builder::SetJwsVerifierFactory<S>>
+    where
+        S::JwsVerifierFactory: token_introspection_builder::IsUnset,
+    {
+        self.maybe_jws_verifier_factory_internal(factory)
     }
 }
 
@@ -110,6 +125,10 @@ impl TokenIntrospection {
         /// the outer JWT of introspection responses with content type
         /// `application/token-introspection+jwt`. If the AS returns a JWT response without a
         /// validator configured, [`IntrospectionCallError::UnexpectedJwtResponse`] is returned.
+        #[builder(
+            with = |factory: impl JwsVerifierFactory + 'static| Arc::new(factory) as Arc<dyn JwsVerifierFactory>,
+            setters(option_fn(name = "maybe_jws_verifier_factory_internal", vis = "")),
+        )]
         jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
         /// JWS verifier platform for JWT response validation.
         ///

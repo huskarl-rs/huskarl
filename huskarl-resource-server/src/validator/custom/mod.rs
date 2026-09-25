@@ -71,9 +71,31 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_bu
     where
         S::JwsVerifierFactory: custom_validator_builder::IsUnset,
     {
-        self.jws_verifier_factory(Arc::new(
-            JwksSource::builder().http_client(http_client).build(),
-        ))
+        self.jws_verifier_factory(JwksSource::builder().http_client(http_client).build())
+    }
+
+    /// _**Optional** ([Some](Self::token_jti_checker()) / [Option](Self::maybe_token_jti_checker()) setters)._
+    /// Access token JTI uniqueness checker.
+    pub fn maybe_token_jti_checker(
+        self,
+        checker: Option<Arc<dyn JtiUniquenessChecker>>,
+    ) -> CustomValidatorBuilder<Claims, custom_validator_builder::SetTokenJtiChecker<S>>
+    where
+        S::TokenJtiChecker: custom_validator_builder::IsUnset,
+    {
+        self.maybe_token_jti_checker_internal(checker)
+    }
+
+    /// _**Optional** ([Some](Self::dpop_jti_checker()) / [Option](Self::maybe_dpop_jti_checker()) setters)._
+    /// `DPoP` JTI uniqueness checker.
+    pub fn maybe_dpop_jti_checker(
+        self,
+        checker: Option<Arc<dyn JtiUniquenessChecker>>,
+    ) -> CustomValidatorBuilder<Claims, custom_validator_builder::SetDpopJtiChecker<S>>
+    where
+        S::DpopJtiChecker: custom_validator_builder::IsUnset,
+    {
+        self.maybe_dpop_jti_checker_internal(checker)
     }
 }
 
@@ -131,13 +153,22 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// JWKS URI for fetching the authorization server's signing keys.
         jwks_uri: Option<EndpointUrl>,
         /// Factory for creating JWS verifiers for access token signature verification.
+        #[builder(with = |factory: impl JwsVerifierFactory + 'static| Arc::new(factory) as Arc<dyn JwsVerifierFactory>)]
         jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
         /// Access token JTI uniqueness checker.
+        #[builder(
+            with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>,
+            setters(option_fn(name = "maybe_token_jti_checker_internal", vis = "")),
+        )]
         token_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// `DPoP` nonce checker.
         #[builder(with = |checker: impl DPoPNonceChecker + 'static| Arc::new(checker) as Arc<dyn DPoPNonceChecker>)]
         dpop_nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
         /// `DPoP` JTI uniqueness checker.
+        #[builder(
+            with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>,
+            setters(option_fn(name = "maybe_dpop_jti_checker_internal", vis = "")),
+        )]
         dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
         /// Cryptographic platform for JWS verification.
         ///
@@ -177,7 +208,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
             .require_iat(rules.require_iat)
             .sub(rules.sub)
             .require_jti(rules.require_jti)
-            .maybe_jti_checker(token_jti_checker)
+            .maybe_token_jti_checker(token_jti_checker)
             .clock_leeway(clock_leeway)
             .build();
 
