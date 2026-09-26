@@ -5,6 +5,9 @@ authorization server's published keys. Supply a custom factory when keys come
 from another source. For issuer, audience, and other claim checks, see
 [validating a JWT](crate::_docs::guide::validating_a_jwt).
 
+For a comparison of fixed keys, file-loaded keys, and remote verification, see
+[how verification fits together](crate::_docs::explanation::verification).
+
 ## Prerequisites
 
 The examples assume an HTTP client and a builder that accepts

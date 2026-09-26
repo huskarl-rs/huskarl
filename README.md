@@ -172,6 +172,36 @@ need it, it lives in `huskarl-core`.
 
 ## Design
 
+### Choose your verification setup
+
+Key acquisition and refresh are independent of token validation. Use a fixed
+key, a JWKS from a file, or rotating keys from an HTTP endpoint. For example,
+these alternatives both produce a `JwsVerifier` for the same JWT validator:
+
+```rust
+// Fixed public key: no discovery or HTTP client needed.
+let verifier = platform.create_verifier_from_jwk(public_key).await?;
+```
+
+```rust
+// Remote JWKS: fetch initial keys and refresh them during use.
+let source = JwksSource::builder().http_client(http_client).build();
+let verifier = source.build(Some(&jwks_uri), platform).await?;
+```
+
+The validator's issuer, audience, and algorithm policy can stay the same.
+Verifiers also compose: an OIDC client can hold a client-secret HMAC verifier
+alongside the provider's JWKS, with accepted algorithms governed by its client
+configuration. Google Cloud KMS HMAC verification implements the same interface,
+with an algorithm policy appropriate to the symmetric key. Discovery, when used,
+supplies configuration independently; you can inspect or amend metadata before
+building a consumer.
+
+See [how verification fits together](huskarl-core/docs/explanation/verification.md)
+for imports, the shared validation policy, and file-based keys.
+
+### Extension points
+
 Async strategy traits let applications supply transports, keys, secrets, and
 stores. Grant-specific builders check required configuration at compile time;
 constructed grants can be reused across requests.

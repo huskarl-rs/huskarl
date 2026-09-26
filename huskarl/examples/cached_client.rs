@@ -2,6 +2,8 @@
 //!
 //! See examples/README.md for configuration and expected output.
 
+use std::time::Duration;
+
 use http::{HeaderMap, Method, StatusCode, Uri};
 use huskarl::{
     authorizer::{HttpAuthorizer, dpop_resend_advised, parse_challenges},
@@ -15,7 +17,6 @@ use huskarl::{
     grant::client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
 };
 use huskarl_reqwest::ReqwestClient;
-use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
