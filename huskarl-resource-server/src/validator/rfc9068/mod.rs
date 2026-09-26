@@ -149,6 +149,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> Rfc9068Validator<Claim
     /// For a more convenient constructor when you have authorization server metadata,
     /// see [`Rfc9068Validator::builder_from_metadata`].
     ///
+    /// Construction calls the verifier factory. With `jwks_source`, this fetches
+    /// the initial JWKS and fails if the fetch fails. A custom factory controls
+    /// its own startup policy. Reuse the validator: validations use its verifier,
+    /// which may fetch keys again according to its refresh policy.
+    ///
     /// # Errors
     ///
     /// Returns an [`Error`] if the [`JwsVerifierFactory`] fails to build a

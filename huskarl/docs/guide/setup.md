@@ -13,7 +13,15 @@ application.
 
 ## Setting up an HTTP client
 
-The examples throughout these guides use the `huskarl_reqwest` crate:
+The examples throughout these guides use `huskarl-reqwest`. Enable a TLS backend
+for HTTPS endpoints (the crate has none enabled by default):
+
+```sh
+cargo add huskarl
+cargo add huskarl-reqwest --features rustls-tls
+```
+
+Then build the HTTP client:
 
 ```rust
 use huskarl_reqwest::ReqwestClient;
@@ -56,9 +64,20 @@ use huskarl::core::client_auth::NoAuth;
 let client_auth = NoAuth;
 ```
 
-The [`jwt_bearer`](crate::grant::jwt_bearer),
-[`token_exchange`](crate::grant::token_exchange), and
-[`refresh`](crate::grant::refresh) grants carry their own authorization (an
-assertion or an existing token), so client authentication is optional and
-*independent* of the grant: such a grant may authenticate the client
-separately, or present no client identity at all (RFC 7523 §3.1, RFC 8693 §2).
+## Choose the discovery method
+
+Use [`AuthorizationServerMetadata::fetch`](crate::core::server_metadata::AuthorizationServerMetadata::fetch)
+for OAuth authorization-server metadata, or
+[`oidc_fetch`](crate::core::server_metadata::AuthorizationServerMetadata::oidc_fetch)
+for OpenID Connect discovery, including Keycloak. They use different well-known
+paths and different rules for issuer URLs containing a path.
+
+## Match authentication to the grant
+
+JWT bearer and token exchange carry an assertion or an existing token as the
+grant. Their builders allow client authentication to be omitted; follow the
+authorization server's requirements.
+
+For refresh, retain the original client's identity and authentication method.
+A public client uses `NoAuth`; a confidential client authenticates. Creating a
+refresh grant with `to_refresh_grant()` preserves the parent grant's settings.

@@ -10,18 +10,17 @@ use crate::{
     platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
 };
 
-/// An AEAD cipher that bounds the age of its keys to a TTL by reloading on the
-/// read path — so a decryption key *removed* upstream is dropped within the TTL
-/// even though it never fails to decrypt (you still hold it). The TTL bounds how
-/// long a removed key lingers; key *additions* are handled by the miss-triggered
-/// [`RetryingDecryptor`](super::RetryingDecryptor) layered on top.
+/// An AEAD cipher that attempts to reload its keys on use after a TTL.
+///
+/// Successful reloads remove retired keys. Failed or rate-limited reloads keep
+/// the previous keys, so the TTL is not a maximum key age. Key misses can trigger
+/// earlier reloads through [`RetryingDecryptor`](super::RetryingDecryptor).
 ///
 /// On each [`decrypt`](AeadDecryptor::decrypt), and inside each
 /// [`select_encryptor`](AeadEncryptorSelector::select_encryptor),
 /// the first caller past the TTL reloads single-flight (non-blocking for others),
-/// then proceeds against a frozen snapshot; for the outbound selector the TTL
-/// bounds how quickly a rotated-in key is discovered rather than how quickly a removed
-/// one is dropped. The type is deliberately *not* an [`AeadEncryptor`]: all
+/// then proceeds against a frozen snapshot. Scheduled attempts discover new
+/// encryption keys as well as retired decryption keys. The type is deliberately *not* an [`AeadEncryptor`]: all
 /// outbound use goes through the selector, so there is no reload-free path to
 /// encrypt with (or read metadata off) a stale key. The pure swap mechanism
 /// without policy is [`RefreshableCipher`](super::RefreshableCipher).

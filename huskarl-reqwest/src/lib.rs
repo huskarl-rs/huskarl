@@ -4,6 +4,17 @@
 //! hand it to a grant, authorizer, or validator. The [`mtls`] module supplies
 //! the mTLS providers (RFC 8705) for the builder.
 //!
+//! # TLS
+//!
+//! For HTTPS endpoints, enable either `rustls-tls` or `native-tls`; neither is
+//! enabled by default. For example:
+//!
+//! ```sh
+//! cargo add huskarl-reqwest --features rustls-tls
+//! ```
+//!
+//! A pre-built `reqwest::Client` uses the TLS features enabled by its application.
+//!
 //! # Example
 //!
 //! ```no_run

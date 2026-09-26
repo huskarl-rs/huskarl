@@ -9,15 +9,16 @@ use crate::{
     platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
 };
 
-/// A [`JwsSignerSelector`] that bounds the age of its signing key to a TTL by
-/// reloading *during selection* — the outbound analogue of
+/// A [`JwsSignerSelector`] that attempts to reload its signing key after a TTL
+/// during selection — the outbound analogue of
 /// [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier)'s
 /// read-path reload.
 ///
 /// Each selection ([`select_signer`](JwsSignerSelector::select_signer) and the
 /// asymmetric variants) reloads the key if it has outlived its TTL (single-flight,
-/// non-blocking for concurrent callers), then hands back a frozen snapshot — so a
-/// current key comes for free, with no `refresh_if_stale`-before-sign step to forget.
+/// non-blocking for concurrent callers), subject to rate limiting and backoff.
+/// Selection returns a frozen snapshot. Failed refreshes retain the previous key;
+/// the TTL does not enforce a maximum key age.
 /// [`refresh`](Self::refresh) forces an immediate reload on an explicit rotation.
 ///
 /// All clones share the same underlying state, so a refresh performed through

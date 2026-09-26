@@ -3,8 +3,8 @@
 This page explains why token acquisition has a specialized error and where the
 line falls between "log in again" and "nothing to be done". For application
 code, see
-[handling errors](crate::_docs::guide::handling_errors); the generic type itself
-is [core's page](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/error_handling/).
+[handling errors](crate::_docs::guide::handling_errors). For the shared error
+type, see [core's error model](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/error_handling/).
 
 ## Where the remedy lives
 
@@ -69,9 +69,9 @@ variants rather than merely report a failure:
 
 - [`PollError`](crate::grant::device_authorization::PollError) — `AccessDenied`
   and `TokenExpired` are branches a device-flow UI takes.
-- `LoopbackError` — an `access_denied` decides what the browser page says. Not
-  linked, because it exists only under the `authorization-flow-loopback` feature
-  (and off browser wasm), so a link here would break every build without it.
+- `LoopbackError` — distinguishes callback and local-server failures for the
+  browser flow. Available with `authorization-flow-loopback` outside browser
+  WebAssembly.
 - [`ParseCallbackError`](crate::grant::authorization_code::ParseCallbackError) —
   carries no `Error`, because parsing redirect parameters never reaches a
   server. An OAuth error response is not a parse failure: it parses, and

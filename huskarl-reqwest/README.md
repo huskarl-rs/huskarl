@@ -7,7 +7,7 @@
 
     This region was generated from Rust documentation comments by `cargo-reedme` using this command:
 
-        cargo +nightly reedme
+        cargo +nightly reedme --manifest-path huskarl-reqwest/Cargo.toml
 
     for more info: https://github.com/nik-rev/cargo-reedme
 
@@ -18,6 +18,17 @@ An [`HttpClient`](https://docs.rs/huskarl_core/latest/huskarl_core/http/trait.Ht
 [`ReqwestClient`](https://docs.rs/huskarl-reqwest/latest/huskarl_reqwest/struct.ReqwestClient.html) is the entry point — build one with its `builder()` and
 hand it to a grant, authorizer, or validator. The [`mtls`](https://docs.rs/huskarl-reqwest/latest/huskarl_reqwest/mtls/) module supplies
 the mTLS providers (RFC 8705) for the builder.
+
+# TLS
+
+For HTTPS endpoints, enable either `rustls-tls` or `native-tls`; neither is
+enabled by default. For example:
+
+```sh
+cargo add huskarl-reqwest --features rustls-tls
+```
+
+A pre-built `reqwest::Client` uses the TLS features enabled by its application.
 
 # Example
 

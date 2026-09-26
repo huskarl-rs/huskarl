@@ -32,7 +32,7 @@
 //! - [Sharing a refresh token store](crate::_docs::explanation::sharing_a_token_store)
 //!   — when a [`RefreshTokenStore`] can be shared across sources or processes.
 //! - [Refresh timing](crate::_docs::explanation::refresh_timing) — how
-//!   refresh-ahead and jitter decide when the cache refreshes.
+//!   refresh-ahead and jitter decide when [`InMemoryTokenCache`] refreshes.
 //!
 //! [`HttpAuthorizer`]: crate::authorizer::HttpAuthorizer
 
@@ -67,6 +67,10 @@ use crate::{
 /// do not reproduce a token unnecessarily; this is why
 /// [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer) requires it. A raw
 /// producer such as [`GrantTokenSource`] does not implement `TokenCache`.
+///
+/// Refresh scheduling is implementation-specific. [`InMemoryTokenCache`]
+/// refreshes during token requests; another implementation could refresh in a
+/// background task or thread while serving cached tokens.
 ///
 /// Token *injection* is a source concern, not a cache one — see
 /// [`GrantTokenSource::prime`].

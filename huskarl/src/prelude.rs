@@ -2,8 +2,8 @@
 //!
 //! `use huskarl::prelude::*` brings the crate's extension traits into scope so
 //! method calls like `grant.exchange(…)` resolve. Everything is imported
-//! anonymously (`as _`), so it adds **zero names** to your namespace and never
-//! collides. It is trait-only *by design* — types are named and imported
+//! anonymously (`as _`), so it adds no trait names to your namespace. Imported
+//! traits can still make method calls ambiguous. It is trait-only *by design* — types are named and imported
 //! explicitly at their use site; see [why the prelude is
 //! trait-only](crate::_docs::explanation::prelude) for the reasoning.
 //!

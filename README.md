@@ -12,16 +12,9 @@
 [![huskarl-redis](https://img.shields.io/crates/v/huskarl-redis.svg?label=huskarl-redis)](https://crates.io/crates/huskarl-redis) [![docs.rs](https://img.shields.io/docsrs/huskarl-redis)](https://docs.rs/huskarl-redis)\
 [![huskarl-google-cloud](https://img.shields.io/crates/v/huskarl-google-cloud.svg?label=huskarl-google-cloud)](https://crates.io/crates/huskarl-google-cloud) [![docs.rs](https://img.shields.io/docsrs/huskarl-google-cloud)](https://docs.rs/huskarl-google-cloud)
 
-A húskarl was a well-paid, well-trained household bodyguard in medieval
-northern Europe. Likewise, huskarl guards access to your services: a suite of
-Rust crates for **requesting** and **validating** OAuth 2.0 access tokens — the
-two jobs that client authors and service deployers face every day.
-
-Its premise is that the modern OAuth 2.0 security extensions — often marketed
-"for high-security and regulated environments" — should not be treated as
-optional extras. Security is not a checkbox for passing regulation; if
-sender-constrained tokens and signed authorization requests are easy to add,
-why not have them? Huskarl makes them accessible with minimal ceremony.
+Huskarl is a suite of Rust crates for obtaining, caching, and validating
+OAuth 2.0 access tokens. It supports client applications and resource servers,
+with pluggable HTTP, cryptography, and secret-storage backends.
 
 ## Documentation
 
@@ -41,46 +34,38 @@ The [complete documentation map](docs/README.md) separates tutorials, how-to
 guides, API reference, and explanation, and lists every workspace guide by
 task.
 
-## Why huskarl
+## Framework and login integrations
 
-- **Tested against the OpenID conformance suite.** The client passes the test
-  plans used for OpenID Connect Core (Basic client) certification, plus the
-  **FAPI 2.0 Security Profile** and **FAPI 2.0 Message Signing** client plans
-  (huskarl has not been formally certified — the same suites run locally and
-  in CI). The grants also run end-to-end against real authorization servers:
-  Keycloak, Dex, `node-oidc-provider`, and Okta.
-- **Modern extensions with minimal ceremony.** `DPoP` sender-constrained
-  tokens, pushed (PAR) and signed (JAR) authorization requests, PKCE,
-  `private_key_jwt`, and mTLS client authentication are builder options, not
-  projects.
-- **Keys and secrets can stay out of process memory.** Signing, verification,
-  and secret access are async traits, so signing keys can live in a cloud KMS
-  or HSM, and client secrets can come from a secret manager — with built-in
-  wrappers that keep them redacted in logs and `Debug` output, decoded, and
-  cached.
-- **Token lifecycle in the box.** A token cache with single-flight refresh,
-  and an HTTP authorizer that attaches (and `DPoP`-binds) tokens to outgoing
-  requests, so grants compose into "make an authenticated request" rather
-  than "exchange once, then good luck".
-- **Both roles.** The client side (grants, cache, authorizer) and the
-  resource-server side (RFC 9068 access-token validation, introspection,
-  server-side `DPoP`, `WWW-Authenticate` challenges).
-- **Comfortable to hold.** Strategy traits are dyn-capable, so clients and
-  authorizers are plain storable values — no tower of generic parameters —
-  and every operation returns one concrete `Error` that embeds
-  cleanly in your own error type. Type-safe builders make missing
-  configuration a compile error.
-- **Hardened defaults.** `forbid(unsafe_code)`; `unwrap`/`expect`/`panic`/
-  `unreachable` are denied in library code, so the handful that remain are
-  explicit, commented exceptions at locally-provable invariants rather than
-  unexamined ones; HTTP response bodies and fetched JWKS sizes are bounded by
-  default; fuzzing and `cargo-deny` in CI.
-- **Runs on most `std` platforms, including WASM** (via a `WebCrypto` backend).
+Companion repositories provide application-facing integrations:
+
+| Task | Repository |
+| --- | --- |
+| Protect an Axum API or add browser login | [huskarl-axum](https://github.com/huskarl-rs/huskarl-axum) — unreleased; see the repository for development setup |
+| Protect an upstream service with Pingora | [huskarl-pingora](https://github.com/huskarl-rs/huskarl-pingora) |
+| Integrate login and sessions into another framework | [huskarl-login](https://github.com/huskarl-rs/huskarl-login) |
+
+These repositories use this workspace's grants and validators. For outgoing
+service requests, start with the [client examples](huskarl/examples/README.md).
+
+## Capabilities
+
+- Client grants, token caching with single-flight acquisition, and request
+  authorization headers.
+- Resource-server validation using JWT access tokens or introspection, including
+  DPoP proofs and `WWW-Authenticate` challenges.
+- PKCE, PAR, JAR, JARM, DPoP, `private_key_jwt`, and mTLS support.
+- Async backends for local keys, WebCrypto, Google Cloud KMS, and secret stores.
+  KMS signing keys can remain remote; fetched client secrets enter process memory
+  and use wrappers that redact `Debug` output.
+- Type-safe builders and extensible strategy traits. Shared `Error` values
+  describe operation failures; `TokenError` adds token-acquisition recovery.
+- Bounded HTTP responses and JWKS sizes by default, plus linting, fuzzing,
+  provider tests, and conformance-suite tests.
 
 ## Quick start
 
 A client obtaining a token with the client-credentials grant
-(`cargo add huskarl huskarl-reqwest`):
+(`cargo add huskarl` and `cargo add huskarl-reqwest --features rustls-tls`):
 
 ```rust
 use huskarl::prelude::*;
@@ -95,7 +80,7 @@ use huskarl_reqwest::ReqwestClient;
 async fn fetch_token() -> Result<(), huskarl::core::Error> {
     let http_client = ReqwestClient::builder().build().await?;
 
-    // RFC 8414 / OIDC discovery.
+    // RFC 8414 discovery; use oidc_fetch() for OpenID Connect discovery.
     let metadata = AuthorizationServerMetadata::fetch()
         .http_client(&http_client)
         .issuer("https://as.example.com")
@@ -111,21 +96,19 @@ async fn fetch_token() -> Result<(), huskarl::core::Error> {
     let token_response = grant
         .exchange(
             ClientCredentialsGrantParameters::builder()
-                .scope(bon::vec!["read"])
+                .scope(vec!["read".to_owned()])
                 .build(),
         )
         .await?;
 
-    println!(
-        "access token: {}",
-        token_response.access_token().token().expose_secret()
-    );
+    let _access_token = token_response.access_token();
     Ok(())
 }
 ```
 
 And a resource server validating RFC 9068 JWT access tokens against the
-issuer's JWKS (`cargo add huskarl-resource-server huskarl-reqwest`):
+issuer's JWKS (`cargo add huskarl-resource-server` and
+`cargo add huskarl-reqwest --features rustls-tls`):
 
 ```rust
 use huskarl_resource_server::{
@@ -159,28 +142,17 @@ and [huskarl-core](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/).
 
 ## Conformance and interoperability testing
 
-Huskarl is verified two ways, both mirrored in CI:
+The provider suite exercises flows against Keycloak, Dex, and
+`node-oidc-provider` in CI. Okta tests are available separately and require a
+configured tenant. Run the integration tasks from `integration/`:
+`mise run matrix` reports coverage and `mise run providers:test` runs the suite.
 
-- **Provider matrix** — the grants run end-to-end against real authorization
-  servers. Keycloak exercises the full flow set (client credentials including
-  `DPoP` and private-key-JWT, refresh, introspection, mTLS, and authorization
-  code with PAR/JAR); the authorization-code flow also runs against Dex,
-  node-oidc-provider, and Okta (the latter two with PAR and JAR too).
-  `mise run matrix` prints the coverage report and `mise run providers:test`
-  runs the suite.
-- **OpenID conformance suite** — the huskarl client passes the test plans
-  used for certification: **OpenID Connect Core** (Basic client), and the
-  **FAPI 2.0 Security Profile** and **FAPI 2.0 Message Signing** client plans
-  (the FAPI plans add private-key-JWT authentication, `DPoP`
-  sender-constrained tokens, and signed/JAR authorization requests). Huskarl
-  has not been submitted for formal certification; the suites run against the
-  [OpenID Conformance Suite](https://gitlab.com/openid/conformance-suite) via
-  `mise run conformance:test:oidc` and `mise run conformance:test:fapi2`.
-
-See [`integration/README.md`](integration/README.md) for the full provider
-matrix, and
-[`integration/huskarl-conformance/README.md`](integration/huskarl-conformance/README.md)
-for the conformance setup.
+The OpenID conformance harness covers OIDC and FAPI client plans. Coverage
+varies by plan and variant; a passing test run is not formal certification.
+See the [provider matrix](integration/README.md),
+[conformance setup](integration/huskarl-conformance/README.md), and
+[conformance coverage](integration/huskarl-conformance/docs/coverage.md) for
+supported configurations and evidence.
 
 ## Crates
 
@@ -198,31 +170,14 @@ for the conformance setup.
 A rule of thumb for the split: if both a resource server and a client might
 need it, it lives in `huskarl-core`.
 
-## Design notes
+## Design
 
-**Async first.** Secret access and cryptographic operations are async traits.
-This is what lets a signing key live in `WebCrypto`, a cloud KMS, or an HSM
-rather than in process memory — a network round trip fits the same interface
-as an in-memory key.
+Async strategy traits let applications supply transports, keys, secrets, and
+stores. Grant-specific builders check required configuration at compile time;
+constructed grants can be reused across requests.
 
-**Traits for extensibility.** Crypto platforms, secret providers, grants,
-client authentication methods, JWKS sources, refresh-token stores, and HTTP
-clients are all defined as traits you can implement yourself when the
-provided implementations don't fit. The strategy traits are dyn-capable, so
-your own implementations plug in as `Arc<dyn …>` values.
-
-**A struct per grant, built with [`bon`](https://docs.rs/bon).** Each grant
-is its own type that knows exactly what it needs: required options are
-enforced at compile time, irrelevant ones aren't mentioned, and the builder
-machinery disappears after construction.
-
-**One error type.** Every operation returns the same concrete
-`Error` pair, designed to embed in your application's error type
-without generics.
-
-The design rationale — the error model, untrusted-key handling, crypto
-strategy composition, validator choice — is written up in the `_docs` modules
-linked above.
+For the rationale behind error handling, key refresh, token caching, and
+validator selection, see the [explanation pages](docs/README.md#explanation).
 
 ## Supported specifications
 

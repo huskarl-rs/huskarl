@@ -11,7 +11,10 @@ explanation](crate::_docs::explanation::multi_issuer_routing).
 Per-issuer validators usually have different claims types. Give them a common
 type `C` by wrapping each in
 [`MapClaims`](crate::validator::multi_issuer::MapClaims), whose mapping is a
-plain `Fn(SourceClaims) -> C`:
+plain `Fn(SourceClaims) -> C`. This example assumes a partner issuer with
+`partner-access+jwt` access tokens and an Okta issuer with `scp` claims. Configure
+the issuer, audience, and token profile for your deployment; an ID token is not
+an API access token:
 
 ```no_run
 use std::sync::Arc;
@@ -27,7 +30,7 @@ use huskarl_resource_server::{
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 # let http = huskarl_reqwest::ReqwestClient::builder().build().await?;
 #[derive(Clone, serde::Deserialize)]
-struct GoogleIdClaims {
+struct PartnerClaims {
     email: Option<String>,
     email_verified: Option<bool>,
 }
@@ -43,14 +46,13 @@ struct Principal {
     scopes: Vec<String>,
 }
 
-let google = CustomValidator::builder()
-    .with_claims::<GoogleIdClaims>()
-    .authorization_server("https://accounts.google.com")
-    .iss(ClaimCheck::required_value("https://accounts.google.com"))
-    .aud(ClaimCheck::required_value("<your-google-oauth-client-id>"))
-    .typ(ClaimCheck::NoCheck)
-    .require_jti(false)
-    .jwks_uri("https://www.googleapis.com/oauth2/v3/certs".parse()?)
+let partner = CustomValidator::builder()
+    .with_claims::<PartnerClaims>()
+    .authorization_server("https://login.partner.example")
+    .iss(ClaimCheck::required_value("https://login.partner.example"))
+    .aud(ClaimCheck::required_value("api://my-resource"))
+    .typ("partner-access+jwt")
+    .jwks_uri("https://login.partner.example/jwks".parse()?)
     .jws_verifier_factory(Arc::new(
         JwksSource::builder().http_client(http.clone()).build(),
     ))
@@ -73,8 +75,8 @@ let okta = CustomValidator::builder()
 
 let validator = MultiIssuerValidator::<Principal>::builder()
     .source(
-        "https://accounts.google.com",
-        MapClaims::new(google, |c: GoogleIdClaims| Principal {
+        "https://login.partner.example",
+        MapClaims::new(partner, |c: PartnerClaims| Principal {
             email: c.email.filter(|_| c.email_verified == Some(true)),
             scopes: Vec::new(),
         }),

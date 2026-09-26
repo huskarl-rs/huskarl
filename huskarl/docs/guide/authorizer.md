@@ -8,6 +8,10 @@ needed — and
 [`process_response`](crate::authorizer::HttpAuthorizer::process_response)
 records what each response reveals.
 
+For a complete program with configuration, a token cache, real HTTP requests,
+and bounded retries, see the repository's
+[cached client example](https://github.com/huskarl-rs/huskarl/blob/main/huskarl/examples/README.md#make-requests-with-a-cached-token).
+
 ## The request loop
 
 1. Build headers with
@@ -58,7 +62,7 @@ Whether and when to re-send is the application's decision, not this library's �
 [`parse_challenges`](crate::authorizer::parse_challenges) exposes the server's
 stated objection for making it, as above. For `DPoP`,
 [`dpop_resend_advised`](crate::authorizer::dpop_resend_advised) reports the one
-failure a re-send is sure to fix: a `use_dpop_nonce` challenge carrying a fresh
+recoverable nonce challenge: `use_dpop_nonce` carrying a fresh
 nonce (RFC 9449 §7.2). Step 2 already recorded that nonce, so the rebuilt
 headers carry it:
 
@@ -85,8 +89,8 @@ if dpop_resend_advised(response.status, &response.headers) {
 # }
 ```
 
-A `401` is issued before the request is processed, so a single re-send is
-normally safe even for non-idempotent requests.
+For non-idempotent requests, retry only when the API guarantees that a rejected
+request has no side effects, or provides an idempotency mechanism.
 
 ## When the server doesn't emit a spec-correct challenge
 

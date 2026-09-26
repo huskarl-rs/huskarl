@@ -1,73 +1,61 @@
+//! Validate one RFC 9068 bearer token using an `OpenID` Connect issuer's JWKS.
+//!
+//! See examples/README.md for configuration and expected output.
+
 #[cfg(target_family = "wasm")]
 fn main() {}
 
 #[cfg(not(target_family = "wasm"))]
 #[tokio::main]
-pub async fn main() {
-    use http::{HeaderValue, Method, header::AUTHORIZATION};
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use http::{HeaderValue, Method, Uri, header::AUTHORIZATION};
     use huskarl_reqwest::ReqwestClient;
     use huskarl_resource_server::{
         core::server_metadata::AuthorizationServerMetadata, validator::rfc9068::Rfc9068Validator,
     };
 
-    let http_client = ReqwestClient::builder().build().await.unwrap();
-
-    let authorization_server_metadata = AuthorizationServerMetadata::fetch()
+    let issuer = std::env::var("ISSUER")?;
+    let audience = std::env::var("AUDIENCE")?;
+    let resource_uri: Uri = std::env::var("RESOURCE_URL")?.parse()?;
+    if resource_uri.scheme().is_none() || resource_uri.authority().is_none() {
+        return Err("RESOURCE_URL must be the absolute external request URL".into());
+    }
+    let access_token = std::env::var("ACCESS_TOKEN")?;
+    let http_client = ReqwestClient::builder().build().await?;
+    let metadata = AuthorizationServerMetadata::oidc_fetch()
         .http_client(&http_client)
-        .issuer("https://...")
+        .issuer(issuer)
         .call()
-        .await
-        .unwrap();
-
-    let validator = Rfc9068Validator::builder_from_metadata(&authorization_server_metadata)
-        .jwks_source(http_client.clone())
-        .audience("api://client")
+        .await?;
+    let validator = Rfc9068Validator::builder_from_metadata(&metadata)
+        .jwks_source(http_client)
+        .audience(audience)
         .build()
-        .await
-        .unwrap();
+        .await?;
 
     let mut headers = http::HeaderMap::new();
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_static("Bearer mF_9.B5f-4.1JqM"),
-    );
-    let http_method = Method::GET;
-
-    // The URI must be the absolute external target URI the client addressed
-    // (it is checked against the `htu` claim of any DPoP proof). A framework
-    // request object carries only the origin-form path (`/resource`), and
-    // behind a TLS-terminating or rewriting proxy only the deployment knows
-    // the external URI — rebuild it from a configured public base URL (or
-    // from forwarded headers you trust).
-    let public_base = http::Uri::from_static("https://example.com");
-    let request_path = "/resource"; // e.g. axum's `req.uri().path()`
-    let http_uri = http::Uri::builder()
-        .scheme(public_base.scheme_str().unwrap())
-        .authority(public_base.authority().unwrap().as_str())
-        .path_and_query(request_path)
-        .build()
-        .unwrap();
-
+    let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))?;
+    authorization.set_sensitive(true);
+    headers.insert(AUTHORIZATION, authorization);
     let result = validator
-        .validate_request(&headers, &http_method, &http_uri, None)
+        .validate_request(&headers, &Method::GET, &resource_uri, None)
         .await;
 
-    // An unauthenticated or invalid request becomes a response with the right
-    // status code, WWW-Authenticate challenges, and DPoP-Nonce header.
-    let validator_metadata = validator.validator_metadata(Some("https://example.com"));
+    let validator_metadata = validator.validator_metadata(None);
     if let Some(rejection) = result.rejection(&validator_metadata, None) {
-        let response = rejection
-            .apply(http::Response::builder())
-            .body(String::new())
-            .unwrap();
-        println!("Rejected: {response:?}");
-        return;
+        let response = rejection.apply(http::Response::builder()).body(())?;
+        println!("Rejected: {}", response.status());
+        for (name, value) in response.headers() {
+            println!("{name}: {}", value.to_str()?);
+        }
+        return Err("request authentication failed".into());
     }
 
-    // Authenticated. A rotated DPoP nonce can arrive on success too — echo it
-    // in the response's DPoP-Nonce header.
+    // Applications must also check the claims against their authorization policy.
+    // A framework adapter can deliver nonce headers on successful responses too.
     if let Some(nonce) = &result.dpop_nonce {
-        println!("DPoP-Nonce to echo: {nonce}");
+        println!("DPoP-Nonce: {nonce}");
     }
-    println!("{result:?}")
+    println!("Authenticated; application authorization is still required.");
+    Ok(())
 }

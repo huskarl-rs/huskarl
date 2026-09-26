@@ -119,6 +119,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: introspection_valid
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator<Claims> {
     /// Creates a new [`IntrospectionValidator`].
     ///
+    /// Construction does not introspect a token. If configured, the verifier
+    /// factory builds the verifier for signed responses; the default JWKS source
+    /// fetches its initial keys and fails construction on a fetch failure.
+    /// Validation calls the introspection endpoint and may also refresh keys.
+    ///
     /// # Errors
     ///
     /// Returns an [`Error`] if the underlying [`TokenIntrospection`] cannot be
@@ -316,21 +321,15 @@ impl IntrospectionValidator<()> {
         IntrospectionValidator::builder_internal()
     }
 
-    /// Configure the validator from authorization server metadata.
-    ///
-    /// Pre-fills `issuer`, `introspection_endpoint`, `jwks_uri`, and
-    /// `token_endpoint` from the metadata. Call `.with_claims::<MyClaims>()` to
-    /// use a custom claims type.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the metadata has no
-    /// `introspection_endpoint`.
+    /// Configures a builder from authorization server metadata without making
+    /// HTTP requests. Copies `issuer`, `introspection_endpoint`, `jwks_uri`, and
+    /// `token_endpoint`. Call `.with_claims::<MyClaims>()` for custom claims.
+    /// `.build().await` may fetch keys for signed introspection responses; it
+    /// does not introspect a token.
     ///
     /// # Errors
     ///
-    /// Returns an error when the metadata does not name an
-    /// `introspection_endpoint`.
+    /// Returns an error if the metadata has no `introspection_endpoint`.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> Result<

@@ -19,6 +19,11 @@
 //! When validation fails, [`rejection`] turns the failure into the matching
 //! response: status code, `WWW-Authenticate` challenges, and `DPoP-Nonce`.
 //!
+//! Framework users can start with the companion
+//! [huskarl-axum](https://github.com/huskarl-rs/huskarl-axum) (unreleased) or
+//! [huskarl-pingora](https://github.com/huskarl-rs/huskarl-pingora) adapters.
+//! This crate supplies their framework-independent validation primitives.
+//!
 //! ## Documentation
 //!
 //! - **Solve a task:** use the [how-to guides](_docs::guide) to validate

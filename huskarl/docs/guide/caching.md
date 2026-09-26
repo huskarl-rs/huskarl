@@ -1,18 +1,13 @@
 # Caching tokens and wiring an authorizer
 
-Grants belong to the login path. For the request path, wrap a grant in a token
-cache and an [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer). The usual
-wiring is a chain, built from the inside out: an `HttpAuthorizer` holds an
-[`InMemoryTokenCache`](crate::cache::InMemoryTokenCache), which wraps a
-[`GrantTokenSource`](crate::cache::GrantTokenSource), which runs a grant —
-drawing exchange parameters from a
-[`GrantParametersSource`](crate::cache::GrantParametersSource) and storing the
-refresh token in a [`RefreshTokenStore`](crate::cache::RefreshTokenStore). Most
-applications use the built-in at every link and implement none of these traits
-themselves.
+Wrap a grant in a [`GrantTokenSource`](crate::cache::GrantTokenSource), cache
+its tokens with [`InMemoryTokenCache`](crate::cache::InMemoryTokenCache), and
+pass the cache to [`HttpAuthorizer`](crate::authorizer::HttpAuthorizer). This
+lets requests reuse tokens and acquire replacements when needed.
 
-Workflow types carry no type parameters, so they store directly in your
-application state.
+The source takes grant parameters and a refresh-token store. The authorizer
+erases the cache's type parameters, so it can be stored directly in application
+state:
 
 ```rust
 # use huskarl::core::client_auth::NoAuth;
@@ -53,13 +48,14 @@ let app = App {
 
 Make authenticated requests through `app.authorizer` — see [making
 authenticated requests](crate::_docs::guide::authorizer) for the request loop,
-and [error handling](crate::_docs::explanation::error_handling) for how every
-operation's [`Error`](crate::core::Error) embeds in your own error type.
+and [handling errors](crate::_docs::guide::handling_errors) to map
+[`TokenError`](crate::cache::TokenError) recovery actions onto your application.
 
-To survive restarts, persist only the refresh token by handing the cache a
+To survive restarts, persist the refresh token with a
 custom [`RefreshTokenStore`](crate::cache::RefreshTokenStore) (keychain- or
-disk-backed); on startup the cache refreshes into a fresh access token. For
-handing a freshly-obtained token from the login path to a running source, use
+disk-backed) through the source's `refresh_store` setter. The first token
+acquisition after startup attempts a refresh. To hand a newly obtained token
+from the login path to a running source, use
 [`GrantTokenSource::prime`](crate::cache::GrantTokenSource::prime).
 
 The `grant_parameters` choice is required, and interactive flows are exactly
@@ -115,6 +111,6 @@ model doesn't fit:
 
 For why sharing a [`RefreshTokenStore`](crate::cache::RefreshTokenStore) across
 sources or processes is or isn't safe, see [sharing a refresh token
-store](crate::_docs::explanation::sharing_a_token_store); for how the cache
-decides when to refresh, see [refresh
+store](crate::_docs::explanation::sharing_a_token_store); for how
+`InMemoryTokenCache` decides when to refresh, see [refresh
 timing](crate::_docs::explanation::refresh_timing).

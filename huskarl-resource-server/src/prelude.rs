@@ -1,11 +1,9 @@
 //! Anonymous trait imports that make the crate's method syntax work.
 //!
-//! This prelude is **trait-only, by design**: it holds exactly the traits
-//! whose methods users call on values they already hold, imported anonymously
-//! (`as _`) so a glob import adds **zero names** to your namespace — it can
-//! never collide with your code, and it is always safe to grow. Types are
-//! named at their use sites, so they are imported explicitly instead; traits
-//! you *implement* (rather than call) are excluded too.
+//! This prelude imports traits anonymously (`as _`) to enable method calls
+//! without introducing trait names. Imported traits can still make calls
+//! ambiguous if their methods overlap. Import types and traits used in `impl`
+//! blocks explicitly.
 //!
 //! What the prelude currently enables:
 //!

@@ -7,7 +7,7 @@
 
     This region was generated from Rust documentation comments by `cargo-reedme` using this command:
 
-        cargo +nightly reedme
+        cargo +nightly reedme --manifest-path huskarl-resource-server/Cargo.toml
 
     for more info: https://github.com/nik-rev/cargo-reedme
 
@@ -24,6 +24,11 @@ binding) and returns a [`ValidatedRequest`](https://docs.rs/huskarl-resource-ser
 carrying its claims — from which your application makes the second decision.
 When validation fails, [`rejection`](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/rejection/) turns the failure into the matching
 response: status code, `WWW-Authenticate` challenges, and `DPoP-Nonce`.
+
+Framework users can start with the companion
+[huskarl-axum](https://github.com/huskarl-rs/huskarl-axum) (unreleased) or
+[huskarl-pingora](https://github.com/huskarl-rs/huskarl-pingora) adapters.
+This crate supplies their framework-independent validation primitives.
 
 ## Documentation
 
@@ -54,15 +59,12 @@ guides and explanation in a `_docs` module:
 ## Example with RFC 9068 token validation:
 
 ```rust
-use huskarl_resource_server::{
-    core::http::HttpClient,
-    validator::rfc9068::Rfc9068Validator,
-};
+use huskarl_resource_server::{core::http::HttpClient, validator::rfc9068::Rfc9068Validator};
 
 let validator = Rfc9068Validator::builder()
     .issuer("https://issuer")
     .audience("audience")
-    .jwks_uri("https://issuer/jwks.json".parse()?)
+    .jwks_uri("https://issuer/jwks.json".parse().unwrap())
     .jwks_source(http_client)
     .build()
     .await?;

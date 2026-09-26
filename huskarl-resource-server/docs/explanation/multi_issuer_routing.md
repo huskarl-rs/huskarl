@@ -10,16 +10,15 @@ single-issuer validator.
 ## How routing stays safe
 
 The issuer is read from the token's payload **without verifying the
-signature**, and is used *only* to select a validator. The selected validator
-independently re-checks `iss`, the signature (against its own JWKS), the
-audience, and any sender-constraint binding — so a token that lies about its
-issuer is merely routed to a validator that rejects it. Routing grants no
-trust; verification is still done in full by the chosen validator.
+signature**, and is used only to select a registered validator. Routing grants
+no trust. Configure each selected validator to verify the token's authenticity,
+issuer, audience, and sender constraints. In particular, a `CustomValidator`
+needs an explicit issuer and audience policy; routing does not add those checks.
+Opaque tokens cannot use this routing mechanism.
 
-Each per-issuer validator carries its own audience: pin it exactly, because the
-audience check is the access boundary. This matters most when a validator
-accepts tokens (such as OIDC ID tokens) that a different relying party could
-also obtain.
+Require the audience of your API and the issuer's access-token profile. Audience
+validation alone does not distinguish an access token from an OIDC ID token;
+configure token-type and claim checks to prevent that substitution.
 
 ## Unifying claim types
 

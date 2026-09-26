@@ -1,15 +1,11 @@
 # Get your first access token
 
-This tutorial takes you from nothing to a working program that requests a real
-OAuth 2.0 access token and prints it. You will start a local authorization
-server, write a small Rust program against huskarl, and watch it obtain a token.
+Build a Rust program that obtains an OAuth 2.0 access token from a local
+Keycloak server using the client-credentials grant. This flow lets a service
+act on its own behalf.
 
-By the end you will have run a complete client-credentials flow end to end
-against a live server — the foundation every other grant builds on.
-
-You do not need to know OAuth 2.0 beforehand, and you do not need an account with
-any provider: everything runs on your machine. Follow the steps in order; each
-one builds on the last.
+You need no provider account or prior OAuth experience. Follow the steps in
+order; everything runs on your machine.
 
 **What you need:**
 
@@ -51,7 +47,7 @@ In the same directory, start Keycloak and import that realm:
 
 ```console
 $ docker run --rm --name huskarl-keycloak \
-    -p 8080:8080 \
+    -p 127.0.0.1:8080:8080 \
     -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
     -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
     -v "$PWD/realm.json:/opt/keycloak/data/import/realm.json:ro" \
@@ -61,12 +57,12 @@ $ docker run --rm --name huskarl-keycloak \
 
 Leave this running in its own terminal. Wait until it logs a line like
 `Imported realm huskarl-tutorial` followed by
-`Keycloak … started`. The server is now listening on `http://localhost:8080`.
+`Keycloak … started`. The server is now listening on `http://127.0.0.1:8080`.
 
 To confirm it is up, open
-<http://localhost:8080/realms/huskarl-tutorial/.well-known/oauth-authorization-server>
+<http://127.0.0.1:8080/realms/huskarl-tutorial/.well-known/openid-configuration>
 in a browser — you should see a JSON discovery document. huskarl will read this
-same document to find the server's token endpoint.
+same [OpenID Connect discovery document](https://www.keycloak.org/securing-apps/oidc-layers) to find the server's token endpoint.
 
 ## 2. Create the project
 
@@ -75,7 +71,8 @@ In a second terminal, create a new binary project and add the dependencies:
 ```console
 $ cargo new huskarl-tutorial
 $ cd huskarl-tutorial
-$ cargo add huskarl huskarl-reqwest
+$ cargo add huskarl
+$ cargo add huskarl-reqwest --features rustls-tls
 $ cargo add tokio --features full
 ```
 
@@ -101,12 +98,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The HTTP client huskarl uses to make its requests.
     let http_client = ReqwestClient::builder().build().await?;
 
-    // Discover the server's endpoints from its issuer URL
-    // (the `/.well-known/oauth-authorization-server` document you opened
-    // in step 1).
-    let metadata = AuthorizationServerMetadata::fetch()
+    // Read the OpenID Connect discovery document from step 1.
+    let metadata = AuthorizationServerMetadata::oidc_fetch()
         .http_client(&http_client)
-        .issuer("http://localhost:8080/realms/huskarl-tutorial")
+        .issuer("http://127.0.0.1:8080/realms/huskarl-tutorial")
         .call()
         .await?;
 
@@ -188,9 +183,9 @@ real applications, and the explanation pages cover the "why":
   [the request authorizer](crate::_docs::guide::authorizer) — stop fetching a
   token per request: cache one, refresh it ahead of expiry, and attach it to
   outgoing requests automatically.
-- [The error model](crate::_docs::explanation::error_handling) — how huskarl's
-  one [`Error`](crate::core::Error) tells you whether to retry, re-authenticate,
-  or give up.
+- [Handling errors](crate::_docs::guide::handling_errors) — use
+  [`Error`](crate::core::Error) for individual operations and
+  [`TokenError`](crate::cache::TokenError) for token-source recovery decisions.
 
 For the full list of grants and the API reference, see the
 [`grant`](crate::grant) module and the crate root.
