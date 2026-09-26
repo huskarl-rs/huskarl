@@ -8,6 +8,9 @@ but not the keys — a concrete signer comes from a crypto backend crate (the
 native or WebCrypto backends), or you can [implement one
 yourself](crate::_docs::guide::implementing_a_backend).
 
+For key selection, reloading, and the difference between secret-backed and
+KMS signing, see [how signing fits together](crate::_docs::explanation::signing).
+
 ```rust
 # use std::borrow::Cow;
 # use huskarl_core::{crypto::signer::JwsSigner, error::Error, platform::MaybeSendBoxFuture};

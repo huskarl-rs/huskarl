@@ -1,5 +1,8 @@
 # Composing crypto strategies
 
+For signing with local keys, secret stores, or KMS, and why selection matters
+during rotation, see [how signing fits together](crate::_docs::explanation::signing).
+
 For an introduction with alternative key configurations feeding the same JWT
 validation policy, start with
 [how verification fits together](crate::_docs::explanation::verification).

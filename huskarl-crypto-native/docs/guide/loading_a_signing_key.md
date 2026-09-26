@@ -30,6 +30,48 @@ let key = PrivateKey::from_secret(secret.mapped(JwkJson)).await?;
 The `kid` comes from the JWK, so the key you sign with and the public JWK you
 publish always agree.
 
+## Reload a key from its secret source
+
+`from_secret` reads the source once. To pick up changes, put that call inside
+a refresh factory. This example accepts a cloneable string secret source,
+such as a file or secret-manager provider containing JWK JSON:
+
+```rust,no_run
+use huskarl_core::{
+    Error,
+    crypto::signer::{JwsSignerSelector, ScheduledRefreshSigner},
+    jwk::JwkJson,
+    platform::Duration,
+    secrets::{Secret, SecretString},
+};
+use huskarl_crypto_native::asymmetric::signer::PrivateKey;
+
+# async fn example(secret: impl Secret<Output = SecretString> + Clone + 'static) -> Result<(), Error> {
+let keys = ScheduledRefreshSigner::builder()
+    .ttl(Duration::from_secs(300))
+    .factory(move || {
+        let secret = secret.clone();
+        Box::pin(async move { PrivateKey::from_secret(secret.mapped(JwkJson)).await })
+    })
+    .build()
+    .await?;
+
+let signer = keys.select_signer().await;
+// Use this signer for one complete JWT signing operation.
+# Ok(())
+# }
+```
+
+The factory loads the initial key during `build`. Later selections attempt a
+reload after the TTL, subject to rate limits and backoff; failed reloads keep
+the existing key. The secret source must return the desired version on a new
+read: a pinned version or separately cached value will not automatically move
+to the latest secret. This configuration replaces one key; retaining older
+keys for DPoP bindings requires a multi-key selector.
+
+See [how signing fits together](https://github.com/huskarl-rs/huskarl/blob/main/huskarl-core/docs/explanation/signing.md)
+for stable selections, KMS signing, and key publication during rotation.
+
 ## Generate a fresh key
 
 For a key created in-process, pass the algorithm and an optional `kid`:

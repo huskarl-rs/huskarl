@@ -118,6 +118,7 @@ trade-off.
 
 ### Cryptography and shared design
 
+- [How signing fits together](../huskarl-core/docs/explanation/signing.md)
 - [How verification fits together](../huskarl-core/docs/explanation/verification.md)
 - [The core error model](../huskarl-core/docs/explanation/error_handling.md)
 - [Handling keys from untrusted sources](../huskarl-core/docs/explanation/untrusted_keys.md)

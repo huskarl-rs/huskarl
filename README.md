@@ -200,6 +200,19 @@ building a consumer.
 See [how verification fits together](huskarl-core/docs/explanation/verification.md)
 for imports, the shared validation policy, and file-based keys.
 
+### Choose your signing setup
+
+The same JWT construction works with a fixed local key, a key reloaded from a
+secret store, or a versioned Google Cloud KMS key. Select a signer once, then
+use it to construct the header and sign: its algorithm and key identity stay
+consistent even if a reload happens concurrently.
+
+Default selection chooses the current key for new operations. Thumbprint
+selection finds the exact key needed for an existing DPoP binding, so rotating
+the default need not break proofs for existing tokens.
+See [how signing fits together](huskarl-core/docs/explanation/signing.md) for
+the common signing code, reload behavior, and key-selection examples.
+
 ### Extension points
 
 Async strategy traits let applications supply transports, keys, secrets, and

@@ -40,6 +40,9 @@ pub mod guide {
 
 /// Understanding-oriented background on how the crate works and why.
 pub mod explanation {
+    #[doc = include_str!("../docs/explanation/signing.md")]
+    pub mod signing {}
+
     #[doc = include_str!("../docs/explanation/verification.md")]
     pub mod verification {}
 
