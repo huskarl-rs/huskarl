@@ -562,9 +562,10 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
     ///
     /// On `invalid_grant` the stored token is discarded only after a
     /// compare-before-clear (re-read, clear only if it still holds the rejected
-    /// value), so a peer's concurrently-rotated token is retried rather than
-    /// clobbered; see [Sharing a store](crate::cache#sharing-a-store). Transient
-    /// failures leave the token in place.
+    /// value). An observed replacement is retried, but the read and clear are
+    /// not atomic: this is not cross-source synchronization. See
+    /// [sharing a store](crate::_docs::explanation::sharing_a_token_store).
+    /// Transient failures leave the token in place.
     async fn try_refresh(&self) -> Result<TokenResponse, Option<Error>> {
         // Single owner: the body runs once. The bound stops a peer rotating a
         // shared token in a tight loop from spinning us indefinitely.

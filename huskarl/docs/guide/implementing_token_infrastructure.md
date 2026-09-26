@@ -45,6 +45,19 @@ When composing another `TokenSource`, call
 your own recovery decision. This keeps the original cause, verdict, retry delay,
 and construction location.
 
+## Implement a token cache
+
+Implement [`TokenSource`](crate::cache::TokenSource) and the
+[`TokenCache`](crate::cache::TokenCache) marker for a source that reuses tokens
+and coordinates acquisition. Preserve the wrapped source's `TokenError` when
+forwarding an acquisition failure.
+
+Choose scheduling to suit your application. `InMemoryTokenCache` refreshes on
+the request path; a custom cache could refresh in a background task or thread.
+Define how it handles startup without a token, expiry, invalidation, and
+refresh failures. Refresh-ahead and jitter are built-in implementation options,
+not requirements of these traits.
+
 ## Implement a refresh-token store
 
 A [`RefreshTokenStore`](crate::cache::RefreshTokenStore) returns `Error` because

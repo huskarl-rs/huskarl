@@ -103,6 +103,11 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_bu
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims> {
     /// Creates a new [`CustomValidator`].
     ///
+    /// Construction calls the verifier factory. With `jwks_source`, this fetches
+    /// the initial JWKS and fails if the fetch fails. A custom factory controls
+    /// its own startup policy. Reuse the validator: validations use its verifier,
+    /// which may fetch keys again according to its refresh policy.
+    ///
     /// # Errors
     ///
     /// Returns an [`Error`] if the [`JwsVerifierFactory`] fails to build a
@@ -253,11 +258,29 @@ impl CustomValidator<()> {
 
     /// Configure the validator from authorization server metadata.
     ///
-    /// Pre-fills `jwks_uri` and `authorization_server` from the metadata. Issuer
-    /// validation is configured via [`AccessTokenValidationRules`] rather than
-    /// inferred from metadata, since non-RFC-9068 authorization servers may require
-    /// different issuer handling. Call `.with_claims::<MyClaims>()` to use a custom
-    /// claims type.
+    /// Copies `jwks_uri` and `authorization_server` without making HTTP requests.
+    /// **This does not configure issuer or audience validation.** Set `.iss(...)`
+    /// and `.aud(...)` to the expected values, or choose an explicit [`ClaimCheck`]
+    /// policy. The defaults require an issuer to be present but do not check its
+    /// value, and do not check the audience.
+    ///
+    /// ```no_run
+    /// # use huskarl_resource_server::{core::{Error, http::HttpClient, server_metadata::AuthorizationServerMetadata}, validator::custom::CustomValidator};
+    /// # async fn example(metadata: &AuthorizationServerMetadata, http: impl HttpClient + 'static) -> Result<(), Error> {
+    /// let validator = CustomValidator::builder_from_metadata(metadata)
+    ///     .iss(metadata.issuer.clone())
+    ///     .aud("https://api.example.com")
+    ///     .jwks_source(http)
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// With `jwks_source`, `.build().await` fetches the initial keys and fails if
+    /// that fetch fails. Later validations may refresh keys. Use
+    /// `.jws_verifier_factory(...)` for custom startup and refresh policies, and
+    /// `.with_claims::<MyClaims>()` for a custom claims type.
     pub fn builder_from_metadata(
         metadata: &AuthorizationServerMetadata,
     ) -> CustomValidatorBuilder<(), CustomValidatorBuilderFromMetadataState> {

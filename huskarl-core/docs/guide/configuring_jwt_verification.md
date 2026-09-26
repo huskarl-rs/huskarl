@@ -1,38 +1,16 @@
 # Configuring JWT verification
 
-[`JwtValidator`](crate::jwt::validator::JwtValidator) verifies a token against a
-[`JwsVerifier`](crate::crypto::verifier::JwsVerifier). This guide is about where
-that verifier comes from: how to wire the opinionated default stack for the
-common case — an authorization server's JWKS endpoint — and how to swap it for
-something else. For the claim policy the validator applies *after* the signature
-checks out, see [validating a JWT](crate::_docs::guide::validating_a_jwt); for
-*why* the stack is layered the way it is, see [composing crypto
-strategies](crate::_docs::explanation::crypto_strategies).
+Use [`JwksSource`](crate::jwk::JwksSource) to verify tokens against an
+authorization server's published keys. Supply a custom factory when keys come
+from another source. For issuer, audience, and other claim checks, see
+[validating a JWT](crate::_docs::guide::validating_a_jwt).
 
-## What verification needs: a platform and a factory
+## Prerequisites
 
-Signing is the easy direction: you hand the builder a concrete
-[`JwsSigner`](crate::crypto::signer::JwsSigner) that already carries its key and
-its crypto, and that is all. Verification is heavier because the verifier must be
-*built* from key material discovered at runtime — an AS's JWKS — which takes two
-collaborators, configured differently:
-
-- A **platform** — a [`JwsVerifierPlatform`](crate::crypto::verifier::JwsVerifierPlatform),
-  the crypto backend that turns a JWK into a per-key verifier. Its *availability*
-  is a feature-flag decision: with the `default-jws-verifier-platform` feature (on
-  by default) the builder's `jws_verifier_platform` defaults to the platform
-  backend — `huskarl-crypto-native` off-wasm, `huskarl-crypto-webcrypto` on wasm —
-  so you never name it. Disable the feature and the field becomes required: pass
-  your own with `.jws_verifier_platform(...)`, or verification is unavailable.
-- A **factory** — a [`JwsVerifierFactory`](crate::crypto::verifier::JwsVerifierFactory),
-  passed as `.jws_verifier_factory(...)`. This is the *selection* you make: it is
-  handed the discovered `jwks_uri` and the platform, and returns the composed
-  `Arc<dyn JwsVerifier>`. There is no default factory — you always supply one, and
-  choosing a stack means choosing it.
-
-So the split is: the platform is *available* (feature-gated, usually implicit),
-the factory is *selected* (always explicit). The rest of this guide is about that
-selection.
+The examples assume an HTTP client and a builder that accepts
+`jws_verifier_factory`. The `default-jws-verifier-platform` feature selects the
+native or WebCrypto backend in the consuming crate. If you disable that
+feature, supply `jws_verifier_platform` explicitly.
 
 ## The default: a JWKS-backed stack
 
@@ -40,7 +18,7 @@ selection.
 builds a [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier) around a
 [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier)
 around a [`MultiKeyVerifier`](crate::crypto::verifier::MultiKeyVerifier): keys are
-fetched from the endpoint on first use, the whole keyset is reloaded on the read
+fetched when the factory builds the verifier, the whole keyset is reloaded on the read
 path once older than the `ttl`, and an unknown-`kid` miss triggers one reload and
 retry.
 
@@ -55,10 +33,8 @@ use huskarl_core::{jwk::JwksSource, platform::Duration};
 let verifier_factory = Arc::new(
     JwksSource::builder()
         .http_client(http_client)
-        // The TTL (default 1h) bounds how long a key removed from the JWKS keeps
-        // verifying its own tokens: it stays trusted until the keyset is reloaded,
-        // so lower this to shorten that window. `max_keys` bounds an untrusted
-        // document's size.
+        // Attempt refresh on use after five minutes (default: one hour).
+        // Failed refreshes retain the previous keys.
         .ttl(Duration::from_secs(5 * 60))
         .build(),
 );
@@ -72,8 +48,10 @@ you, passing it the discovered `jwks_uri` and the platform. The platform is
 implicit here (the `default-jws-verifier-platform` feature is on), so only the
 factory is named; each crate's setup guide shows the call in context.
 
-The `ttl` is the one knob you should set deliberately — it is a trust decision,
-not a performance one.
+Choose `ttl` to control how soon requests trigger a scheduled refresh. It is
+not a maximum key age: rate limits, failed fetches, and concurrent refreshes
+can leave older keys in use. See [refresh policy](crate::_docs::explanation::crypto_strategies)
+for the availability and key-retirement trade-off.
 
 ## Selecting a different stack
 
@@ -82,9 +60,8 @@ instead. Return any `Arc<dyn JwsVerifier>` — compose the wrappers you need and
 erase the result; the validator above only ever sees the base trait. Implement it
 on a type, or (via the blanket impl) pass a closure with the same signature.
 
-This factory ignores the JWKS URI and instead presents fixed keys (from a KMS, an
-enclave, or a local file), still wrapped in `RetryingVerifier` so an unknown-`kid`
-miss can drive a reload:
+This factory ignores the JWKS URI and presents keys supplied by the application.
+It does not reload them; use a refreshable wrapper if the key set can change:
 
 ```rust
 # #[derive(Debug)]
@@ -108,7 +85,7 @@ use std::sync::Arc;
 use huskarl_core::{
     EndpointUrl,
     crypto::verifier::{
-        JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform, MultiKeyVerifier, RetryingVerifier,
+        JwsVerifier, JwsVerifierFactory, JwsVerifierPlatform, MultiKeyVerifier,
     },
     error::Error,
     platform::MaybeSendBoxFuture,
@@ -127,7 +104,7 @@ impl JwsVerifierFactory for StaticKeyStack {
     ) -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
         let keys = self.keys.clone();
         Box::pin(async move {
-            let verifier = RetryingVerifier::new(MultiKeyVerifier::new(keys));
+            let verifier = MultiKeyVerifier::new(keys);
             Ok(Arc::new(verifier) as Arc<dyn JwsVerifier>)
         })
     }

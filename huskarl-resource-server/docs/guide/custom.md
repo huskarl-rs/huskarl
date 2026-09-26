@@ -9,6 +9,11 @@ or through individual builder methods such as `.aud()`, `.iss()`, and
 guide](crate::_docs::guide::rfc9068) instead — see [choosing a
 validator](crate::_docs::explanation::choosing_a_validator).
 
+**Configure the trust policy explicitly.** Discovery supplies endpoints;
+`builder_from_metadata()` does not set the expected issuer or audience. Set
+`.iss(...)` and `.aud(...)` as shown below, and choose any token-type checks
+required by your issuer's access-token profile.
+
 ## 1. Set up your HTTP client
 
 Use an HTTP client to fetch discovery metadata and signing keys:

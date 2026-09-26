@@ -47,7 +47,9 @@ client authentication, `DPoP` sender-constrained tokens, and signed authorizatio
 requests (JAR). Both OIDC and plain-OAuth clients are tested; Message Signing
 runs with both plain and signed (JARM) responses. The grants are additionally run
 end-to-end against real
-authorization servers — Keycloak, Dex, `node-oidc-provider`, and Okta — in CI.
+authorization servers: Keycloak, Dex, and `node-oidc-provider` in CI, with
+optional Okta tests for a configured tenant. Passing these plans is not formal
+`OpenID` certification.
 See the [repository](https://github.com/huskarl-rs/huskarl) for the full provider
 matrix and conformance plans.
 

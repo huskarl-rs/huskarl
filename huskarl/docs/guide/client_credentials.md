@@ -97,7 +97,9 @@ use huskarl::core::client_auth::ClientSecret;
 #     .client_auth(client_auth)
 #     .build();
 
-let params = ClientCredentialsGrantParameters::builder().scope(bon::vec!["read", "write"]).build();
+let params = ClientCredentialsGrantParameters::builder()
+    .scope(vec!["read".to_owned(), "write".to_owned()])
+    .build();
 let response = grant.exchange(params).await?;
 let token: &AccessToken = response.access_token();
 

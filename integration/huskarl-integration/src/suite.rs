@@ -73,6 +73,7 @@ async fn jwks_validator(
     audience: &str,
 ) -> CustomValidator {
     CustomValidator::builder_from_metadata(metadata)
+        .iss(metadata.issuer.clone())
         .aud(ClaimCheck::required_value(audience))
         .jws_verifier_factory(Arc::new(
             JwksSource::builder().http_client(http.clone()).build(),

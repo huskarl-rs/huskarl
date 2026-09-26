@@ -23,6 +23,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # huskarl-crypto-webcrypto is wasm32-only; the WASM job covers it.
       - run: cargo test --workspace --exclude huskarl-crypto-webcrypto
+      - name: Compile all native examples, including feature-gated examples
+        run: cargo check --workspace --exclude huskarl-crypto-webcrypto --examples --all-features
       - run: cargo test --manifest-path integration/huskarl-no-default-features/Cargo.toml --target-dir target
 
   clippy:
@@ -163,6 +165,8 @@ jobs:
       # feature, the okta binary's trials are ignored.
       - name: Run tests
         run: cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc
+      - name: Run the first-token tutorial against Keycloak
+        run: python3 scripts/test-first-token.py
       # huskarl-redis's server-backed tests are `#[ignore]`d without the
       # opt-in, so they need their own invocation (mirrors `redis:test`).
       - name: Run huskarl-redis tests

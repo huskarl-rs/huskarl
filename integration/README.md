@@ -176,3 +176,22 @@ CONFORMANCE_INSECURE_TLS=true cargo test -p huskarl-conformance --features confo
 For hosted-suite API tokens, TLS settings, timeouts, and per-plan evidence exports,
 see [the conformance harness guide](huskarl-conformance/README.md). Local `mise`
 tasks explicitly enable self-signed TLS; direct Cargo runs verify TLS by default.
+
+## Check the first-token tutorial
+
+With the local Keycloak service running on port 8080, run from the workspace
+root:
+
+```sh
+python3 scripts/test-first-token.py
+```
+
+The check extracts the Rust program and realm JSON directly from the tutorial,
+compiles against the workspace crates, creates the documented realm, and checks
+that the program obtains a token. It removes the realm afterwards, and refuses
+to overwrite an existing `huskarl-tutorial` realm. The local admin credentials
+default to `admin` / `admin`; override with `KEYCLOAK_ADMIN` and
+`KEYCLOAK_ADMIN_PASSWORD`. Use `--compile-only` to check the program without a
+server. If port 8080 is occupied, use `--base-url http://127.0.0.1:18080` with
+a Keycloak instance on that port; the check substitutes only the tutorial's
+origin. CI runs the unchanged default origin in the provider integration job.

@@ -10,7 +10,7 @@ guide](crate::_docs::guide::setup) shows where the value plugs in.
 |---|---|---|
 | *(public client)* | [`NoAuth`](crate::core::client_auth::NoAuth) | The client holds no credentials (SPA, CLI, device) |
 | `client_secret_post` / `client_secret_basic` | [`ClientSecret`](crate::core::client_auth::ClientSecret) | A shared secret is acceptable |
-| `private_key_jwt` | [`JwtBearer`](crate::core::client_auth::JwtBearer) + an asymmetric key | No shared secrets; required by FAPI 2.0 |
+| `private_key_jwt` | [`JwtBearer`](crate::core::client_auth::JwtBearer) + an asymmetric key | Public-key authentication; one FAPI 2.0 option |
 | `client_secret_jwt` | [`JwtBearer`](crate::core::client_auth::JwtBearer) + an HMAC key | A shared secret, without putting it on the wire |
 | `tls_client_auth` / mTLS | [`NoAuth`](crate::core::client_auth::NoAuth) + an mTLS HTTP client | Authentication belongs to the transport (RFC 8705) |
 
@@ -22,9 +22,9 @@ mutually supported variant.
 ## Public clients: `NoAuth`
 
 [`NoAuth`](crate::core::client_auth::NoAuth) sends only the `client_id`.
-Public clients should still sender-constrain their tokens — see
-[PKCE](crate::_docs::guide::authorization_code) (automatic) and
-[DPoP](crate::_docs::guide::dpop).
+The authorization-code grant uses [PKCE](crate::_docs::guide::authorization_code)
+to protect code redemption. To bind access tokens to a client-held key, configure
+[DPoP](crate::_docs::guide::dpop). PKCE does not sender-constrain access tokens.
 
 ```rust
 use huskarl::core::client_auth::NoAuth;
@@ -35,8 +35,8 @@ let client_auth = NoAuth;
 ## Shared secret: `ClientSecret`
 
 [`ClientSecret`](crate::core::client_auth::ClientSecret) implements both
-RFC 6749 §2.3.1 forms. It defaults to `client_secret_post` (the OAuth 2.1
-mandatory-to-support method) and switches to `client_secret_basic` when the
+RFC 6749 §2.3.1 forms. It defaults to `client_secret_post` and switches to
+`client_secret_basic` when the
 server only advertises that; opt into preferring Basic with the builder. The
 secret comes from any [`Secret`](crate::core::secrets::Secret) source, so
 the credential itself stays out of your code:
@@ -61,8 +61,9 @@ let basic_preferring = ClientSecret::builder()
 
 [`JwtBearer`](crate::core::client_auth::JwtBearer) authenticates with a
 signed JWT (RFC 7523 / OIDC Core §9): no secret crosses the wire, the server
-verifies against your registered public key, and FAPI 2.0 requires it. Give
-it an asymmetric signer and an [`Audience`](crate::core::client_auth::Audience)
+verifies against your registered public key. FAPI 2.0 permits this method or
+mTLS client authentication ([profile §5.3.3.1](https://openid.net/specs/fapi-security-profile-2_0-final.html#section-5.3.3.1)).
+Give it an asymmetric signer and an [`Audience`](crate::core::client_auth::Audience)
 policy:
 
 ```rust
@@ -145,10 +146,11 @@ configuration.
 
 ## Grants that carry their own authorization
 
-The [`jwt_bearer`](crate::_docs::guide::jwt_bearer),
-[`token_exchange`](crate::_docs::guide::token_exchange), and
-[`refresh`](crate::_docs::guide::refresh) grants present an assertion or an
-existing token, so `client_auth` (and `client_id`) are optional there and
-independent of the grant — anonymous presentation is spec-valid (RFC 7523
-§3.1, RFC 8693 §2). Set them when the authorization server also wants the
-client authenticated.
+The [`jwt_bearer`](crate::_docs::guide::jwt_bearer) and
+[`token_exchange`](crate::_docs::guide::token_exchange) builders allow client
+identity and authentication to be omitted. Follow the authorization server's
+policy for these grants.
+
+For [refresh](crate::_docs::guide::refresh), retain the original client's
+identity and authentication method. Confidential clients authenticate; public
+clients use `NoAuth`. `to_refresh_grant()` copies the parent grant's settings.

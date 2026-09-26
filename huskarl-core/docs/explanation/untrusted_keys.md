@@ -10,8 +10,8 @@ treats them conservatively rather than acting on them.
 
 - **`x5u`** (X.509 URL) — captured and **rejected** when present in JWKs from
   untrusted sources such as `DPoP` proof headers (RFC 9449 §4.2). Like `jku` in
-  JWS headers, `x5u` triggers a remote fetch, which introduces SSRF risk and
-  lets an attacker substitute their own key material. Per RFC 7517 §4.6 the
+  JWS headers, `x5u` names a remote key source. Following an attacker-supplied
+  URL could introduce SSRF or substitute key material; huskarl does not fetch it. Per RFC 7517 §4.6 the
   referenced resource must be secured, but that cannot be verified at parse
   time, so rejection is the safe default.
 
@@ -21,9 +21,8 @@ treats them conservatively rather than acting on them.
   include `x5c` in their JWKS — harmless here, since the signing key material is
   present regardless.
 
-- **`x5t`** (X.509 SHA-1 thumbprint) — silently ignored. SHA-1 is deprecated for
-  cryptographic use (RFC 6151) and this field adds no security without
-  certificate-chain validation.
+- **`x5t`** (X.509 SHA-1 thumbprint) — silently ignored. This library does not
+  use certificate thumbprints to establish trust in a JWK.
 
 - **`x5t#S256`** (X.509 SHA-256 thumbprint) — silently ignored at the JWK level.
   Note that `cnf.x5t#S256` in JWT access tokens is a distinct concept (RFC 8705

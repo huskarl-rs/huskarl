@@ -5,6 +5,22 @@ Choose a page by what you need now. The documentation follows
 experience, how-to guides solve a specific task, reference describes the API,
 and explanation develops the ideas behind the design.
 
+## Application entry points
+
+For framework integration, start with the companion repositories:
+
+- [huskarl-axum](https://github.com/huskarl-rs/huskarl-axum): API protection and
+  browser login for Axum. Unreleased; follow the repository's development setup.
+- [huskarl-pingora](https://github.com/huskarl-rs/huskarl-pingora): authenticated
+  reverse proxies and browser login for upstream services.
+- [huskarl-login](https://github.com/huskarl-rs/huskarl-login): the shared login
+  and session engine for framework adapter authors.
+
+For a service making outgoing authenticated requests, use the
+[cached client example](../huskarl/examples/README.md#make-requests-with-a-cached-token).
+The [resource-server example](../huskarl-resource-server/examples/README.md)
+shows token validation without a framework.
+
 ## Tutorial
 
 Start here if you are new to huskarl:
@@ -90,7 +106,7 @@ trade-off.
 
 - [The client error model](../huskarl/docs/explanation/error_handling.md)
 - [How a grant token source resolves a token](../huskarl/docs/explanation/token_source_resolution.md)
-- [Refresh-ahead and jitter](../huskarl/docs/explanation/refresh_timing.md)
+- [InMemoryTokenCache refresh-ahead and jitter](../huskarl/docs/explanation/refresh_timing.md)
 - [Sharing a refresh token store](../huskarl/docs/explanation/sharing_a_token_store.md)
 - [Why the prelude is trait-only](../huskarl/docs/explanation/prelude.md)
 

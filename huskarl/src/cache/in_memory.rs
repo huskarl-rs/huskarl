@@ -16,12 +16,12 @@ use crate::{
 
 /// The jitter band as a fraction of each token's lifetime, before the
 /// [`refresh_jitter`](InMemoryTokenCache::refresh_jitter) cap. See
-/// [Jitter](crate::cache#jitter).
+/// [Jitter](crate::_docs::explanation::refresh_timing#why-jitter-is-enabled-by-default).
 const JITTER_LIFETIME_FRACTION: f64 = 0.1;
 
 /// Ceiling on the effective [`expires_margin`](InMemoryTokenCache::expires_margin),
 /// as a fraction of each token's lifetime, keeping short-lived tokens servable.
-/// See [Refresh-ahead](crate::cache#refresh-ahead).
+/// See [Refresh-ahead](crate::_docs::explanation::refresh_timing).
 const MARGIN_LIFETIME_FRACTION: f64 = 0.5;
 
 /// In-memory caching wrapper over a [`TokenSource`].
@@ -35,18 +35,23 @@ const MARGIN_LIFETIME_FRACTION: f64 = 0.5;
 /// — lives in the [`TokenSource`]; this type is solely the cache, so there is
 /// exactly one way tokens enter it.
 ///
+/// Construction does not acquire a token or start a background task. Calls to
+/// [`TokenSource::token`] drive acquisition and refresh according to this cache's
+/// timing policy. Other [`TokenCache`] implementations may schedule differently.
+///
 /// The usual source is [`GrantTokenSource`]; see
 /// it for the refresh/exchange resolution order, the rejection handling, and the
 /// error contract. To prime or inspect that source after it is in the cache,
 /// hold it in an `Arc` and reach it via [`source`](Self::source) (or your own
 /// clone).
 ///
-/// By default a token is refreshed only once it nears expiry, blocking the
-/// acquiring caller. [`refresh_ahead`](InMemoryTokenCacheBuilder::refresh_ahead)
-/// and [`refresh_jitter`](InMemoryTokenCacheBuilder::refresh_jitter) move that
-/// refresh earlier and off the request's critical path — see
-/// [Refresh-ahead](crate::cache#refresh-ahead) and
-/// [Jitter](crate::cache#jitter).
+/// Default jitter starts refresh before the token's retirement threshold. The
+/// elected caller waits for refresh; concurrent callers receive the valid cached
+/// token. [`refresh_ahead`](InMemoryTokenCacheBuilder::refresh_ahead) and
+/// [`refresh_jitter`](InMemoryTokenCacheBuilder::refresh_jitter) configure this
+/// early-refresh window — see
+/// [Refresh-ahead](crate::_docs::explanation::refresh_timing) and
+/// [Jitter](crate::_docs::explanation::refresh_timing#why-jitter-is-enabled-by-default).
 #[derive(Builder)]
 pub struct InMemoryTokenCache<Src: TokenSource> {
     /// The source tokens are pulled from when the cache holds no valid token, or
@@ -54,20 +59,22 @@ pub struct InMemoryTokenCache<Src: TokenSource> {
     source: Src,
     /// How early to retire a token before its real expiry, covering clock skew
     /// and in-flight requests. Capped per token at [`MARGIN_LIFETIME_FRACTION`]
-    /// of its lifetime (see [Refresh-ahead](crate::cache#refresh-ahead)).
+    /// of its lifetime (see [Refresh-ahead](crate::_docs::explanation::refresh_timing)).
     /// Defaults to 30s.
     #[builder(default = Duration::from_secs(30))]
     expires_margin: Duration,
     /// Default lifetime assumed for tokens that do not include an `expires_in` field.
     #[builder(default = Duration::from_hours(1))]
     default_expires_in: Duration,
-    /// When set, refresh a still-valid token this far ahead of `expires_margin`,
-    /// off the request's critical path. See
-    /// [Refresh-ahead](crate::cache#refresh-ahead).
+    /// Margin before token expiry at which early refresh starts, plus jitter.
+    /// Replaces the effective `expires_margin` as the refresh trigger; set it
+    /// larger to refresh before retirement. The elected caller waits for refresh.
+    /// See
+    /// [Refresh-ahead](crate::_docs::explanation::refresh_timing).
     refresh_ahead: Option<Duration>,
     /// Absolute cap on the per-instance jitter that de-synchronizes fleet
     /// refreshes; the band itself scales with each token's lifetime. [`None`]
-    /// disables jitter. See [Jitter](crate::cache#jitter). Defaults to `Some(30s)`.
+    /// disables jitter. See [Jitter](crate::_docs::explanation::refresh_timing#why-jitter-is-enabled-by-default). Defaults to `Some(30s)`.
     #[builder(required, default = Some(Duration::from_secs(30)))]
     refresh_jitter: Option<Duration>,
     /// Stable per-instance position in the jitter band, a fraction in `[0, 1)`
@@ -143,7 +150,7 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
     /// [fraction](Self::jitter_fraction) of a band that is
     /// [`JITTER_LIFETIME_FRACTION`] of the lifetime, capped at
     /// [`refresh_jitter`](Self::refresh_jitter) (a [`None`] cap disables jitter).
-    /// See [Jitter](crate::cache#jitter).
+    /// See [Jitter](crate::_docs::explanation::refresh_timing#why-jitter-is-enabled-by-default).
     fn jitter_offset(&self, lifetime: Duration) -> Duration {
         let Some(cap) = self.refresh_jitter else {
             return Duration::ZERO;
@@ -155,7 +162,7 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
     /// The hard serve margin for a token of this `lifetime`:
     /// [`expires_margin`](Self::expires_margin), capped at
     /// [`MARGIN_LIFETIME_FRACTION`] of the lifetime. See
-    /// [Refresh-ahead](crate::cache#refresh-ahead).
+    /// [Refresh-ahead](crate::_docs::explanation::refresh_timing).
     fn effective_margin(&self, lifetime: Duration) -> Duration {
         self.expires_margin
             .min(lifetime.mul_f64(MARGIN_LIFETIME_FRACTION))
@@ -176,7 +183,7 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
     /// refresh-ahead margin if set, else the
     /// [effective serve margin](Self::effective_margin), brought earlier by
     /// [jitter](Self::jitter_offset). Always `false` with neither refresh-ahead
-    /// nor jitter. See [Refresh-ahead](crate::cache#refresh-ahead).
+    /// nor jitter. See [Refresh-ahead](crate::_docs::explanation::refresh_timing).
     fn in_refresh_window(&self, token: &TokenResponse) -> bool {
         let access_token = token.access_token();
         let lifetime = access_token.effective_lifetime(self.default_expires_in);

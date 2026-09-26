@@ -24,21 +24,11 @@ native and WebCrypto platforms, and remote backends such as `huskarl-google-clou
 for Cloud KMS — not in `huskarl-core`, which defines only the traits and the
 wrappers that compose them.
 
-Verification carries one piece of machinery the other directions don't. Its key
-material *arrives as data* — a JWKS fetched at runtime — so each key has to be
-turned into a working verifier by whatever backend is present. That construction
-step is the [`JwsVerifierPlatform`](crate::crypto::verifier::JwsVerifierPlatform):
-a pluggable "materialise a verifier from a [`PublicJwk`](crate::jwk::PublicJwk)"
-seam, which is what lets the same JWKS logic run over RustCrypto natively and
-WebCrypto on wasm. There is deliberately no matching signer or cipher "platform":
-you *hold* those keys, building a concrete
-[`JwsSigner`](crate::crypto::signer::JwsSigner) or
-[`AeadCipher`](crate::crypto::cipher::AeadCipher) directly from a source you chose
-(a KMS handle, a file, a secret manager). Nothing has to be materialised from
-arriving data, so a factory there would resolve nothing — the concrete key already
-carries its backend. It is the inbound/outbound split below in another guise:
-inbound keys are *built for you* from what the wire delivered; outbound keys are
-*handed in* fully formed.
+JWKS verification also needs a
+[`JwsVerifierPlatform`](crate::crypto::verifier::JwsVerifierPlatform) to turn
+public JWK data into working verifiers. This lets the same key-fetching logic
+use native cryptography or WebCrypto. Signing and encryption instead receive
+keys that already carry their backend, such as a local key or KMS handle.
 
 ## Two directions of key selection
 
@@ -76,12 +66,9 @@ wrapper implements.
 
 On the inbound side,
 [`RefreshableVerifier`](crate::crypto::verifier::RefreshableVerifier) implements
-[`JwsVerifier`](crate::crypto::verifier::JwsVerifier) directly. Each call loads
-the current key snapshot and runs to completion, and a verify only ever accepts
-or rejects — so a rotation landing mid-flight can do no worse than turn a match
-into a miss, which the retrying layer recovers by refreshing and trying once
-more. The consumer holds the wrapper for the life of the program and never sees
-the swap.
+[`JwsVerifier`](crate::crypto::verifier::JwsVerifier) directly. Each verification
+uses one key snapshot. A later call can use a new snapshot without rebuilding
+the consumer.
 
 On the outbound side a swap *mid-operation* would be corrupting, not merely a
 miss. Signing is compound: read the signer's algorithm and `kid` to build the
@@ -134,25 +121,18 @@ relevant trait — the operation trait inbound, the selector trait outbound:
 
 - **Scheduled refresh** —
   [`ScheduledRefreshVerifier`](crate::crypto::verifier::ScheduledRefreshVerifier),
-  [`ScheduledRefreshSigner`](crate::crypto::signer::ScheduledRefreshSigner),
-  [`ScheduledRefreshCipher`](crate::crypto::cipher::ScheduledRefreshCipher). Wrap
-  a refreshable with a TTL and drive it *on the read path*: on each inbound
-  operation ([`verify`](crate::crypto::verifier::JwsVerifier::verify) /
-  [`decrypt`](crate::crypto::cipher::AeadDecryptor::decrypt)), if the keyset has
-  outlived its TTL the first caller to notice reloads it single-flight —
-  non-blocking for concurrent callers, who keep serving the current keyset —
-  before proceeding. This bounds the keyset's age to the TTL, which is what
-  drops a *removed* key: a key dropped upstream still verifies (or decrypts) its
-  own tokens, so no failure ever signals its removal — only the time bound catches
-  it. A minimum interval and
-  failure backoff rate-limit the reloads. The outbound selectors work the same
-  way: selection
-  ([`select_signer`](crate::crypto::signer::JwsSignerSelector::select_signer) /
-  [`select_encryptor`](crate::crypto::cipher::AeadEncryptorSelector::select_encryptor))
-  is async, so it reloads a stale key *during selection* — the outbound read path —
-  and hands back a fresh frozen snapshot. There the TTL bounds how quickly a
-  rotated-in key is discovered rather than how quickly a removed one is dropped,
-  but the mechanism is identical and the caller never has to poll.
+  [`ScheduledRefreshSigner`](crate::crypto::signer::ScheduledRefreshSigner), and
+  [`ScheduledRefreshCipher`](crate::crypto::cipher::ScheduledRefreshCipher)
+  attempt a reload on use after a TTL. One caller waits for the reload while
+  concurrent callers use the existing snapshot. Minimum refresh intervals and
+  failure backoff limit attempts. A successful reload replaces the whole keyset,
+  including removing retired keys.
+
+  **The TTL is a refresh trigger, not a maximum key age.** A failed reload keeps
+  the previous keys available. Rate limiting and in-flight reloads can also
+  extend their use beyond the TTL. Consequently, an upstream key removal takes
+  effect only after a successful refresh is observed by the caller. Applications
+  requiring a strict retirement deadline need an additional policy.
 
 - **Warm start from a persisted cache.** A scheduled-refresh layer serves its
   factory's `Ok` value immediately, so a factory that falls back to a *trusted
@@ -177,8 +157,8 @@ relevant trait — the operation trait inbound, the selector trait outbound:
   while any others arriving within that window still surface the miss until the
   ceiling clears. It reacts *only* to a miss; a signature mismatch is almost
   always a forged token (a refresh would be wasted), and its one legitimate case —
-  a same-algorithm, kid-less rotation — is caught within the TTL by the scheduled
-  layer's read-path reload instead. So the two layers split the work: **misses
+  a same-algorithm, kid-less rotation — is handled after a successful scheduled
+  reload instead. So the two layers split the work: **misses
   here handle additions; the TTL there handles removals and the kid-less edge.**
   Retrying is inbound-only — there is no outbound miss, since the caller selects
   the key.
@@ -187,7 +167,7 @@ relevant trait — the operation trait inbound, the selector trait outbound:
 
 A typical verifier for an authorization server's JWKS reads, from the outside
 in: an optional metrics wrapper, around a retrying verifier (reload-and-retry on
-an unknown `kid`), around a scheduled-refresh verifier (the TTL-bounded snapshot
+an unknown `kid`), around a scheduled-refresh verifier (a cached snapshot
 of the whole keyset, reloaded on the read path), around a multi-key verifier
 (pick the matching key from the current snapshot), around the per-key verifiers.
 The scheduled-refresh layer sits *outside* the multi-key verifier, so a reload
@@ -208,12 +188,9 @@ source, with the layer above calling
 [`select_signer`](crate::crypto::signer::JwsSignerSelector::select_signer) once
 per token and signing against the returned snapshot.
 
-One nuance distinguishes the outbound direction. Because you own the signing key
-and choose when it rotates, outbound rotation is *self-driven*: the TTL bounds how
-quickly a newly-rotated key is discovered rather than how quickly a removed one is
-dropped, and
-[`refresh`](crate::crypto::signer::RefreshableSigner::refresh) forces an immediate
-reload on an explicit rotation event.
+For an explicit signing-key rotation, call
+[`refresh`](crate::crypto::signer::RefreshableSigner::refresh) to request an
+immediate reload instead of waiting for a scheduled attempt.
 
 ## Sealing: self-contained bundles
 
@@ -288,17 +265,6 @@ bound on the sealer traits accept either world unchanged.
 
 ## The three operations, compared
 
-Everything above follows from two rules and one question. The rules: an
-**outbound** operation is compound, so it must run against one frozen key
-snapshot — reached through a selector, refreshed at selection; an **inbound**
-operation is handed its selection criteria by what arrived — matched by
-strength, where the worst a stale keyset can produce is a recoverable miss. The
-question: does the key material arrive as data (then a platform must
-materialise it) or is it handed in fully formed? Signing is the outbound rule
-alone, verification the inbound rule alone, and encryption is the one operation
-family where both rules apply to a single key — which is why it alone has a
-combined trait (`AeadCipher`) and the sealing layer on top.
-
 |                        | Signing                                     | Verification                                 | Encryption / decryption                                        |
 |------------------------|---------------------------------------------|----------------------------------------------|----------------------------------------------------------------|
 | Direction              | outbound                                    | inbound                                      | both, on one key family                                        |
@@ -309,9 +275,3 @@ combined trait (`AeadCipher`) and the sealing layer on top.
 | Ambiguous key match    | n/a — default key, or by thumbprint         | fails closed: wrong-key acceptance is a risk | try-all is safe: the AEAD tag self-authenticates               |
 | Materialisation seam   | none — keys are handed in                   | `JwsVerifierPlatform`, keys arrive as a JWKS | none — keys are handed in                                      |
 | Extra layer            | by-thumbprint selection (`DPoP`'s `dpop_jkt`) | —                                          | sealing: self-contained bundles, external sealers              |
-
-The columns differ only where the direction or the key's origin genuinely
-differs; where neither does, the machinery is deliberately identical — the
-refresh wrappers share one mechanism, the two match methods share
-[`KeyMatchStrength`](crate::crypto::KeyMatchStrength), and the two miss-driven
-retry wrappers share their split of work with the TTL layer.

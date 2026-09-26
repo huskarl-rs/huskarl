@@ -11,9 +11,9 @@ Use this when your authorization server issues
 [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) JWT access tokens — the `typ`
 header is `at+jwt` and the token carries `iss`, `exp`, `aud`, `sub`, `iat`,
 `jti`, and `client_id`. The token is self-contained, so validation is a local
-signature and claim check against the authorization server's published JWKS,
-with no per-request network call. This is the default choice for a standards-
-compliant authorization server. See the [RFC 9068
+signature and claim check using cached keys from the authorization server's
+JWKS. Key refresh can make network requests during validation. OAuth servers
+are not required to issue RFC 9068 tokens; check the issuer's token format. See the [RFC 9068
 guide](crate::_docs::guide::rfc9068).
 
 ## [`CustomValidator`](crate::validator::custom::CustomValidator)
@@ -31,13 +31,15 @@ Like the RFC 9068 validator, verification is local against the JWKS. See the
 Use this when tokens are opaque (not JWTs), or when you need authoritative
 revocation status on every request. Validation calls the authorization server's
 [RFC 7662](https://www.rfc-editor.org/rfc/rfc7662) introspection endpoint rather
-than verifying a signature locally, which costs a network round trip per request
-but reflects revocation immediately. See the [introspection
+than verifying a signature locally. It adds a network round trip and uses the
+server's current view of token activity; revocation propagation depends on the
+server. See the [introspection
 guide](crate::_docs::guide::introspection).
 
 ## [`MultiIssuerValidator`](crate::validator::multi_issuer::MultiIssuerValidator)
 
-Use this to accept tokens from more than one issuer with a single validator. It
-routes each request to one of the validators above by the token's `iss` claim.
+Use this to accept JWT-shaped tokens from more than one issuer with a single
+validator. It reads the unverified `iss` claim to select a configured validator.
+Opaque tokens cannot be routed this way because they expose no issuer claim.
 See the [multi-issuer routing
 explanation](crate::_docs::explanation::multi_issuer_routing).

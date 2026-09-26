@@ -19,7 +19,7 @@ use crate::{
 ///
 /// This is an opinionated default stack: a [`MultiKeyVerifier`] wrapped in a
 /// [`ScheduledRefreshVerifier`] and a [`RetryingVerifier`] — keys are fetched from the JWKS
-/// endpoint on first use, reloaded on the read path once older than the `ttl`,
+/// endpoint when the factory builds a verifier, then refreshed on use after `ttl`,
 /// and a single retry is attempted when a key lookup misses after a successful refresh.
 ///
 /// If you need to tune beyond the TTL (failure backoff, refresh rate limiting) or
@@ -34,7 +34,7 @@ pub struct JwksSource {
     http_client: Arc<dyn HttpClient>,
     /// Maximum number of keys accepted from a fetched JWKS document.
     max_keys: usize,
-    /// How long a fetched keyset is served before it is reloaded on the read path.
+    /// Age after which reads trigger refresh attempts; failed refreshes retain old keys.
     ttl: Duration,
     /// How a failed initial JWKS fetch at build time is handled.
     startup: JwksStartup,

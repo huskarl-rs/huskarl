@@ -231,6 +231,15 @@ impl AuthorizationCodeGrant {
     /// Callers use [`Self::builder()`], or [`Self::builder_from_metadata()`]
     /// to pre-populate the endpoint fields from server metadata.
     ///
+    /// Creating the builder does no HTTP work. Building the grant may fetch
+    /// initial verification keys. The default source fails construction on a
+    /// fetch error when OIDC or JARM is explicitly required; when OIDC is inferred
+    /// from scopes, it tolerates that error and retries key loading during use.
+    /// A custom verifier factory controls its own startup policy. See
+    /// [construction behavior](crate::_docs::guide::authorization_code#2d-what-happens-during-construction).
+    /// Reuse the grant across logins; `start` can send PAR requests, `complete`
+    /// exchanges the code, and signature verification can trigger key refresh.
+    ///
     /// # Errors
     ///
     /// Returns an error if a `jws_verifier_factory` is supplied without a

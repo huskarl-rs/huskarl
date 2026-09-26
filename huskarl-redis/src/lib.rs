@@ -32,7 +32,7 @@
 //!
 //! Hand the `Arc` to whichever validator should enforce uniqueness:
 //! huskarl-core's `JwtValidator` (`jti_checker`), or huskarl-resource-server's
-//! RFC 9068 validator (`jti_checker` for access-token `jti`s,
+//! RFC 9068 validator (`token_jti_checker` for access-token `jti`s,
 //! `dpop_jti_checker` for `DPoP` proof `jti`s).
 //!
 //! For automatic reconnection, build the checker on redis's

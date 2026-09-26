@@ -10,11 +10,13 @@ use crate::{
     platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
 };
 
-/// A [`JwsVerifier`] that bounds the age of its keyset to a TTL by reloading on
-/// the read path — so a key *removed* upstream is dropped within the TTL even
-/// though it never fails to verify (you still hold it). The TTL bounds how long a
-/// removed key lingers; key *additions* are handled by the miss-triggered
-/// [`RetryingVerifier`](super::RetryingVerifier) layered on top.
+/// A [`JwsVerifier`] that attempts to reload its keyset on use after a TTL.
+///
+/// A successful reload removes keys retired upstream. The TTL is a refresh
+/// trigger, not a maximum key age: failed or rate-limited reloads retain the
+/// previous keys, as do concurrent callers while a reload is in progress.
+/// [`RetryingVerifier`](super::RetryingVerifier) can trigger earlier refreshes
+/// when a key lookup misses.
 ///
 /// [`try_refresh`](JwsVerifier::try_refresh) drives the same reload for the
 /// miss-triggered path, under the same policy.

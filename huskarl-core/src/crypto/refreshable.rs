@@ -361,8 +361,8 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     }
 
     /// Read-path gate: the value has outlived its TTL *and* policy permits an
-    /// attempt. Drives [`poll_refresh_ahead`](Self::poll_refresh_ahead), bounding
-    /// the value's age to the TTL so a *removed* key cannot outlive it.
+    /// attempt. Drives [`poll_refresh_ahead`](Self::poll_refresh_ahead); stale
+    /// values remain usable until a refresh succeeds.
     fn should_refresh_stale(&self) -> bool {
         let now = Instant::now();
         let ts = self
@@ -515,9 +515,8 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// If the value is stale (its TTL has elapsed) and the rate-limit/backoff
     /// policy allows, the first caller to observe the staleness reloads it in
     /// place while concurrent callers return immediately and keep serving the
-    /// current value. This bounds a cached value to its TTL — so a retired key
-    /// cannot outlive it — with no background task: the reload is driven by
-    /// whichever read first crosses the TTL.
+    /// current value. Failed reloads retain that value beyond the TTL. There is
+    /// no background task: reads drive reload attempts.
     pub(crate) async fn poll_refresh_ahead(&self) {
         if !self.should_refresh_stale() {
             return;

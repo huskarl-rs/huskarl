@@ -75,10 +75,6 @@ required-features = ["authorization-flow-loopback"]
 name = "basic_dpop"
 required-features = ["authorization-flow-loopback"]
 
-[[example]]
-name = "client_credentials"
-required-features = ["authorization-flow-loopback"]
-
 [dev-dependencies]
 huskarl = { path = ".", default-features = true }
 huskarl-core = { workspace = true, features = ["strict-propagation"] }

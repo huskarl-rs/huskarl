@@ -97,8 +97,10 @@ impl HttpAuthorizer {
     /// the configured header, plus a `DPoP` proof bound to `method` and
     /// `uri` when the token is `DPoP`-bound.
     ///
-    /// Acquires or refreshes the token as needed, using the HTTP client held
-    /// by the underlying grant.
+    /// Asks the configured cache for a token. Depending on its implementation,
+    /// this may wait for acquisition or return a token obtained by background
+    /// work. `InMemoryTokenCache` drives acquisition and early refresh on this
+    /// call path; a grant-backed source uses its configured HTTP client.
     ///
     /// Pair **every** response with
     /// [`process_response`](Self::process_response) — success or failure.
