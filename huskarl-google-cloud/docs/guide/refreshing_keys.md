@@ -54,6 +54,10 @@ let cipher = ScheduledRefreshCipher::builder().factory(factory).build().await?;
 
 ## A self-refreshing signer
 
+For why signing selects a stable key version, and how this differs from loading
+private material from a secret store, see
+[how signing fits together](https://github.com/huskarl-rs/huskarl/blob/main/huskarl-core/docs/explanation/signing.md).
+
 The same shape works for signing: build a
 [`SigningKey`](crate::kms::asymmetric::signer::SigningKey) in the factory and
 wrap it in a

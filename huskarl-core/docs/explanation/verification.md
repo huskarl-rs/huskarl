@@ -143,8 +143,8 @@ operation as well as WebCrypto and local cryptography.
 
 For asymmetric KMS signing keys, public keys can instead be fetched and used
 for local verification. See the Google Cloud guides for
-[HMAC verification](https://docs.rs/huskarl-google-cloud/latest/huskarl_google_cloud/_docs/guide/symmetric_crypto/index.html)
-and [publishing asymmetric public keys](https://docs.rs/huskarl-google-cloud/latest/huskarl_google_cloud/_docs/guide/asymmetric_signing/index.html).
+[HMAC verification](https://github.com/huskarl-rs/huskarl/blob/main/huskarl-google-cloud/docs/guide/symmetric_crypto.md)
+and [publishing asymmetric public keys](https://github.com/huskarl-rs/huskarl/blob/main/huskarl-google-cloud/docs/guide/asymmetric_signing.md).
 
 ## The boundaries
 
