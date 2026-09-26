@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.1...huskarl-resource-server-v0.11.2) - 2026-09-26
+
+### Added
+
+- *(resource-server)* Allow more concrete values to be accepted in validator config, fix naming ([#320](https://github.com/huskarl-rs/huskarl/pull/320))
+- Return an error when a verifier factory is configured without a platform. ([#319](https://github.com/huskarl-rs/huskarl/pull/319))
+- Add a jwks_source helper that configures the default JwksSource ([#317](https://github.com/huskarl-rs/huskarl/pull/317))
+
+### Fixed
+
+- *(resource-server)* Normalize htu on both sides when validating DPoP ([#316](https://github.com/huskarl-rs/huskarl/pull/316))
+
+### Other
+
+- Improve documentation wording ([#325](https://github.com/huskarl-rs/huskarl/pull/325))
+- Make JWKS setup docs clearer ([#321](https://github.com/huskarl-rs/huskarl/pull/321))
+
 ## [0.11.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.0...huskarl-resource-server-v0.11.1) - 2026-09-18
 
 ### Other

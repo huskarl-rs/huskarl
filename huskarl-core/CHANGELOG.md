@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.1...huskarl-core-v0.10.2) - 2026-09-26
+
+### Added
+
+- *(resource-server)* Allow more concrete values to be accepted in validator config, fix naming ([#320](https://github.com/huskarl-rs/huskarl/pull/320))
+
+### Other
+
+- Improve explanation of JWT verifier design ([#326](https://github.com/huskarl-rs/huskarl/pull/326))
+- Improve documentation wording ([#325](https://github.com/huskarl-rs/huskarl/pull/325))
+
 ## [0.10.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.0...huskarl-core-v0.10.1) - 2026-09-18
 
 ### Other

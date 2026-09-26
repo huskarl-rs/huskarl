@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1831,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-core"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-redis"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "bon",
  "hex",
@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-reqwest"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "bon",
  "bytes",
@@ -2009,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "base64 0.23.1",
  "bon",
