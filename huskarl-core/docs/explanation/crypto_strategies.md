@@ -1,5 +1,9 @@
 # Composing crypto strategies
 
+For an introduction with alternative key configurations feeding the same JWT
+validation policy, start with
+[how verification fits together](crate::_docs::explanation::verification).
+
 The [`crypto`](crate::crypto) module is built from small, single-purpose traits
 and a set of wrappers that decorate them. Each base operation — signing,
 verification, encryption, decryption — is one trait describing a single key. The

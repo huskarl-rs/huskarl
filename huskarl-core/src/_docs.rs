@@ -40,6 +40,9 @@ pub mod guide {
 
 /// Understanding-oriented background on how the crate works and why.
 pub mod explanation {
+    #[doc = include_str!("../docs/explanation/verification.md")]
+    pub mod verification {}
+
     #[doc = include_str!("../docs/explanation/error_handling.md")]
     pub mod error_handling {}
 
