@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.1...huskarl-v0.11.2) - 2026-09-26
+
+### Added
+
+- *(conformance)* Improve OpenID conformance suite. ([#324](https://github.com/huskarl-rs/huskarl/pull/324))
+- *(resource-server)* Allow more concrete values to be accepted in validator config, fix naming ([#320](https://github.com/huskarl-rs/huskarl/pull/320))
+- Return an error when a verifier factory is configured without a platform. ([#319](https://github.com/huskarl-rs/huskarl/pull/319))
+- Add a jwks_source helper that configures the default JwksSource ([#317](https://github.com/huskarl-rs/huskarl/pull/317))
+
+### Fixed
+
+- *(client)* Pass response type and scope in request body when sending request object. ([#323](https://github.com/huskarl-rs/huskarl/pull/323))
+
+### Other
+
+- Improve explanation of JWT verifier design ([#326](https://github.com/huskarl-rs/huskarl/pull/326))
+- Improve documentation wording ([#325](https://github.com/huskarl-rs/huskarl/pull/325))
+- Make JWKS setup docs clearer ([#321](https://github.com/huskarl-rs/huskarl/pull/321))
+
 ## [0.11.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.0...huskarl-v0.11.1) - 2026-09-18
 
 ### Fixed
