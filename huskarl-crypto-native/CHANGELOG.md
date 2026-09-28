@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-native-v0.11.0...huskarl-crypto-native-v0.11.1) - 2026-09-28
+
+### Other
+
+- Improve signing documentation ([#327](https://github.com/huskarl-rs/huskarl/pull/327))
+
 ## [0.11.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-native-v0.10.1...huskarl-crypto-native-v0.11.0) - 2026-08-24
 
 ### Fixed

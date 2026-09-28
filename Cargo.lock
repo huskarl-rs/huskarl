@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1831,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-core"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1865,7 +1865,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-crypto-native"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "aead",
  "aes-gcm",
@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-google-cloud"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "bon",
  "der",
@@ -2009,7 +2009,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "base64 0.23.1",
  "bon",

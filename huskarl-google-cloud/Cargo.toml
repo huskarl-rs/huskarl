@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-google-cloud"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2024"
 rust-version = "1.92"
 description = "Google Cloud cryptographic integrations for the huskarl OAuth2 ecosystem."
