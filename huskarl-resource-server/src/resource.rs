@@ -2,6 +2,8 @@
 //!
 //! A definition can be constructed before its validator. Adapters bind it to
 //! authentication and publish the prepared document separately at server scope.
+//! See the [metadata guide](crate::_docs::guide::resource_metadata) for builder
+//! ownership, scope defaults, standalone publication, and browser discovery.
 
 use std::collections::BTreeSet;
 
@@ -50,6 +52,18 @@ pub struct ResourceDefinition {
     incoming_mount: String,
     audiences: Vec<String>,
     endpoint: Uri,
+    description: ResourceDescription,
+}
+
+// Only owner-supplied fields belong here. Identity and authentication capabilities
+// are derived separately and cannot be replaced by presentation configuration.
+#[derive(Clone, Debug, Default)]
+struct ResourceDescription {
+    resource_name: Option<String>,
+    resource_documentation: Option<String>,
+    resource_policy_uri: Option<String>,
+    resource_tos_uri: Option<String>,
+    scopes_supported: Option<Vec<String>>,
 }
 
 /// Configuration error defining, preparing, or assembling protected resources.
@@ -143,6 +157,7 @@ impl PreparedResource {
     }
 }
 
+#[bon::bon]
 impl ResourceDefinition {
     /// Derives public identity and incoming mount from one mapping and subpath.
     ///
@@ -177,8 +192,53 @@ impl ResourceDefinition {
             incoming_mount,
             audiences,
             endpoint,
+            description: ResourceDescription::default(),
         })
     }
+    /// Configures a resource with optional owner-supplied discovery information.
+    ///
+    /// `mapping`, `subpath`, and `audience` are required. Identity, metadata URL,
+    /// and ingress mount are derived at `build()`; validator capabilities are
+    /// supplied later when binding. Existing `new()` calls remain equivalent to
+    /// a builder without owner-supplied fields.
+    ///
+    /// # Errors
+    /// Rejects invalid mappings, resource identifiers, and empty audience bindings.
+    #[builder(on(String, into))]
+    pub fn builder(
+        /// Trusted public-to-ingress URL mapping.
+        mapping: PublicUrlMapping,
+        /// Resource path relative to the public base, including any query.
+        subpath: &str,
+        /// Token audiences accepted for this resource.
+        audience: AudienceBinding,
+        /// Human-readable name of the resource.
+        resource_name: Option<String>,
+        /// Documentation for using this resource.
+        /// Callers should supply an absolute URL. Stored as supplied, without validation.
+        resource_documentation: Option<String>,
+        /// Resource policy on how clients can use its data.
+        /// Callers should supply an absolute URL. Stored as supplied, without validation.
+        resource_policy_uri: Option<String>,
+        /// Resource terms of service.
+        /// Callers should supply an absolute URL. Stored as supplied, without validation.
+        resource_tos_uri: Option<String>,
+        /// Advertised capabilities, not access grants. Overrides scopes supplied
+        /// during binding; an explicit empty list omits the field. When unset,
+        /// binding supplies the defaults. Values are sorted and deduplicated.
+        scopes_supported: Option<Vec<String>>,
+    ) -> Result<Self, ResourceError> {
+        let mut definition = Self::new(mapping, subpath, audience)?;
+        definition.description = ResourceDescription {
+            resource_name,
+            resource_documentation,
+            resource_policy_uri,
+            resource_tos_uri,
+            scopes_supported,
+        };
+        Ok(definition)
+    }
+
     /// Exact identifier supplied to authorization servers and metadata clients.
     pub fn resource(&self) -> &str {
         &self.resource
@@ -200,7 +260,8 @@ impl ResourceDefinition {
         &self.endpoint
     }
     /// Prepares a document and matching challenges without mounting a service.
-    /// Advertised scopes are sorted and deduplicated; an empty list omits them.
+    /// Owner-configured scopes override the supplied defaults. Advertised scopes
+    /// are sorted and deduplicated; an empty list omits them.
     ///
     /// # Errors
     /// Rejects inconsistent metadata URLs or documents that cannot be serialized.
@@ -209,7 +270,12 @@ impl ResourceDefinition {
         validator: &V,
         scopes: Vec<String>,
     ) -> Result<PreparedResource, ResourceError> {
-        let (validator_metadata, body) = prepare_metadata(&self.resource, validator, scopes)?;
+        let (validator_metadata, body) = prepare_metadata_with_description(
+            &self.resource,
+            validator,
+            scopes,
+            &self.description,
+        )?;
         Ok(PreparedResource {
             definition: self.clone(),
             validator_metadata,
@@ -228,6 +294,15 @@ pub fn prepare_metadata<V: ProvideValidatorMetadata>(
     validator: &V,
     scopes: Vec<String>,
 ) -> Result<(ValidatorMetadata, Vec<u8>), ResourceError> {
+    prepare_metadata_with_description(resource, validator, scopes, &ResourceDescription::default())
+}
+
+fn prepare_metadata_with_description<V: ProvideValidatorMetadata>(
+    resource: &str,
+    validator: &V,
+    scopes: Vec<String>,
+    description: &ResourceDescription,
+) -> Result<(ValidatorMetadata, Vec<u8>), ResourceError> {
     let endpoint = well_known_url(resource).context(IdentifierSnafu)?;
     let mut metadata = validator.validator_metadata(Some(resource));
     let derived = endpoint.to_string();
@@ -241,15 +316,33 @@ pub fn prepare_metadata<V: ProvideValidatorMetadata>(
     }
     metadata.resource = Some(resource.to_owned());
     metadata.resource_metadata = Some(derived);
-    let mut document = metadata
-        .to_resource_metadata()
-        .ok_or(ResourceError::DocumentUnavailable)?;
-    let scopes: BTreeSet<_> = scopes.into_iter().collect();
-    document.scopes_supported = if scopes.is_empty() {
+    let scopes: BTreeSet<_> = description
+        .scopes_supported
+        .clone()
+        .unwrap_or(scopes)
+        .into_iter()
+        .collect();
+    let scopes = if scopes.is_empty() {
         None
     } else {
         Some(scopes.into_iter().collect())
     };
+    let mut document = metadata
+        .to_resource_metadata()
+        .ok_or(ResourceError::DocumentUnavailable)?;
+    document
+        .resource_name
+        .clone_from(&description.resource_name);
+    document
+        .resource_documentation
+        .clone_from(&description.resource_documentation);
+    document
+        .resource_policy_uri
+        .clone_from(&description.resource_policy_uri);
+    document
+        .resource_tos_uri
+        .clone_from(&description.resource_tos_uri);
+    document.scopes_supported = scopes;
     Ok((
         metadata,
         serde_json::to_vec(&document).context(SerializationSnafu)?,
@@ -265,6 +358,121 @@ mod tests {
             ValidatorMetadata::builder().build()
         }
     }
+    #[test]
+    fn builder_preserves_identity_capabilities_and_owner_fields() {
+        struct Capabilities;
+        impl ProvideValidatorMetadata for Capabilities {
+            fn validator_metadata(&self, _: Option<&str>) -> ValidatorMetadata {
+                ValidatorMetadata::builder()
+                    .authorization_servers(vec!["https://issuer.example".into()])
+                    .dpop_bound_access_tokens_required(true)
+                    .dpop_signing_alg_values_supported(vec!["ES256".into()])
+                    .bearer_methods_supported(vec!["header"])
+                    .build()
+            }
+        }
+        let mapping = PublicUrlMapping::new("https://api.example/gateway", "/edge").unwrap();
+        let plain = ResourceDefinition::new(
+            mapping.clone(),
+            "/items?tenant=one",
+            AudienceBinding::mapped(["items"]),
+        )
+        .unwrap();
+        let configured = ResourceDefinition::builder()
+            .mapping(mapping.clone())
+            .subpath("/items?tenant=one")
+            .audience(AudienceBinding::mapped(["items"]))
+            .resource_name("Items API")
+            .resource_documentation("https://api.example/docs#authentication")
+            .resource_policy_uri("https://api.example/privacy#data-use")
+            .resource_tos_uri("https://api.example/terms#conditions")
+            .scopes_supported(vec!["write".into(), "read".into(), "read".into()])
+            .build()
+            .unwrap();
+        assert_eq!(configured.resource(), plain.resource());
+        assert_eq!(configured.metadata_uri(), plain.metadata_uri());
+        assert_eq!(configured.incoming_mount(), plain.incoming_mount());
+        assert_eq!(configured.audiences(), plain.audiences());
+        let prepared = configured
+            .prepare(&Capabilities, vec!["fallback".into()])
+            .unwrap();
+        let document: serde_json::Value =
+            serde_json::from_slice(prepared.publication().body).unwrap();
+        assert_eq!(document["resource"], configured.resource());
+        assert_eq!(document["resource_name"], "Items API");
+        assert_eq!(
+            document["resource_documentation"],
+            "https://api.example/docs#authentication"
+        );
+        assert_eq!(
+            document["resource_policy_uri"],
+            "https://api.example/privacy#data-use"
+        );
+        assert_eq!(
+            document["resource_tos_uri"],
+            "https://api.example/terms#conditions"
+        );
+        assert_eq!(
+            document["scopes_supported"],
+            serde_json::json!(["read", "write"])
+        );
+        assert_eq!(
+            document["authorization_servers"],
+            serde_json::json!(["https://issuer.example"])
+        );
+        assert_eq!(document["dpop_bound_access_tokens_required"], true);
+        assert_eq!(
+            document["dpop_signing_alg_values_supported"],
+            serde_json::json!(["ES256"])
+        );
+        assert_eq!(
+            document["bearer_methods_supported"],
+            serde_json::json!(["header"])
+        );
+        let original = plain.prepare(&Capabilities, vec![]).unwrap();
+        assert_eq!(
+            prepared.validator_metadata.challenges(None, None, None),
+            original.validator_metadata.challenges(None, None, None)
+        );
+    }
+
+    #[test]
+    fn builder_scope_defaults_differ_from_explicit_empty_and_validation_is_retained() {
+        let mapping = PublicUrlMapping::new("https://api.example", "/").unwrap();
+        for explicit in [None, Some(vec![])] {
+            let definition = ResourceDefinition::builder()
+                .mapping(mapping.clone())
+                .subpath("/items")
+                .audience(AudienceBinding::ResourceIdentifier)
+                .maybe_scopes_supported(explicit.clone())
+                .build()
+                .unwrap();
+            let prepared = definition.prepare(&Metadata, vec!["read".into()]).unwrap();
+            let document: serde_json::Value = serde_json::from_slice(&prepared.body).unwrap();
+            assert_eq!(
+                document.get("scopes_supported").is_some(),
+                explicit.is_none()
+            );
+        }
+        assert!(matches!(
+            ResourceDefinition::builder()
+                .mapping(mapping.clone())
+                .subpath("/items")
+                .audience(AudienceBinding::mapped(Vec::<String>::new()))
+                .build(),
+            Err(ResourceError::EmptyAudiences)
+        ));
+        let http = PublicUrlMapping::new("http://api.example", "/").unwrap();
+        assert!(matches!(
+            ResourceDefinition::builder()
+                .mapping(http)
+                .subpath("/items")
+                .audience(AudienceBinding::ResourceIdentifier)
+                .build(),
+            Err(ResourceError::HttpsRequired)
+        ));
+    }
+
     #[test]
     fn definition_drives_audiences_document_and_challenges() {
         let definition = ResourceDefinition::new(
