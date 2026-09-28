@@ -101,6 +101,7 @@ pub mod resource_metadata;
 pub mod secrets;
 pub mod serde_utils;
 pub mod server_metadata;
+pub mod url_mapping;
 
 pub use authorization_details::AuthorizationDetail;
 pub use endpoint_url::EndpointUrl;

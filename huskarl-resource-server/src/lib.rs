@@ -76,6 +76,7 @@ pub mod error;
 pub mod introspection;
 pub mod prelude;
 pub mod rejection;
+pub mod resource;
 pub mod validator;
 
 use std::sync::Arc;
