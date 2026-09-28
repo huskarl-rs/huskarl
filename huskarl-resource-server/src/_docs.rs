@@ -28,6 +28,12 @@ pub mod explanation {
 
 /// Task-oriented recipes for wiring a validator into a resource server.
 pub mod guide {
+    #[doc = include_str!("../docs/guide/cors.md")]
+    pub mod cors {}
+
+    #[doc = include_str!("../docs/guide/resource_metadata.md")]
+    pub mod resource_metadata {}
+
     #[doc = include_str!("../docs/guide/rfc9068.md")]
     pub mod rfc9068 {}
 

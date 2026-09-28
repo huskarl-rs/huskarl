@@ -101,15 +101,18 @@ pub struct ProtectedResourceMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_name: Option<String>,
     /// URL of developer documentation for using the protected resource.
+    /// Callers should supply an absolute URL. Stored as supplied, without validation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_documentation: Option<EndpointUrl>,
+    pub resource_documentation: Option<String>,
     /// URL of the protected resource's requirements on how clients can use
     /// the data it provides.
+    /// Callers should supply an absolute URL. Stored as supplied, without validation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_policy_uri: Option<EndpointUrl>,
+    pub resource_policy_uri: Option<String>,
     /// URL of the protected resource's terms of service.
+    /// Callers should supply an absolute URL. Stored as supplied, without validation.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_tos_uri: Option<EndpointUrl>,
+    pub resource_tos_uri: Option<String>,
     /// Whether mutual-TLS certificate-bound access tokens (RFC 8705) are
     /// supported. The RFC default is `false`; the member is omitted from the
     /// serialized document when `false`.
@@ -285,6 +288,30 @@ mod tests {
             parsed.signed_metadata.as_deref(),
             Some("eyJhbGciOiJFUzI1NiJ9.e30.sig")
         );
+    }
+
+    #[test]
+    fn descriptive_urls_preserve_fragments_through_json_round_trip() {
+        let doc = ProtectedResourceMetadata::builder()
+            .resource("https://resource.example.com")
+            .resource_documentation("https://resource.example.com/docs#authentication")
+            .resource_policy_uri("https://resource.example.com/policy#data-use")
+            .resource_tos_uri("https://resource.example.com/tos#conditions")
+            .build();
+        let json = serde_json::to_value(&doc).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "resource": "https://resource.example.com",
+                "resource_documentation": "https://resource.example.com/docs#authentication",
+                "resource_policy_uri": "https://resource.example.com/policy#data-use",
+                "resource_tos_uri": "https://resource.example.com/tos#conditions",
+            })
+        );
+        let parsed: ProtectedResourceMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.resource_documentation, doc.resource_documentation);
+        assert_eq!(parsed.resource_policy_uri, doc.resource_policy_uri);
+        assert_eq!(parsed.resource_tos_uri, doc.resource_tos_uri);
     }
 
     #[test]
