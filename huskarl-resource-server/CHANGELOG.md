@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.2...huskarl-resource-server-v0.11.3) - 2026-09-28
+
+### Added
+
+- add public URL mapping and protected-resource registration ([#330](https://github.com/huskarl-rs/huskarl/pull/330))
+
 ## [0.11.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.1...huskarl-resource-server-v0.11.2) - 2026-09-26
 
 ### Added

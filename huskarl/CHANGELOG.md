@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.2...huskarl-v0.11.3) - 2026-09-28
+
+### Other
+
+- *(client)* Move tests into separate modules ([#329](https://github.com/huskarl-rs/huskarl/pull/329))
+
 ## [0.11.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.1...huskarl-v0.11.2) - 2026-09-26
 
 ### Added
