@@ -1831,7 +1831,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-core"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
