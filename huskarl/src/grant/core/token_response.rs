@@ -21,7 +21,7 @@ use crate::{
 /// running a real exchange. To persist credentials across restarts, store the
 /// refresh token in a [`RefreshTokenStore`](crate::cache::RefreshTokenStore) and
 /// refresh into a fresh access token, rather than persisting whole responses.
-#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
+#[derive(Clone, Builder, Serialize, Deserialize)]
 #[builder(on(String, into), on(SecretString, into))]
 pub struct RawTokenResponse {
     /// The access token.
@@ -52,8 +52,24 @@ pub struct RawTokenResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization_details: Option<Vec<AuthorizationDetail>>,
     /// Other fields received from the token endpoint.
+    #[builder(default)]
     #[serde(flatten)]
-    extra: Option<HashMap<String, Value>>,
+    extra: HashMap<String, Value>,
+}
+
+impl std::fmt::Debug for RawTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawTokenResponse")
+            .field("access_token", &self.access_token)
+            .field("token_type", &self.token_type)
+            .field("expires_in", &self.expires_in)
+            .field("refresh_token", &self.refresh_token)
+            .field("scope", &self.scope)
+            .field("id_token", &self.id_token)
+            .field("issued_token_type", &self.issued_token_type)
+            .field("authorization_details", &self.authorization_details)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A processed token-endpoint response — what [`exchange`] hands back.
@@ -105,6 +121,8 @@ impl TokenResponse {
     }
 
     /// Returns a non-standard field from the token response.
+    ///
+    /// These fields may contain credentials and are omitted from `Debug` output.
     #[must_use]
     pub fn get_extra(&self, key: &str) -> Option<&Value> {
         self.raw.get_extra(key)
@@ -132,7 +150,7 @@ impl RawTokenResponse {
     /// Returns a value from the extra token fields.
     #[must_use]
     pub fn get_extra(&self, key: &str) -> Option<&Value> {
-        self.extra.as_ref().and_then(|extra| extra.get(key))
+        self.extra.get(key)
     }
 
     /// Converts the raw response into a validated [`TokenResponse`].
@@ -256,6 +274,66 @@ mod test {
         },
         grant::core::token_response::{InvalidTokenResponse, RawTokenResponse},
     };
+
+    #[test]
+    fn extras_round_trip_without_appearing_in_debug() {
+        let raw: RawTokenResponse = serde_json::from_value(serde_json::json!({
+            "access_token": "access-token",
+            "token_type": "Bearer",
+            "provider_secret": {"nested": "secret-extension"},
+            "nullable": null
+        }))
+        .unwrap();
+        assert_eq!(raw.get_extra("nullable"), Some(&serde_json::Value::Null));
+        assert!(raw.get_extra("missing").is_none());
+        assert!(raw.get_extra("access_token").is_none());
+        let serialized = serde_json::to_value(&raw).unwrap();
+        assert_eq!(
+            serialized["provider_secret"],
+            serde_json::json!({"nested": "secret-extension"})
+        );
+        assert!(!serialized.as_object().unwrap().contains_key("extra"));
+        let response = raw
+            .clone()
+            .into_token_response(None, SystemTime::now())
+            .unwrap();
+        assert_eq!(
+            response.get_extra("provider_secret"),
+            raw.get_extra("provider_secret")
+        );
+        for debug in [format!("{raw:?}"), format!("{response:?}")] {
+            assert!(!debug.contains("secret-extension"));
+            assert!(!debug.contains("provider_secret"));
+            assert!(debug.contains("Bearer"));
+        }
+    }
+
+    #[test]
+    fn absent_extras_and_builder_setters_remain_supported() {
+        let raw: RawTokenResponse =
+            serde_json::from_str(r#"{"access_token":"token","token_type":"Bearer"}"#).unwrap();
+        assert!(raw.extra.is_empty());
+        let built = RawTokenResponse::builder()
+            .access_token("token")
+            .token_type("Bearer")
+            .build();
+        assert!(built.extra.is_empty());
+        let built = RawTokenResponse::builder()
+            .access_token("token")
+            .token_type("Bearer")
+            .maybe_extra(None)
+            .build();
+        assert!(built.extra.is_empty());
+        let built = RawTokenResponse::builder()
+            .access_token("token")
+            .token_type("Bearer")
+            .extra(std::collections::HashMap::from([(
+                "custom".into(),
+                serde_json::json!(42),
+            )]))
+            .build();
+        assert_eq!(built.get_extra("custom"), Some(&serde_json::json!(42)));
+    }
 
     #[test]
     fn parse_rfc6749_token_response() {

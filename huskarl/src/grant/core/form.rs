@@ -167,20 +167,15 @@ fn parse_oauth2_error_response(
         );
     };
 
-    match serde_json::from_slice::<OAuth2ErrorBody>(body) {
-        Ok(error_body) => {
-            let verdict = OAuthError::new(error_body.error.as_str())
-                .with_description(error_body.error_description.clone())
-                .with_uri(error_body.error_uri.clone());
-            failed.into_error(
-                Some(verdict),
-                HandleResponseError::OAuth2 {
-                    body: error_body,
-                    status,
-                    content_type,
-                },
-            )
-        }
+    match serde_json::from_slice::<OAuthError>(body) {
+        Ok(verdict) => failed.into_error(
+            Some(verdict.clone()),
+            HandleResponseError::OAuth2 {
+                body: verdict,
+                status,
+                content_type,
+            },
+        ),
         // An unparseable body supplies no verdict.
         Err(source) => failed.into_error(
             None,
@@ -260,15 +255,12 @@ pub(crate) enum HandleResponseError {
     /// The message includes the status because codes in `5xx` bodies are
     /// diagnostic rather than [`Error::verdict`] values.
     #[snafu(display(
-        "the token endpoint returned HTTP {status}: {}{}{}{}",
-        body.error,
-        body.error_description.as_ref().map(|d| format!(": {d}")).unwrap_or_default(),
-        body.error_uri.as_ref().map(|uri| format!(" (see {uri})")).unwrap_or_default(),
+        "the token endpoint returned HTTP {status}: {body}{}",
         content_type.as_ref().map(|ct| format!(" (content-type: {})", ct.to_str().unwrap_or_default())).unwrap_or_default()
     ))]
     OAuth2 {
         /// The OAuth 2.0 error body.
-        body: OAuth2ErrorBody,
+        body: OAuthError,
         /// The status code of the OAuth 2.0 error response.
         status: http::StatusCode,
         /// The content type of the OAuth 2.0 error response.
@@ -287,20 +279,6 @@ impl HandleResponseError {
             Self::OAuth2 { .. } => false,
         }
     }
-}
-
-/// The OAuth 2.0 error response, as it arrived on the wire.
-///
-/// Read a classified response through [`Error::verdict`], which exposes these
-/// members as a typed [`OAuthError`].
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct OAuth2ErrorBody {
-    /// The error field from the OAuth 2.0 error.
-    pub(crate) error: String,
-    /// The `error_description` field from the OAuth 2.0 error.
-    pub(crate) error_description: Option<String>,
-    /// The (optional) `error_uri` from the OAuth 2.0 error.
-    pub(crate) error_uri: Option<String>,
 }
 
 /// Executes a block, retrying once if the error indicates a `DPoP` nonce is required.
@@ -332,6 +310,54 @@ mod tests {
 
     use super::*;
     use crate::core::OAuthErrorCode;
+
+    #[test]
+    fn extension_fields_survive_propagation_without_leaking_to_diagnostics() {
+        let err = parse_oauth2_error_response(
+            http::StatusCode::FORBIDDEN,
+            &http::HeaderMap::new(),
+            &Bytes::from_static(
+                br#"{"error":"mfa_required","mfa_token":"secret-continuation",
+                     "challenge":{"methods":["otp"]},"nullable":null}"#,
+            ),
+        );
+        let err = Error::propagate(err.classification(), err);
+        let verdict = err.verdict().unwrap();
+        assert_eq!(verdict.code().as_str(), "mfa_required");
+        assert_eq!(
+            verdict
+                .get_extra("mfa_token")
+                .and_then(serde_json::Value::as_str),
+            Some("secret-continuation")
+        );
+        assert_eq!(
+            verdict.get_extra("challenge"),
+            Some(&serde_json::json!({"methods": ["otp"]}))
+        );
+        assert_eq!(
+            verdict.get_extra("nullable"),
+            Some(&serde_json::Value::Null)
+        );
+        assert!(verdict.get_extra("missing").is_none());
+        assert!(verdict.get_extra("error").is_none());
+        for rendered in [format!("{err:?}"), format!("{err}"), format!("{err:#}")] {
+            assert!(!rendered.contains("secret-continuation"));
+        }
+    }
+
+    #[rstest]
+    #[case(429)]
+    #[case(500)]
+    fn error_extensions_do_not_turn_server_failures_into_verdicts(#[case] status: u16) {
+        let err = parse_oauth2_error_response(
+            http::StatusCode::from_u16(status).unwrap(),
+            &http::HeaderMap::new(),
+            &Bytes::from_static(br#"{"error":"mfa_required","mfa_token":"secret-continuation"}"#),
+        );
+        assert!(err.verdict().is_none());
+        assert_eq!(err.retry_advice(), RetryAdvice::RETRY);
+        assert!(!format!("{err:?}").contains("secret-continuation"));
+    }
 
     fn classify(status: u16, body: &str) -> RetryAdvice {
         let err = parse_oauth2_error_response(
