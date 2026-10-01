@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.4](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.3...huskarl-v0.11.4) - 2026-10-01
+
+### Added
+
+- Make OAuth error deserializable, add extra fields. ([#333](https://github.com/huskarl-rs/huskarl/pull/333))
+
 ## [0.11.3](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.2...huskarl-v0.11.3) - 2026-09-28
 
 ### Other
