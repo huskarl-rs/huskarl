@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode, header::ACCEPT};
 use serde::de::DeserializeOwned;
 use snafu::prelude::*;
 
@@ -28,8 +28,11 @@ pub(crate) struct MalformedDocumentError {
 pub(crate) async fn get<T: DeserializeOwned>(
     http_client: &dyn HttpClient,
     uri: http::Uri,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
 ) -> Result<T, Error> {
+    headers
+        .entry(ACCEPT)
+        .or_insert(HeaderValue::from_static("application/json"));
     let (mut parts, ()) = http::Request::new(()).into_parts();
     parts.headers = headers;
     // Retain the URI for parse errors. Cloning it only increments a refcount.

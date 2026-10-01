@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use bon::bon;
-use http::HeaderMap;
+use http::{HeaderMap, HeaderValue, header::ACCEPT};
 
 use crate::{
     EndpointUrl,
@@ -135,12 +135,13 @@ impl JwsVerifierFactory for JwksSource {
                     let uri = uri.clone();
                     let platform = platform.clone();
                     Box::pin(async move {
-                        let jwks: Jwks = crate::http::get(
-                            client.as_ref(),
-                            uri.as_uri().clone(),
-                            HeaderMap::new(),
-                        )
-                        .await?;
+                        let headers = HeaderMap::from_iter([(
+                            ACCEPT,
+                            HeaderValue::from_static("application/jwk-set+json, application/json"),
+                        )]);
+                        let jwks: Jwks =
+                            crate::http::get(client.as_ref(), uri.as_uri().clone(), headers)
+                                .await?;
                         let public_jwks: PublicJwks = jwks.into();
 
                         if public_jwks.keys.len() > max_keys {
@@ -188,9 +189,13 @@ mod tests {
     impl HttpClient for FakeJwksClient {
         fn execute(
             &self,
-            _request: Request<Bytes>,
+            request: Request<Bytes>,
             _idempotency: Idempotency,
         ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            assert_eq!(
+                request.headers()[http::header::ACCEPT],
+                "application/jwk-set+json, application/json"
+            );
             Box::pin(async move {
                 Ok(HttpResponse {
                     status: StatusCode::OK,
