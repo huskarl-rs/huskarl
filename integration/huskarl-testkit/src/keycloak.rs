@@ -261,9 +261,9 @@ impl TestRealm {
     }
 
     /// HTTPS issuer URL for mTLS flows. Keycloak computes `iss` from the request
-    /// URL, so mTLS tokens carry this HTTPS issuer. Host 8444 maps to container 8443.
+    /// URL, so mTLS tokens carry this HTTPS issuer. Host 8446 maps to container 8443.
     pub fn mtls_issuer(&self) -> String {
-        format!("https://localhost:8444/realms/{}", self.name)
+        format!("https://localhost:8446/realms/{}", self.name)
     }
 
     async fn create_user(&self, body: &UserRepresentation) -> Result<(), Error> {
