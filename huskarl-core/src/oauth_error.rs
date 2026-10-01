@@ -1,11 +1,14 @@
 //! Typed OAuth error responses.
 //!
 //! [`OAuthErrorCode`] represents the `error` member returned by OAuth endpoints.
-//! [`OAuthError`] also preserves `error_description` and `error_uri`. See
+//! [`OAuthError`] preserves the accompanying response fields. See
 //! [the error model](crate::_docs::explanation::error_handling) for how these
 //! protocol errors are classified by [`crate::Error`].
 
-use std::fmt;
+use std::{collections::HashMap, fmt};
+
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::error::RetryAdvice;
 
@@ -20,7 +23,8 @@ use crate::error::RetryAdvice;
 ///
 /// This enum is non-exhaustive; use a wildcard arm when matching it.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(from = "String")]
 // Derive the count only for the test that ensures every variant has a wire
 // spelling. This keeps the implementation detail out of the public API.
 #[cfg_attr(test, derive(strum::EnumCount))]
@@ -376,12 +380,15 @@ impl fmt::Display for OAuthErrorCode {
 /// An OAuth error response.
 ///
 /// This preserves the required `error` code and optional `error_description`
-/// and `error_uri` members defined by RFC 6749.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// and `error_uri` members defined by RFC 6749. Read non-standard fields with
+/// [`get_extra`](Self::get_extra).
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct OAuthError {
-    code: OAuthErrorCode,
-    description: Option<String>,
-    uri: Option<String>,
+    error: OAuthErrorCode,
+    error_description: Option<String>,
+    error_uri: Option<String>,
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
 }
 
 impl OAuthError {
@@ -389,30 +396,40 @@ impl OAuthError {
     #[must_use]
     pub fn new(code: impl Into<OAuthErrorCode>) -> Self {
         Self {
-            code: code.into(),
-            description: None,
-            uri: None,
+            error: code.into(),
+            error_description: None,
+            error_uri: None,
+            extra: HashMap::new(),
         }
     }
 
     /// Sets the server's optional `error_description`.
     #[must_use]
     pub fn with_description(mut self, description: Option<String>) -> Self {
-        self.description = description;
+        self.error_description = description;
         self
     }
 
     /// Sets the server's optional `error_uri`.
     #[must_use]
     pub fn with_uri(mut self, uri: Option<String>) -> Self {
-        self.uri = uri;
+        self.error_uri = uri;
         self
+    }
+
+    /// Returns a non-standard field from the OAuth error response.
+    ///
+    /// These fields may contain credentials and are omitted from `Debug` and
+    /// `Display` output.
+    #[must_use]
+    pub fn get_extra(&self, key: &str) -> Option<&Value> {
+        self.extra.get(key)
     }
 
     /// Returns the error code sent by the server.
     #[must_use]
     pub fn code(&self) -> &OAuthErrorCode {
-        &self.code
+        &self.error
     }
 
     /// Returns the server's human-readable `error_description`, if present.
@@ -421,7 +438,7 @@ impl OAuthError {
     /// Do not use it for protocol decisions, and escape it before rendering it.
     #[must_use]
     pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
+        self.error_description.as_deref()
     }
 
     /// Returns the server's `error_uri`, if present.
@@ -431,17 +448,27 @@ impl OAuthError {
     /// origin.
     #[must_use]
     pub fn uri(&self) -> Option<&str> {
-        self.uri.as_deref()
+        self.error_uri.as_deref()
+    }
+}
+
+impl fmt::Debug for OAuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuthError")
+            .field("code", &self.error)
+            .field("description", &self.error_description)
+            .field("uri", &self.error_uri)
+            .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for OAuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.code.fmt(f)?;
-        if let Some(description) = &self.description {
+        self.error.fmt(f)?;
+        if let Some(description) = &self.error_description {
             write!(f, ": {description}")?;
         }
-        if let Some(uri) = &self.uri {
+        if let Some(uri) = &self.error_uri {
             write!(f, " (see {uri})")?;
         }
         Ok(())
@@ -451,6 +478,42 @@ impl fmt::Display for OAuthError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deserialize_preserves_extensions_and_redacts_them() {
+        let error: OAuthError = serde_json::from_str(
+            r#"{"error":"mfa_required","error_description":"Another factor is required",
+                "error_uri":"https://as.example/errors","mfa_token":"secret-continuation"}"#,
+        )
+        .unwrap();
+        assert_eq!(error.code().as_str(), "mfa_required");
+        assert_eq!(error.description(), Some("Another factor is required"));
+        assert_eq!(error.uri(), Some("https://as.example/errors"));
+        for key in ["error", "error_description", "error_uri"] {
+            assert!(error.get_extra(key).is_none());
+        }
+        assert_eq!(
+            error.get_extra("mfa_token"),
+            Some(&Value::from("secret-continuation"))
+        );
+        assert!(!format!("{error:?}").contains("secret-continuation"));
+        assert!(!error.to_string().contains("secret-continuation"));
+    }
+
+    #[test]
+    fn deserialize_requires_a_string_code_and_allows_absent_optional_fields() {
+        let error: OAuthError = serde_json::from_str(r#"{"error":"invalid_grant"}"#).unwrap();
+        assert_eq!(error, OAuthError::new(OAuthErrorCode::InvalidGrant));
+        assert!(error.get_extra("missing").is_none());
+        for body in [
+            r"{}",
+            r#"{"error":null}"#,
+            r#"{"error":42}"#,
+            r#"{"error":"invalid_grant","error_description":42}"#,
+        ] {
+            assert!(serde_json::from_str::<OAuthError>(body).is_err());
+        }
+    }
 
     // Keep the variant count and wire-spelling table in sync. The round-trip
     // test below also catches duplicates or missing variants.

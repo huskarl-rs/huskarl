@@ -3,7 +3,6 @@
 use bon::Builder;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
-use serde::Deserialize;
 use snafu::ResultExt as _;
 
 use super::{
@@ -150,13 +149,6 @@ fn ensure_json_content_type(headers: &HeaderMap) -> Result<(), Error> {
     }
 }
 
-/// The JSON error body returned for a registration failure (RFC 7591 §3.2.2).
-#[derive(Deserialize)]
-struct ErrorBody {
-    error: String,
-    error_description: Option<String>,
-}
-
 /// Maps a non-success registration response to an [`Error`].
 ///
 /// A 5xx or 429 remains a transient failure regardless of its body. Other
@@ -181,11 +173,7 @@ fn map_error_response(status: StatusCode, headers: &http::HeaderMap, body: &[u8]
         );
     }
 
-    let Ok(ErrorBody {
-        error,
-        error_description: description,
-    }) = serde_json::from_slice::<ErrorBody>(body)
-    else {
+    let Ok(verdict) = serde_json::from_slice::<crate::core::OAuthError>(body) else {
         return failed.into_error(
             None,
             RegistrationError::BadStatus {
@@ -196,9 +184,7 @@ fn map_error_response(status: StatusCode, headers: &http::HeaderMap, body: &[u8]
     };
 
     // Preserve registered and extension codes through the same variant.
-    let cause = RegistrationError::OAuthError {
-        verdict: crate::core::OAuthError::new(error).with_description(description),
-    };
+    let cause = RegistrationError::OAuthError { verdict };
     // Use the variant's value so direct conversion and HTTP mapping agree.
     let verdict = cause.verdict();
     failed.into_error(verdict, cause)
@@ -477,6 +463,8 @@ mod tests {
             &serde_json::json!({
                 "error": code,
                 "error_description": "nope",
+                "error_uri": "https://as.example/errors",
+                "provider_detail": {"field": "redirect_uris"},
             }),
         ));
 
@@ -491,6 +479,14 @@ mod tests {
                 .is_some_and(|o| o.code().parameters_at_fault())
         );
         assert_eq!(err.verdict().map(|v| v.code().as_str()), Some(code));
+        assert_eq!(
+            err.verdict().and_then(crate::core::OAuthError::uri),
+            Some("https://as.example/errors")
+        );
+        assert_eq!(
+            err.verdict().and_then(|v| v.get_extra("provider_detail")),
+            Some(&serde_json::json!({"field": "redirect_uris"}))
+        );
         // The gloss travels with its code — both are read off the variant, so
         // this also pins the round trip through `RegistrationError::verdict`.
         assert_eq!(
