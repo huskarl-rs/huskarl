@@ -12,8 +12,8 @@ run = "cargo run -p huskarl-integration --example coverage"
 depends = ["keycloak:up", "dex:up", "node-oidc:up"]
 run = "cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc,okta"
 
-# Keycloak (for huskarl crate integration tests). HTTPS/mTLS is on host port 8444
-# (→ container 8443), so it coexists with the conformance suite's 8443.
+# Keycloak (for huskarl crate integration tests). HTTPS/mTLS is on host port 8446
+# (→ container 8443), so it coexists with the conformance suite (8443-8445).
 [tasks."keycloak:up"]
 run = "docker compose up --wait"
 
@@ -83,8 +83,8 @@ depends = ["redis:up"]
 [tasks."okta:test"]
 run = "cargo nextest run -p huskarl-integration --test okta --features okta"
 
-# OpenID Conformance Suite (for huskarl-conformance tests). On 8443; coexists
-# with Keycloak now that Keycloak's HTTPS is on 8444.
+# OpenID Conformance Suite (for huskarl-conformance tests). On 8443-8445;
+# coexists with Keycloak, whose HTTPS is on 8446.
 [tasks."conformance:up"]
 run = "docker compose -f huskarl-conformance/docker/docker-compose-prebuilt.yml up --wait"
 

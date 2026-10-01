@@ -4,7 +4,7 @@ This directory contains integration tests that run against external services,
 each with its own Docker infrastructure:
 
 - **Provider matrix** (`huskarl-integration`) — real OAuth2/OIDC flows against
-  self-hosted servers (Keycloak on 8080 + 8444, Dex on 5556, node-oidc-provider
+  self-hosted servers (Keycloak on 8080 + 8446, Dex on 5556, node-oidc-provider
   on 3000).
 - **OpenID conformance suite** — the official certification test plans (8443).
 
@@ -105,7 +105,7 @@ mise run keycloak:down    # stop when done
 ```
 
 Keycloak is available at `http://localhost:8080` (HTTP) and
-`https://localhost:8444` (HTTPS/mTLS; host 8444 → container 8443). Admin
+`https://localhost:8446` (HTTPS/mTLS; host 8446 → container 8443). Admin
 credentials: `admin`/`admin`. Each
 test provisions an ephemeral realm (deleted on drop). `auth_code` creates a user
 and drives Keycloak's login form headlessly.
