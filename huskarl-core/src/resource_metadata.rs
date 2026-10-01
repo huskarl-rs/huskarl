@@ -386,6 +386,7 @@ mod tests {
             _idempotency: crate::http::Idempotency,
         ) -> crate::platform::MaybeSendBoxFuture<'_, Result<crate::http::HttpResponse, Error>>
         {
+            assert_eq!(request.headers()[http::header::ACCEPT], "application/json");
             *self.requested.lock().unwrap() = Some(request.uri().clone());
             Box::pin(async move {
                 Ok(crate::http::HttpResponse {
