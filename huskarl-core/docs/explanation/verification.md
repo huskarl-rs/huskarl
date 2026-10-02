@@ -1,7 +1,7 @@
 # How verification fits together
 
-Choose how keys are obtained and refreshed independently of how tokens are
-validated. The same validation policy can use a fixed public key, a JWKS loaded
+Key acquisition and refresh are independent of token validation.
+The same validation policy can use a fixed public key, a JWKS loaded
 from a file, or a remotely refreshed JWKS. Discovery is optional in all three
 cases.
 
@@ -32,7 +32,7 @@ fn validator(verifier: impl JwsVerifier + 'static) -> JwtValidator {
 }
 ```
 
-Each configuration below produces a verifier you can pass to `validator`.
+Each configuration below produces a verifier accepted by `validator`.
 `platform` is the cryptographic backend, such as the native or WebCrypto
 implementation of
 [`JwsVerifierPlatform`](crate::crypto::verifier::JwsVerifierPlatform).
@@ -50,9 +50,9 @@ let verifier = platform.create_verifier_from_jwk(public_key).await?;
 # }
 ```
 
-**A JWKS from a file.** Deployment configuration supplies the keys. Parse the
-file and construct a verifier for the whole set; this loads one snapshot and
-does not watch the file for changes.
+**A JWKS from a file.** Deployment configuration supplies the keys. The
+application parses the file and constructs a verifier for the whole set. This
+loads one snapshot and does not watch the file for changes.
 
 ```rust,no_run
 use huskarl_core::{
@@ -118,10 +118,10 @@ let verifier = RetryingVerifier::new(combined);
 
 Here the JWKS child supplies scheduled refresh, while retry wraps the combined
 verifier so a key miss can request a refresh through the whole composition.
-The HMAC child need not refresh. When assembling this stack, apply retry once
-at the outside, as shown in the
+The HMAC child need not refresh. The consumer still sees one `JwsVerifier`.
+
+When assembling this stack, apply retry once at the outside, as shown in the
 [mixed-source recipe](crate::_docs::guide::configuring_jwt_verification).
-The consumer still sees one `JwsVerifier`.
 
 [OIDC Core §3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation)
 specifies the client secret's UTF-8 bytes as the verification key for

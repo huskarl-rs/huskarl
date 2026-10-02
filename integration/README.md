@@ -143,13 +143,16 @@ mise run node-oidc:down
 
 Tests in `huskarl-conformance/` that validate huskarl against the
 [OpenID Foundation Conformance Suite](https://gitlab.com/openid/conformance-suite).
-Runs the official test plans for OIDC Basic and Configuration RP certification, FAPI 2.0 Security
+Runs the official test plans for OIDC Basic, Form Post, and Configuration RP certification, FAPI 2.0 Security
 Profile Final, and FAPI 2.0 Message Signing Final with plain and JARM responses.
 The FAPI plans run with both OIDC and plain-OAuth clients.
 
+Huskarl 0.11.3 has published OpenID Connect and FAPI 2.0 client certifications;
+see [certification details](../README.md#certification-and-interoperability).
+
 ```sh
 mise run conformance:test         # starts suite, runs all tests
-mise run conformance:test:oidc    # OIDC Basic + Configuration RP certification
+mise run conformance:test:oidc    # OIDC Basic + Form Post + Configuration RP
 mise run conformance:test:fapi2   # FAPI 2.0 Security Profile + Message Signing (plain/JARM)
 mise run conformance:down         # stop when done
 ```

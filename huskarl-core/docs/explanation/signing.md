@@ -77,10 +77,12 @@ Both must use the same key. If reloading changed the key between those steps,
 the header could identify one key while another produced the signature.
 
 The selected signer keeps its identity throughout the operation, even if its
-selector is refreshed concurrently. Select once per signing operation and use
-that signer for the whole operation. Keeping it across unrelated operations
-would keep using the old selection after rotation. For KMS, stable identity
-means a pinned version; disabling that version can still cause signing to fail.
+selector is refreshed concurrently. For KMS, stable identity means a pinned
+version; disabling that version can still cause signing to fail.
+
+When implementing a signing operation, select once and use that signer for the
+whole operation. Keeping it across unrelated operations would keep using the
+old selection after rotation.
 
 ## Default selection, key IDs, and thumbprints
 
@@ -123,10 +125,12 @@ selection when a binding is supplied.
 ## Publishing verification keys is separate
 
 Changing the default signer does not ensure verifiers have its public key.
-Coordinate publication and activation so verifiers can obtain the new key,
-and retain the old public key for as long as previously issued tokens should
-remain verifiable. Retaining an old private key for DPoP proofs is a separate
-need from retaining its public key for verification.
+Retaining an old private key for DPoP proofs is a separate need from retaining
+its public key for verification.
+
+When rotating signing keys, coordinate publication and activation so verifiers
+can obtain the new key, and retain the old public key for as long as previously
+issued tokens should remain verifiable.
 
 For the lower-level wrapper design, see
 [composing crypto strategies](crate::_docs::explanation::crypto_strategies).

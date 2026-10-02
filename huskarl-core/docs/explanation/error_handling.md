@@ -7,8 +7,8 @@ verdicts, and application recovery. For API contracts, see
 ## Classification is not recovery
 
 Nearly every fallible operation returns the one concrete
-[`Error`](crate::error::Error). It is not generic, so it embeds in your own error
-enum and keeps one shape across every layer it crosses.
+[`Error`](crate::error::Error). It is not generic, so it embeds in an application's
+error enum and keeps one shape across every layer it crosses.
 
 An `Error` carries two classification facts in addition to its cause:
 
@@ -118,7 +118,9 @@ error in the source chain.
 
 That check can inspect only the chain exposed by `std::error::Error::source`.
 A transparent wrapper may delegate `source()` past its contained `Error`, making
-the classified hop genuinely unobservable. Every such internal wrapper must
+the classified hop unobservable.
+
+Within huskarl's implementation, every such internal wrapper must
 therefore return `Origin::Propagates` explicitly and have a test that preserves
 the complete classification.
 

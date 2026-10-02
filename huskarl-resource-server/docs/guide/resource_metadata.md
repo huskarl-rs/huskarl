@@ -22,9 +22,11 @@ assert_eq!(definition.incoming_mount(), "/edge/inventory");
 ```
 
 Identity and discovery URLs are derived from the mapping and subpath. Binding
-supplies authentication capabilities from the validator. Callers are responsible
-for descriptive metadata; documentation, policy, and terms links should be
-absolute URLs and are stored without validation, preserving fragments.
+supplies authentication capabilities from the validator. The definition stores
+documentation, policy, and terms links without validation, preserving fragments.
+
+Supply the descriptive metadata for the resource, using absolute URLs for
+documentation, policy, and terms links.
 
 Leaving `scopes_supported` unset preserves adapter defaults: Pingora gathers rule
 scopes, while Axum takes the list passed during binding. An explicit list overrides
@@ -32,8 +34,10 @@ those defaults; an empty list omits the field. Lists are sorted and deduplicated
 Advertised scopes do not change authorization rules.
 
 Bind the definition using the adapter's `BoundResource` or assembly. The native
-endpoint and `publication()` snapshot carry the same document. An external
-publisher owns routing and HTTP responses at the derived metadata URL.
+endpoint and `publication()` snapshot carry the same document.
+
+If publishing the snapshot through an external service, configure that service
+to route the derived metadata URL and serve the document in its HTTP response.
 
 For standalone publication, use `ValidatorMetadata::to_resource_metadata()` and
 assign descriptive fields on the returned document, or construct a document with

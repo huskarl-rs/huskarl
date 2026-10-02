@@ -2,6 +2,11 @@
 
 Runs Huskarl's RP/client tests against the [OpenID Conformance Suite](https://gitlab.com/openid/conformance-suite).
 
+Huskarl 0.11.3 has published OpenID Connect and FAPI 2.0 client certifications.
+See [certification details](../../README.md#certification-and-interoperability)
+for the certified profiles and official listings, and [coverage](docs/coverage.md)
+for the current test matrix. The workflow below prepares evidence for submissions.
+
 **Run all commands below from the repository root.** Rust/Cargo is required to
 run tests; the preset tool needs Python 3.10+ and no Python dependencies.
 

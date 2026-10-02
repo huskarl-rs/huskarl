@@ -95,18 +95,29 @@ request has no side effects, or provides an idempotency mechanism.
 ## When the server doesn't emit a spec-correct challenge
 
 Step 2's automatic token invalidation works only when the server emits a
-spec-correct `invalid_token` challenge (RFC 6750 §3.1), and not all do. You know
-your server better than this library can: when a bare `401`, a JSON error body,
-or a custom convention tells you the token is bad, call
-[`invalidate`](crate::authorizer::HttpAuthorizer::invalidate) yourself before
-re-sending. Treating any `401` as a stale token is a common policy, at the cost
-of an occasional unnecessary refresh.
+spec-correct `invalid_token` challenge (RFC 6750 §3.1), and not all do. The
+application may recognize additional rejection signals from that server.
+
+If the server's documented behavior identifies a bad token through a bare
+`401`, a JSON error body, or a custom convention, call
+[`invalidate`](crate::authorizer::HttpAuthorizer::invalidate) before re-sending.
+Treating any `401` as a stale token is a common policy, at the cost of an
+occasional unnecessary refresh.
+
+## When a response relays an upstream challenge
 
 [`process_response`](crate::authorizer::HttpAuthorizer::process_response) acts on
-the headers alone and ignores the status code. That is normally fine, since a
-spec-correct `invalid_token` challenge always accompanies a `401`. The one trap
-is relaying: if your service copies an upstream server's `WWW-Authenticate` onto
-its own response, that header reflects *the upstream's* view of *its* token, not
-yours — passing it here would wrongly invalidate your token. Give
-[`process_response`](crate::authorizer::HttpAuthorizer::process_response) only
-the headers that describe your own request.
+the headers alone and ignores the status code. A spec-correct `invalid_token`
+challenge normally accompanies a `401` and describes the token sent by the
+authorizer.
+
+Consider a client calling an intermediary service, which calls an upstream API
+with a separate token. If the intermediary copies the upstream API's
+`WWW-Authenticate` header into its response to the client, that challenge
+describes the intermediary's token. Passing it to the client's
+`process_response` would wrongly invalidate the client's token.
+
+When integrating the client's authorizer, pass only response headers that
+describe the token it sent. When implementing the intermediary, handle upstream
+authentication failures separately instead of presenting them as challenges to
+the client.

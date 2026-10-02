@@ -19,9 +19,9 @@ Building a key or fetching versions returns a crate-specific error:
 These non-exhaustive error types describe the specific failure, such as the API
 call that failed, an unsupported algorithm, or the absence of enabled versions.
 Each exposes [`retry_advice()`](crate::kms::symmetric::KeyError::retry_advice)
-and [`is_retryable()`](crate::kms::symmetric::KeyError::is_retryable). Prefer
-`retry_advice()`: unlike the coarse Boolean result from `is_retryable()`, it
-preserves any minimum delay supplied by the service. See [how failures are
+and [`is_retryable()`](crate::kms::symmetric::KeyError::is_retryable).
+`retry_advice()` preserves any minimum delay supplied by the service, while
+`is_retryable()` returns only a Boolean. See [how failures are
 classified](#how-failures-are-classified).
 
 A refresh factory must return a
@@ -66,10 +66,10 @@ errors convert to `huskarl_core::Error` with one of three forms of
 [`RetryAdvice`](huskarl_core::RetryAdvice):
 
 - [`RetryAdvice::retry_after(d)`](huskarl_core::RetryAdvice::retry_after) when
-  the service told us how long to wait.
+  the service supplied a minimum retry delay.
 - [`RetryAdvice::RETRY`](huskarl_core::RetryAdvice::RETRY) for a transient KMS
-  or Secret Manager failure with no specified delay. The caller chooses a delay
-  according to its backoff policy.
+  or Secret Manager failure with no specified delay. The calling application
+  chooses a delay according to its backoff policy.
 - [`RetryAdvice::No`](huskarl_core::RetryAdvice::No) for conclusive failures,
   such as a malformed signature response, mismatched key information, or a
   missing secret payload. Repeating the operation is not expected to help.
@@ -81,12 +81,14 @@ The types involved are
 [`symmetric::signer::SigningError`](crate::kms::symmetric::signer::SigningError)
 / [`VerificationError`](crate::kms::symmetric::signer::VerificationError), and
 [`SecretError`](crate::secretmanager::SecretError). Callers usually receive a
-`huskarl_core::Error` instead of naming these types directly. Read its
+`huskarl_core::Error` instead of naming these types directly.
+
+To handle a runtime failure, read the error's
 [`retry_advice()`](huskarl_core::Error::retry_advice), or downcast its
 [`cause()`](huskarl_core::Error::cause) when the specific failure matters.
 
-The advice classifies the failed operation only. Your own retry budget,
-deadline, and backoff policy still apply on top of it.
+The advice classifies the failed operation only. The calling application's retry
+budget, deadline, and backoff policy still apply on top of it.
 
 ## How failures are classified
 

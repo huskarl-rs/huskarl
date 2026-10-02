@@ -34,7 +34,7 @@ The convenience method
 [`ValidatorMetadata::rejection`](crate::validator::metadata::ValidatorMetadata::rejection)
 does this internally when only a rejection is needed.
 
-## Client or ours
+## Client failures and resource-server failures
 
 [`TokenValidationError`](crate::error::TokenValidationError) separates failures
 that produced a verdict about the request from failures that prevented a
@@ -102,8 +102,9 @@ A `DPoP` nonce can accompany successful validation because a checker may rotate
 nonces before they expire. It must be echoed in a `DPoP-Nonce` response header
 on both success and rejection paths.
 
-No credentials is not a token error. `Ok(None)` means nothing was presented. If
-the endpoint requires authentication, respond with 401 and unauthenticated
+No credentials is not a token error. `Ok(None)` means nothing was presented.
+
+For an endpoint that requires authentication, respond with 401 and unauthenticated
 challenges without an `error` attribute; RFC 6750 §3 reserves that attribute for
 a request that presented a token.
 

@@ -14,8 +14,8 @@ result. A built
 version(s) it resolved, no matter what happens in KMS afterwards. They do not
 poll or refresh themselves — `try_refresh` is a no-op.
 
-To pick up a newly rotated version you **rebuild** the key. You rarely do this
-by hand: the `huskarl-core` refresh wrappers rebuild on a schedule for you — see
+Picking up a newly rotated version requires **rebuilding** the key. The
+`huskarl-core` refresh wrappers can perform this rebuild on a schedule — see
 the [self-refreshing keys guide](crate::_docs::guide::refreshing_keys).
 
 ## One version to write, all versions to read
@@ -47,9 +47,9 @@ choice is the [`VersionStrategy`](crate::kms::VersionStrategy):
   window when verifiers cache their keys, although clients can often retry after
   the verifier refreshes.
 - [`ByLabel`](crate::kms::VersionStrategy::ByLabel) writes with whichever
-  version a label on the `CryptoKey` points at. You promote the label only
-  *after* every consumer has loaded the new version as a decryptor — so the
-  encryptor can never outrun the decryptors.
+  version a label on the `CryptoKey` points at. The operator controls promotion
+  by moving the label. Moving it only *after* every consumer has loaded the new
+  version as a decryptor prevents the encryptor from outrunning the decryptors.
 - [`MinAge`](crate::kms::VersionStrategy::MinAge) writes with the newest version
   that meets a configured minimum age, skipping versions younger than the
   propagation window. It is a coarser, time-based alternative to `ByLabel`.
@@ -58,7 +58,7 @@ choice is the [`VersionStrategy`](crate::kms::VersionStrategy):
 
 ## The safe rotation order
 
-For encryption keys the ordering is always:
+When rotating encryption keys, perform these steps in order:
 
 1. **Add** the new version.
 2. **Wait** for every consumer to load it as a decryptor (they will on their
@@ -77,7 +77,9 @@ Multi-version secrets work the same way.
 [`SecretVersions`](crate::secretmanager::SecretVersions) exposes a **primary**
 version, resolved through a caller-controlled alias, together with **all**
 enabled versions. It validates that the primary appears in the enabled set.
-Write with the primary and build a decryptor from all enabled versions. Promote
+
+To configure encryption with this source, write with the primary and build a
+decryptor from all enabled versions. Promote
 the primary by repointing the alias, again only after every consumer has loaded
 the new version. See the
 [Secret Manager guide](crate::_docs::guide::secret_manager).
