@@ -1,9 +1,9 @@
 //! Shared version resolution logic for Cloud KMS keys.
 
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use google_cloud_kms_v1::{client::KeyManagementService, model::CryptoKeyVersion};
-use huskarl_core::RetryAdvice;
+use huskarl_core::{RetryAdvice, time::Clock};
 use snafu::prelude::*;
 
 use crate::retry::RpcDiagnostics as _;
@@ -107,7 +107,27 @@ pub enum VersionStrategy {
     MinAge(Duration),
 }
 
+/// Resolves a version ID using the platform clock.
+///
+/// # Errors
+/// Returns an error if the version could not be resolved from KMS.
+pub async fn resolve_version(
+    key_name: &str,
+    strategy: &VersionStrategy,
+    kms_client: &KeyManagementService,
+) -> Result<String, VersionResolutionError> {
+    // TODO(next breaking release): require the clock-aware API.
+    resolve_version_with_clock(
+        key_name,
+        strategy,
+        kms_client,
+        &huskarl_core::time::PlatformClock,
+    )
+    .await
+}
+
 /// Resolves a version ID from a key name using the given strategy.
+/// For `MinAge`, samples `clock` once after all enabled versions have been fetched.
 ///
 /// # Errors
 ///
@@ -116,10 +136,11 @@ pub enum VersionStrategy {
     feature = "tracing",
     tracing::instrument(name = "huskarl.gcp.kms.resolve_version", level = "debug", skip_all)
 )]
-pub async fn resolve_version(
+pub async fn resolve_version_with_clock(
     key_name: &str,
     strategy: &VersionStrategy,
     kms_client: &KeyManagementService,
+    clock: &dyn Clock,
 ) -> Result<String, VersionResolutionError> {
     #[cfg(feature = "tracing")]
     tracing::trace!(
@@ -138,7 +159,7 @@ pub async fn resolve_version(
             resolve_version_by_label(key_name, kms_client, label).await
         }
         VersionStrategy::MinAge(min_age) => {
-            resolve_min_age_version(key_name, kms_client, min_age).await
+            resolve_min_age_version(key_name, kms_client, min_age, clock).await
         }
     };
     #[cfg(feature = "tracing")]
@@ -185,6 +206,7 @@ async fn resolve_min_age_version(
     key_name: &str,
     kms_client: &KeyManagementService,
     min_age: &Duration,
+    clock: &dyn Clock,
 ) -> Result<String, VersionResolutionError> {
     let versions = list_enabled_kms_versions(kms_client, key_name, None, Some("name desc"))
         .await
@@ -192,7 +214,7 @@ async fn resolve_min_age_version(
 
     ensure!(!versions.is_empty(), NoEnabledCryptoKeyVersionsSnafu);
 
-    Ok(select_min_age_id(&versions, min_age).to_string())
+    Ok(select_min_age_id(&versions, min_age, clock.now()).to_string())
 }
 
 /// Fetches all enabled `CryptoKeyVersion`s for `key_name`, handling pagination.
@@ -262,20 +284,25 @@ pub(crate) async fn list_enabled_kms_versions(
 pub(crate) fn select_min_age_id<'a>(
     versions: &'a [CryptoKeyVersion],
     min_age: &Duration,
+    now: jiff::Timestamp,
 ) -> &'a str {
-    let cutoff = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default() // only fails if the system clock is before the Unix epoch
-        .as_secs()
-        .cast_signed()
-        - min_age.as_secs().cast_signed();
+    // An unrepresentable cutoff precedes every representable creation time.
+    // No version qualifies; retain the documented newest-version fallback.
+    let cutoff = now.checked_sub(*min_age).ok();
 
     let chosen = versions
         .iter()
         .find(|v| {
-            v.create_time
-                .as_ref()
-                .is_some_and(|ct| ct.seconds() <= cutoff)
+            let created_at = v.create_time.as_ref().and_then(|ct| {
+                huskarl_core::time::timestamp_from_unix_parts(
+                    ct.seconds(),
+                    u32::try_from(ct.nanos()).ok()?,
+                )
+                .ok()
+            });
+            created_at
+                .zip(cutoff)
+                .is_some_and(|(created_at, cutoff)| created_at <= cutoff)
         })
         // Fall back to the newest version if none meet the threshold.
         .unwrap_or(&versions[0]);
@@ -307,9 +334,7 @@ async fn resolve_version_by_label(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::time::UNIX_EPOCH;
-
-    use google_cloud_wkt::Timestamp;
+    use google_cloud_wkt::Timestamp as GoogleTimestamp;
     use rstest::rstest;
 
     use super::*;
@@ -329,26 +354,22 @@ mod tests {
         assert_eq!(version_id_from_resource_name(resource_name), expected);
     }
 
-    fn now_secs() -> i64 {
-        i64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-        )
-        .unwrap()
+    const NOW: i64 = 2_000_000;
+
+    fn now() -> jiff::Timestamp {
+        jiff::Timestamp::new(NOW, 0).unwrap()
     }
 
     /// Builds a newest-first list of versions, each with a `create_time` at the
     /// given age (in seconds) before now.
     fn versions(ages_secs: &[(&str, i64)]) -> Vec<CryptoKeyVersion> {
-        let now = now_secs();
+        let seconds = NOW;
         ages_secs
             .iter()
             .map(|(name, age)| {
                 CryptoKeyVersion::default()
                     .set_name(*name)
-                    .set_create_time(Timestamp::clamp(now - age, 0))
+                    .set_create_time(GoogleTimestamp::clamp(seconds - age, 0))
             })
             .collect()
     }
@@ -364,7 +385,7 @@ mod tests {
         ]);
         // With a 60-second minimum age, v3 is skipped and v2 is the newest
         // version old enough to qualify.
-        assert_eq!(select_min_age_id(&vs, &Duration::from_secs(60)), "2");
+        assert_eq!(select_min_age_id(&vs, &Duration::from_secs(60), now()), "2");
     }
 
     #[test]
@@ -375,19 +396,148 @@ mod tests {
         ]);
         // No version is 3,600 seconds old, so fall back to the newest version,
         // which appears first.
-        assert_eq!(select_min_age_id(&vs, &Duration::from_secs(3600)), "3");
+        assert_eq!(
+            select_min_age_id(&vs, &Duration::from_secs(3600), now()),
+            "3"
+        );
     }
 
     #[test]
     fn select_min_age_ignores_versions_without_create_time() {
-        let now = now_secs();
+        let seconds = NOW;
         let vs = vec![
             // Newest, but no create_time — not eligible for the age check.
             CryptoKeyVersion::default().set_name(".../cryptoKeyVersions/3"),
             CryptoKeyVersion::default()
                 .set_name(".../cryptoKeyVersions/2")
-                .set_create_time(Timestamp::clamp(now - 1000, 0)),
+                .set_create_time(GoogleTimestamp::clamp(seconds - 1000, 0)),
         ];
-        assert_eq!(select_min_age_id(&vs, &Duration::from_secs(60)), "2");
+        assert_eq!(select_min_age_id(&vs, &Duration::from_secs(60), now()), "2");
+    }
+    #[rstest]
+    #[case::before(jiff::Timestamp::new(100, 249_999_999).unwrap(), Duration::from_millis(250), "old")]
+    #[case::exact(jiff::Timestamp::new(100, 250_000_000).unwrap(), Duration::from_millis(250), "new")]
+    #[case::after(jiff::Timestamp::new(100, 250_000_001).unwrap(), Duration::from_millis(250), "new")]
+    #[case::minimum(jiff::Timestamp::MIN, Duration::from_secs(1), "new")]
+    #[case::maximum(jiff::Timestamp::MAX, Duration::from_secs(1), "new")]
+    #[case::huge_age(jiff::Timestamp::MAX, Duration::MAX, "new")]
+    fn minimum_age_boundaries(
+        #[case] now: jiff::Timestamp,
+        #[case] age: Duration,
+        #[case] expected: &str,
+    ) {
+        let vs = vec![
+            CryptoKeyVersion::default()
+                .set_name("new")
+                .set_create_time(GoogleTimestamp::clamp(100, 0)),
+            CryptoKeyVersion::default()
+                .set_name("old")
+                .set_create_time(GoogleTimestamp::clamp(0, 0)),
+        ];
+        assert_eq!(select_min_age_id(&vs, &age, now), expected);
+    }
+
+    #[rstest]
+    #[case::before(-1, 749_999_999, "old")]
+    #[case::exact(-1, 750_000_000, "new")]
+    #[case::after(-1, 750_000_001, "new")]
+    fn pre_epoch_creation_preserves_nanoseconds(
+        #[case] seconds: i64,
+        #[case] nanos: i32,
+        #[case] expected: &str,
+    ) {
+        let vs = vec![
+            CryptoKeyVersion::default()
+                .set_name("new")
+                .set_create_time(GoogleTimestamp::clamp(-1, 500_000_000)),
+            CryptoKeyVersion::default()
+                .set_name("old")
+                .set_create_time(GoogleTimestamp::clamp(-10, 0)),
+        ];
+        assert_eq!(
+            select_min_age_id(
+                &vs,
+                &Duration::from_millis(250),
+                jiff::Timestamp::new(seconds, nanos).unwrap()
+            ),
+            expected
+        );
+    }
+
+    #[derive(Debug, Clone)]
+    struct DelayedListing(huskarl_core::time::ManualTime);
+
+    impl google_cloud_kms_v1::stub::KeyManagementService for DelayedListing {
+        async fn list_crypto_key_versions(
+            &self,
+            request: google_cloud_kms_v1::model::ListCryptoKeyVersionsRequest,
+            _: google_cloud_gax::options::RequestOptions,
+        ) -> google_cloud_gax::Result<
+            google_cloud_gax::response::Response<
+                google_cloud_kms_v1::model::ListCryptoKeyVersionsResponse,
+            >,
+        > {
+            tokio::task::yield_now().await;
+            self.0.advance(Duration::from_secs(7)).unwrap();
+            let (name, created, next) = if request.page_token.is_empty() {
+                ("new", 100, "second")
+            } else {
+                assert_eq!(request.page_token, "second");
+                ("old", 90, "")
+            };
+            Ok(google_cloud_gax::response::Response::from(
+                google_cloud_kms_v1::model::ListCryptoKeyVersionsResponse::default()
+                    .set_crypto_key_versions([CryptoKeyVersion::default()
+                        .set_name(name)
+                        .set_create_time(GoogleTimestamp::clamp(created, 0))])
+                    .set_next_page_token(next),
+            ))
+        }
+    }
+
+    #[derive(Debug)]
+    struct SelectionClock {
+        time: huskarl_core::time::ManualTime,
+        reads: std::sync::atomic::AtomicUsize,
+    }
+    impl Clock for SelectionClock {
+        fn now(&self) -> jiff::Timestamp {
+            self.reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.time.now()
+        }
+    }
+
+    #[tokio::test]
+    async fn resolution_samples_once_after_all_pages() {
+        let time = huskarl_core::time::ManualTime::new(jiff::Timestamp::new(105, 0).unwrap());
+        let client = KeyManagementService::from_stub(DelayedListing(time.clone()));
+        let clock = SelectionClock {
+            time,
+            reads: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let selected = resolve_version_with_clock(
+            "key",
+            &VersionStrategy::MinAge(Duration::from_secs(20)),
+            &client,
+            &clock,
+        )
+        .await
+        .unwrap();
+        assert_eq!(selected, "old");
+        assert_eq!(clock.time.now(), jiff::Timestamp::new(119, 0).unwrap());
+        assert_eq!(clock.reads.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(
+            resolve_version_with_clock(
+                "key",
+                &VersionStrategy::Specific("pinned".into()),
+                &client,
+                &clock
+            )
+            .await
+            .unwrap(),
+            "pinned"
+        );
+        assert_eq!(clock.reads.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 }

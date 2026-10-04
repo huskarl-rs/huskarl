@@ -29,11 +29,12 @@ impl AuthorizationServerDPoP for NoDPoP {
         Box::pin(async { None })
     }
 
-    fn proof<'a>(
+    fn proof_at<'a>(
         &'a self,
         _method: &'a Method,
         _uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
+        _now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async move {
             if dpop_jkt.is_some() {
@@ -45,12 +46,13 @@ impl AuthorizationServerDPoP for NoDPoP {
     }
 
     #[cfg(feature = "experimental-oidc-key-binding")]
-    fn proof_with_code_hash<'a>(
+    fn proof_with_code_hash_at<'a>(
         &'a self,
         _method: &'a Method,
         _uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
         code_hash: Option<&'a str>,
+        _now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async move {
             if dpop_jkt.is_some() || code_hash.is_some() {
@@ -77,12 +79,13 @@ impl AuthorizationServerDPoP for NoDPoP {
 impl ResourceServerDPoP for NoDPoP {
     fn update_nonce(&self, _uri: &Uri, _nonce: String) {}
 
-    fn proof<'a>(
+    fn proof_at<'a>(
         &'a self,
         _method: &'a Method,
         _uri: &'a Uri,
         _access_token: &'a SecretString,
         _dpop_jkt: &'a str,
+        _now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async { Err(DPoPNotConfiguredSnafu.build().into()) })
     }
@@ -111,11 +114,19 @@ mod tests {
         let dpop: Arc<dyn AuthorizationServerDPoP> = Arc::new(NoDPoP);
         let uri = Uri::from_static("https://as.example/token");
 
-        let proof = dpop.proof(&Method::POST, &uri, None).await.unwrap();
+        let proof = dpop
+            .proof_at(&Method::POST, &uri, None, jiff::Timestamp::UNIX_EPOCH)
+            .await
+            .unwrap();
         assert!(proof.is_none());
 
         let _err = dpop
-            .proof(&Method::POST, &uri, Some("jkt"))
+            .proof_at(
+                &Method::POST,
+                &uri,
+                Some("jkt"),
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap_err();
 
@@ -127,7 +138,13 @@ mod tests {
 
         let resource = dpop.to_resource_server_dpop();
         let _err = resource
-            .proof(&Method::GET, &uri, &SecretString::new("token"), "jkt")
+            .proof_at(
+                &Method::GET,
+                &uri,
+                &SecretString::new("token"),
+                "jkt",
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap_err();
     }

@@ -19,6 +19,7 @@ fn a_challenge_becomes_the_verdict() {
         HeaderValue::from_static(r#"Bearer error="insufficient_scope""#),
     );
     let err = Error::from(UserInfoError::BadStatus {
+        received_at: jiff::Timestamp::UNIX_EPOCH,
         status: StatusCode::FORBIDDEN,
         headers,
         body: TruncatedBody::new(""),

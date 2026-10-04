@@ -1,10 +1,17 @@
 use rstest::rstest;
 
 use super::{checks::normalize_typ, *};
-use crate::crypto::{
-    KeyMatchStrength,
-    verifier::{JwsVerifier, KeyMatch, VerifyError},
+use crate::{
+    crypto::{
+        KeyMatchStrength,
+        verifier::{JwsVerifier, KeyMatch, VerifyError},
+    },
+    time::{ManualTime, Timer},
 };
+
+fn test_time() -> ManualTime {
+    ManualTime::new(jiff::Timestamp::new(2_000_000, 0).unwrap())
+}
 
 fn classification(error: &JwtValidationError) -> crate::error::propagation::Classification {
     match crate::error::propagation::Cause::origin(error) {
@@ -81,6 +88,7 @@ async fn test_validate_unit_claims_with_extra_fields() {
 
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .iss(ClaimCheck::required_value("joe"))
         .build();
 
@@ -100,6 +108,7 @@ async fn test_validate_custom_claims_success() {
 
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .iss(ClaimCheck::required_value("joe"))
         .build();
 
@@ -123,6 +132,7 @@ async fn test_validate_custom_claims_failure() {
 
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .iss(ClaimCheck::required_value("joe"))
         .build();
 
@@ -152,7 +162,10 @@ fn make_parsed_jws(
 }
 
 fn default_validator() -> JwtValidator {
-    JwtValidator::builder().verifier(MockVerifier).build()
+    JwtValidator::builder()
+        .verifier(MockVerifier)
+        .clock(test_time())
+        .build()
 }
 
 // --- Algorithm checks ---
@@ -170,6 +183,7 @@ async fn reject_alg_none() {
 async fn reject_disallowed_algorithm() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .allowed_algorithms(["ES256".to_string()])
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -215,11 +229,7 @@ async fn reject_expired_token() {
 
 #[tokio::test]
 async fn reject_not_yet_valid() {
-    let far_future = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        + 999_999;
+    let far_future = 2_000_000_u64 + 999_999;
     let parsed = make_parsed_jws(
         serde_json::json!({"alg": "RS256"}),
         serde_json::json!({"nbf": far_future}),
@@ -235,11 +245,7 @@ async fn reject_not_yet_valid() {
 
 #[tokio::test]
 async fn reject_issued_in_future() {
-    let far_future = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        + 999_999;
+    let far_future = 2_000_000_u64 + 999_999;
     let parsed = make_parsed_jws(
         serde_json::json!({"alg": "RS256"}),
         serde_json::json!({"iat": far_future}),
@@ -255,12 +261,10 @@ async fn reject_issued_in_future() {
 
 #[tokio::test]
 async fn clock_leeway_allows_slightly_expired() {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = 2_000_000_u64;
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .clock_leeway(Duration::from_secs(10))
         .build();
     let parsed = make_parsed_jws(
@@ -279,6 +283,7 @@ async fn clock_leeway_allows_slightly_expired() {
 async fn require_exp_missing() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .require_exp(true)
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -295,6 +300,7 @@ async fn require_exp_missing() {
 async fn require_iat_missing() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .require_iat(true)
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -311,6 +317,7 @@ async fn require_iat_missing() {
 async fn require_jti_missing() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .require_jti(true)
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -334,6 +341,7 @@ async fn require_jti_missing() {
 async fn iss_mismatch_is_rejected(#[case] iss_check: ClaimCheck, #[case] actual_iss: &str) {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .iss(iss_check)
         .build();
     let parsed = make_parsed_jws(
@@ -353,6 +361,7 @@ async fn iss_mismatch_is_rejected(#[case] iss_check: ClaimCheck, #[case] actual_
 async fn iss_present_missing() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .iss(ClaimCheck::present())
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -369,6 +378,7 @@ async fn iss_present_missing() {
 async fn iss_if_present_mismatch() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .iss(ClaimCheck::if_present("expected"))
         .build();
     let parsed = make_parsed_jws(
@@ -388,6 +398,7 @@ async fn iss_if_present_mismatch() {
 async fn iss_if_present_absent_ok() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .iss(ClaimCheck::if_present("expected"))
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -403,6 +414,7 @@ async fn iss_if_present_absent_ok() {
 async fn aud_required_value_not_in_list() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .aud(ClaimCheck::required_value("expected-aud"))
         .build();
     let parsed = make_parsed_jws(
@@ -422,6 +434,7 @@ async fn aud_required_value_not_in_list() {
 async fn aud_empty_when_required() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .aud(ClaimCheck::present())
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -453,6 +466,7 @@ async fn typ_if_present_any_absent_ok() {
 async fn typ_required_value_mismatch() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .typ(ClaimCheck::required_value("at+jwt"))
         .build();
     let parsed = make_parsed_jws(
@@ -472,6 +486,7 @@ async fn typ_required_value_mismatch() {
 async fn typ_application_prefix_normalization() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .typ(ClaimCheck::required_value("at+jwt"))
         .build();
     let parsed = make_parsed_jws(
@@ -488,6 +503,7 @@ async fn typ_application_prefix_normalization() {
 async fn typ_case_insensitive() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .typ(ClaimCheck::required_value("AT+JWT"))
         .build();
     let parsed = make_parsed_jws(
@@ -506,6 +522,7 @@ async fn typ_case_insensitive() {
 async fn max_token_age_old_token() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .max_token_age(Duration::from_mins(1))
         .build();
     let parsed = make_parsed_jws(
@@ -525,6 +542,7 @@ async fn max_token_age_old_token() {
 async fn max_token_age_missing_iat() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .max_token_age(Duration::from_mins(1))
         .build();
     let parsed = make_parsed_jws(serde_json::json!({"alg": "RS256"}), serde_json::json!({}));
@@ -542,12 +560,10 @@ async fn max_token_age_missing_iat() {
 /// before the leeway-aware `IssuedInFuture` check can run.
 #[tokio::test]
 async fn max_token_age_allows_future_iat_within_leeway() {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = 2_000_000_u64;
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .max_token_age(Duration::from_mins(5))
         .clock_leeway(Duration::from_mins(1))
         .build();
@@ -565,12 +581,10 @@ async fn max_token_age_allows_future_iat_within_leeway() {
 /// that owns future timestamps, not as a bogus `TokenTooOld`.
 #[tokio::test]
 async fn max_token_age_far_future_iat_is_issued_in_future() {
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = 2_000_000_u64;
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .max_token_age(Duration::from_mins(5))
         .build();
     let parsed = make_parsed_jws(
@@ -633,6 +647,7 @@ async fn max_representable_exp_with_leeway_does_not_panic() {
 
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .clock_leeway(Duration::from_secs(10))
         .build();
     let parsed = make_parsed_jws(
@@ -667,13 +682,11 @@ impl JtiUniquenessChecker for InMemoryJtiChecker {
 async fn temporally_invalid_token_does_not_burn_jti() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .token_jti_checker(InMemoryJtiChecker::default())
         .build();
 
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = 2_000_000_u64;
 
     // A token presented before its `nbf` is rejected, but its `jti` must
     // not be marked seen — the later legitimate presentation must succeed.
@@ -728,6 +741,7 @@ async fn temporally_invalid_token_does_not_burn_jti() {
 async fn jti_too_long() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
+        .clock(test_time())
         .max_jti_len(5)
         .build();
     let parsed = make_parsed_jws(
@@ -779,4 +793,173 @@ fn empty_optional_allowlist_accepts_only_absence() {
     assert!(checks::check_str_claim("iss", &check, Some("issuer")).is_err());
     assert!(checks::check_aud(&check, &[]).is_ok());
     assert!(checks::check_aud(&check, &["audience".into()]).is_err());
+}
+
+#[rstest]
+#[case("exp", 0)]
+#[case("exp", 10)]
+#[case("nbf", 0)]
+#[case("nbf", 10)]
+#[case("iat", 0)]
+#[case("iat", 10)]
+#[case("age", 0)]
+#[case("age", 10)]
+#[tokio::test]
+async fn temporal_boundaries_use_injected_clock(
+    #[case] claim: &str,
+    #[case] leeway: u64,
+    #[values(0)] nanos: u32,
+) {
+    let time = test_time();
+    let validator = JwtValidator::builder()
+        .verifier(MockVerifier)
+        .clock(Arc::new(time.clone()))
+        .clock_leeway(Duration::from_secs(leeway))
+        .maybe_max_token_age((claim == "age").then_some(Duration::from_secs(60)))
+        .build();
+    let boundary = match claim {
+        "exp" => 1_000 + leeway,
+        "age" => 1_060 + leeway,
+        _ => 1_000 - leeway,
+    };
+    let boundary = jiff::Timestamp::UNIX_EPOCH
+        .checked_add(Duration::new(boundary, nanos))
+        .unwrap();
+    let readings = [
+        boundary.checked_sub(Duration::from_nanos(1)).unwrap(),
+        boundary,
+        boundary.checked_add(Duration::from_nanos(1)).unwrap(),
+    ];
+    for (index, reading) in readings.into_iter().enumerate() {
+        time.set_wall_time(reading);
+        let key = if claim == "age" { "iat" } else { claim };
+        let parsed = make_parsed_jws(
+            serde_json::json!({"alg": "RS256"}),
+            serde_json::json!({key: 1_000.0 + f64::from(nanos) / 1_000_000_000.0}),
+        );
+        let result = validator.validate_parsed_jws(parsed).await;
+        let valid = match claim {
+            "exp" => index == 0,
+            "age" => index <= 1,
+            _ => index >= 1,
+        };
+        if valid {
+            assert!(result.is_ok(), "{claim} at {reading:?}: {result:?}");
+        } else {
+            let error = result.unwrap_err();
+            assert!(matches!(
+                (claim, error),
+                ("exp", JwtValidationError::Expired { .. })
+                    | ("nbf", JwtValidationError::NotYetValid { .. })
+                    | ("iat", JwtValidationError::IssuedInFuture { .. })
+                    | ("age", JwtValidationError::TokenTooOld { .. })
+            ));
+        }
+    }
+}
+
+#[tokio::test]
+async fn wall_clock_steps_change_validation_independently_of_timer() {
+    let time = test_time();
+    let validator = JwtValidator::builder()
+        .verifier(MockVerifier)
+        .clock(time.clone())
+        .build();
+    let token = {
+        use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
+        format!(
+            "{}.{}.AA",
+            BASE64_URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#),
+            BASE64_URL_SAFE_NO_PAD.encode(r#"{"nbf":1999990,"exp":2000010}"#)
+        )
+    };
+    assert!(validator.validate::<()>(&token).await.is_ok());
+    time.advance_monotonic(Duration::from_secs(10_000)).unwrap();
+    assert!(validator.validate::<()>(&token).await.is_ok());
+    let monotonic = Timer::now(&time);
+    for (seconds, valid) in [
+        (3_000_000, false),
+        (2_000_000, true),
+        (1_000_000, false),
+        (2_000_000, true),
+    ] {
+        time.set_wall_time(jiff::Timestamp::new(seconds, 0).unwrap());
+        assert_eq!(validator.validate::<()>(&token).await.is_ok(), valid);
+        assert_eq!(Timer::now(&time), monotonic);
+    }
+    time.advance(Duration::from_secs(11)).unwrap();
+    assert!(matches!(
+        validator.validate::<()>(&token).await,
+        Err(JwtValidationError::Expired { .. })
+    ));
+}
+
+#[rstest::rstest]
+#[case::minimum(jiff::Timestamp::MIN)]
+#[case::maximum(jiff::Timestamp::MAX)]
+#[tokio::test]
+async fn extreme_clock_readings_are_clamped_in_validation_errors(
+    #[case] timestamp: jiff::Timestamp,
+) {
+    let time = test_time();
+    let validator = JwtValidator::builder()
+        .verifier(MockVerifier)
+        .clock(time.clone())
+        .build();
+    time.set_wall_time(timestamp);
+    let parsed = make_parsed_jws(
+        serde_json::json!({"alg": "RS256"}),
+        serde_json::json!({"nbf": 1_999_990, "exp": 2_000_010}),
+    );
+    let error = validator.validate_parsed_jws(parsed).await.unwrap_err();
+    let now = match error {
+        JwtValidationError::Expired { now, .. } | JwtValidationError::NotYetValid { now, .. } => {
+            now
+        }
+        other => panic!("unexpected error: {other:?}"),
+    };
+    assert_eq!(
+        now,
+        crate::time::system_time_from_timestamp_saturating(timestamp)
+    );
+}
+
+#[tokio::test]
+async fn explicit_snapshot_does_not_read_clock() {
+    use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
+
+    #[derive(Debug)]
+    struct UnreadClock;
+    impl Clock for UnreadClock {
+        fn now(&self) -> jiff::Timestamp {
+            panic!("explicit validation must not read the clock")
+        }
+    }
+    let validator = JwtValidator::builder()
+        .verifier(MockVerifier)
+        .clock(UnreadClock)
+        .build();
+    let now = jiff::Timestamp::new(2_000_000, 0).unwrap();
+    let parsed = make_parsed_jws(
+        serde_json::json!({"alg": "RS256"}),
+        serde_json::json!({"nbf": 1_999_990, "exp": 2_000_010}),
+    );
+    assert!(
+        validator
+            .validate_parsed_jws_at::<serde_json::Value>(parsed, now)
+            .await
+            .is_ok()
+    );
+    let token = format!(
+        "{}.{}.AA",
+        BASE64_URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#),
+        BASE64_URL_SAFE_NO_PAD.encode(r#"{"nbf":1999990,"exp":2000010}"#)
+    );
+    assert!(validator.validate_at::<()>(&token, now).await.is_ok());
+    assert!(matches!(
+        validator
+            .validate_at::<()>(&token, now.checked_add(Duration::from_secs(11)).unwrap())
+            .await,
+        Err(JwtValidationError::Expired { .. })
+    ));
 }

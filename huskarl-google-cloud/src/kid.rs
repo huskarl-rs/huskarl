@@ -39,7 +39,16 @@ pub struct VersionKid(Repr);
 enum Repr {
     None,
     Verbatim,
-    Map(MapFn),
+    Map(
+        #[cfg_attr(
+            not(any(feature = "kms", feature = "secretmanager", test)),
+            allow(
+                dead_code,
+                reason = "the callback is consumed only by enabled backends"
+            )
+        )]
+        MapFn,
+    ),
 }
 
 impl VersionKid {
@@ -65,6 +74,10 @@ impl VersionKid {
     }
 
     /// Applies this policy to `version_id` and returns the derived `kid`.
+    #[cfg_attr(
+        not(any(feature = "kms", feature = "secretmanager", test)),
+        allow(dead_code, reason = "the policy is applied only by enabled backends")
+    )]
     pub(crate) fn derive(&self, version_id: &str) -> Option<String> {
         match &self.0 {
             Repr::None => None,

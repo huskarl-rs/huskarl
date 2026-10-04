@@ -13,7 +13,7 @@ use crate::{
         client_auth::NoAuth,
         dpop::SessionKeyedDPoP,
         http::{HttpClient, HttpResponse, Idempotency},
-        platform::MaybeSendBoxFuture,
+        platform::{Duration, MaybeSendBoxFuture},
         server_metadata::AuthorizationServerMetadata,
     },
     grant::authorization_code::{
@@ -318,6 +318,87 @@ async fn oidc_false_builds_no_verifier_and_skips_the_fetch() {
         grant.jws_verifier.is_none(),
         "oidc(false) without JARM must build no default verifier"
     );
+}
+
+#[rstest]
+#[case::default_source(false)]
+#[case::supplied_source(true)]
+#[tokio::test]
+async fn jwks_timer_inheritance(#[case] supplied_source: bool) {
+    use crate::core::{
+        crypto::verifier::KeyMatch,
+        jwk::{JwksSource, JwksStartup},
+        time::ManualTime,
+    };
+
+    struct ColdJwksClient(AtomicUsize);
+
+    impl HttpClient for ColdJwksClient {
+        fn execute(
+            &self,
+            _: http::Request<Bytes>,
+            _: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            Box::pin(async move {
+                let call = self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(HttpResponse {
+                    status: if call == 0 {
+                        http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        http::StatusCode::OK
+                    },
+                    headers: http::HeaderMap::new(),
+                    body: Bytes::from_static(br#"{"keys":[]}"#),
+                })
+            })
+        }
+    }
+
+    let grant_time = ManualTime::new(jiff::Timestamp::UNIX_EPOCH);
+    let source_time = ManualTime::new(jiff::Timestamp::UNIX_EPOCH);
+    let client = Arc::new(ColdJwksClient(AtomicUsize::new(0)));
+    let factory = supplied_source.then(|| {
+        JwksSource::builder()
+            .http_client(client.clone())
+            .timer(source_time.clone())
+            .startup(JwksStartup::SeedEmpty)
+            .build()
+    });
+    let grant = Grant::builder()
+        .client_id("client")
+        .http_client(client.clone())
+        .client_auth(NoAuth)
+        .timer(grant_time.clone())
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+        .jwks_uri("https://as.example.com/jwks".parse().unwrap())
+        .redirect_uri("http://127.0.0.1/cb")
+        .maybe_jws_verifier_factory(factory)
+        .build()
+        .await
+        .unwrap();
+    let verifier = grant.jws_verifier.unwrap();
+    let key = KeyMatch::builder().alg("ES256").build();
+    assert_eq!(client.0.load(Ordering::Relaxed), 1);
+    assert!(verifier.verify(b"input", b"signature", &key).await.is_err());
+    assert_eq!(client.0.load(Ordering::Relaxed), 1);
+
+    grant_time
+        .advance_monotonic(Duration::from_millis(250))
+        .unwrap();
+    assert!(verifier.verify(b"input", b"signature", &key).await.is_err());
+    assert_eq!(
+        client.0.load(Ordering::Relaxed),
+        if supplied_source { 1 } else { 2 }
+    );
+
+    if supplied_source {
+        source_time
+            .advance_monotonic(Duration::from_millis(250))
+            .unwrap();
+        assert!(verifier.verify(b"input", b"signature", &key).await.is_err());
+        assert_eq!(client.0.load(Ordering::Relaxed), 2);
+    }
 }
 
 /// The default `JwksSource` is actually built, and its startup policy is

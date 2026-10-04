@@ -10,10 +10,12 @@ use crate::core::{
     dpop::AuthorizationServerDPoP,
     http::{FailedResponse, HttpClient, Idempotency, TruncatedBody},
     oauth_form,
+    time::Clock,
 };
 
 #[derive(Builder)]
 pub(crate) struct OAuth2FormRequest<'a, F: Serialize> {
+    now: jiff::Timestamp,
     /// Endpoint receiving the form request.
     uri: &'a Uri,
     /// Grant- or operation-specific form fields.
@@ -72,17 +74,18 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
         #[cfg(feature = "experimental-oidc-key-binding")]
         let proof = self
             .dpop
-            .proof_with_code_hash(
+            .proof_with_code_hash_at(
                 &parts.method,
                 &parts.uri,
                 self.dpop_jkt,
                 self.dpop_code_hash,
+                self.now,
             )
             .await?;
         #[cfg(not(feature = "experimental-oidc-key-binding"))]
         let proof = self
             .dpop
-            .proof(&parts.method, &parts.uri, self.dpop_jkt)
+            .proof_at(&parts.method, &parts.uri, self.dpop_jkt, self.now)
             .await?;
         if let Some(proof) = proof {
             let mut proof_value =
@@ -114,7 +117,17 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     pub(crate) async fn execute<R: for<'de> Deserialize<'de>>(
         &self,
         http_client: &dyn HttpClient,
-    ) -> Result<R, Error> {
+        clock: &dyn Clock,
+    ) -> Result<(R, jiff::Timestamp), Error> {
+        let (response, receipt) = self.execute_with_receipt(http_client, clock).await?;
+        Ok((response, receipt.received_at()))
+    }
+
+    pub(crate) async fn execute_with_receipt<R: for<'de> Deserialize<'de>>(
+        &self,
+        http_client: &dyn HttpClient,
+        clock: &dyn Clock,
+    ) -> Result<(R, super::TokenReceipt), Error> {
         let request = self.build_request().await?;
         // The body may consume one-shot state, and replaying it would reuse the
         // `jti` and DPoP proof. Higher layers must rebuild any retry.
@@ -130,6 +143,8 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
                     "OAuth form request failed before a response was received"
                 );
             })?;
+        let receipt = super::TokenReceipt::capture(clock);
+        let received_at = receipt.received_at();
         #[cfg(feature = "tracing")]
         if response.status.is_success() {
             tracing::trace!(
@@ -149,7 +164,12 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             self.dpop.update_nonce(nonce);
         }
 
-        let result = parse_oauth2_response(response.status, &response.headers, &response.body);
+        let result = parse_oauth2_response(
+            response.status,
+            &response.headers,
+            &response.body,
+            received_at,
+        );
         #[cfg(feature = "tracing")]
         if let Err(error) = &result {
             // Extension codes are server-controlled strings, just like descriptions.
@@ -159,7 +179,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             });
             tracing::debug!(outcome = "error", oauth_error, "OAuth form request failed");
         }
-        result
+        Ok((result?, receipt))
     }
 
     /// Executes the form request, expecting an empty response body on success.
@@ -176,6 +196,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     pub(crate) async fn execute_empty_response(
         &self,
         http_client: &dyn HttpClient,
+        clock: &dyn Clock,
     ) -> Result<(), Error> {
         let request = self.build_request().await?;
         #[cfg(feature = "tracing")]
@@ -190,6 +211,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
                     "OAuth form request failed before a response was received"
                 );
             })?;
+        let received_at = clock.now();
         #[cfg(feature = "tracing")]
         if response.status.is_success() {
             tracing::trace!(
@@ -211,6 +233,7 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
             response.status,
             &response.headers,
             &response.body,
+            received_at,
         ))
     }
 }
@@ -253,10 +276,11 @@ fn parse_oauth2_error_response(
     status: http::StatusCode,
     headers: &http::HeaderMap,
     body: &Bytes,
+    received_at: jiff::Timestamp,
 ) -> Error {
     let content_type = headers.get(CONTENT_TYPE).cloned();
     // Handle an unexpected success status without panicking.
-    let Some(failed) = FailedResponse::new(status, headers) else {
+    let Some(failed) = FailedResponse::new_at(status, headers, received_at) else {
         return Error::new(
             RetryAdvice::No,
             HandleResponseError::UnparseableSuccessResponse {
@@ -292,9 +316,15 @@ fn parse_oauth2_response<T: for<'de> Deserialize<'de>>(
     status: http::StatusCode,
     headers: &http::HeaderMap,
     body: &Bytes,
+    received_at: jiff::Timestamp,
 ) -> Result<T, Error> {
     if !status.is_success() {
-        return Err(parse_oauth2_error_response(status, headers, body));
+        return Err(parse_oauth2_error_response(
+            status,
+            headers,
+            body,
+            received_at,
+        ));
     }
 
     serde_json::from_slice(body).map_err(|source| {
@@ -424,6 +454,7 @@ mod tests {
                 br#"{"error":"mfa_required","mfa_token":"secret-continuation",
                      "challenge":{"methods":["otp"]},"nullable":null}"#,
             ),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         let err = Error::propagate(err.classification(), err);
         let verdict = err.verdict().unwrap();
@@ -457,6 +488,7 @@ mod tests {
             http::StatusCode::from_u16(status).unwrap(),
             &http::HeaderMap::new(),
             &Bytes::from_static(br#"{"error":"mfa_required","mfa_token":"secret-continuation"}"#),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert!(err.verdict().is_none());
         assert_eq!(err.retry_advice(), RetryAdvice::RETRY);
@@ -468,6 +500,7 @@ mod tests {
             http::StatusCode::from_u16(status).unwrap(),
             &http::HeaderMap::new(),
             &Bytes::copy_from_slice(body.as_bytes()),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         err.retry_advice()
     }
@@ -514,6 +547,7 @@ mod tests {
             http::StatusCode::BAD_REQUEST,
             &http::HeaderMap::new(),
             &Bytes::from(format!(r#"{{"error":"{wire}"}}"#)),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert_eq!(err.retry_advice(), RetryAdvice::No, "{wire}");
         assert_eq!(err.verdict().map(OAuthError::code), Some(&expected));
@@ -535,6 +569,7 @@ mod tests {
                      "error_description":"scope 'admin' is not permitted",
                      "error_uri":"https://as.example.com/errors"}"#,
             ),
+            jiff::Timestamp::UNIX_EPOCH,
         );
 
         assert_eq!(
@@ -553,6 +588,7 @@ mod tests {
             http::StatusCode::BAD_REQUEST,
             &http::HeaderMap::new(),
             &Bytes::from_static(br#"{"error":"invalid_grant"}"#),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert_eq!(
             format!("{bare:#}"),
@@ -568,6 +604,7 @@ mod tests {
             http::StatusCode::BAD_REQUEST,
             &http::HeaderMap::new(),
             &Bytes::from_static(br#"{"error":"invalid_grant"}"#),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert_ne!(
             crate::cache::Recovery::implied_by(&err),
@@ -588,6 +625,7 @@ mod tests {
             http::StatusCode::BAD_GATEWAY,
             &http::HeaderMap::new(),
             &Bytes::from_static(br#"{"error":"invalid_grant"}"#),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert!(err.verdict().is_none());
         assert_eq!(
@@ -605,6 +643,7 @@ mod tests {
             http::StatusCode::TOO_MANY_REQUESTS,
             &headers,
             &Bytes::from_static(br#"{"error":"slow_down"}"#),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert_eq!(
             err.retry_advice(),
@@ -619,6 +658,7 @@ mod tests {
             http::StatusCode::UNAUTHORIZED,
             &http::HeaderMap::new(),
             &Bytes::from_static(br#"{"error":"invalid_client"}"#),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert_eq!(
             err.verdict().map(|v| v.code().as_str()),
@@ -630,6 +670,7 @@ mod tests {
             http::StatusCode::BAD_GATEWAY,
             &http::HeaderMap::new(),
             &Bytes::from_static(b"<html>nope</html>"),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert!(unparseable.verdict().is_none());
     }
@@ -641,6 +682,7 @@ mod tests {
             http::StatusCode::BAD_REQUEST,
             &http::HeaderMap::new(),
             &Bytes::from_static(br#"{"error":"use_dpop_nonce"}"#),
+            jiff::Timestamp::UNIX_EPOCH,
         );
         assert_eq!(err.retry_advice(), RetryAdvice::No);
         assert!(

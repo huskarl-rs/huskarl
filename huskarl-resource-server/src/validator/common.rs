@@ -14,6 +14,7 @@ use crate::{
 };
 
 pub(super) struct ValidatorInner {
+    pub clock: std::sync::Arc<dyn crate::core::time::Clock>,
     pub jwt_validator: JwtValidator,
     pub dpop_binding_checker: DPoPBindingChecker,
     pub token_header: HeaderName,
@@ -70,9 +71,12 @@ impl ValidatorInner {
             Ok(Some(v)) => v,
         };
 
+        // One snapshot covers the access token, DPoP proof, and nonce even when
+        // signature verification awaits a remote key fetch.
+        let now = self.clock.now();
         let validated = match self
             .jwt_validator
-            .validate::<Claims>(access_token.expose_secret())
+            .validate_at::<Claims>(access_token.expose_secret(), now)
             .await
             .context(InvalidJwtSnafu { token_type })
         {
@@ -95,6 +99,7 @@ impl ValidatorInner {
             http_method,
             http_uri,
             client_cert_der,
+            now,
         )
         .await;
 

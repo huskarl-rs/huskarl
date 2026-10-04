@@ -10,6 +10,7 @@ use crate::{
         Error,
         dpop::ResourceServerDPoP,
         platform::{Duration, MaybeSendBoxFuture},
+        time::{Clock, Timer},
     },
     grant::core::{OAuth2ExchangeGrant, TokenResponse},
 };
@@ -35,6 +36,15 @@ const MARGIN_LIFETIME_FRACTION: f64 = 0.5;
 /// — lives in the [`TokenSource`]; this type is solely the cache, so there is
 /// exactly one way tokens enter it.
 ///
+/// Token expiry uses a wall-clock deadline calculated from the receipt timestamp
+/// and `expires_in` (or the default lifetime). Wall-clock adjustments affect expiry;
+/// monotonic timers do not. Configure `.clock(...)` on the grant; refresh grants
+/// inherit it, and caches default to their source's clock. An explicit cache
+/// `.clock(...)` overrides the clock used for its expiry checks.
+///
+/// Original receipt timestamps are preserved through clones and nested caches.
+/// [`ManualTime`](crate::core::time::ManualTime) can supply a clock for tests.
+///
 /// Construction does not acquire a token or start a background task. Calls to
 /// [`TokenSource::token`] drive acquisition and refresh according to this cache's
 /// timing policy. Other [`TokenCache`] implementations may schedule differently.
@@ -57,6 +67,13 @@ pub struct InMemoryTokenCache<Src: TokenSource> {
     /// The source tokens are pulled from when the cache holds no valid token, or
     /// the source has a freshly-injected (primed) token that supersedes it.
     source: Src,
+    /// Wall clock for token expiry checks and resource-server proofs.
+    /// Defaults to the source's clock, inherited from its grant when applicable.
+    #[builder(
+        default = source.clock(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    clock: Arc<dyn Clock>,
     /// How early to retire a token before its real expiry, covering clock skew
     /// and in-flight requests. Capped per token at [`MARGIN_LIFETIME_FRACTION`]
     /// of its lifetime (see [Refresh-ahead](crate::_docs::explanation::refresh_timing)).
@@ -171,12 +188,24 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
     /// A cached token still valid to *serve*, judged against the
     /// [effective serve margin](Self::effective_margin).
     fn get_valid_cached(&self) -> Option<Arc<TokenResponse>> {
-        self.cached.load_full().filter(|t| {
-            let access_token = t.access_token();
-            let margin =
-                self.effective_margin(access_token.effective_lifetime(self.default_expires_in));
-            !access_token.is_expired(self.default_expires_in, margin)
-        })
+        self.cached.load_full().filter(|token| self.is_valid(token))
+    }
+
+    fn is_valid(&self, token: &TokenResponse) -> bool {
+        let lifetime = token
+            .access_token()
+            .effective_lifetime(self.default_expires_in);
+        !token.is_expired_at(
+            self.clock.now(),
+            self.default_expires_in,
+            self.effective_margin(lifetime),
+        )
+    }
+
+    async fn acquire(&self) -> Result<Arc<TokenResponse>, TokenError> {
+        let token = self.source.token().await?;
+        self.cached.store(Some(token.clone()));
+        Ok(token)
     }
 
     /// Whether a still-valid token has reached its proactive-refresh trigger: the
@@ -192,8 +221,8 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
         let base = self
             .refresh_ahead
             .unwrap_or_else(|| self.effective_margin(lifetime));
-        let trigger = base + self.jitter_offset(lifetime);
-        access_token.is_expired(self.default_expires_in, trigger)
+        let trigger = base.saturating_add(self.jitter_offset(lifetime));
+        token.is_expired_at(self.clock.now(), self.default_expires_in, trigger)
     }
 
     /// Refreshes a token that is valid but past the refresh trigger (the
@@ -220,13 +249,9 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
             return token;
         }
 
-        match self.source.token().await {
-            Ok(token) => {
-                self.cached.store(Some(token.clone()));
-                token
-            }
-            // The current token is still valid; serve it and let a later call
-            // retry rather than failing a request that needs no new token yet.
+        match self.acquire().await {
+            Ok(token) => token,
+            // Serve the current token and let a later call retry.
             Err(_) => current,
         }
     }
@@ -278,10 +303,16 @@ impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
                 return Ok(token);
             }
 
-            let token = self.source.token().await?;
-            self.cached.store(Some(token.clone()));
-            Ok(token)
+            self.acquire().await
         })
+    }
+
+    fn timer(&self) -> Arc<dyn Timer> {
+        self.source.timer()
+    }
+
+    fn clock(&self) -> Arc<dyn crate::core::time::Clock> {
+        self.clock.clone()
     }
 
     fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
@@ -418,6 +449,58 @@ mod tests {
             .access_token
             .expose_secret()
             .to_owned()
+    }
+
+    #[tokio::test]
+    async fn wall_time_controls_refresh_and_hard_expiry_boundaries() {
+        use crate::core::time::ManualTime;
+
+        let time = ManualTime::new(jiff::Timestamp::new(1_000, 0).unwrap());
+        let response = RawTokenResponse::builder()
+            .access_token("original")
+            .token_type("bearer")
+            .expires_in(100)
+            .build()
+            .into_token_response_with_receipt(
+                None,
+                crate::grant::core::TokenReceipt::capture(&time),
+            )
+            .unwrap();
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([
+                Ok(response),
+                Err(Error::new(RetryAdvice::No, "early refresh failed")),
+                Err(Error::new(RetryAdvice::No, "early refresh failed again")),
+                Err(Error::new(RetryAdvice::No, "expired refresh failed")),
+            ]))
+            .clock(time.clone())
+            .expires_margin(Duration::from_secs(10))
+            .refresh_ahead(Duration::from_secs(20))
+            .refresh_jitter(None)
+            .build();
+        cache.token().await.unwrap();
+        // Monotonic advancement alone does not age a token.
+        time.advance_monotonic(Duration::from_hours(1)).unwrap();
+        time.set_wall_time(jiff::Timestamp::new(1_079, 999_999_999).unwrap());
+        cache.token().await.unwrap();
+        assert_eq!(cache.source().calls(), 1);
+        time.set_wall_time(jiff::Timestamp::new(1_080, 0).unwrap());
+        assert_eq!(access_of(&cache.token().await.unwrap()), "original");
+        assert_eq!(cache.source().calls(), 2);
+        // A backward correction moves the token out of its refresh window,
+        // even when the new reading is before receipt.
+        time.set_wall_time(jiff::Timestamp::UNIX_EPOCH);
+        cache.token().await.unwrap();
+        assert_eq!(cache.source().calls(), 2);
+        time.set_wall_time(jiff::Timestamp::new(1_080, 0).unwrap());
+        cache.token().await.unwrap();
+        assert_eq!(cache.source().calls(), 3);
+        time.set_wall_time(jiff::Timestamp::new(1_089, 999_999_999).unwrap());
+        assert!(cache.get_valid_cached().is_some());
+        time.set_wall_time(jiff::Timestamp::new(1_090, 0).unwrap());
+        assert!(cache.get_valid_cached().is_none());
+        assert!(cache.token().await.is_err());
+        assert_eq!(cache.source().calls(), 4);
     }
 
     #[tokio::test]
@@ -668,5 +751,203 @@ mod tests {
         // One refresh happened (t2 minted), one caller reused t1 — no stampede.
         assert_eq!(served, ["t1".to_owned(), "t2".to_owned()].into());
         assert_eq!(cache.source().calls(), 2);
+    }
+    fn local_token(time: &crate::core::time::ManualTime, expires_in: Option<u64>) -> TokenResponse {
+        RawTokenResponse::builder()
+            .access_token("local")
+            .token_type("bearer")
+            .maybe_expires_in(expires_in)
+            .build()
+            .into_token_response_with_receipt(None, crate::grant::core::TokenReceipt::capture(time))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn delayed_insertion_and_nested_caches_preserve_receipt() {
+        use crate::core::time::ManualTime;
+        for expires_in in [Some(100), None] {
+            let time = ManualTime::default();
+            let response = local_token(&time, expires_in);
+            time.advance(Duration::from_secs(40)).unwrap();
+            let inner = Arc::new(
+                InMemoryTokenCache::builder()
+                    .source(FakeSource::new([
+                        Ok(response),
+                        Err(Error::new(RetryAdvice::No, "no replacement")),
+                    ]))
+                    .clock(time.clone())
+                    .expires_margin(Duration::ZERO)
+                    .default_expires_in(Duration::from_secs(100))
+                    .refresh_jitter(None)
+                    .build(),
+            );
+            let outer = InMemoryTokenCache::builder()
+                .source(inner.clone())
+                .expires_margin(Duration::ZERO)
+                .default_expires_in(Duration::from_secs(100))
+                .refresh_jitter(None)
+                .build();
+            let cached = outer.token().await.unwrap();
+            assert_eq!(
+                cached.elapsed_since_receipt_at(Clock::now(&time)),
+                Some(Duration::from_secs(40))
+            );
+            time.advance(Duration::from_secs(60) - Duration::from_nanos(1))
+                .unwrap();
+            assert!(Arc::ptr_eq(&cached, &outer.token().await.unwrap()));
+            time.advance(Duration::from_nanos(1)).unwrap();
+            assert!(outer.token().await.is_err());
+            assert_eq!(inner.source().calls(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn imported_receipt_is_preserved_by_clones() {
+        use crate::core::time::ManualTime;
+        let time = ManualTime::new(jiff::Timestamp::from_second(1_040).unwrap());
+        let response = RawTokenResponse::builder()
+            .access_token("imported")
+            .token_type("bearer")
+            .expires_in(100)
+            .build()
+            .into_token_response(None, SystemTime::UNIX_EPOCH + Duration::from_secs(1_000))
+            .unwrap();
+        let clone = response.clone();
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([Ok(response)]))
+            .clock(time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_jitter(None)
+            .build();
+        cache.token().await.unwrap();
+        assert_eq!(
+            clone.elapsed_since_receipt_at(Clock::now(&time)),
+            Some(Duration::from_secs(40))
+        );
+        time.advance(Duration::from_secs(60)).unwrap();
+        // Re-inserting a clone cannot reset the receipt.
+        let second = InMemoryTokenCache::builder()
+            .source(FakeSource::new([Ok(clone)]))
+            .clock(time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_jitter(None)
+            .build();
+        second.token().await.unwrap();
+        assert!(second.get_valid_cached().is_none());
+        assert!(cache.get_valid_cached().is_none());
+    }
+
+    #[tokio::test]
+    async fn cache_clock_override_controls_expiry_and_refresh_for_shared_token() {
+        use crate::core::time::ManualTime;
+
+        let source_time = ManualTime::default();
+        let response = local_token(&source_time, Some(100));
+        let inner = Arc::new(
+            InMemoryTokenCache::builder()
+                .source(FakeSource::new([Ok(response)]))
+                .clock(source_time.clone())
+                .expires_margin(Duration::ZERO)
+                .refresh_jitter(None)
+                .build(),
+        );
+        let cached = inner.token().await.unwrap();
+        let cache_time = ManualTime::default();
+        let outer = InMemoryTokenCache::builder()
+            .source(inner.clone())
+            .clock(cache_time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_ahead(Duration::from_secs(20))
+            .refresh_jitter(None)
+            .build();
+        assert!(Arc::ptr_eq(&cached, &outer.token().await.unwrap()));
+        cache_time.advance(Duration::from_secs(80)).unwrap();
+        assert!(outer.in_refresh_window(&cached));
+        assert!(!inner.in_refresh_window(&cached));
+        assert!(outer.get_valid_cached().is_some());
+        cache_time.advance(Duration::from_secs(20)).unwrap();
+        assert!(outer.get_valid_cached().is_none());
+        assert!(Arc::ptr_eq(&cached, &inner.token().await.unwrap()));
+    }
+
+    #[tokio::test]
+    async fn imported_future_receipt_keeps_its_original_wall_deadline() {
+        let time = crate::core::time::ManualTime::default();
+        let response = RawTokenResponse::builder()
+            .access_token("imported")
+            .token_type("bearer")
+            .expires_in(100)
+            .build()
+            .into_token_response(None, SystemTime::UNIX_EPOCH + Duration::from_secs(1))
+            .unwrap();
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([Ok(response)]))
+            .clock(time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_jitter(None)
+            .build();
+        cache.token().await.unwrap();
+        time.advance(Duration::from_secs(101) - Duration::from_nanos(1))
+            .unwrap();
+        assert!(cache.get_valid_cached().is_some());
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(cache.get_valid_cached().is_none());
+    }
+    #[tokio::test]
+    async fn oversized_explicit_and_default_lifetimes_remain_cached() {
+        for expires_in in [Some(u64::MAX), None] {
+            let time = crate::core::time::ManualTime::default();
+            let cache = InMemoryTokenCache::builder()
+                .source(FakeSource::new([Ok(local_token(&time, expires_in))]))
+                .clock(time.clone())
+                .default_expires_in(Duration::MAX)
+                .build();
+            let token = cache.token().await.unwrap();
+            time.advance(Duration::from_hours(100 * 365 * 24)).unwrap();
+            assert!(Arc::ptr_eq(&token, &cache.token().await.unwrap()));
+            assert_eq!(cache.source().calls(), 1);
+        }
+        let time = crate::core::time::ManualTime::new(
+            jiff::Timestamp::MAX
+                .checked_sub(Duration::from_secs(1))
+                .unwrap(),
+        );
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([Ok(local_token(&time, Some(2)))]))
+            .clock(time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_jitter(None)
+            .build();
+        cache.token().await.unwrap();
+        time.set_wall_time(jiff::Timestamp::MAX);
+        assert!(cache.get_valid_cached().is_none());
+    }
+
+    #[tokio::test]
+    async fn wall_clock_retires_cached_token_after_suspend() {
+        use crate::core::time::ManualTime;
+
+        let time = ManualTime::new(jiff::Timestamp::new(1_000, 0).unwrap());
+        let receipt = crate::grant::core::TokenReceipt::capture(&time);
+        let response = RawTokenResponse::builder()
+            .access_token("token")
+            .token_type("bearer")
+            .expires_in(60)
+            .build()
+            .into_token_response_with_receipt(None, receipt)
+            .unwrap();
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([Ok(response)]))
+            .clock(time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_jitter(None)
+            .build();
+        cache.token().await.unwrap();
+        time.advance_monotonic(Duration::from_hours(1)).unwrap();
+        assert!(cache.get_valid_cached().is_some());
+        time.set_wall_time(jiff::Timestamp::new(1_059, 999_999_999).unwrap());
+        assert!(cache.get_valid_cached().is_some());
+        time.set_wall_time(jiff::Timestamp::new(1_060, 0).unwrap());
+        assert!(cache.get_valid_cached().is_none());
     }
 }

@@ -16,6 +16,7 @@ use crate::{
         client_auth::{AuthenticationContext, ClientAuthentication},
         dpop::NoDPoP,
         http::HttpClient,
+        time::{Clock, PlatformClock},
     },
     grant::core::form::OAuth2FormRequest,
     token::{AccessToken, RefreshToken},
@@ -69,6 +70,13 @@ impl RevocableToken for RefreshToken {
     /// inputs before returning this builder.
 }))]
 pub struct TokenRevocation {
+    /// Clock used to timestamp outgoing requests.
+    #[builder(
+        default = Arc::<PlatformClock>::default(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    clock: Arc<dyn Clock>,
+
     // -- User-supplied fields --
     /// The OAuth 2.0 client identifier registered with the authorization
     /// server.
@@ -155,10 +163,12 @@ impl TokenRevocation {
             &self.revocation_endpoint
         };
 
+        let now = self.clock.now();
         let auth_params = self
             .client_auth
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(now)
                     .client_id(&self.client_id)
                     .target_endpoint(effective_endpoint)
                     .maybe_issuer(self.issuer.as_deref())
@@ -176,12 +186,13 @@ impl TokenRevocation {
         };
 
         OAuth2FormRequest::builder()
+            .now(now)
             .auth_params(auth_params)
             .form(&form)
             .uri(effective_endpoint.as_uri())
             .dpop(&NoDPoP)
             .build()
-            .execute_empty_response(http_client)
+            .execute_empty_response(http_client, self.clock.as_ref())
             .await
     }
 }

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::Snafu;
 
+use super::receipt::TokenReceipt;
 use crate::{
     core::{AuthorizationDetail, platform::Duration, secrets::SecretString},
     token::{
@@ -15,7 +16,7 @@ use crate::{
 /// The response from the token endpoint (RFC 6749 §5.1), as received.
 ///
 /// Grants produce this internally and convert it via
-/// [`into_token_response`](Self::into_token_response). The builder exists so
+/// [`into_token_response_with_receipt`](Self::into_token_response_with_receipt). The builder exists so
 /// tests and integrations can fabricate a [`TokenResponse`] — e.g. to
 /// [`prime`](crate::cache::GrantTokenSource::prime) a token source without
 /// running a real exchange. To persist credentials across restarts, store the
@@ -84,12 +85,46 @@ impl std::fmt::Debug for RawTokenResponse {
 /// [`exchange`]: crate::grant::core::OAuth2ExchangeGrant::exchange
 #[derive(Debug, Clone)]
 pub struct TokenResponse {
+    received_at: jiff::Timestamp,
     raw: RawTokenResponse,
     access_token: AccessToken,
     refresh_token: Option<RefreshToken>,
 }
 
 impl TokenResponse {
+    /// Wall-clock duration from receipt to `now`, including processing and priming delays.
+    ///
+    /// Returns `None` if `now` is before receipt. Clock adjustments can increase
+    /// or decrease this duration. Expiry checks compare wall time directly
+    /// against the deadline instead.
+    #[must_use]
+    pub fn elapsed_since_receipt_at(&self, now: jiff::Timestamp) -> Option<Duration> {
+        now.duration_since(self.received_at).try_into().ok()
+    }
+
+    pub(crate) fn is_expired_at(
+        &self,
+        now: jiff::Timestamp,
+        default_expires_in: Duration,
+        margin: Duration,
+    ) -> bool {
+        // The access token's platform receipt may have been clamped (for example,
+        // before the epoch in browsers). Anchor expiry to the original receipt.
+        let expiry = crate::token::effective_expiry_at(
+            self.received_at,
+            self.access_token.effective_lifetime(default_expires_in),
+            margin,
+        );
+        now >= expiry
+    }
+
+    /// The wall-clock timestamp captured when the token response was received.
+    /// Used for expiry, absolute claims, and persistence.
+    #[must_use]
+    pub fn received_at(&self) -> jiff::Timestamp {
+        self.received_at
+    }
+
     /// Returns the access token from the token response.
     #[must_use]
     pub fn access_token(&self) -> &AccessToken {
@@ -202,6 +237,10 @@ impl RawTokenResponse {
     /// [`into_token_response_with_context`](Self::into_token_response_with_context)
     /// to resolve refresh binding independently, as built-in grants do.
     ///
+    /// This imports a wall-clock receipt timestamp, preserved through priming
+    /// and caching. For local responses, use
+    /// [`Self::into_token_response_with_receipt`] to capture the receipt before parsing.
+    ///
     /// # Errors
     ///
     /// Returns [`InvalidTokenResponse::InvalidTokenType`] for an unknown
@@ -243,12 +282,74 @@ impl RawTokenResponse {
         context: TokenResponseContext,
         received_at: crate::core::platform::SystemTime,
     ) -> Result<TokenResponse, InvalidTokenResponse> {
+        // Clamp like other platform-time inputs; a token beyond Jiff's range
+        // is either already expired or effectively never expires.
+        let received_at = crate::core::time::timestamp_from_system_time_saturating(received_at);
+        self.into_token_response_with_context_at(context, received_at)
+    }
+
+    /// Resolve a locally received response without losing its lifetime origin.
+    ///
+    /// # Errors
+    /// Returns the same token-type and `DPoP` binding errors as [`Self::into_token_response`].
+    pub fn into_token_response_with_receipt(
+        self,
+        dpop_jkt: Option<String>,
+        receipt: TokenReceipt,
+    ) -> Result<TokenResponse, InvalidTokenResponse> {
+        let bind_refresh_token = self.token_type.eq_ignore_ascii_case("DPoP");
+        self.into_token_response_with_context_and_receipt(
+            TokenResponseContext::builder()
+                .maybe_dpop_jkt(dpop_jkt)
+                .bind_refresh_token(bind_refresh_token)
+                .build(),
+            receipt,
+        )
+    }
+
+    /// Resolve request bindings while retaining the local response's receipt timestamp.
+    ///
+    /// # Errors
+    /// Returns the same token-type and `DPoP` binding errors as
+    /// [`Self::into_token_response_with_context`].
+    pub fn into_token_response_with_context_and_receipt(
+        self,
+        context: TokenResponseContext,
+        receipt: TokenReceipt,
+    ) -> Result<TokenResponse, InvalidTokenResponse> {
+        self.into_token_response_with_context_at(context, receipt.wall)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_token_response_at(
+        self,
+        dpop_jkt: Option<String>,
+        received_at: jiff::Timestamp,
+    ) -> Result<TokenResponse, InvalidTokenResponse> {
+        let bind_refresh_token = self.token_type.eq_ignore_ascii_case("DPoP");
+        self.into_token_response_with_context_at(
+            TokenResponseContext::builder()
+                .maybe_dpop_jkt(dpop_jkt)
+                .bind_refresh_token(bind_refresh_token)
+                .build(),
+            received_at,
+        )
+    }
+
+    fn into_token_response_with_context_at(
+        self,
+        context: TokenResponseContext,
+        received_at: jiff::Timestamp,
+    ) -> Result<TokenResponse, InvalidTokenResponse> {
         let bind_refresh_token = context.bind_refresh_token;
         #[cfg(feature = "experimental-oidc-key-binding")]
         let bind_refresh_token = bind_refresh_token || context.openid_bound_key_requested;
         let refresh_token_dpop_jkt = context.dpop_jkt.clone().filter(|_| bind_refresh_token);
         let token_type = self.resolve_token_type(context.dpop_jkt)?;
-        let access_token = self.build_access_token(token_type, received_at);
+        let access_token = self.build_access_token(
+            token_type,
+            huskarl_core::time::system_time_from_timestamp_saturating(received_at),
+        );
         let refresh_token = self.build_refresh_token(refresh_token_dpop_jkt);
         #[cfg(feature = "experimental-oidc-key-binding")]
         let mut refresh_token = refresh_token;
@@ -258,6 +359,7 @@ impl RawTokenResponse {
         }
 
         Ok(TokenResponse {
+            received_at,
             raw: self,
             access_token,
             refresh_token,
@@ -341,6 +443,51 @@ pub enum InvalidTokenResponse {
 mod test {
     use http::HeaderValue;
 
+    #[rstest::rstest]
+    #[case::minimum(jiff::Timestamp::MIN)]
+    #[case::maximum(jiff::Timestamp::MAX)]
+    #[case::fractional_pre_epoch(jiff::Timestamp::new(-1, 123_456_789).unwrap())]
+    fn token_response_preserves_receipt_timestamp(#[case] received_at: jiff::Timestamp) {
+        let raw = RawTokenResponse::builder()
+            .access_token("token")
+            .token_type("bearer")
+            .build();
+        let response = raw
+            .clone()
+            .into_token_response_at(None, received_at)
+            .unwrap();
+        assert_eq!(response.received_at(), received_at);
+
+        if let Ok(system_time) = huskarl_core::time::system_time_from_timestamp(received_at) {
+            let response = raw.into_token_response(None, system_time).unwrap();
+            assert_eq!(response.received_at(), received_at);
+        }
+    }
+
+    // Imported receipts outside Jiff's range clamp, like other platform-time inputs.
+    #[rstest::rstest]
+    #[case::minimum(jiff::Timestamp::MIN)]
+    #[case::maximum(jiff::Timestamp::MAX)]
+    #[test]
+    fn out_of_range_receipt_time_is_clamped(#[case] boundary: jiff::Timestamp) {
+        let Ok(system_time) = huskarl_core::time::system_time_from_timestamp(boundary) else {
+            return;
+        };
+        let outside = if boundary < jiff::Timestamp::UNIX_EPOCH {
+            system_time.checked_sub(Duration::from_secs(1))
+        } else {
+            system_time.checked_add(Duration::from_secs(1))
+        };
+        let Some(outside) = outside else { return };
+        let response = RawTokenResponse::builder()
+            .access_token("token")
+            .token_type("bearer")
+            .build()
+            .into_token_response(None, outside)
+            .unwrap();
+        assert_eq!(response.received_at(), boundary);
+    }
+
     use crate::{
         core::{
             platform::{Duration, SystemTime},
@@ -348,6 +495,66 @@ mod test {
         },
         grant::core::token_response::{InvalidTokenResponse, RawTokenResponse},
     };
+
+    #[test]
+    fn expiry_preserves_original_receipt_when_platform_receipt_is_clamped() {
+        use crate::{
+            core::time::{Clock, ManualTime},
+            grant::core::TokenReceipt,
+        };
+
+        for expires_in in [Some(20), None] {
+            for margin in [Duration::ZERO, Duration::from_secs(3)] {
+                let time = ManualTime::new(jiff::Timestamp::from_second(-10).unwrap());
+                let mut response = RawTokenResponse::builder()
+                    .access_token("token")
+                    .token_type("bearer")
+                    .maybe_expires_in(expires_in)
+                    .build()
+                    .into_token_response_with_receipt(None, TokenReceipt::capture(&time))
+                    .unwrap();
+                // Reproduce web_time's pre-epoch clamp on native targets too.
+                response.access_token = response
+                    .raw
+                    .build_access_token(super::ResolvedTokenType::Bearer, SystemTime::UNIX_EPOCH);
+                let expiry = response
+                    .received_at()
+                    .checked_add(Duration::from_secs(20))
+                    .unwrap()
+                    .checked_sub(margin)
+                    .unwrap();
+                time.set_wall_time(expiry.checked_sub(Duration::from_nanos(1)).unwrap());
+                assert!(!response.is_expired_at(time.now(), Duration::from_secs(20), margin));
+                time.set_wall_time(expiry);
+                assert!(response.is_expired_at(time.now(), Duration::from_secs(20), margin));
+            }
+        }
+    }
+
+    #[test]
+    fn elapsed_time_uses_explicit_now_without_priming_or_caching() {
+        let received_at = jiff::Timestamp::from_second(100).unwrap();
+        let response = RawTokenResponse::builder()
+            .access_token("token")
+            .token_type("bearer")
+            .build()
+            .into_token_response_at(None, received_at)
+            .unwrap();
+        assert_eq!(
+            response.elapsed_since_receipt_at(received_at),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            response
+                .elapsed_since_receipt_at(received_at.checked_add(Duration::from_secs(5)).unwrap()),
+            Some(Duration::from_secs(5))
+        );
+        assert_eq!(
+            response
+                .elapsed_since_receipt_at(received_at.checked_sub(Duration::from_secs(1)).unwrap()),
+            None
+        );
+    }
 
     #[test]
     fn extras_round_trip_without_appearing_in_debug() {

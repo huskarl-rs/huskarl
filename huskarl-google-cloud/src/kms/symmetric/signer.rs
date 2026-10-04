@@ -14,6 +14,7 @@ use huskarl_core::{
         verifier::{JwsVerifier, KeyMatch, MultiKeyVerifier, VerifyError},
     },
     platform::MaybeSendBoxFuture,
+    time::{Clock, PlatformClock},
 };
 use snafu::prelude::*;
 
@@ -318,14 +319,18 @@ impl SigningKey {
         /// The version selection strategy. Defaults to [`VersionStrategy::Latest`].
         #[builder(default)]
         strategy: VersionStrategy,
+        /// Clock sampled after listing versions for minimum-age selection.
+        #[builder(default = Arc::<PlatformClock>::default(), with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>)]
+        clock: Arc<dyn Clock>,
         /// The policy for deriving a `kid` from the key version ID. Defaults to
         /// [`VersionKid::none()`] (no `kid`).
         #[builder(default = VersionKid::none())]
         kid: VersionKid,
     ) -> Result<Self, KeyError> {
-        let version_id = version::resolve_version(&key_name, &strategy, &kms_client)
-            .await
-            .context(ResolveVersionSnafu)?;
+        let version_id =
+            version::resolve_version_with_clock(&key_name, &strategy, &kms_client, clock.as_ref())
+                .await
+                .context(ResolveVersionSnafu)?;
 
         let resource_name = format!("{key_name}/cryptoKeyVersions/{version_id}");
 

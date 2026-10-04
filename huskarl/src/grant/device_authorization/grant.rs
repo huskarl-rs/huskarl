@@ -10,7 +10,8 @@ use crate::{
         client_auth::{AuthenticationContext, ClientAuthentication},
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
-        platform::{Duration, sleep},
+        platform::Duration,
+        time::{Clock, PlatformClock, PlatformTimer, Timer},
     },
     grant::{
         core::{
@@ -40,6 +41,14 @@ use crate::{
     /// authentication capability inputs before returning this builder.
 }))]
 pub struct DeviceAuthorizationGrant {
+    /// Clock used for outgoing JWTs and received tokens; inherited by refresh grants.
+    /// Grant-backed token caches inherit this clock by default.
+    #[builder(
+        default = Arc::<PlatformClock>::default(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    clock: Arc<dyn Clock>,
+
     /// The OAuth 2.0 client identifier registered with the authorization
     /// server.
     client_id: String,
@@ -82,6 +91,13 @@ pub struct DeviceAuthorizationGrant {
     /// policy yourself.
     #[builder(default = DEFAULT_MAX_TRANSIENT_POLL_FAILURES)]
     max_transient_poll_failures: u32,
+
+    /// Timer used to pace polling and enforce polling deadlines.
+    #[builder(
+        default = Arc::<PlatformTimer>::default(),
+        with = |timer: impl Timer + 'static| Arc::new(timer) as Arc<dyn Timer>
+    )]
+    timer: Arc<dyn Timer>,
 
     /// The authorization server's issuer identifier, when known.
     ///
@@ -153,8 +169,8 @@ impl DeviceAuthorizationGrant {
     /// # Errors
     ///
     /// Returns an error if client authentication, `DPoP` proof generation, the
-    /// HTTP request, or response parsing fails, or if the endpoint rejects the
-    /// request.
+    /// HTTP request, or response parsing fails, if the endpoint rejects the
+    /// request, or if the response expiry is outside the representable timestamp range.
     pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
         let dpop_jkt = self.dpop().get_current_thumbprint().await;
         #[cfg(feature = "experimental-oidc-key-binding")]
@@ -170,7 +186,8 @@ impl DeviceAuthorizationGrant {
 
         let device_auth_endpoint = &self.effective_device_authorization_endpoint;
 
-        let response: DeviceAuthorizationResponse = with_dpop_nonce_retry!({
+        let (response, received_at): (DeviceAuthorizationResponse, _) = with_dpop_nonce_retry!({
+            let now = self.clock.now();
             // The assertion is sent to the device authorization endpoint, not
             // the token endpoint: pass that as the target endpoint (RFC 8628 is
             // one of the non-token endpoints named in the audience-injection
@@ -179,6 +196,7 @@ impl DeviceAuthorizationGrant {
                 .client_auth
                 .authentication_context(
                     AuthenticationContext::builder()
+                        .now(now)
                         .client_id(&self.client_id)
                         .target_endpoint(device_auth_endpoint)
                         .maybe_issuer(self.issuer.as_deref())
@@ -191,22 +209,22 @@ impl DeviceAuthorizationGrant {
                 .await?;
 
             OAuth2FormRequest::builder()
+                .now(now)
                 .form(&payload)
                 .auth_params(auth_params)
                 .uri(device_auth_endpoint.as_uri())
                 .dpop(self.dpop())
                 .maybe_dpop_jkt(dpop_jkt.as_deref())
                 .build()
-                .execute(self.http_client.as_ref())
+                .execute(self.http_client.as_ref(), self.clock.as_ref())
                 .await
         })?;
 
         Ok(StartOutput::builder()
-            .expires_at(
-                crate::core::platform::SystemTime::now()
-                    .checked_add(Duration::from_secs(response.expires_in.into()))
-                    .unwrap_or_else(crate::core::platform::SystemTime::now),
-            )
+            .expires_at(crate::grant::core::response_expiry(
+                received_at,
+                response.expires_in.into(),
+            )?)
             .verification_uri(response.verification_uri)
             .maybe_verification_uri_complete(response.verification_uri_complete)
             .user_code(response.user_code)
@@ -240,13 +258,19 @@ impl DeviceAuthorizationGrant {
         resource: Option<Vec<String>>,
     ) -> Result<TokenResponse, PollError> {
         let mut consecutive_failures: u32 = 0;
+        let mut retry_after = None;
         loop {
             // Clamp to the configured floor: a server (or a deserialized
             // pending state) can carry `interval: 0`, which would otherwise
             // spin a zero-delay hot loop hammering the token endpoint.
             let interval_secs = pending_state.interval_secs.max(self.min_poll_interval_secs);
             let interval = Duration::from_secs(interval_secs.into());
-            sleep(interval).await;
+            let delay = interval.max(retry_after.take().unwrap_or_default());
+            match self.timer.now().checked_add(delay) {
+                Some(deadline) => self.timer.sleep_until(deadline).await,
+                // A deadline beyond this timeline's range cannot be reached.
+                None => core::future::pending::<()>().await,
+            }
 
             let err = match self.poll(pending_state, resource.clone()).await {
                 Ok(PollResult::Complete(token_response)) => return Ok(*token_response),
@@ -266,10 +290,8 @@ impl DeviceAuthorizationGrant {
             if consecutive_failures > self.max_transient_poll_failures {
                 return Err(err);
             }
-            // The next loop already sleeps for `interval`, so wait only the excess.
-            if let Some(after) = after {
-                sleep(after.saturating_sub(interval)).await;
-            }
+            // Honor both the polling cadence and Retry-After with one wait.
+            retry_after = after;
         }
     }
 
@@ -346,6 +368,13 @@ pub struct DeviceAuthorizationGrantForm {
 }
 
 impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
+    async fn authentication_params_at(
+        &self,
+        now: jiff::Timestamp,
+    ) -> Result<crate::core::client_auth::AuthenticationParams<'_>, crate::core::Error> {
+        crate::grant::core::authentication_params_at(self, now).await
+    }
+
     type Parameters = DeviceAuthorizationGrantParameters;
     type Form<'a> = DeviceAuthorizationGrantForm;
 
@@ -389,6 +418,14 @@ impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
         self.dpop.as_ref()
     }
 
+    fn timer(&self) -> Arc<dyn crate::core::time::Timer> {
+        self.timer.clone()
+    }
+
+    fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
+    }
+
     fn http_client(&self) -> &dyn HttpClient {
         self.http_client.as_ref()
     }
@@ -399,6 +436,8 @@ impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
 
     fn to_refresh_grant(&self) -> RefreshGrant {
         RefreshGrant::builder()
+            .clock(self.clock.clone())
+            .timer(OAuth2ExchangeGrant::timer(self))
             .client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
             .http_client(self.http_client.clone())
@@ -490,7 +529,8 @@ pub struct StartOutput {
     pub verification_uri: String,
     /// A verification URI that includes the user code.
     pub verification_uri_complete: Option<String>,
-    /// The time at which the user code expires.
+    /// The time at which the user code expires, anchored to the grant's clock
+    /// when the device authorization response is received.
     pub expires_at: crate::core::platform::SystemTime,
     /// The pending state information (to be passed to the `poll` function).
     pub pending_state: PendingState,
@@ -621,6 +661,7 @@ impl StartInput {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use futures_util::FutureExt as _;
     use http::{HeaderMap, Request, StatusCode};
 
     use super::*;
@@ -629,6 +670,7 @@ mod tests {
         client_auth::NoAuth,
         http::{HttpClient, HttpResponse, Idempotency},
         platform::MaybeSendBoxFuture,
+        time::ManualTime,
     };
 
     /// An [`HttpClient`] that ignores the request and returns a fixed response.
@@ -677,6 +719,23 @@ mod tests {
             device_code: "dev-code".to_string(),
             interval_secs: 5,
         }
+    }
+
+    fn complete_after(
+        grant: &DeviceAuthorizationGrant,
+        time: &ManualTime,
+        delays_secs: &[u64],
+    ) -> Result<TokenResponse, PollError> {
+        let mut state = pending();
+        let mut polling = std::pin::pin!(grant.poll_to_completion(&mut state, None));
+        for &seconds in delays_secs {
+            assert!(polling.as_mut().now_or_never().is_none());
+            time.advance(Duration::from_secs(seconds)).unwrap();
+        }
+        let Some(result) = polling.as_mut().now_or_never() else {
+            panic!("polling did not finish after the expected delays");
+        };
+        result
     }
 
     /// Same wire leniency as the token response's `expires_in`: seconds
@@ -830,9 +889,9 @@ mod tests {
     }
 
     // A pending code echoed in a 5xx body must still consume the failure budget.
-    #[tokio::test(start_paused = true)]
-    async fn an_echoed_pending_code_is_an_outage_not_a_wait() {
-        let (g, calls) = scripted_grant(
+    #[test]
+    fn an_echoed_pending_code_is_an_outage_not_a_wait() {
+        let (g, calls, time) = scripted_grant(
             vec![(
                 StatusCode::SERVICE_UNAVAILABLE,
                 r#"{"error":"authorization_pending"}"#,
@@ -841,7 +900,7 @@ mod tests {
         );
 
         assert!(matches!(
-            g.poll_to_completion(&mut pending(), None).await,
+            complete_after(&g, &time, &[5, 5, 5]),
             Err(PollError::Exchange { .. })
         ));
         // Bounded: a budget of 2 absorbs two, and the third ends it.
@@ -933,30 +992,34 @@ mod tests {
         assert_eq!(configured.min_poll_interval_secs, 30);
     }
 
-    // A zero server interval must still honor the configured floor.
-    #[tokio::test(start_paused = true)]
-    async fn poll_to_completion_enforces_interval_floor_on_zero() {
-        let g = grant(
-            StatusCode::OK,
-            r#"{"access_token":"at-123","token_type":"bearer"}"#,
-        );
-        let mut state = PendingState {
-            #[cfg(feature = "experimental-oidc-key-binding")]
-            dpop_jkt: None,
-            #[cfg(feature = "experimental-oidc-key-binding")]
-            openid_bound_key_requested: false,
-            device_code: "dev-code".to_string(),
-            interval_secs: 0,
-        };
-
-        let start = tokio::time::Instant::now();
-        g.poll_to_completion(&mut state, None).await.unwrap();
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed >= std::time::Duration::from_secs(DEFAULT_MIN_POLL_INTERVAL_SECS.into()),
-            "expected at least the {DEFAULT_MIN_POLL_INTERVAL_SECS}s floor, slept {elapsed:?}"
-        );
+    #[rstest::rstest]
+    #[case::zero_interval(0, 5, 5)]
+    #[case::short_interval(1, 5, 5)]
+    #[case::server_interval(10, 5, 10)]
+    #[case::configured_floor(5, 30, 30)]
+    #[test]
+    fn polling_waits_for_the_interval_floor(
+        #[case] interval_secs: u32,
+        #[case] floor_secs: u32,
+        #[case] delay_secs: u64,
+    ) {
+        let (mut grant, calls, time) = scripted_grant(vec![(StatusCode::OK, TOKEN)], 0);
+        grant.min_poll_interval_secs = floor_secs;
+        let mut state = pending();
+        state.interval_secs = interval_secs;
+        let mut polling = std::pin::pin!(grant.poll_to_completion(&mut state, None));
+        assert!(polling.as_mut().now_or_never().is_none());
+        time.advance(
+            Duration::from_secs(delay_secs)
+                .checked_sub(Duration::from_nanos(1))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(polling.as_mut().now_or_never().is_none());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(matches!(polling.as_mut().now_or_never(), Some(Ok(_))));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     // Repeats the last scripted response and counts requests.
@@ -992,7 +1055,9 @@ mod tests {
     ) -> (
         DeviceAuthorizationGrant,
         Arc<std::sync::atomic::AtomicUsize>,
+        ManualTime,
     ) {
+        let time = ManualTime::default();
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let grant = DeviceAuthorizationGrant::builder()
             .client_id("device-client")
@@ -1006,8 +1071,9 @@ mod tests {
                 "https://as.example/device".parse::<EndpointUrl>().unwrap(),
             )
             .max_transient_poll_failures(max_transient_poll_failures)
+            .timer(time.clone())
             .build();
-        (grant, calls)
+        (grant, calls, time)
     }
 
     const TOKEN: &str = r#"{"access_token":"at-123","token_type":"bearer"}"#;
@@ -1017,29 +1083,23 @@ mod tests {
     #[case::server_error(StatusCode::SERVICE_UNAVAILABLE)]
     #[case::bad_gateway(StatusCode::BAD_GATEWAY)]
     #[case::rate_limited(StatusCode::TOO_MANY_REQUESTS)]
-    #[tokio::test(start_paused = true)]
-    async fn a_transient_failure_does_not_end_the_flow(#[case] status: StatusCode) {
-        let (g, _) = scripted_grant(
+    #[test]
+    fn a_transient_failure_does_not_end_the_flow(#[case] status: StatusCode) {
+        let (g, _, time) = scripted_grant(
             vec![(status, "{}"), (StatusCode::OK, TOKEN)],
             DEFAULT_MAX_TRANSIENT_POLL_FAILURES,
         );
 
-        let token = g
-            .poll_to_completion(&mut pending(), None)
-            .await
-            .expect("the flow survives a blip");
+        let token = complete_after(&g, &time, &[5, 5]).expect("the flow survives a blip");
         assert_eq!(token.access_token().token().expose_secret(), "at-123");
     }
 
     // A sustained outage returns the underlying failure after the budget.
-    #[tokio::test(start_paused = true)]
-    async fn a_sustained_outage_still_ends_the_flow() {
-        let (g, calls) = scripted_grant(vec![(StatusCode::SERVICE_UNAVAILABLE, "{}")], 2);
+    #[test]
+    fn a_sustained_outage_still_ends_the_flow() {
+        let (g, calls, time) = scripted_grant(vec![(StatusCode::SERVICE_UNAVAILABLE, "{}")], 2);
 
-        let err = g
-            .poll_to_completion(&mut pending(), None)
-            .await
-            .unwrap_err();
+        let err = complete_after(&g, &time, &[5, 5, 5]).unwrap_err();
         assert!(
             matches!(err, PollError::Exchange { .. }),
             "expected the underlying failure, got {err:?}"
@@ -1049,9 +1109,9 @@ mod tests {
     }
 
     // A zero budget lets callers drive their own retry policy.
-    #[tokio::test(start_paused = true)]
-    async fn a_zero_budget_surfaces_the_first_transient_failure() {
-        let (g, _) = scripted_grant(
+    #[test]
+    fn a_zero_budget_surfaces_the_first_transient_failure() {
+        let (g, _, time) = scripted_grant(
             vec![
                 (StatusCode::SERVICE_UNAVAILABLE, "{}"),
                 (StatusCode::OK, TOKEN),
@@ -1059,16 +1119,16 @@ mod tests {
             0,
         );
         assert!(matches!(
-            g.poll_to_completion(&mut pending(), None).await,
+            complete_after(&g, &time, &[5]),
             Err(PollError::Exchange { .. })
         ));
     }
 
     // Any server answer resets the consecutive-failure count.
-    #[tokio::test(start_paused = true)]
-    async fn an_answer_resets_the_transient_budget() {
+    #[test]
+    fn an_answer_resets_the_transient_budget() {
         const PENDING: &str = r#"{"error":"authorization_pending"}"#;
-        let (g, _) = scripted_grant(
+        let (g, _, time) = scripted_grant(
             vec![
                 (StatusCode::SERVICE_UNAVAILABLE, "{}"),
                 (StatusCode::BAD_REQUEST, PENDING),
@@ -1080,9 +1140,7 @@ mod tests {
             1,
         );
 
-        let token = g
-            .poll_to_completion(&mut pending(), None)
-            .await
+        let token = complete_after(&g, &time, &[5, 5, 5, 5, 5, 5])
             .expect("each blip is a fresh streak of one");
         assert_eq!(token.access_token().token().expose_secret(), "at-123");
     }
@@ -1091,17 +1149,14 @@ mod tests {
     #[rstest::rstest]
     #[case::denied(r#"{"error":"access_denied"}"#)]
     #[case::expired(r#"{"error":"expired_token"}"#)]
-    #[tokio::test(start_paused = true)]
-    async fn a_verdict_ends_the_flow_immediately(#[case] body: &'static str) {
-        let (g, _) = scripted_grant(
+    #[test]
+    fn a_verdict_ends_the_flow_immediately(#[case] body: &'static str) {
+        let (g, _, time) = scripted_grant(
             vec![(StatusCode::BAD_REQUEST, body), (StatusCode::OK, TOKEN)],
             DEFAULT_MAX_TRANSIENT_POLL_FAILURES,
         );
 
-        let err = g
-            .poll_to_completion(&mut pending(), None)
-            .await
-            .unwrap_err();
+        let err = complete_after(&g, &time, &[5]).unwrap_err();
         assert!(
             matches!(err, PollError::AccessDenied | PollError::TokenExpired),
             "got {err:?}"
@@ -1109,11 +1164,15 @@ mod tests {
         assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
 
-    // Honor `Retry-After` when it exceeds the normal poll interval.
-    #[tokio::test(start_paused = true)]
-    async fn a_named_interval_is_honoured_before_re_attempting() {
-        // Answers once with `Retry-After: 60`, then issues the token.
-        struct ThrottlingClient(std::sync::atomic::AtomicUsize);
+    #[rstest::rstest]
+    #[case::shorter_than_cadence("2", 5)]
+    #[case::longer_than_cadence("60", 60)]
+    #[test]
+    fn retry_after_and_poll_interval_are_both_honoured(
+        #[case] after: &'static str,
+        #[case] delay_secs: u64,
+    ) {
+        struct ThrottlingClient(Arc<std::sync::atomic::AtomicUsize>, &'static str);
 
         impl HttpClient for ThrottlingClient {
             fn execute(
@@ -1122,10 +1181,11 @@ mod tests {
                 _idempotency: Idempotency,
             ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
                 let first = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0;
+                let after = self.1;
                 Box::pin(async move {
                     let mut headers = HeaderMap::new();
                     if first {
-                        headers.insert("retry-after", http::HeaderValue::from_static("60"));
+                        headers.insert("retry-after", http::HeaderValue::from_static(after));
                     }
                     Ok(HttpResponse {
                         status: if first {
@@ -1140,9 +1200,12 @@ mod tests {
             }
         }
 
+        let time = ManualTime::default();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let g = DeviceAuthorizationGrant::builder()
+            .timer(time.clone())
             .client_id("device-client")
-            .http_client(ThrottlingClient(std::sync::atomic::AtomicUsize::new(0)))
+            .http_client(ThrottlingClient(calls.clone(), after))
             .client_auth(NoAuth)
             .token_endpoint("https://as.example/token".parse::<EndpointUrl>().unwrap())
             .device_authorization_endpoint(
@@ -1150,17 +1213,113 @@ mod tests {
             )
             .build();
 
-        let start = tokio::time::Instant::now();
-        g.poll_to_completion(&mut pending(), None)
-            .await
-            .expect("the flow survives a throttle");
+        let mut state = pending();
+        let mut polling = std::pin::pin!(g.poll_to_completion(&mut state, None));
+        assert!(polling.as_mut().now_or_never().is_none());
+        time.advance(Duration::from_secs(5)).unwrap();
+        assert!(polling.as_mut().now_or_never().is_none());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        time.advance(
+            Duration::from_secs(delay_secs)
+                .checked_sub(Duration::from_nanos(1))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(polling.as_mut().now_or_never().is_none());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(matches!(polling.as_mut().now_or_never(), Some(Ok(_))));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 2);
+    }
 
-        // The 60s the server asked for, not the 5s poll cadence.
-        assert!(
-            start.elapsed() >= std::time::Duration::from_mins(1),
-            "slept only {:?}; the server's Retry-After was dropped",
-            start.elapsed()
+    #[test]
+    fn slow_down_increases_subsequent_poll_intervals() {
+        let (g, calls, time) = scripted_grant(
+            vec![
+                (StatusCode::BAD_REQUEST, r#"{"error":"slow_down"}"#),
+                (
+                    StatusCode::BAD_REQUEST,
+                    r#"{"error":"authorization_pending"}"#,
+                ),
+                (StatusCode::BAD_REQUEST, r#"{"error":"slow_down"}"#),
+                (StatusCode::OK, TOKEN),
+            ],
+            0,
         );
+        let mut state = pending();
+        {
+            let mut polling = std::pin::pin!(g.poll_to_completion(&mut state, None));
+            assert!(polling.as_mut().now_or_never().is_none());
+            for (index, seconds) in [5, 10, 10, 15].into_iter().enumerate() {
+                time.advance(
+                    Duration::from_secs(seconds)
+                        .checked_sub(Duration::from_nanos(1))
+                        .unwrap(),
+                )
+                .unwrap();
+                assert!(polling.as_mut().now_or_never().is_none());
+                assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), index);
+                time.advance(Duration::from_nanos(1)).unwrap();
+                let result = polling.as_mut().now_or_never();
+                if index == 3 {
+                    assert!(matches!(result, Some(Ok(_))));
+                } else {
+                    assert!(result.is_none());
+                }
+                assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), index + 1);
+            }
+        }
+        assert_eq!(state.interval_secs, 15);
+    }
+
+    #[rstest::rstest]
+    #[case::before_first_request(false)]
+    #[case::between_requests(true)]
+    #[test]
+    fn wall_clock_jumps_do_not_wake_polls_and_dropping_cancels_the_wait(
+        #[case] after_request: bool,
+    ) {
+        let (g, calls, time) = scripted_grant(
+            vec![(
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"authorization_pending"}"#,
+            )],
+            0,
+        );
+        let mut state = pending();
+        {
+            let mut polling = std::pin::pin!(g.poll_to_completion(&mut state, None));
+            assert!(polling.as_mut().now_or_never().is_none());
+            if after_request {
+                time.advance(Duration::from_secs(5)).unwrap();
+                assert!(polling.as_mut().now_or_never().is_none());
+            }
+            for wall in [jiff::Timestamp::MAX, jiff::Timestamp::MIN] {
+                time.set_wall_time(wall);
+                assert!(polling.as_mut().now_or_never().is_none());
+            }
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::Relaxed),
+                usize::from(after_request)
+            );
+            assert_eq!(time.pending_sleeps(), 1);
+        }
+        assert_eq!(time.pending_sleeps(), 0);
+        time.advance_monotonic(Duration::from_hours(1)).unwrap();
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::Relaxed),
+            usize::from(after_request)
+        );
+    }
+
+    #[test]
+    fn unrepresentable_deadline_does_not_poll_early() {
+        let (g, calls, time) = scripted_grant(vec![(StatusCode::OK, TOKEN)], 0);
+        time.advance_monotonic(Duration::MAX).unwrap();
+        let mut state = pending();
+        let mut polling = std::pin::pin!(g.poll_to_completion(&mut state, None));
+        assert!(polling.as_mut().now_or_never().is_none());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 
     // Poll errors expose terminal and wrapped retry advice consistently.

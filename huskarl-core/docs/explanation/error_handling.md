@@ -137,3 +137,13 @@ without participating in huskarl's internal propagation convention.
 status rule, retry delay, and judged-versus-echoed distinction in one step.
 Keeping these decisions together prevents different endpoint implementations
 from interpreting the same response differently.
+
+HTTP-date `Retry-After` values are resolved against the response receipt
+timestamp supplied to [`FailedResponse::new`](crate::http::FailedResponse::new).
+The request owner samples its clock after the HTTP call completes; classification
+keeps that timestamp even if it happens later. Numeric delays remain independent
+of the clock, past dates give zero delay, and delays are capped at 24 hours.
+
+Standalone discovery fetches, `JwksSource`, and client registration expose a
+`clock(...)` builder setter, defaulting to the platform clock. Grants pass their
+clock to the default JWKS source they create.

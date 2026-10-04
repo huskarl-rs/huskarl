@@ -8,6 +8,7 @@ use crate::{
     },
     error::Error,
     platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
+    time::{PlatformTimer, Timer},
 };
 
 /// An AEAD cipher that attempts to reload its keys on use after a TTL.
@@ -82,8 +83,15 @@ impl<C: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshCipher<C> {
         /// Emits counters only with the `metrics` feature enabled.
         /// See [refresh metrics](crate::crypto#refresh-metrics) for labels and outcomes.
         metrics_name: Option<String>,
+        /// Timer used for refresh scheduling.
+        #[builder(
+            default = Arc::<PlatformTimer>::default(),
+            with = |timer: impl Timer + 'static| Arc::new(timer) as Arc<dyn Timer>
+        )]
+        timer: Arc<dyn Timer>,
     ) -> Result<Self, Error> {
         let inner = ScheduledRefreshable::builder()
+            .timer(timer)
             .factory(factory)
             .ttl(ttl)
             .failure_backoff(failure_backoff)
@@ -395,18 +403,25 @@ mod tests {
 
     #[tokio::test]
     async fn stale_keyset_reloads_before_decrypt_and_retires_the_key() {
-        // gen-0 would decrypt, but the keyset is past its TTL, so the read-path
-        // reload swaps in gen-1 (key retired) before decrypting — no decrypt
-        // failure was ever needed to trigger it.
+        let time = crate::time::ManualTime::default();
         let (builds, factory) = retiring_decryptor();
         let cipher: ScheduledRefreshCipher<RetiringDecryptor> = ScheduledRefreshCipher::builder()
             .factory(factory)
-            .ttl(Duration::ZERO)
+            .ttl(Duration::from_secs(10))
             .min_refresh_interval(Duration::ZERO)
+            .timer(time.clone())
             .build()
             .await
             .unwrap();
 
+        time.advance(Duration::from_secs(10) - Duration::from_nanos(1))
+            .unwrap();
+        assert_eq!(
+            cipher.decrypt(None, b"", b"data", b"", b"").await.unwrap(),
+            b"data"
+        );
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        time.advance(Duration::from_nanos(1)).unwrap();
         cipher
             .decrypt(None, b"", b"data", b"", b"")
             .await

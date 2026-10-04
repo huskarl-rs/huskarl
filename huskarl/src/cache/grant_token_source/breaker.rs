@@ -3,7 +3,10 @@
 
 use std::sync::{Mutex, PoisonError};
 
-use crate::core::platform::{Duration, Instant};
+use crate::core::{
+    platform::Duration,
+    time::{MonotonicInstant, Timer},
+};
 
 // Runtime state for the fresh-exchange backoff policy. The owner decides which
 // failures count and maps an open breaker to the public error contract.
@@ -16,22 +19,29 @@ pub(super) struct Breaker {
 struct BreakerState {
     /// Non-recoverable from-scratch failures since the last success.
     consecutive: u32,
-    /// When set and not yet reached, the breaker is open (cooling down).
-    open_until: Option<Instant>,
+    /// Start and duration of the current cooldown.
+    cooldown: Option<(MonotonicInstant, Duration)>,
 }
 
 impl Breaker {
     // Returns the remaining cooldown while open. After cooldown, exactly one
     // caller receives the half-open trial permit. A zero threshold disables it.
-    pub(super) fn try_acquire(&self, threshold: u32, cooldown: Duration) -> Result<(), Duration> {
+    pub(super) fn try_acquire(
+        &self,
+        threshold: u32,
+        cooldown: Duration,
+        timer: &dyn Timer,
+    ) -> Result<(), Duration> {
         if threshold == 0 {
             return Ok(());
         }
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(open_until) = state.open_until {
-            let now = Instant::now();
-            if now < open_until {
-                return Err(open_until - now);
+        if let Some((started_at, duration)) = state.cooldown {
+            let now = timer.now();
+            let elapsed = now.checked_duration_since(started_at).unwrap_or_default();
+            let remaining = duration.saturating_sub(elapsed);
+            if !remaining.is_zero() {
+                return Err(remaining);
             }
             // Re-arm as the permit is handed out rather than waiting for the
             // trial to report back: the trial may resolve without calling
@@ -39,20 +49,20 @@ impl Breaker {
             // not count toward the breaker), which would otherwise leave the
             // breaker disarmed indefinitely. Also makes the permit exclusive
             // against concurrent callers.
-            state.open_until = Some(now + cooldown);
+            state.cooldown = Some((now, cooldown));
         }
         Ok(())
     }
 
     // Opens the breaker after `threshold` consecutive countable failures.
-    pub(super) fn record_failure(&self, threshold: u32, cooldown: Duration) {
+    pub(super) fn record_failure(&self, threshold: u32, cooldown: Duration, timer: &dyn Timer) {
         if threshold == 0 {
             return;
         }
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.consecutive = state.consecutive.saturating_add(1);
         if state.consecutive >= threshold {
-            state.open_until = Some(Instant::now() + cooldown);
+            state.cooldown = Some((timer.now(), cooldown));
         }
     }
 
@@ -65,70 +75,75 @@ impl Breaker {
 #[cfg(test)]
 mod breaker_tests {
     use super::Breaker;
-    use crate::core::platform::Duration;
+    use crate::core::{platform::Duration, time::ManualTime};
 
     const COOLDOWN: Duration = Duration::from_mins(1);
 
     #[test]
     fn opens_after_threshold_consecutive_failures() {
         let breaker = Breaker::default();
-        assert!(breaker.try_acquire(3, COOLDOWN).is_ok());
-        breaker.record_failure(3, COOLDOWN);
-        breaker.record_failure(3, COOLDOWN);
+        let time = ManualTime::default();
+        assert!(breaker.try_acquire(3, COOLDOWN, &time).is_ok());
+        breaker.record_failure(3, COOLDOWN, &time);
+        breaker.record_failure(3, COOLDOWN, &time);
         // Below threshold: still permits.
-        assert!(breaker.try_acquire(3, COOLDOWN).is_ok());
-        breaker.record_failure(3, COOLDOWN);
+        assert!(breaker.try_acquire(3, COOLDOWN, &time).is_ok());
+        breaker.record_failure(3, COOLDOWN, &time);
         // Threshold reached: open and cooling down — permission denied.
-        assert!(breaker.try_acquire(3, COOLDOWN).is_err());
+        assert!(breaker.try_acquire(3, COOLDOWN, &time).is_err());
     }
 
     #[test]
     fn reset_closes_an_open_breaker() {
         let breaker = Breaker::default();
-        breaker.record_failure(1, COOLDOWN);
-        assert!(breaker.try_acquire(1, COOLDOWN).is_err());
+        let time = ManualTime::default();
+        breaker.record_failure(1, COOLDOWN, &time);
+        assert!(breaker.try_acquire(1, COOLDOWN, &time).is_err());
         breaker.reset();
-        assert!(breaker.try_acquire(1, COOLDOWN).is_ok());
+        assert!(breaker.try_acquire(1, COOLDOWN, &time).is_ok());
     }
 
     #[test]
     fn zero_threshold_never_opens() {
         let breaker = Breaker::default();
+        let time = ManualTime::default();
         for _ in 0..10 {
-            breaker.record_failure(0, COOLDOWN);
+            breaker.record_failure(0, COOLDOWN, &time);
         }
-        assert!(breaker.try_acquire(0, COOLDOWN).is_ok());
+        assert!(breaker.try_acquire(0, COOLDOWN, &time).is_ok());
     }
 
-    #[tokio::test]
-    async fn half_opens_one_trial_after_cooldown() {
+    #[test]
+    fn half_opens_one_trial_after_cooldown() {
         let breaker = Breaker::default();
-        breaker.record_failure(1, Duration::from_millis(10));
-        assert!(breaker.try_acquire(1, COOLDOWN).is_err());
+        let time = ManualTime::default();
+        breaker.record_failure(1, Duration::from_millis(10), &time);
+        assert!(breaker.try_acquire(1, COOLDOWN, &time).is_err());
 
-        crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
+        time.advance(Duration::from_millis(10)).unwrap();
         // Cooldown elapsed: the gate permits one trial while retaining the
         // failure count, so a failing trial re-opens at once.
-        assert!(breaker.try_acquire(1, COOLDOWN).is_ok());
-        breaker.record_failure(1, COOLDOWN);
-        assert!(breaker.try_acquire(1, COOLDOWN).is_err());
+        assert!(breaker.try_acquire(1, COOLDOWN, &time).is_ok());
+        breaker.record_failure(1, COOLDOWN, &time);
+        assert!(breaker.try_acquire(1, COOLDOWN, &time).is_err());
     }
 
     // The trial permit must be exclusive on its own, without waiting for the
     // trial to report back. Two callers racing through the gate the moment the
     // cooldown elapses would otherwise both mount a from-scratch exchange.
-    #[tokio::test]
-    async fn half_open_trial_permits_exactly_one_caller() {
+    #[test]
+    fn half_open_trial_permits_exactly_one_caller() {
         let breaker = Breaker::default();
-        breaker.record_failure(1, Duration::from_millis(10));
-        crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
+        let time = ManualTime::default();
+        breaker.record_failure(1, Duration::from_millis(10), &time);
+        time.advance(Duration::from_millis(10)).unwrap();
 
         assert!(
-            breaker.try_acquire(1, COOLDOWN).is_ok(),
+            breaker.try_acquire(1, COOLDOWN, &time).is_ok(),
             "the trial is permitted"
         );
         assert!(
-            breaker.try_acquire(1, COOLDOWN).is_err(),
+            breaker.try_acquire(1, COOLDOWN, &time).is_err(),
             "a second caller must not also get through"
         );
     }
@@ -136,19 +151,69 @@ mod breaker_tests {
     // Not every from-scratch failure counts toward the breaker: a retryable or
     // request-shape failure resolves the trial without any `record_failure`. The
     // breaker must still be armed afterwards rather than permitting freely.
-    #[tokio::test]
-    async fn trial_that_records_nothing_still_leaves_the_breaker_armed() {
+    #[test]
+    fn trial_that_records_nothing_still_leaves_the_breaker_armed() {
         let breaker = Breaker::default();
-        breaker.record_failure(1, Duration::from_millis(10));
-        crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
+        let time = ManualTime::default();
+        breaker.record_failure(1, Duration::from_millis(10), &time);
+        time.advance(Duration::from_millis(10)).unwrap();
 
-        assert!(breaker.try_acquire(1, Duration::from_millis(10)).is_ok());
+        assert!(
+            breaker
+                .try_acquire(1, Duration::from_millis(10), &time)
+                .is_ok()
+        );
         // Trial fails transiently — nothing is recorded.
-        assert!(breaker.try_acquire(1, Duration::from_millis(10)).is_err());
+        assert!(
+            breaker
+                .try_acquire(1, Duration::from_millis(10), &time)
+                .is_err()
+        );
 
         // ...and the next cooldown still yields a trial, so it is backoff and
         // not a permanent lockout.
-        crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
-        assert!(breaker.try_acquire(1, Duration::from_millis(10)).is_ok());
+        time.advance(Duration::from_millis(10)).unwrap();
+        assert!(
+            breaker
+                .try_acquire(1, Duration::from_millis(10), &time)
+                .is_ok()
+        );
+    }
+    #[test]
+    fn cooldown_uses_monotonic_time_and_opens_at_exact_boundary() {
+        let breaker = Breaker::default();
+        let time = ManualTime::default();
+        breaker.record_failure(1, COOLDOWN, &time);
+        for wall in [
+            jiff::Timestamp::MAX,
+            jiff::Timestamp::MIN,
+            jiff::Timestamp::UNIX_EPOCH,
+        ] {
+            time.set_wall_time(wall);
+            assert_eq!(breaker.try_acquire(1, COOLDOWN, &time), Err(COOLDOWN));
+        }
+        time.advance_monotonic(COOLDOWN.checked_sub(Duration::from_nanos(1)).unwrap())
+            .unwrap();
+        assert_eq!(
+            breaker.try_acquire(1, COOLDOWN, &time),
+            Err(Duration::from_nanos(1))
+        );
+        time.advance_monotonic(Duration::from_nanos(1)).unwrap();
+        assert_eq!(breaker.try_acquire(1, COOLDOWN, &time), Ok(()));
+        assert_eq!(breaker.try_acquire(1, COOLDOWN, &time), Err(COOLDOWN));
+    }
+
+    #[test]
+    fn cooldown_can_exceed_representable_deadline() {
+        let breaker = Breaker::default();
+        let time = ManualTime::default();
+        time.advance(Duration::from_secs(1)).unwrap();
+        breaker.record_failure(1, Duration::MAX, &time);
+        time.advance_monotonic(Duration::MAX.checked_sub(Duration::from_secs(1)).unwrap())
+            .unwrap();
+        assert_eq!(
+            breaker.try_acquire(1, Duration::MAX, &time),
+            Err(Duration::from_secs(1))
+        );
     }
 }

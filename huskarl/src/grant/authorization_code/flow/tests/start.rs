@@ -133,27 +133,6 @@ async fn direct_request_object_omits_absent_scope() {
     }
 }
 
-/// Serves one canned PAR response, for exercising the PAR delivery path.
-struct ParHttp;
-
-impl HttpClient for ParHttp {
-    fn execute(
-        &self,
-        _request: http::Request<Bytes>,
-        _idempotency: Idempotency,
-    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-        Box::pin(async {
-            Ok(HttpResponse {
-                status: http::StatusCode::CREATED,
-                headers: http::HeaderMap::new(),
-                body: Bytes::from_static(
-                    br#"{"request_uri":"urn:ietf:params:oauth:request_uri:abc","expires_in":90}"#,
-                ),
-            })
-        })
-    }
-}
-
 /// Challenges the first PAR request for a `DPoP` nonce, then accepts a retry
 /// only when its freshly generated proof carries that nonce.
 #[derive(Clone, Default)]
@@ -220,37 +199,6 @@ async fn unbound_session_template_rejects_start() {
         .start(StartInput::scope(bon::vec!["api"]))
         .await
         .expect_err("unbound SessionKeyedDPoP must not sign a PAR request");
-}
-
-#[tokio::test]
-async fn par_start_resolves_expiry_to_an_absolute_instant() {
-    let grant = AuthorizationCodeGrant::builder()
-        .client_id("client")
-        .http_client(ParHttp)
-        .client_auth(NoAuth)
-        .token_endpoint("https://as.example.com/token".parse().unwrap())
-        .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
-        .pushed_authorization_request_endpoint("https://as.example.com/par".parse().unwrap())
-        .prefer_pushed_authorization_requests(true)
-        .redirect_uri("http://127.0.0.1/cb")
-        .build()
-        .await
-        .unwrap();
-
-    let before = SystemTime::now();
-    let output = grant
-        .start(StartInput::scope(bon::vec!["profile"]))
-        .await
-        .unwrap();
-    let expires_at = output.expires_at.expect("PAR delivery sets an expiry");
-
-    // The RFC 9126 `expires_in` (90s) is anchored at receipt.
-    let lower = before + Duration::from_secs(90);
-    let upper = SystemTime::now() + Duration::from_secs(90);
-    assert!(
-        expires_at >= lower && expires_at <= upper,
-        "expected within [{lower:?}, {upper:?}], got {expires_at:?}"
-    );
 }
 
 #[tokio::test]
@@ -671,4 +619,49 @@ async fn disable_pkce_omits_challenge() {
 
     let url = start_url(&grant).await;
     assert!(!url.contains("code_challenge"), "{url}");
+}
+
+#[tokio::test]
+async fn jar_uses_grant_clock_for_all_temporal_claims() {
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+    use crate::core::time::ManualTime;
+
+    let time = ManualTime::new(jiff::Timestamp::new(1_000, 0).unwrap());
+    let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+    let grant = Grant::builder()
+        .client_id("client")
+        .http_client(NoHttp)
+        .client_auth(NoAuth)
+        .jar(key)
+        .clock(time.clone())
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+        .redirect_uri("http://127.0.0.1/cb")
+        .build()
+        .await
+        .unwrap();
+    for expected in [1_000, 1_010] {
+        let output = grant.start(StartInput::builder().build()).await.unwrap();
+        let query: std::collections::HashMap<String, String> =
+            crate::core::oauth_form::from_str(output.authorization_url.query().unwrap()).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(query["request"].split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(claims["iat"], expected);
+        assert_eq!(claims["nbf"], expected);
+        assert_eq!(claims["exp"], expected + 60);
+        time.advance(Duration::from_secs(10)).unwrap();
+    }
+    time.set_wall_time(jiff::Timestamp::new(-1, 0).unwrap());
+    assert!(grant.start(StartInput::builder().build()).await.is_err());
+    #[cfg(not(target_family = "wasm"))]
+    {
+        time.set_wall_time(jiff::Timestamp::MAX);
+        // Jiff's maximum plus the JAR lifetime still fits in SystemTime.
+        grant.start(StartInput::builder().build()).await.unwrap();
+    }
 }

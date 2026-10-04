@@ -81,6 +81,7 @@ fn json_headers() -> HeaderMap {
 
 fn client() -> UserInfoClient {
     UserInfoClient {
+        clock: Arc::new(PlatformClock),
         userinfo_endpoint: "https://op.example.com/userinfo"
             .parse::<EndpointUrl>()
             .unwrap(),
@@ -158,3 +159,77 @@ fn userinfo_metadata() -> AuthorizationServerMetadata {
 mod basic;
 mod classification;
 mod jwt;
+
+struct DelayedJwksFailure(crate::core::time::ManualTime);
+
+impl crate::core::http::HttpClient for DelayedJwksFailure {
+    fn execute(
+        &self,
+        _: http::Request<bytes::Bytes>,
+        _: crate::core::http::Idempotency,
+    ) -> crate::core::platform::MaybeSendBoxFuture<
+        '_,
+        Result<crate::core::http::HttpResponse, crate::core::Error>,
+    > {
+        Box::pin(async move {
+            self.0.advance(std::time::Duration::from_secs(7)).unwrap();
+            Ok(crate::core::http::HttpResponse {
+                status: http::StatusCode::SERVICE_UNAVAILABLE,
+                headers: http::HeaderMap::from_iter([(
+                    http::header::RETRY_AFTER,
+                    http::HeaderValue::from_static("Thu, 01 Jan 1970 00:17:40 GMT"),
+                )]),
+                body: bytes::Bytes::new(),
+            })
+        })
+    }
+}
+
+#[rstest::rstest]
+#[case::clock_first(true, false)]
+#[case::source_first(false, false)]
+#[case::explicit_factory(true, true)]
+#[tokio::test]
+async fn jwks_source_inherits_clock_in_either_order(
+    #[case] clock_first: bool,
+    #[case] explicit_factory: bool,
+) {
+    use crate::core::time::ManualTime;
+    let time = ManualTime::new(jiff::Timestamp::new(1_000, 250_000_000).unwrap());
+    let builder = UserInfoClient::builder()
+        .userinfo_endpoint("https://as.example/userinfo".parse().unwrap())
+        .jwks_uri("https://as.example/jwks".parse().unwrap())
+        .jws_verifier_platform(Arc::new(huskarl_crypto_native::NativeVerifierPlatform));
+    let result = if explicit_factory {
+        let factory = crate::core::jwk::JwksSource::builder()
+            .http_client(DelayedJwksFailure(time.clone()))
+            .clock(ManualTime::new(jiff::Timestamp::new(1_020, 0).unwrap()))
+            .build();
+        builder
+            .clock(time)
+            .jws_verifier_factory(factory)
+            .build()
+            .await
+    } else if clock_first {
+        builder
+            .clock(time.clone())
+            .jwks_source(DelayedJwksFailure(time))
+            .build()
+            .await
+    } else {
+        builder
+            .jwks_source(DelayedJwksFailure(time.clone()))
+            .clock(time)
+            .build()
+            .await
+    };
+    let error = result.expect_err("JWKS fetch fails");
+    assert_eq!(
+        error.retry_advice(),
+        RetryAdvice::retry_after(std::time::Duration::from_millis(if explicit_factory {
+            40_000
+        } else {
+            52_750
+        }))
+    );
+}

@@ -14,6 +14,7 @@ use crate::{
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         jwk::{JwksSource, JwksStartup},
+        time::{Clock, PlatformClock},
     },
     grant::{
         authorization_code::{
@@ -31,6 +32,13 @@ use crate::{
 #[allow(clippy::struct_excessive_bools)] // independent protocol switches, not a state machine
 #[derive(Clone)]
 pub struct AuthorizationCodeGrant {
+    /// Clock used for outgoing JWTs and received tokens; inherited by refresh grants.
+    /// Grant-backed token caches inherit this clock by default.
+    clock: Arc<dyn Clock>,
+
+    /// Timer for loopback deadlines and token-source cooldowns; inherited by refresh grants.
+    pub(super) timer: Arc<dyn crate::core::time::Timer>,
+
     /// The client ID.
     pub(super) client_id: String,
 
@@ -170,7 +178,13 @@ impl AuthorizationCodeGrant {
 /// Resolves the grant's JWS verifier: a supplied factory as-is, otherwise a
 /// default [`JwksSource`] built only when a verifier could be needed and a
 /// `jwks_uri` is present.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "isolates verifier construction from the grant constructor while taking its independent builder inputs explicitly; the grant does not yet exist to borrow"
+)]
 async fn resolve_jws_verifier(
+    clock: Arc<dyn Clock>,
+    timer: Arc<dyn crate::core::time::Timer>,
     factory: Option<Arc<dyn JwsVerifierFactory>>,
     platform: Option<Arc<dyn JwsVerifierPlatform>>,
     http_client: &Arc<dyn HttpClient>,
@@ -215,6 +229,8 @@ async fn resolve_jws_verifier(
         JwksStartup::SeedEmpty
     };
     let default = JwksSource::builder()
+        .clock(clock)
+        .timer(timer)
         .http_client(Arc::clone(http_client))
         .startup(startup)
         .build();
@@ -259,6 +275,20 @@ impl AuthorizationCodeGrant {
         /// returning this builder.
     }))]
     pub async fn new(
+        /// Clock used for outgoing JWTs and received tokens; inherited by refresh grants.
+        #[builder(
+            default = Arc::<PlatformClock>::default(),
+            with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+        )]
+        clock: Arc<dyn Clock>,
+        /// Timer used for loopback deadlines, the default JWKS source, and token-source
+        /// cooldowns; inherited by refresh grants. A supplied verifier factory retains
+        /// its own timer configuration.
+        #[builder(
+            default = Arc::new(crate::core::time::PlatformTimer),
+            with = |timer: impl crate::core::time::Timer + 'static| Arc::new(timer) as Arc<dyn crate::core::time::Timer>
+        )]
+        timer: Arc<dyn crate::core::time::Timer>,
         /// Extra labels applied to this grant's metrics.
         #[cfg(feature = "metrics")]
         #[builder(default)]
@@ -460,6 +490,8 @@ impl AuthorizationCodeGrant {
         let jws_verifier_platform = Some(jws_verifier_platform);
 
         let jws_verifier = resolve_jws_verifier(
+            clock.clone(),
+            timer.clone(),
             jws_verifier_factory,
             jws_verifier_platform,
             &http_client,
@@ -531,6 +563,8 @@ impl AuthorizationCodeGrant {
         }
 
         Ok(AuthorizationCodeGrant {
+            clock,
+            timer,
             client_id,
             http_client,
             client_auth,
@@ -590,6 +624,13 @@ pub struct AuthorizationCodeGrantForm<'a> {
 }
 
 impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
+    async fn authentication_params_at(
+        &self,
+        now: jiff::Timestamp,
+    ) -> Result<crate::core::client_auth::AuthenticationParams<'_>, crate::core::Error> {
+        crate::grant::core::authentication_params_at(self, now).await
+    }
+
     type Parameters = AuthorizationCodeGrantParameters;
     type Form<'a> = AuthorizationCodeGrantForm<'a>;
 
@@ -621,6 +662,14 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
         self.jws_verifier.clone()
     }
 
+    fn timer(&self) -> Arc<dyn crate::core::time::Timer> {
+        self.timer.clone()
+    }
+
+    fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
+    }
+
     fn http_client(&self) -> &dyn HttpClient {
         self.http_client.as_ref()
     }
@@ -647,6 +696,8 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
 
     fn to_refresh_grant(&self) -> refresh::RefreshGrant {
         refresh::RefreshGrant::builder()
+            .clock(self.clock.clone())
+            .timer(self.timer.clone())
             .client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
             .http_client(self.http_client.clone())

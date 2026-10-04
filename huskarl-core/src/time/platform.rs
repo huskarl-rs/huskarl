@@ -1,4 +1,4 @@
-use super::{Clock, timestamp_from_system_time};
+use super::{Clock, timestamp_from_system_time_saturating};
 use crate::platform::SystemTime;
 
 /// The platform wall clock: `std::time` natively and on WASI, `web_time` in browsers.
@@ -9,14 +9,7 @@ pub struct PlatformClock;
 
 impl Clock for PlatformClock {
     fn now(&self) -> jiff::Timestamp {
-        let now = SystemTime::now();
-        timestamp_from_system_time(now).unwrap_or_else(|_| {
-            if now < SystemTime::UNIX_EPOCH {
-                jiff::Timestamp::MIN
-            } else {
-                jiff::Timestamp::MAX
-            }
-        })
+        timestamp_from_system_time_saturating(SystemTime::now())
     }
 }
 

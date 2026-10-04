@@ -168,6 +168,12 @@ impl ProtectedResourceMetadata {
     /// classification.
     #[builder(on(String, into))]
     pub async fn fetch<C: HttpClient>(
+        /// Clock used to interpret HTTP-date retry delays at response receipt.
+        #[builder(
+            default = std::sync::Arc::new(crate::time::PlatformClock),
+            with = |clock: impl crate::time::Clock + 'static| std::sync::Arc::new(clock) as std::sync::Arc<dyn crate::time::Clock>
+        )]
+        clock: std::sync::Arc<dyn crate::time::Clock>,
         /// Transport used to retrieve the metadata document.
         http_client: &C,
         /// Exact protected-resource identifier expected in the returned
@@ -181,6 +187,7 @@ impl ProtectedResourceMetadata {
             metadata_url.clone().into_uri(),
             HeaderMap::new(),
             crate::http::DocumentKind::ResourceMetadata,
+            clock.as_ref(),
         )
         .await
         .with_context(|_| FetchingSnafu {

@@ -1,5 +1,7 @@
 //! The [`ClientRegistration`] client (RFC 7591 §3.1).
 
+use std::sync::Arc;
+
 use bon::Builder;
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -16,6 +18,7 @@ use crate::core::{
     EndpointUrl, Error,
     http::{FailedResponse, HttpClient, Idempotency, TruncatedBody},
     secrets::SecretString,
+    time::{Clock, PlatformClock},
 };
 
 /// Registers a client with an authorization server's registration endpoint
@@ -32,6 +35,9 @@ use crate::core::{
 #[huskarl_macros::from_metadata(metadata = crate::core::server_metadata::AuthorizationServerMetadata)]
 #[derive(Clone, Builder)]
 pub struct ClientRegistration {
+    /// Clock used to interpret retry delays after receiving a response.
+    #[builder(default = Arc::<PlatformClock>::default(), with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>)]
+    clock: Arc<dyn Clock>,
     /// The URL of the client registration endpoint.
     #[from_metadata(path = "registration_endpoint?")]
     registration_endpoint: EndpointUrl,
@@ -116,6 +122,7 @@ impl ClientRegistration {
             .await
             .context(RequestFailedSnafu)?;
 
+        let received_at = self.clock.now();
         if response.status.is_success() {
             ensure_json_content_type(&response.headers)?;
             Ok(serde_json::from_slice(&response.body).context(DeserializeSnafu)?)
@@ -124,6 +131,7 @@ impl ClientRegistration {
                 response.status,
                 &response.headers,
                 &response.body,
+                received_at,
             ))
         }
     }
@@ -154,8 +162,13 @@ fn ensure_json_content_type(headers: &HeaderMap) -> Result<(), Error> {
 /// A 5xx or 429 remains a transient failure regardless of its body. Other
 /// well-formed RFC 7591 error responses become server verdicts.
 #[track_caller]
-fn map_error_response(status: StatusCode, headers: &http::HeaderMap, body: &[u8]) -> Error {
-    let Some(failed) = FailedResponse::new(status, headers) else {
+fn map_error_response(
+    status: StatusCode,
+    headers: &http::HeaderMap,
+    body: &[u8],
+    received_at: jiff::Timestamp,
+) -> Error {
+    let Some(failed) = FailedResponse::new_at(status, headers, received_at) else {
         return Error::from(RegistrationError::BadStatus {
             status,
             body: TruncatedBody::from_bytes(body),

@@ -258,7 +258,7 @@ pub struct StartOutput {
     /// The URL to redirect the user to for authorization.
     pub authorization_url: http::Uri,
     /// When the pushed authorization request expires (RFC 9126 `expires_in`,
-    /// resolved to an absolute time at receipt). `None` when PAR was not
+    /// resolved using the grant's clock at receipt). `None` when PAR was not
     /// used. Restart the flow rather than redirecting to an expired request.
     pub expires_at: Option<crate::core::platform::SystemTime>,
     /// State that must be persisted until the callback completes.

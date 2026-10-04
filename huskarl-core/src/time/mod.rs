@@ -13,8 +13,7 @@
 //!
 //! Wall time uses [`jiff::Timestamp`] directly, with Jiff's range and signed
 //! fractional-second representation.
-//! Platform conversions are centralised in [`timestamp_from_system_time`],
-//! [`system_time_from_timestamp`], and [`system_time_from_timestamp_saturating`].
+//! Platform conversions are implementation details of the `SystemTime` migration.
 //!
 //! Jiff's Serde support serializes timestamps as strings, preserving nanoseconds.
 //! For integer epoch fields, use `#[serde(with = "...")]` with Jiff's
@@ -23,6 +22,14 @@
 //! Existing OAuth/JWT `SystemTime` fields retain the numeric adapters in
 //! [`crate::serde_utils::time`], including their validation and fractional-number
 //! input rules.
+//
+// TODO(0.12): Replace public wall-time SystemTime fields, parameters, and return
+// values across the workspace with jiff::Timestamp, including JWT claims and
+// validation, token receipts/expiry, and authorization response deadlines. Keep
+// validation and expiry arithmetic in Timestamp; convert SystemTime only at
+// platform or explicit interoperability boundaries. Preserve the protocol's
+// numeric timestamp encoding and validation rules through explicit Serde adapters.
+// Duration and monotonic timer instants remain separate from wall timestamps.
 //!
 //! ```
 //! use std::sync::Arc;
@@ -49,10 +56,14 @@ mod types;
 
 pub use core::time::Duration;
 
+pub use conversion::timestamp_from_unix_parts;
+// Cross-crate implementation helpers used by huskarl until the 0.12 migration.
+#[doc(hidden)]
 pub use conversion::{
-    system_time_from_timestamp, system_time_from_timestamp_saturating, timestamp_from_system_time,
-    timestamp_from_unix_parts,
+    system_time_from_timestamp, system_time_from_timestamp_saturating,
+    timestamp_from_system_time_saturating,
 };
+pub(crate) use conversion::{timestamp_from_std_system_time, unix_seconds_from_timestamp};
 pub use manual::ManualTime;
 pub use platform::{PlatformClock, PlatformTimer};
 pub use types::{MonotonicInstant, TimeOverflow, TimerDomain};

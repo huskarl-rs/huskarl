@@ -7,6 +7,7 @@ use crate::{
     },
     error::Error,
     platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
+    time::{PlatformTimer, Timer},
 };
 
 /// A [`JwsSignerSelector`] that attempts to reload its signing key after a TTL
@@ -105,8 +106,15 @@ impl<S: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshSigner<S> {
         /// Emits counters only with the `metrics` feature enabled.
         /// See [refresh metrics](crate::crypto#refresh-metrics) for labels and outcomes.
         metrics_name: Option<String>,
+        /// Timer used for refresh scheduling.
+        #[builder(
+            default = Arc::<PlatformTimer>::default(),
+            with = |timer: impl Timer + 'static| Arc::new(timer) as Arc<dyn Timer>
+        )]
+        timer: Arc<dyn Timer>,
     ) -> Result<Self, Error> {
         let inner = ScheduledRefreshable::builder()
+            .timer(timer)
             .factory(factory)
             .ttl(ttl)
             .failure_backoff(failure_backoff)
@@ -290,5 +298,39 @@ mod tests {
         let signer = generational_signer(ttl, Duration::from_secs(0)).await;
         assert_eq!(signer.refresh_if_stale().await, expected_refreshed);
         assert_eq!(current_kid(&signer).await.as_deref(), Some(expected_kid));
+    }
+
+    #[tokio::test]
+    async fn selection_uses_the_injected_timer_across_clones() {
+        let time = crate::time::ManualTime::default();
+        let counter = AtomicUsize::new(0);
+        let signer = ScheduledRefreshSigner::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    Ok(GenSelector {
+                        kid: format!("gen-{n}"),
+                    })
+                })
+            })
+            .ttl(Duration::from_secs(10))
+            .min_refresh_interval(Duration::ZERO)
+            .timer(time.clone())
+            .build()
+            .await
+            .unwrap();
+        let clone = signer.clone();
+        time.advance(Duration::from_secs(10) - Duration::from_nanos(1))
+            .unwrap();
+        assert_eq!(
+            clone.select_signer().await.key_id().as_deref(),
+            Some("gen-0")
+        );
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert_eq!(
+            clone.select_signer().await.key_id().as_deref(),
+            Some("gen-1")
+        );
+        assert_eq!(current_kid(&signer).await.as_deref(), Some("gen-1"));
     }
 }

@@ -34,6 +34,7 @@ pub(crate) async fn get<T: DeserializeOwned>(
     uri: http::Uri,
     mut headers: HeaderMap,
     #[cfg_attr(not(feature = "tracing"), allow(unused_variables))] document: DocumentKind,
+    clock: &dyn crate::time::Clock,
 ) -> Result<T, Error> {
     headers
         .entry(ACCEPT)
@@ -71,7 +72,8 @@ pub(crate) async fn get<T: DeserializeOwned>(
     }
 
     // Document fetches are idempotent, so transient failures may be retried.
-    let Some(failed) = FailedResponse::new(response.status, &response.headers) else {
+    let Some(failed) = FailedResponse::new_at(response.status, &response.headers, clock.now())
+    else {
         // Format the URI only if parsing fails.
         return Ok(serde_json::from_slice(&response.body).with_context(|_| {
             #[cfg(feature = "tracing")]

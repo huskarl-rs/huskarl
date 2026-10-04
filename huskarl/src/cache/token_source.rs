@@ -32,6 +32,16 @@ use crate::{
 /// `&T`, so a source can be shared: hand an `Arc<GrantTokenSource>` to the cache
 /// and keep a clone to prime or inspect it on a live instance.
 pub trait TokenSource: MaybeSendSync {
+    /// Wall clock used for these tokens and resource-server proofs.
+    fn clock(&self) -> Arc<dyn crate::core::time::Clock> {
+        Arc::new(crate::core::time::PlatformClock)
+    }
+
+    /// Timer used by the source for scheduling and cooldowns.
+    fn timer(&self) -> Arc<dyn crate::core::time::Timer> {
+        Arc::new(crate::core::time::PlatformTimer)
+    }
+
     /// Produces a token, returned in an `Arc` for cheap shared access on the
     /// request hot path.
     ///
@@ -89,6 +99,14 @@ macro_rules! forward_token_source {
         impl<T: TokenSource + ?Sized> TokenSource for $wrapper {
             fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
                 (**self).token()
+            }
+
+            fn timer(&self) -> Arc<dyn crate::core::time::Timer> {
+                (**self).timer()
+            }
+
+            fn clock(&self) -> Arc<dyn crate::core::time::Clock> {
+                (**self).clock()
             }
 
             fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {

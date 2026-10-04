@@ -129,11 +129,12 @@ impl HttpAuthorizer {
                 let Some(proof) = self
                     .cache
                     .resource_server_dpop()
-                    .proof(
+                    .proof_at(
                         method,
                         uri,
                         dpop_access_token.token(),
                         dpop_access_token.jkt(),
+                        self.cache.clock().now(),
                     )
                     .await?
                 else {

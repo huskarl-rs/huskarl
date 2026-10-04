@@ -57,30 +57,6 @@ fn timestamp_normalization_and_boundaries() {
 }
 
 #[test]
-fn system_time_round_trips() {
-    for value in [
-        jiff::Timestamp::UNIX_EPOCH,
-        timestamp(1_700_000_000, 123_456_789),
-    ] {
-        let system = huskarl_core::time::system_time_from_timestamp(value).unwrap();
-        assert_eq!(
-            huskarl_core::time::timestamp_from_system_time(system),
-            Ok(value)
-        );
-    }
-    // web_time cannot represent pre-epoch values; conversion must remain checked.
-    let before = timestamp(-1, 999_999_999);
-    let system = huskarl_core::time::system_time_from_timestamp(before);
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-    assert_eq!(
-        huskarl_core::time::timestamp_from_system_time(system.unwrap()),
-        Ok(before)
-    );
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-    assert_eq!(system, Err(TimeOverflow));
-}
-
-#[test]
 fn monotonic_arithmetic_is_checked() {
     let domain = TimerDomain::new();
     let origin = MonotonicInstant::from_duration_since_origin(domain, Duration::ZERO);
@@ -312,26 +288,6 @@ async fn browser_platform_timer_handles_small_and_cancelled_long_waits() {
     drop(cancelled);
 }
 
-#[rstest::rstest]
-#[case::minimum(jiff::Timestamp::MIN)]
-#[case::pre_epoch(jiff::Timestamp::new(-1, 500_000_000).unwrap())]
-#[case::epoch(jiff::Timestamp::UNIX_EPOCH)]
-#[case::fractional(jiff::Timestamp::new(2_000_000, 123_456_789).unwrap())]
-#[case::maximum(jiff::Timestamp::MAX)]
-#[crate::test]
-fn system_time_saturation_preserves_values_or_reaches_the_platform_boundary(
-    #[case] timestamp: jiff::Timestamp,
-) {
-    let saturated = huskarl_core::time::system_time_from_timestamp_saturating(timestamp);
-    if let Ok(exact) = huskarl_core::time::system_time_from_timestamp(timestamp) {
-        assert_eq!(saturated, exact);
-    } else if timestamp < jiff::Timestamp::UNIX_EPOCH {
-        assert!(saturated.checked_sub(Duration::from_nanos(1)).is_none());
-    } else {
-        assert!(saturated.checked_add(Duration::from_nanos(1)).is_none());
-    }
-}
-
 #[test]
 fn monotonic_domains_are_distinct_and_arithmetic_preserves_them() {
     let first_domain = TimerDomain::new();
@@ -432,27 +388,6 @@ fn timestamp_serde_preserves_signed_nanoseconds_and_range(#[case] value: jiff::T
         serde_json::from_value::<jiff::Timestamp>(json).unwrap(),
         value
     );
-}
-
-#[rstest::rstest]
-#[case::minimum(jiff::Timestamp::MIN, true)]
-#[case::maximum(jiff::Timestamp::MAX, false)]
-#[crate::test]
-fn system_time_conversion_rejects_values_outside_jiff_range(
-    #[case] boundary: jiff::Timestamp,
-    #[case] before: bool,
-) {
-    let Ok(system) = system_time_from_timestamp(boundary) else {
-        return;
-    };
-    let outside = if before {
-        system.checked_sub(Duration::from_nanos(1))
-    } else {
-        system.checked_add(Duration::from_nanos(1))
-    };
-    if let Some(outside) = outside {
-        assert_eq!(timestamp_from_system_time(outside), Err(TimeOverflow));
-    }
 }
 
 #[test]

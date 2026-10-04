@@ -33,6 +33,7 @@ pub(super) struct AuthorizationPushResponse {
     pub expires_in: u64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn make_par_call(
     http_client: &dyn HttpClient,
     par_url: &EndpointUrl,
@@ -40,15 +41,18 @@ pub(super) async fn make_par_call(
     payload: &ParBody<'_>,
     dpop: &dyn AuthorizationServerDPoP,
     dpop_jkt: Option<&str>,
-) -> Result<AuthorizationPushResponse, Error> {
+    now: jiff::Timestamp,
+    clock: &dyn crate::core::time::Clock,
+) -> Result<(AuthorizationPushResponse, jiff::Timestamp), Error> {
     OAuth2FormRequest::builder()
+        .now(now)
         .form(payload)
         .auth_params(auth_params)
         .uri(par_url.as_uri())
         .dpop(dpop)
         .maybe_dpop_jkt(dpop_jkt)
         .build()
-        .execute(http_client)
+        .execute(http_client, clock)
         .await
 }
 
@@ -171,6 +175,7 @@ mod tests {
         let auth = NoAuth
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("client-1")
                     .target_endpoint(&par_url)
                     .build(),
@@ -182,9 +187,18 @@ mod tests {
             client_id: "client-1",
             request: "header.payload.signature",
         };
-        let response = make_par_call(&client, &par_url, auth, &body, &NoDPoP, None)
-            .await
-            .unwrap();
+        let (response, _) = make_par_call(
+            &client,
+            &par_url,
+            auth,
+            &body,
+            &NoDPoP,
+            None,
+            jiff::Timestamp::UNIX_EPOCH,
+            &crate::core::time::PlatformClock,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             response.request_uri,
@@ -213,6 +227,7 @@ mod tests {
         let auth = NoAuth
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("client-1")
                     .target_endpoint(&par_url)
                     .build(),
@@ -230,6 +245,8 @@ mod tests {
             },
             &NoDPoP,
             None,
+            jiff::Timestamp::UNIX_EPOCH,
+            &crate::core::time::PlatformClock,
         )
         .await;
         assert!(result.is_err());

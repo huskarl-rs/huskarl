@@ -94,7 +94,8 @@ the default JWKS source, it attempts an initial key fetch:
   fetching keys when needed; a token cannot pass verification without usable keys.
 - With `.oidc(false)` and no JARM, or without a JWKS URI, no default key fetch occurs.
 
-A supplied factory controls its own startup behavior and is called even without
+The default JWKS source inherits the grant's clock and timer for keyset expiry, refresh rate limiting, and failure backoff.
+A supplied factory keeps its own time configuration, controls its startup behavior, and is called even without
 a JWKS URI. With `default-jws-verifier-platform` disabled, provide
 `.jws_verifier_platform(...)` whenever a verifier is needed.
 
@@ -178,6 +179,9 @@ rejects a token response without an ID token (OIDC Core 1.0 §3.1.3.3) —
 unless the server narrowed `openid` out of the granted scope. `complete()`
 returns the validated ID token on `CompleteOutput::id_token` alongside the
 token response whenever the flow is OIDC.
+ID-token time checks use `TokenResponse::received_at()`, captured by the grant's
+clock when the token response arrives. Access-token lifetime uses the same
+timestamp, so later processing does not shift either time reference.
 
 When metadata provides `jwks_uri`, the grant configures signature verification
 using its HTTP client. See [construction behavior](#2d-what-happens-during-construction)
@@ -260,6 +264,14 @@ address family, so a `localhost` redirect may resolve to the family it did not
 bind and the callback never arrives.
 
 Requires the `authorization-flow-loopback` feature.
+
+`complete_on_loopback` uses the grant's timer for request-read and result-page
+deadlines. Configure it with `.timer(...)` on `AuthorizationCodeGrant::builder()`;
+the default is the platform timer. For example, `ManualTime` lets tests advance
+those deadlines without sleeping. These waits use monotonic time; token
+validation still uses the grant's wall clock. Timing out a stalled connection
+leaves the flow waiting for another callback, while timing out the result page
+returns the completed flow's result.
 
 ## Request a key-bound ID token
 

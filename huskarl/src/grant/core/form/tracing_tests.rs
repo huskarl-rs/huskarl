@@ -124,13 +124,16 @@ async fn levels_preserve_context_without_recording_secrets() {
                     });
                     let uri = "https://example.com/secret-path?code=secret-query".parse().unwrap();
                     let form = Form { client_secret: "secret-client", code: "secret-code" };
+                    let clock = crate::core::time::PlatformClock;
                     let request = OAuth2FormRequest::builder()
+                        .now(crate::core::time::Clock::now(&clock))
                         .uri(&uri)
                         .form(&form)
                         .auth_params(AuthenticationParams::builder().build())
                         .dpop(&NoDPoP)
                         .build();
-                    let result: Result<serde_json::Value, Error> = request.execute(&client).await;
+                    let result: Result<serde_json::Value, Error> =
+                        request.execute(&client, &clock).await.map(|(value, _)| value);
                     assert_eq!(result.is_ok(), status == 200);
                 }
             }.instrument(parent).await;
@@ -698,6 +701,9 @@ async fn custom_grant_type_is_recorded_on_exchange_without_other_form_fields() {
         };
         let uri = "https://example.com/token".parse().unwrap();
         OAuth2FormRequest::builder()
+            .now(crate::core::time::Clock::now(
+                &crate::core::time::PlatformClock,
+            ))
             .uri(&uri)
             .form(&form)
             .exchange_span(&exchange)

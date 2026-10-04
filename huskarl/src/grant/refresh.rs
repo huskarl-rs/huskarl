@@ -21,6 +21,7 @@ use crate::{
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         secrets::SecretString,
+        time::{Clock, PlatformClock},
     },
     grant::core::{OAuth2ExchangeGrant, join_space},
     token::RefreshToken,
@@ -42,6 +43,20 @@ use crate::{
     /// instead of building one directly.
 }))]
 pub struct RefreshGrant {
+    /// Clock used for outgoing JWTs and received tokens; inherited by refresh grants.
+    /// Grant-backed token caches inherit this clock by default.
+    #[builder(
+        default = Arc::<PlatformClock>::default(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    clock: Arc<dyn Clock>,
+    /// Timer for token-source cooldowns, inherited by refresh grants.
+    #[builder(
+        default = Arc::new(crate::core::time::PlatformTimer),
+        with = |timer: impl crate::core::time::Timer + 'static| Arc::new(timer) as Arc<dyn crate::core::time::Timer>
+    )]
+    timer: Arc<dyn crate::core::time::Timer>,
+
     /// The client ID. Omitted for a client that presents no identification
     /// (e.g. refreshing a token obtained by an anonymous grant).
     client_id: Option<String>,
@@ -124,6 +139,13 @@ impl core::fmt::Debug for RefreshGrant {
 }
 
 impl OAuth2ExchangeGrant for RefreshGrant {
+    async fn authentication_params_at(
+        &self,
+        now: jiff::Timestamp,
+    ) -> Result<crate::core::client_auth::AuthenticationParams<'_>, crate::core::Error> {
+        crate::grant::core::authentication_params_at(self, now).await
+    }
+
     type Parameters = RefreshGrantParameters;
     type Form<'a> = RefreshGrantForm;
 
@@ -149,6 +171,14 @@ impl OAuth2ExchangeGrant for RefreshGrant {
 
     fn dpop(&self) -> &dyn AuthorizationServerDPoP {
         self.dpop.as_ref()
+    }
+
+    fn timer(&self) -> Arc<dyn crate::core::time::Timer> {
+        self.timer.clone()
+    }
+
+    fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
     }
 
     fn http_client(&self) -> &dyn HttpClient {

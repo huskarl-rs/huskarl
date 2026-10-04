@@ -24,6 +24,7 @@ use crate::{
         http::HttpClient,
         platform::MaybeSendBoxFuture,
         secrets::SecretString,
+        time::{Clock, PlatformClock},
     },
     grant::{
         core::{OAuth2ExchangeGrant, join_space},
@@ -50,6 +51,20 @@ use crate::{
     /// inputs before returning this builder.
 }))]
 pub struct JwtBearerGrant {
+    /// Clock used for outgoing JWTs and received tokens; inherited by refresh grants.
+    /// Grant-backed token caches inherit this clock by default.
+    #[builder(
+        default = Arc::<PlatformClock>::default(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    clock: Arc<dyn Clock>,
+    /// Timer for token-source cooldowns, inherited by refresh grants.
+    #[builder(
+        default = Arc::new(crate::core::time::PlatformTimer),
+        with = |timer: impl crate::core::time::Timer + 'static| Arc::new(timer) as Arc<dyn crate::core::time::Timer>
+    )]
+    timer: Arc<dyn crate::core::time::Timer>,
+
     /// The client ID. Optional: omit it for an unidentified client (the
     /// assertion's `iss`/`sub` identify the principal; RFC 7523 §3.1 allows a
     /// grant with no client identification).
@@ -136,6 +151,13 @@ impl core::fmt::Debug for JwtBearerGrant {
 }
 
 impl OAuth2ExchangeGrant for JwtBearerGrant {
+    async fn authentication_params_at(
+        &self,
+        now: jiff::Timestamp,
+    ) -> Result<crate::core::client_auth::AuthenticationParams<'_>, crate::core::Error> {
+        crate::grant::core::authentication_params_at(self, now).await
+    }
+
     type Parameters = JwtBearerGrantParameters;
     type Form<'a> = JwtBearerGrantForm;
 
@@ -163,6 +185,14 @@ impl OAuth2ExchangeGrant for JwtBearerGrant {
         self.dpop.as_ref()
     }
 
+    fn timer(&self) -> Arc<dyn crate::core::time::Timer> {
+        self.timer.clone()
+    }
+
+    fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
+    }
+
     fn http_client(&self) -> &dyn HttpClient {
         self.http_client.as_ref()
     }
@@ -173,6 +203,8 @@ impl OAuth2ExchangeGrant for JwtBearerGrant {
 
     fn to_refresh_grant(&self) -> RefreshGrant {
         RefreshGrant::builder()
+            .clock(self.clock.clone())
+            .timer(OAuth2ExchangeGrant::timer(self))
             .maybe_client_id(self.client_id.clone())
             .maybe_issuer(self.issuer.clone())
             .http_client(self.http_client.clone())

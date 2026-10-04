@@ -70,6 +70,7 @@ pub(crate) async fn check_token_binding(
     http_method: &http::Method,
     http_uri: &http::Uri,
     client_cert_der: Option<&[u8]>,
+    now: jiff::Timestamp,
 ) -> (Option<String>, Result<(), TokenBindingError>) {
     if let Some(cnf) = cnf {
         if cnf.jwe.is_some() {
@@ -108,7 +109,7 @@ pub(crate) async fn check_token_binding(
             };
 
             let (nonce, result) = dpop_binding_checker
-                .check(cnf, access_token, dpop_proof, http_method, http_uri)
+                .check(cnf, access_token, dpop_proof, http_method, http_uri, now)
                 .await;
             match result {
                 Ok(()) => nonce,
@@ -168,6 +169,7 @@ impl DPoPBindingChecker {
         dpop_proof: &str,
         method: &http::Method,
         uri: &http::Uri,
+        now: jiff::Timestamp,
     ) -> (Option<String>, Result<(), DPoPBindingError>) {
         // The `htu` comparison below needs the absolute external target URI
         // (RFC 9449 §4.3), which only the deployment knows once proxies are
@@ -186,7 +188,7 @@ impl DPoPBindingChecker {
 
         let validated_proof = match self
             .proof_validator
-            .validate(dpop_proof)
+            .validate_at(dpop_proof, now)
             .await
             .context(ProofValidationSnafu)
         {
@@ -195,7 +197,10 @@ impl DPoPBindingChecker {
         };
 
         let nonce_check = match self.dpop_nonce_checker.as_ref() {
-            Some(c) => c.check_nonce(validated_proof.nonce.as_deref()).await,
+            Some(c) => {
+                c.check_nonce_at(validated_proof.nonce.as_deref(), now)
+                    .await
+            }
             None => Ok(NonceCheck::Valid),
         };
         let nonce_check = match nonce_check {
@@ -551,6 +556,7 @@ mod tests {
                 proof.expose_secret(),
                 &http::Method::POST,
                 &req_uri(),
+                crate::core::time::Clock::now(&crate::core::time::PlatformClock),
             )
             .await
     }
@@ -595,6 +601,7 @@ mod tests {
                 proof.expose_secret(),
                 &http::Method::POST,
                 &req_uri(),
+                crate::core::time::Clock::now(&crate::core::time::PlatformClock),
             )
             .await;
         assert!(
@@ -618,6 +625,7 @@ mod tests {
                 proof.expose_secret(),
                 &http::Method::POST,
                 &"/resource".parse::<http::Uri>().unwrap(),
+                crate::core::time::Clock::now(&crate::core::time::PlatformClock),
             )
             .await;
         assert!(
@@ -812,6 +820,7 @@ mod tests {
             &http::Method::POST,
             &req_uri(),
             None,
+            crate::core::time::Clock::now(&crate::core::time::PlatformClock),
         )
         .await;
         assert!(nonce.is_none());
@@ -857,6 +866,7 @@ mod tests {
                 proof.expose_secret(),
                 &http::Method::POST,
                 &req_uri(),
+                crate::core::time::Clock::now(&crate::core::time::PlatformClock),
             )
             .await;
         let err = result.unwrap_err();

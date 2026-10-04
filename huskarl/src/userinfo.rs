@@ -20,6 +20,7 @@ use crate::{
             validator::{ClaimCheck, JwtValidationError, JwtValidator},
         },
         server_metadata::{AuthorizationServerMetadata, missing_field},
+        time::{Clock, PlatformClock},
     },
     grant::core::OAuth2ExchangeGrant,
     token::{AccessToken, id_token::StandardOidcProfileClaims},
@@ -32,6 +33,7 @@ use crate::{
 /// client validates the response subject against the ID token subject supplied
 /// to [`get`](Self::get).
 pub struct UserInfoClient {
+    clock: Arc<dyn Clock>,
     /// The URL of the `UserInfo` endpoint.
     userinfo_endpoint: EndpointUrl,
 
@@ -51,16 +53,18 @@ pub struct UserInfoClient {
 
 /// State of [`UserInfoClientBuilder`] returned by
 /// [`UserInfoClient::builder_from_grant`]: `userinfo_endpoint`,
-/// `mtls_userinfo_endpoint`, `dpop`, `jws_verifier`, `issuer`, and `client_id`
+/// `mtls_userinfo_endpoint`, `dpop`, `jws_verifier`, `issuer`, `client_id`, and `clock`
 /// set.
 // Name mirrors the `{Struct}{Method}State` alias `#[from_metadata]` generates,
 // so the hand-written and generated constructors read alike.
-pub type UserInfoClientBuilderFromGrantState = user_info_client_builder::SetClientId<
-    user_info_client_builder::SetIssuer<
-        user_info_client_builder::SetJwsVerifier<
-            user_info_client_builder::SetDpop<
-                user_info_client_builder::SetMtlsUserinfoEndpoint<
-                    user_info_client_builder::SetUserinfoEndpoint,
+pub type UserInfoClientBuilderFromGrantState = user_info_client_builder::SetClock<
+    user_info_client_builder::SetClientId<
+        user_info_client_builder::SetIssuer<
+            user_info_client_builder::SetJwsVerifier<
+                user_info_client_builder::SetDpop<
+                    user_info_client_builder::SetMtlsUserinfoEndpoint<
+                        user_info_client_builder::SetUserinfoEndpoint,
+                    >,
                 >,
             >,
         >,
@@ -81,17 +85,19 @@ impl<S: user_info_client_builder::State> UserInfoClientBuilder<S> {
     /// Uses the authorization server's JWKS URI to verify signatures with a
     /// default [`JwksSource`] backed by this HTTP client.
     ///
+    /// The source inherits this builder's clock when `build()` is called.
     /// This sets the same field as `jws_verifier_factory`; choose one of the two.
     /// For custom refresh or startup settings, pass a configured [`JwksSource`]
     /// to `jws_verifier_factory` instead.
     pub fn jwks_source(
-        self,
+        mut self,
         http_client: impl HttpClient + 'static,
     ) -> UserInfoClientBuilder<user_info_client_builder::SetJwsVerifierFactory<S>>
     where
         S::JwsVerifierFactory: user_info_client_builder::IsUnset,
     {
-        self.jws_verifier_factory(JwksSource::builder().http_client(http_client).build())
+        self.jwks_http_client = Some(Arc::new(http_client));
+        self.maybe_jws_verifier_factory_internal(None::<Arc<dyn JwsVerifierFactory>>)
     }
 
     /// _**Optional** ([Some](Self::jws_verifier_factory()) / [Option](Self::maybe_jws_verifier_factory()) setters)._
@@ -131,6 +137,13 @@ impl UserInfoClient {
     /// verifier, or when the verifier cannot be built from `jwks_uri`.
     #[builder(on(String, into))]
     pub async fn new(
+        #[builder(field)] jwks_http_client: Option<Arc<dyn HttpClient>>,
+        /// Clock used for outgoing proofs and signed response validation.
+        #[builder(
+            default = Arc::<PlatformClock>::default(),
+            with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+        )]
+        clock: Arc<dyn Clock>,
         /// The URL of the `UserInfo` endpoint.
         #[from_metadata(path = "userinfo_endpoint?")]
         userinfo_endpoint: EndpointUrl,
@@ -195,6 +208,16 @@ impl UserInfoClient {
         #[builder(default)]
         require_signed_response: bool,
     ) -> Result<Self, Error> {
+        let jws_verifier_factory = jwks_http_client
+            .map(|http_client| {
+                Arc::new(
+                    JwksSource::builder()
+                        .http_client(http_client)
+                        .clock(clock.clone())
+                        .build(),
+                ) as Arc<dyn JwsVerifierFactory>
+            })
+            .or(jws_verifier_factory);
         #[cfg(feature = "default-jws-verifier-platform")]
         let jws_verifier_platform = Some(jws_verifier_platform);
 
@@ -218,6 +241,7 @@ impl UserInfoClient {
 
             Some(
                 JwtValidator::builder()
+                    .clock(clock.clone())
                     .verifier(verifier)
                     .aud(ClaimCheck::required_value(client_id))
                     .iss(ClaimCheck::required_value(issuer))
@@ -235,6 +259,7 @@ impl UserInfoClient {
         );
 
         Ok(Self {
+            clock,
             userinfo_endpoint,
             mtls_userinfo_endpoint,
             dpop,
@@ -295,7 +320,8 @@ impl UserInfoClient {
             .dpop(grant.dpop().to_resource_server_dpop())
             .maybe_jws_verifier(grant.jws_verifier())
             .maybe_issuer(grant.issuer())
-            .maybe_client_id(grant.client_id()))
+            .maybe_client_id(grant.client_id())
+            .clock(grant.clock()))
     }
     /// Call the `UserInfo` endpoint with the given access token.
     ///
@@ -343,7 +369,13 @@ impl UserInfoClient {
             if let Some(jkt) = dpop_jkt
                 && let Some(proof) = self
                     .dpop
-                    .proof(&Method::GET, endpoint.as_uri(), access_token.token(), jkt)
+                    .proof_at(
+                        &Method::GET,
+                        endpoint.as_uri(),
+                        access_token.token(),
+                        jkt,
+                        self.clock.now(),
+                    )
                     .await
                     .context(GeneratingProofSnafu)?
             {
@@ -363,6 +395,7 @@ impl UserInfoClient {
                 .await
                 .context(RequestFailedSnafu)?;
 
+            let received_at = self.clock.now();
             let status = response.status;
             let response_headers = response.headers;
             let body = response.body;
@@ -379,6 +412,7 @@ impl UserInfoClient {
 
             if !status.is_success() {
                 return Err(Error::from(UserInfoError::BadStatus {
+                    received_at,
                     status,
                     headers: response_headers,
                     body: TruncatedBody::from_bytes(&body),
@@ -412,7 +446,7 @@ impl UserInfoClient {
             }
 
             let user_info: UserInfo = if is_jwt_response {
-                self.decode_jwt_response(&body).await?
+                self.decode_jwt_response(&body, received_at).await?
             } else {
                 serde_json::from_slice(&body).context(DeserializeSnafu)?
             };
@@ -429,7 +463,11 @@ impl UserInfoClient {
     }
 
     /// Decode and validate a JWT-encoded `UserInfo` response body.
-    async fn decode_jwt_response(&self, body: &[u8]) -> Result<UserInfo, Error> {
+    async fn decode_jwt_response(
+        &self,
+        body: &[u8],
+        received_at: jiff::Timestamp,
+    ) -> Result<UserInfo, Error> {
         let jwt_validator = self
             .jwt_validator
             .as_ref()
@@ -444,7 +482,7 @@ impl UserInfoClient {
         let parsed =
             parse_compact_jws::<(), serde_json::Value>(jwt_str.trim()).context(JwtParseSnafu)?;
         let validated = jwt_validator
-            .validate_parsed_jws(parsed)
+            .validate_parsed_jws_at(parsed, received_at)
             .await
             .context(JwtValidationSnafu)?;
 
@@ -620,6 +658,8 @@ pub(crate) enum UserInfoError {
     #[snafu(display("UserInfo endpoint returned HTTP {status}: {body}"))]
     #[classify(with = UserInfoError::read_off_the_response)]
     BadStatus {
+        /// Receipt timestamp used to interpret HTTP-date retry delays.
+        received_at: jiff::Timestamp,
         /// The HTTP status code.
         status: StatusCode,
         /// The response headers, used to inspect `WWW-Authenticate` challenges.
@@ -642,13 +682,14 @@ impl UserInfoError {
         reason = "Classify handlers receive references to every variant field"
     )]
     fn read_off_the_response(
+        received_at: &jiff::Timestamp,
         status: &StatusCode,
         headers: &HeaderMap,
         _body: &TruncatedBody,
     ) -> crate::core::error::propagation::Origin<'static> {
         use crate::core::error::propagation::Origin;
 
-        let Some(failed) = FailedResponse::new(*status, headers) else {
+        let Some(failed) = FailedResponse::new_at(*status, headers, *received_at) else {
             // `BadStatus` should only be constructed for non-success responses.
             return Origin::Establishes(crate::core::RetryAdvice::No.into());
         };
