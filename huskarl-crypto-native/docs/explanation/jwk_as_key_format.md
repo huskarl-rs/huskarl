@@ -15,8 +15,8 @@ OID, but not which JWS algorithm to use (an RSA key could sign with `RS256` or
 bytes could be an `HS256` signing key or an `A256GCM` cipher key.
 
 That difference sets the shape of the API. Loading a JWK needs no extra
-arguments; loading PKCS#8 or raw bytes makes you supply the algorithm, and a
-`kid` if you want one.
+arguments; loading PKCS#8 or raw bytes requires the caller to supply the
+algorithm and, optionally, a `kid`.
 
 ## The `kid` lives in the key
 
@@ -24,10 +24,10 @@ Because the JWK carries the `kid`, a
 [`PrivateKey`](crate::asymmetric::signer::PrivateKey) has exactly one source of
 truth for it. The value that goes in a signature's `kid` header
 ([`JwsSigner::key_id`](huskarl_core::crypto::signer::JwsSigner::key_id)) and the
-JWK you publish in a JWKS
+JWK exported for publication in a JWKS
 ([`as_private_jwk`](crate::asymmetric::signer::PrivateKey::as_private_jwk)) both
-read it from the same place, so they cannot disagree — a verifier looking up
-your key by `kid` will always find it. There is no separate `kid` argument to
+read it from the same place, so the signature and published key use the same
+identifier. There is no separate `kid` argument to
 pass to the accessor, and so none to accidentally mismatch.
 
 ## One funnel
@@ -49,8 +49,8 @@ JWK's `alg` to an [`AesGcmKey`](crate::aead::AesGcmKey) or
 [`XChaChaKey`](crate::aead::XChaChaKey); their own `from_secret` constructors
 remain for binding to one cipher.
 
-Decoders are chosen by **input format**, key types by what you need — each
-funnel accepts the variant it can finalize and rejects the other with a
+Decoders correspond to **input formats**, key types to cryptographic operations.
+Each funnel accepts the variant it can finalize and rejects the other with a
 configuration error. The decoders are
 [`SecretMap`](huskarl_core::secrets::SecretMap)s, so they compose onto any
 secret source with [`mapped`](huskarl_core::secrets::Secret::mapped) and pass
@@ -69,6 +69,6 @@ is pure JSON, and wrapping raw symmetric bytes is pure bookkeeping, so
 [`JwkJson`](huskarl_core::jwk::JwkJson) and
 [`OctBytes`](huskarl_core::jwk::OctBytes) live in `huskarl-core` and are shared
 by every backend — the WebCrypto AES-GCM key loads through the identical
-funnel. Store your keys as JWKs and the runtime load path never touches
-backend-specific decoding at all — which is the case for
+funnel. Keys stored as JWKs need no backend-specific decoding at runtime, as
+shown in
 [loading a signing key](crate::_docs::guide::loading_a_signing_key).

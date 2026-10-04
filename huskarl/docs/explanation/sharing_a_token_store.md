@@ -28,6 +28,9 @@ them, so this check cannot guarantee that a peer's token is preserved. Successfu
 refreshes can also overwrite each other's rotated tokens.
 
 The store API provides no atomic compare-and-clear or cross-process refresh
-lock. For rotating tokens, keep one owner for each refresh-token lineage, or
-coordinate the entire read, exchange, and write sequence outside these sources.
+lock.
+
+When configuring sources for rotating tokens, keep one owner for each
+refresh-token lineage, or coordinate the entire read, exchange, and write
+sequence outside these sources.
 Separate replicas can instead use independently issued credentials.

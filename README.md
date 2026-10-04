@@ -140,15 +140,27 @@ and [huskarl-core](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/).
 
 [`registration`]: https://docs.rs/huskarl/latest/huskarl/registration/
 
-## Conformance and interoperability testing
+## Certification and interoperability
+
+Huskarl 0.11.3 is certified for the following client/relying-party profiles
+listed by the OpenID Foundation:
+
+| Certification | Profiles |
+| --- | --- |
+| [OpenID Connect](https://openid.net/certification/certified-openid-connect-implementations/) | Basic RP, Configuration RP, and Form Post RP |
+| [FAPI 2.0 Security Profile Final](https://openid.net/certification/certified-fapi-2-0-rp-security-profile-final-message-signing-final/) | OpenID Connect; all four combinations of mTLS or `private_key_jwt` client authentication with mTLS or DPoP sender-constrained tokens |
+| [FAPI 2.0 Message Signing Final](https://openid.net/certification/certified-fapi-2-0-rp-security-profile-final-message-signing-final/) | JAR and JARM |
+
+These certifications apply to the client implementation and version listed above.
 
 The provider suite exercises flows against Keycloak, Dex, and
 `node-oidc-provider` in CI. Okta tests are available separately and require a
 configured tenant. Run the integration tasks from `integration/`:
 `mise run matrix` reports coverage and `mise run providers:test` runs the suite.
 
-The OpenID conformance harness covers OIDC and FAPI client plans. Coverage
-varies by plan and variant; a passing test run is not formal certification.
+The OpenID conformance harness continues to exercise OIDC and FAPI client plans
+weekly and on demand in CI. Test coverage and published certification scope
+are tracked separately.
 See the [provider matrix](integration/README.md),
 [conformance setup](integration/huskarl-conformance/README.md), and
 [conformance coverage](integration/huskarl-conformance/docs/coverage.md) for
@@ -288,12 +300,17 @@ validator selection, see the [explanation pages](docs/README.md#explanation).
 - OAuth 2.0 Form Post Response Mode
 - JWT Secured Authorization Response Mode (JARM)
 
+#### Financial-grade API
+
+- FAPI 2.0 Security Profile Final
+- FAPI 2.0 Message Signing Final
+
 ## Status
 
 Huskarl is pre-1.0: the API is still evolving, and the crates version
 independently (a breaking change in one does not force a major bump in the
-others). It is used in production, and changes are gated by the conformance
-and provider-matrix suites above.
+others). It is used in production. Pull requests run the provider-matrix suite;
+the OpenID conformance suite runs weekly and on demand.
 
 Minimum supported Rust version: **1.92** (edition 2024).
 

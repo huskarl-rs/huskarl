@@ -12,7 +12,7 @@ and a set of wrappers that decorate them. Each base operation — signing,
 verification, encryption, decryption — is one trait describing a single key. The
 wrappers implement the *same* trait, so they nest: a retrying verifier can wrap
 a scheduled-refresh verifier that swaps a multi-key snapshot, and the JWT layer
-above sees only a `JwsVerifier`. You assemble the behaviour you need by
+above sees only a `JwsVerifier`. Applications assemble the required behaviour by
 stacking layers rather than configuring one large type.
 
 ## The base traits
@@ -95,7 +95,7 @@ dropped, not cached across a rotation. Encryption and
 [`AeadEncryptorSelector`](crate::crypto::cipher::AeadEncryptorSelector) work the
 same way.
 
-The relation is deliberately one-way: you hold a *selector* and get an
+The relation is deliberately one-way: the caller holds a *selector* and gets an
 encryptor, never the reverse. Even a fixed key is a selector — it hands out its
 shared inner [`AeadEncryptor`](crate::crypto::cipher::AeadEncryptor) — so
 there is no wrapper for lifting a bare encryptor into selection, which would
@@ -120,7 +120,7 @@ relevant trait — the operation trait inbound, the selector trait outbound:
 - **Refreshable (hot-swap)** —
   [`RefreshableVerifier`](crate::crypto::verifier::RefreshableVerifier),
   [`RefreshableSigner`](crate::crypto::signer::RefreshableSigner),
-  [`RefreshableCipher`](crate::crypto::cipher::RefreshableCipher). Hold the
+  and [`RefreshableCipher`](crate::crypto::cipher::RefreshableCipher) hold the
   current key material behind an atomic swap so it can be replaced at runtime
   (a rotated key, a re-fetched JWKS) without rebuilding the stack above.
   Concurrent refreshes are serialised; waiters adopt the in-flight result. The
@@ -149,23 +149,25 @@ relevant trait — the operation trait inbound, the selector trait outbound:
   [`JwksStartup::SeedEmpty`](crate::jwk::JwksStartup::SeedEmpty), which comes up
   *cold* and returns
   [`KeysUnavailable`](crate::crypto::verifier::VerifyError::KeysUnavailable)
-  until a live fetch lands. Persist each successful fetch so the cache tracks key
-  rotations rather than a stale bake-in; with no live fetch *and* no cache (a
-  first-ever offline boot) the build still fails — you genuinely have no keys.
+  until a live fetch lands. With no live fetch *and* no cache (a first-ever
+  offline boot), the build still fails because the factory has no keys.
+
+  To implement warm starts, persist each successful fetch so the cache tracks
+  key rotations rather than retaining only the keys from the initial deployment.
 
 - **Retrying** —
-  [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier),
-  [`RetryingDecryptor`](crate::crypto::cipher::RetryingDecryptor). React to a
+  [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier) and
+  [`RetryingDecryptor`](crate::crypto::cipher::RetryingDecryptor) react to a
   *miss* — no held key matches the token's `alg`/`kid` — by refreshing and trying
   once more. This is the fast path for key *additions*: a token signed by a
   freshly-rotated `kid` is accepted as soon as a miss drives a reload, instead of
   waiting for the next scheduled reload — though that reload is itself gated by the
   scheduled layer's `min_refresh_interval`, so the first unknown-`kid` miss fetches
   while any others arriving within that window still surface the miss until the
-  ceiling clears. It reacts *only* to a miss; a signature mismatch is almost
-  always a forged token (a refresh would be wasted), and its one legitimate case —
-  a same-algorithm, kid-less rotation — is handled after a successful scheduled
-  reload instead. So the two layers split the work: **misses
+  ceiling clears. The retrying verifier reacts *only* to a miss; a signature
+  mismatch is almost always a forged token (a refresh would be wasted), and its
+  one legitimate case — a same-algorithm, kid-less rotation — is handled after a
+  successful scheduled reload instead. So the two layers split the work: **misses
   here handle additions; the TTL there handles removals and the kid-less edge.**
   Retrying is inbound-only — there is no outbound miss, since the caller selects
   the key.
@@ -209,7 +211,7 @@ value, store or send it, and decrypt it later. [`seal`](crate::crypto::seal) is
 that convenience layer, built *on* `cipher`: it packs the parts into one opaque,
 self-contained bundle. The trade is deliberate — the bundle framing is
 huskarl's own, so sealing is the wrong tool for JWE (whose framing is fixed by
-spec); reach past it to the `cipher` traits there.
+spec). JWE implementations use the `cipher` traits directly.
 
 Sealing suits values that must travel on their own — encrypted cookies, stateless
 tokens — where the nonce and tag must be carried alongside the ciphertext.

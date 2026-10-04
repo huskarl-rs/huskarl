@@ -76,17 +76,31 @@ crate_declares_break() {
 }
 
 rows=""
+console_rows=""
 any_break=0
 mismatch=0
-printf '%-26s %s\n' "CRATE" "VERDICT"
-printf '%-26s %s\n' "-----" "-------"
+unchecked=0
 
 for entry in "${crates[@]}"; do
   crate="${entry%%$'\t'*}"
   dir="${entry#*$'\t'}"
-  out="$(cargo semver-checks --package "$crate" --baseline-rev "$base_rev" --color never 2>&1)" || true
+  # Stream diagnostics immediately, keeping group markers and checker output
+  # on stdout so GitHub Actions preserves their order.
+  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    printf '::group::cargo-semver-checks %s\n' "$crate"
+  else
+    printf '\n--- cargo-semver-checks %s ---\n' "$crate"
+  fi
+  status=0
+  cargo semver-checks --package "$crate" --baseline-rev "$base_rev" --color never 2>&1 || status=$?
+  printf 'Checker exited %s\n' "$status"
+  if [[ ${GITHUB_ACTIONS:-} == true ]]; then
+    echo '::endgroup::'
+  fi
 
-  if grep -q "requires new" <<<"$out"; then
+  # Since cargo-semver-checks 0.49, exit codes distinguish violations (100)
+  # from errors (101). Human-readable summary wording is not a stable API.
+  if [[ $status -eq 100 ]]; then
     any_break=1
     if crate_declares_break "$dir"; then
       verdict="breaking — declared (has \`!\`/BREAKING CHANGE)"
@@ -96,24 +110,34 @@ for entry in "${crates[@]}"; do
       verdict="BREAKING — commit type UNDERSTATES it"
       row="| \`$crate\` | ⚠️ breaking | ❌ **commit type understates — re-tag \`type!:\` or add \`BREAKING CHANGE:\`** |"
     fi
-  elif grep -q "no semver update required" <<<"$out"; then
+  elif [[ $status -eq 0 ]]; then
     verdict="compatible"
     row="| \`$crate\` | compatible | — |"
   else
-    verdict="could not check (build error / no baseline)"
-    row="| \`$crate\` | ⚠️ unchecked | build error or missing baseline |"
+    unchecked=$((unchecked + 1))
+    verdict="could not check (exit $status; see diagnostics)"
+    row="| \`$crate\` | ⚠️ unchecked | checker exited $status; see CI log |"
   fi
-  printf '%-26s %s\n' "$crate" "$verdict"
+  console_rows+="$(printf '%-26s %s' "$crate" "$verdict")"$'\n'
   rows+="$row"$'\n'
 done
 
+echo
+printf '%-26s %s\n' "CRATE" "VERDICT"
+printf '%-26s %s\n' "-----" "-------"
+printf '%s' "$console_rows"
 echo
 if [[ $mismatch -eq 1 ]]; then
   echo "RESULT: semver-affecting; at least one commit type understates a breaking change."
 elif [[ $any_break -eq 1 ]]; then
   echo "RESULT: semver-affecting; breaking changes are correctly declared."
+elif [[ $unchecked -gt 0 ]]; then
+  echo "RESULT: inconclusive ($unchecked crate(s) could not be checked vs $base_rev)."
 else
   echo "RESULT: not semver-affecting (no breaking API changes vs $base_rev)."
+fi
+if [[ $unchecked -gt 0 && $any_break -eq 1 ]]; then
+  echo "Report incomplete: $unchecked crate(s) could not be checked; additional breaking changes may exist."
 fi
 
 if [[ -n "${SEMVER_REPORT:-}" ]]; then
@@ -132,8 +156,14 @@ if [[ -n "${SEMVER_REPORT:-}" ]]; then
       echo "release-plz bumps correctly."
     elif [[ $any_break -eq 1 ]]; then
       echo "This PR is **semver-affecting**; the breaking changes are correctly declared."
+    elif [[ $unchecked -gt 0 ]]; then
+      echo "**Inconclusive:** $unchecked crate(s) could not be checked. See the CI log for checker diagnostics."
     else
       echo "No breaking API changes detected. Not semver-affecting."
+    fi
+    if [[ $unchecked -gt 0 && $any_break -eq 1 ]]; then
+      echo
+      echo "**Report incomplete:** $unchecked crate(s) could not be checked; additional breaking changes may exist."
     fi
     echo
     echo "<sub>cargo-semver-checks detects breaking changes only; it can't tell \`feat\` from \`fix\` when neither breaks the API.</sub>"

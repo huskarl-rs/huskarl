@@ -28,9 +28,9 @@ refresh threshold = refresh_ahead (or the effective expires_margin) + jitter
 
 [`refresh_ahead`](crate::cache::InMemoryTokenCacheBuilder::refresh_ahead) is an
 alternative margin before expiry, not an extra duration added to
-`expires_margin`. Set it larger than the effective expiry margin to create an
-early-refresh window. It is not clamped to the lifetime: a sufficiently large
-value puts every newly acquired token in that window.
+`expires_margin`. A value larger than the effective expiry margin creates an
+early-refresh window. The cache does not clamp it to the lifetime: a
+sufficiently large value puts every newly acquired token in that window.
 
 While the cached token is still valid, one caller acquires the refresh lock
 without waiting and performs the refresh inline. **That caller waits for the
@@ -49,6 +49,7 @@ fraction by the smaller of 10% of the token's lifetime and
 (default `Some(30s)`). The fraction is stable, but the resulting offset can
 change when token lifetimes change.
 
-Jitter starts refresh earlier without changing the retirement threshold. To
-refresh only at that threshold, leave `refresh_ahead` unset and set
+Jitter starts refresh earlier without changing the retirement threshold.
+
+To refresh only at that threshold, leave `refresh_ahead` unset and set
 `refresh_jitter` to `None`.

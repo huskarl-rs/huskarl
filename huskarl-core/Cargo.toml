@@ -5,7 +5,6 @@ edition = "2024"
 rust-version = "1.92"
 description = "Base library for the huskarl OAuth2 ecosystem."
 repository = "https://github.com/huskarl-rs/huskarl"
-homepage = "https://github.com/huskarl-rs/huskarl"
 documentation = "https://docs.rs/huskarl-core"
 license = "MIT OR Apache-2.0"
 keywords = ["oauth2", "security", "authentication"]

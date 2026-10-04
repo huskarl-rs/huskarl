@@ -1,6 +1,9 @@
 # Configure browser access with CORS
 
-CORS belongs to the consuming server. Neither adapter installs a CORS policy.
+CORS belongs to the application server. The Axum and Pingora adapters do not
+install a CORS policy.
+
+When configuring the server's browser access, apply the following rules.
 For public metadata fetched without credentials, return
 `Access-Control-Allow-Origin: *`; browser callers can use `credentials: "omit"`.
 For protected API responses, configure allowed origins and expose

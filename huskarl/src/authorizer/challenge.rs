@@ -544,7 +544,7 @@ mod tests {
         assert_eq!(challenges.len(), 2);
         assert_eq!(challenges[0].scheme, "Basic");
         assert_eq!(challenges[0].token68(), Some("dGVzdDoxMjM="));
-        assert!(challenges[0].params().is_empty());
+        assert_eq!(challenges[0].params(), []);
         assert_eq!(challenges[1].error(), Some(OAuthErrorCode::InvalidToken));
     }
 
@@ -639,8 +639,8 @@ mod tests {
 
     #[test]
     fn no_challenges() {
-        assert!(parse_challenges(&headers(&[])).is_empty());
-        assert!(parse_challenges(&headers(&["  ,  "])).is_empty());
+        assert_eq!(parse_challenges(&headers(&[])), [] as [Challenge; 0]);
+        assert_eq!(parse_challenges(&headers(&["  ,  "])), [] as [Challenge; 0]);
     }
 
     #[test]

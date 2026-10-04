@@ -35,6 +35,8 @@ contents) composed with a `SecretMap`; the same composition is available on any
 provider through [`Secret::mapped`](crate::secrets::Secret::mapped):
 
 ```rust,no_run
+# #[cfg(feature = "fs")]
+# {
 use huskarl_core::prelude::*; // brings `Secret::mapped` into scope
 use huskarl_core::secrets::{FileBytes, FileSecret, encodings::Base64Encoding};
 
@@ -43,6 +45,7 @@ let client_secret = FileSecret::string("/run/secrets/client_secret");
 // Equivalent to FileSecret::new(path, Base64Encoding):
 let signing_key = FileBytes::new("/run/secrets/signing_key").mapped(Base64Encoding);
 # let _ = (client_secret, signing_key);
+# }
 ```
 
 A managed store needs a provider crate: `huskarl-google-cloud` implements

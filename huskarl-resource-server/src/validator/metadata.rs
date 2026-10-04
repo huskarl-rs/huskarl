@@ -525,9 +525,9 @@ mod tests {
         let mut m = meta();
         m.dpop_signing_alg_values_supported = Some(vec!["ES256".to_string()]);
         // 5xx failures omit WWW-Authenticate entirely.
-        assert!(
-            m.challenges(Some(&TestError::server()), None, None)
-                .is_empty()
+        assert_eq!(
+            m.challenges(Some(&TestError::server()), None, None),
+            [] as [std::string::String; 0]
         );
     }
 

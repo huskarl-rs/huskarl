@@ -37,21 +37,26 @@ and explanation in a `_docs` module:
 - [`huskarl-core`](https://docs.rs/huskarl-core) — the shared **foundation** the
   other two build on.
 
-## Conformance and interoperability
+## Certification and interoperability
 
-Huskarl's client is verified against the official [OpenID conformance
-suite](https://openid.net/certification/). It passes the `OpenID` Connect Core
-*Basic client* and *Configuration* certification plans, plus the **FAPI 2.0 Security Profile** and
-**Message Signing** client plans. The FAPI variants exercise `private_key_jwt`
-client authentication, `DPoP` sender-constrained tokens, and signed authorization
-requests (JAR). Both OIDC and plain-OAuth clients are tested; Message Signing
-runs with both plain and signed (JARM) responses. The grants are additionally run
-end-to-end against real
-authorization servers: Keycloak, Dex, and `node-oidc-provider` in CI, with
-optional Okta tests for a configured tenant. Passing these plans is not formal
-`OpenID` certification.
-See the [repository](https://github.com/huskarl-rs/huskarl) for the full provider
-matrix and conformance plans.
+Huskarl 0.11.3 is certified for the following client/relying-party profiles
+listed by the `OpenID` Foundation:
+
+- [OpenID Connect](https://openid.net/certification/certified-openid-connect-implementations/):
+  Basic RP, Configuration RP, and Form Post RP.
+- [FAPI 2.0 Security Profile Final](https://openid.net/certification/certified-fapi-2-0-rp-security-profile-final-message-signing-final/):
+  `OpenID` Connect and all four combinations of mTLS or `private_key_jwt` client
+  authentication with mTLS or `DPoP` sender-constrained tokens.
+- [FAPI 2.0 Message Signing Final](https://openid.net/certification/certified-fapi-2-0-rp-security-profile-final-message-signing-final/):
+  JAR and JARM.
+
+These certifications apply to the client implementation and version listed above.
+
+The official conformance suite runs weekly and on demand in CI. The grants also
+run end-to-end against Keycloak, Dex, and `node-oidc-provider` in CI, with optional
+Okta tests for a configured tenant. See the
+[repository](https://github.com/huskarl-rs/huskarl#certification-and-interoperability)
+for the provider matrix and conformance coverage.
 
 ## Grants
 

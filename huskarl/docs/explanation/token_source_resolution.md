@@ -34,9 +34,11 @@ Credentials are dropped only when replay cannot succeed:
 
 Because a spent fixed source's rejected value cannot become valid again, neither
 [`prime`](crate::cache::GrantTokenSource::prime) nor
-[`clear`](crate::cache::TokenSource::clear) revives it. To supply a fresh
-credential, build a new source or use a [`from_fn`](crate::cache::from_fn) source,
-which mints a new value per exchange and is never spent.
+[`clear`](crate::cache::TokenSource::clear) revives it.
+
+To supply a fresh credential, build a new source or use a
+[`from_fn`](crate::cache::from_fn) source, which mints a new value per exchange
+and is never spent.
 
 A **request-parameter rejection** — a code for which
 [`parameters_at_fault`](crate::core::OAuthErrorCode::parameters_at_fault) holds:

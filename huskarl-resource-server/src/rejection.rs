@@ -297,7 +297,7 @@ mod tests {
     fn metadata_rejection_server_error_has_no_challenges() {
         let rejection = meta().rejection(&TestError::server(), None);
         assert_eq!(rejection.status, http::StatusCode::BAD_GATEWAY);
-        assert!(rejection.www_authenticate.is_empty());
+        assert_eq!(rejection.www_authenticate, [] as [std::string::String; 0]);
         // Nothing measured an interval, so nothing is claimed.
         assert_eq!(rejection.retry_after, None);
     }
