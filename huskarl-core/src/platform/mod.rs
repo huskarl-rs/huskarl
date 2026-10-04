@@ -28,4 +28,5 @@ pub use wasm32_unknown::{Duration, Instant, SystemTime, SystemTimeError, sleep};
 ///
 /// This is the return type for async methods on dyn-capable traits.
 /// Implementors typically write the method body as `Box::pin(async move { ... })`.
-pub type MaybeSendBoxFuture<'a, T> = std::pin::Pin<Box<dyn MaybeSendFuture<Output = T> + 'a>>;
+pub type MaybeSendBoxFuture<'a, T> =
+    core::pin::Pin<alloc::boxed::Box<dyn MaybeSendFuture<Output = T> + 'a>>;

@@ -35,6 +35,7 @@ default-members = [
 exclude = ["huskarl-core/fuzz"]
 
 [workspace.dependencies]
+jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
 huskarl = { version = "0.11", path = "./huskarl" }
 huskarl-core = { version = "0.10", path = "./huskarl-core" }
 huskarl-macros = { version = "0.4", path = "./huskarl-macros" }

@@ -84,6 +84,8 @@ and explanation in a `_docs` module:
 // lint even though the `Arc` never crosses a thread boundary there.
 #![cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
 
+extern crate alloc;
+
 mod endpoint_url;
 mod uuid;
 mod well_known;
@@ -107,6 +109,7 @@ pub mod resource_metadata;
 pub mod secrets;
 pub mod serde_utils;
 pub mod server_metadata;
+pub mod time;
 pub mod url_mapping;
 
 pub use authorization_details::AuthorizationDetail;
