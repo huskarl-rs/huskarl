@@ -43,6 +43,14 @@ async fn fetch_metadata(
     http: &ReqwestClient,
     transport: Transport,
 ) -> AuthorizationServerMetadata {
+    if provider.uses_oidc_discovery() {
+        return AuthorizationServerMetadata::oidc_fetch()
+            .http_client(http)
+            .issuer(provider.issuer(transport))
+            .call()
+            .await
+            .expect("fetch OIDC server metadata");
+    }
     AuthorizationServerMetadata::fetch()
         .http_client(http)
         .issuer(provider.issuer(transport))

@@ -9,8 +9,8 @@ run = "cargo run -p huskarl-integration --example coverage"
 # its trials are ignored, so this is safe with no Okta tenant. Conformance is a
 # separate, slower command — see `conformance:test`.
 [tasks."providers:test"]
-depends = ["keycloak:up", "dex:up", "node-oidc:up"]
-run = "cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc,okta"
+depends = ["keycloak:up", "dex:up", "node-oidc:up", "authentik:up"]
+run = "cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc,authentik,okta"
 
 # Keycloak (for huskarl crate integration tests). HTTPS/mTLS is on host port 8446
 # (→ container 8443), so it coexists with the conformance suite (8443-8445).
@@ -105,3 +105,26 @@ depends = ["conformance:up"]
 env.CONFORMANCE_INSECURE_TLS = "true"
 run = "cargo test -p huskarl-conformance --test fapi2 --test client_credentials --features conformance-suite-tests -- --nocapture"
 depends = ["conformance:up"]
+
+# Authentik: wait for the blueprint, not just the server's HTTP listener.
+[tasks."authentik:up"]
+run = """
+docker compose -f authentik/docker-compose.yml up -d
+for i in $(seq 1 180); do
+  if curl --max-time 2 -sf http://127.0.0.1:9000/application/o/huskarl/.well-known/openid-configuration >/dev/null 2>&1 &&
+     curl --max-time 2 -sf http://127.0.0.1:9000/application/o/huskarl-authcode/.well-known/openid-configuration >/dev/null 2>&1; then
+    echo "authentik ready"; exit 0
+  fi
+  sleep 2
+done
+docker compose -f authentik/docker-compose.yml logs --tail=50
+echo "authentik did not become ready in time" >&2
+exit 1
+"""
+
+[tasks."authentik:down"]
+run = "docker compose -f authentik/docker-compose.yml down"
+
+[tasks."authentik:test"]
+run = "cargo nextest run -p huskarl-integration --test authentik --features authentik"
+depends = ["authentik:up"]

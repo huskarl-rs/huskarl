@@ -1,0 +1,58 @@
+version: 1
+metadata:
+  name: huskarl local OAuth2 tests
+entries:
+  - model: authentik_providers_oauth2.oauth2provider
+    id: provider
+    identifiers:
+      name: huskarl
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      client_id: huskarl-rs
+      client_secret: huskarl-authentik-secret
+      grant_types:
+        - client_credentials
+      redirect_uris: []
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      issuer_mode: per_provider
+  - model: authentik_core.application
+    identifiers:
+      slug: huskarl
+    attrs:
+      name: Huskarl local tests
+      provider: !KeyOf provider
+  - model: authentik_core.user
+    identifiers:
+      username: huskarl-test-user
+    attrs:
+      name: Huskarl test user
+      is_active: true
+      password: huskarl-test-password
+  - model: authentik_providers_oauth2.oauth2provider
+    id: authcode-provider
+    identifiers:
+      name: huskarl-authcode
+    attrs:
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-authentication-flow]]
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      client_id: huskarl-authcode
+      client_secret: huskarl-authcode-secret
+      grant_types:
+        - authorization_code
+      redirect_uris:
+        - matching_mode: strict
+          url: http://127.0.0.1:9001/callback
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, authentik Self-signed Certificate]]
+      issuer_mode: per_provider
+  - model: authentik_core.application
+    identifiers:
+      slug: huskarl-authcode
+    attrs:
+      name: Huskarl authorization-code tests
+      provider: !KeyOf authcode-provider

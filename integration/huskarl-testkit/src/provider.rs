@@ -28,6 +28,12 @@ pub trait TestProvider: Send + Sync {
 
     fn issuer(&self, transport: Transport) -> String;
 
+    /// Use OIDC discovery for non-interactive flows when RFC 8414 metadata is
+    /// unavailable. Authorization-code flows always use OIDC discovery.
+    fn uses_oidc_discovery(&self) -> bool {
+        false
+    }
+
     fn mtls_material(&self) -> Option<MtlsMaterial> {
         None
     }
