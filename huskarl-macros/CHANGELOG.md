@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.4.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-macros-v0.4.0...huskarl-macros-v0.4.1) - 2026-10-06
+
+### Other
+
+- Update docs, add conformance info, fix nightly clippy. ([#337](https://github.com/huskarl-rs/huskarl/pull/337))
+
 ## [0.4.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-macros-v0.3.1...huskarl-macros-v0.4.0) - 2026-08-24
 
 ### Added

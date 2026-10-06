@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-redis-v0.3.1...huskarl-redis-v0.3.2) - 2026-10-06
+
+### Other
+
+- Update docs, add conformance info, fix nightly clippy. ([#337](https://github.com/huskarl-rs/huskarl/pull/337))
+
 ## [0.3.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-redis-v0.3.0...huskarl-redis-v0.3.1) - 2026-09-26
 
 ### Other
