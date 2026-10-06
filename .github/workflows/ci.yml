@@ -149,6 +149,7 @@ jobs:
           docker compose up --wait                                                # Keycloak (8080 + 8444)
           docker compose -f dex/docker-compose.yml up -d                          # Dex (5556)
           docker compose -f node-oidc-provider/docker-compose.yml up -d --build   # node-oidc (3000)
+          mise run authentik:up
           docker compose -f redis/docker-compose.yml up --wait                    # Redis (6379)
           # Dex and node-oidc images carry no healthcheck, so wait on their
           # discovery endpoints from the host (mirrors the mise `*:up` tasks).
@@ -164,7 +165,7 @@ jobs:
       # Okta is intentionally excluded (hosted; needs a tenant). Without its
       # feature, the okta binary's trials are ignored.
       - name: Run tests
-        run: cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc
+        run: cargo nextest run -p huskarl-integration --features keycloak,dex,node-oidc,authentik
       - name: Run the first-token tutorial against Keycloak
         run: python3 scripts/test-first-token.py
       # huskarl-redis's server-backed tests are `#[ignore]`d without the
@@ -178,4 +179,5 @@ jobs:
           docker compose down
           docker compose -f dex/docker-compose.yml down
           docker compose -f node-oidc-provider/docker-compose.yml down
+          docker compose -f authentik/docker-compose.yml down
           docker compose -f redis/docker-compose.yml down

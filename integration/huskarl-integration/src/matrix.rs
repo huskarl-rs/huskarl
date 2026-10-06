@@ -1,7 +1,9 @@
 //! Derived coverage report: which flows each provider exercises, computed from
 //! [`FLOWS`] and each provider's supported [`Features`].
 
-use huskarl_testkit::{DexProvider, Features, KeycloakProvider, NodeOidcProvider, OktaProvider};
+use huskarl_testkit::{
+    AuthentikProvider, DexProvider, Features, KeycloakProvider, NodeOidcProvider, OktaProvider,
+};
 
 use crate::flows::FLOWS;
 
@@ -20,6 +22,7 @@ pub fn flows() -> Vec<(String, Features)> {
 /// Every wired provider with its supported features (from each `FEATURES` const).
 pub fn all_providers() -> Vec<(&'static str, Features)> {
     vec![
+        ("authentik", AuthentikProvider::FEATURES),
         ("keycloak", KeycloakProvider::FEATURES),
         ("dex", DexProvider::FEATURES),
         ("node-oidc", NodeOidcProvider::FEATURES),

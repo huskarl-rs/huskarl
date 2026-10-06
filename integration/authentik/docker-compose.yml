@@ -1,0 +1,40 @@
+# Local test credentials only. No Docker socket or public listener is needed.
+x-authentik: &authentik
+  image: ghcr.io/goauthentik/server:2026.8.3
+  environment:
+    AUTHENTIK_SECRET_KEY: huskarl-local-authentik-secret-key-not-for-production
+    AUTHENTIK_POSTGRESQL__HOST: postgresql
+    AUTHENTIK_POSTGRESQL__NAME: authentik
+    AUTHENTIK_POSTGRESQL__USER: authentik
+    AUTHENTIK_POSTGRESQL__PASSWORD: huskarl-local-postgres
+    AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+    AUTHENTIK_DISABLE_UPDATE_CHECK: "true"
+  depends_on:
+    postgresql:
+      condition: service_healthy
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: authentik
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: huskarl-local-postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    # Disposable database: down removes the test configuration.
+    tmpfs:
+      - /var/lib/postgresql/data
+  server:
+    <<: *authentik
+    command: server
+    ports:
+      - "127.0.0.1:9000:9000"
+  worker:
+    <<: *authentik
+    command: worker
+    volumes:
+      - ./blueprints:/blueprints/custom:ro

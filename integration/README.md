@@ -5,7 +5,7 @@ each with its own Docker infrastructure:
 
 - **Provider matrix** (`huskarl-integration`) — real OAuth2/OIDC flows against
   self-hosted servers (Keycloak on 8080 + 8446, Dex on 5556, node-oidc-provider
-  on 3000).
+  on 3000, Authentik on 9000).
 - **OpenID conformance suite** — the official certification test plans (8443).
 
 Every backend binds a distinct port, so they can all run at once — no juggling.
@@ -26,6 +26,8 @@ All commands run from the `integration/` directory.
 | Dex: stop | `mise run dex:down` |
 | node-oidc-provider: test | `mise run node-oidc:test` |
 | node-oidc-provider: stop | `mise run node-oidc:down` |
+| Authentik: test | `mise run authentik:test` |
+| Authentik: stop | `mise run authentik:down` |
 | Okta: test (hosted; needs `OKTA_*`) | `mise run okta:test` |
 | Coverage report (all providers) | `mise run matrix` |
 | Conformance: all tests | `mise run conformance:test` |
@@ -47,19 +49,20 @@ when a server can't do it.
 
 Wired providers and the flows each runs (others skip on the feature check). Each
 provider is provisioned differently — Keycloak via its admin API, Dex via static
-config, node-oidc-provider via RFC 7591 dynamic registration — which is exactly
+config, node-oidc-provider via RFC 7591 dynamic registration, Authentik via a blueprint — which is exactly
 what the `TestProvider` seam abstracts.
 
-| flow / variant | Keycloak | Dex | node-oidc |
-|---|---|---|---|
-| client_credentials (plain, dpop, private_key_jwt) | ✓ | — | — |
-| refresh | ✓ | — | — |
-| introspection | ✓ | — | — |
-| mtls | ✓ | — | — |
-| rejection (wrong_audience) | ✓ | — | — |
-| auth_code/direct | ✓ | ✓ | ✓ |
-| auth_code/par | ✓ | — | ✓ |
-| auth_code/jar | ✓ | — | ✓ |
+| flow / variant | Keycloak | Dex | node-oidc | Authentik |
+|---|---|---|---|---|
+| client_credentials/plain | ✓ | — | — | ✓ |
+| client_credentials (dpop, private_key_jwt) | ✓ | — | — | — |
+| refresh | ✓ | — | — | — |
+| introspection | ✓ | — | — | ✓ |
+| mtls | ✓ | — | — | — |
+| rejection (wrong_audience) | ✓ | — | — | ✓ |
+| auth_code/direct | ✓ | ✓ | ✓ | ✓ |
+| auth_code/par | ✓ | — | ✓ | — |
+| auth_code/jar | ✓ | — | ✓ | — |
 
 node-oidc-provider issues opaque access tokens, so the client-credentials/JWKS
 flows are out of its feature set; it covers the authorization-code family
@@ -95,6 +98,7 @@ The `--test` target and `--features` flag differ per provider (note the
 | Keycloak | `keycloak` | `keycloak` | `keycloak` |
 | Dex | `dex` | `dex` | `dex` |
 | node-oidc-provider | `node-oidc` | `node_oidc` | `node-oidc` |
+| Authentik | `authentik` | `authentik` | `authentik` |
 | Okta (hosted, no `up`) | `okta` | `okta` | `okta` |
 
 ### Keycloak
@@ -138,6 +142,35 @@ any username, any password). It serves the authorization-code family —
 mise run node-oidc:test    # builds + starts the container, runs tests
 mise run node-oidc:down
 ```
+
+### Authentik
+
+```sh
+mise run authentik:test    # starts Authentik and waits for its test blueprint
+mise run authentik:down    # stops services and discards the test database
+```
+
+Authentik serves on `http://127.0.0.1:9000`. The stack runs PostgreSQL, a server,
+and a worker, with no manual admin setup. Its blueprint registers the shared
+confidential client `huskarl-rs` / `huskarl-authentik-secret` and selects an RSA
+signing certificate so access tokens can be validated through JWKS. These are
+local test credentials only. The first start may take several minutes while
+images download and database migrations finish.
+
+The matrix covers plain client credentials, introspection, wrong-audience
+rejection, and authorization code with PKCE. Authentik uses the client ID as the
+access-token audience. The static clients are shared safely by these tests; no per-test provisioning or teardown is
+needed.
+
+A separate client, `huskarl-authcode` / `huskarl-authcode-secret`, uses a strict
+`http://127.0.0.1:9001/callback` redirect and the `openid` scope. The test logs in
+as `huskarl-test-user` / `huskarl-test-password` through Authentik’s default
+authentication flow using its flow executor API, then exchanges the code with
+PKCE and validates the ID token. This exercises ordinary OIDC independently of
+the future `bound_key` feature; key binding is not enabled on this client.
+
+The generic refresh test requires a refresh token from client credentials,
+which Authentik does not issue, so it is skipped along with unsupported variants.
 
 ## OpenID Conformance Suite Tests
 
