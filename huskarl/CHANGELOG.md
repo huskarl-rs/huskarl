@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.5](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.4...huskarl-v0.11.5) - 2026-10-06
+
+### Other
+
+- Update docs, add conformance info, fix nightly clippy. ([#337](https://github.com/huskarl-rs/huskarl/pull/337))
+
 ## [0.11.4](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.3...huskarl-v0.11.4) - 2026-10-01
 
 ### Added

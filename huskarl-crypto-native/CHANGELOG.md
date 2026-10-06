@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-native-v0.11.1...huskarl-crypto-native-v0.11.2) - 2026-10-06
+
+### Other
+
+- Update rsa to rc19 ([#339](https://github.com/huskarl-rs/huskarl/pull/339))
+- Update docs, add conformance info, fix nightly clippy. ([#337](https://github.com/huskarl-rs/huskarl/pull/337))
+
 ## [0.11.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-native-v0.11.0...huskarl-crypto-native-v0.11.1) - 2026-09-28
 
 ### Other
