@@ -57,7 +57,7 @@ pub enum ValidationOutcome {
     /// endpoint, replay store, nonce checker) or the deployment is
     /// misintegrated. The token was never judged; mirrors the 5xx response.
     CallError,
-    /// A token was presented but its `iss` claim was missing, unparseable, or
+    /// A token was presented but its `iss` claim was missing or
     /// not registered with the
     /// [`MultiIssuerValidator`](crate::validator::multi_issuer::MultiIssuerValidator)
     /// (a misconfigured client, or probing).
@@ -431,6 +431,16 @@ mod tests {
         },
         ValidationOutcome::BindingError,
         Some("https://as.example")
+    )]
+    #[case::parse(
+        MultiIssuerError::Parse { source: crate::core::jwt::JwsParseError::InvalidFormat },
+        ValidationOutcome::InvalidToken,
+        None
+    )]
+    #[case::unsupported_encryption(
+        MultiIssuerError::UnsupportedEncryptedToken,
+        ValidationOutcome::InvalidToken,
+        None
     )]
     fn multi_issuer_errors_classify(
         #[case] error: MultiIssuerError,

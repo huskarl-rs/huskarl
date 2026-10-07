@@ -414,7 +414,7 @@ impl crate::error::ToRfc6750Error for MtlsBindingError {
             Self::CertThumbprintMismatch => {
                 "The client certificate thumbprint does not match the token binding"
             }
-            Self::MtlsRequired => "The protected resource requires a client certificate",
+            Self::MtlsRequired => "A client certificate is required to access this resource",
         };
         crate::error::Challenge::new(error).with_description(description)
     }
@@ -936,7 +936,7 @@ mod tests {
             .challenge()
             .description
             .as_deref(),
-            Some("The DPoP proof is missing the JWK header"),
+            Some("The DPoP proof is missing the required 'jwk' header"),
         );
         assert_eq!(
             MtlsBindingError::CertBoundTokenWithoutCert

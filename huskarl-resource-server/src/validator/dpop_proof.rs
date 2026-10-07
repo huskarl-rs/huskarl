@@ -197,14 +197,16 @@ impl DPoPProofError {
     pub fn error_description(&self) -> Option<String> {
         match self {
             Self::BadFormat { .. } => Some("The DPoP proof is malformed".to_string()),
-            Self::MissingJwkHeader => Some("The DPoP proof is missing the JWK header".to_string()),
+            Self::MissingJwkHeader => {
+                Some("The DPoP proof is missing the required 'jwk' header".to_string())
+            }
             Self::JwkX5u => {
-                Some("The DPoP proof JWK contains an unsupported x5u parameter".to_string())
+                Some("The DPoP proof JWK contains an unsupported 'x5u' parameter".to_string())
             }
             Self::JwkPrivateKey => {
                 Some("The DPoP proof JWK contains private-key material".to_string())
             }
-            Self::CreateVerifier { .. } => Some("The DPoP proof signature is invalid".to_string()),
+            Self::CreateVerifier { .. } => Some("The DPoP proof key could not be used".to_string()),
             Self::InvalidProof { source } => {
                 use JwtValidationError as E;
                 match source {
@@ -225,7 +227,7 @@ impl DPoPProofError {
                     }
                     E::TokenTooOld { .. } => Some("The DPoP proof is too old".to_string()),
                     E::InvalidTokenType { .. } => {
-                        Some("The DPoP proof has an invalid typ header".to_string())
+                        Some("The DPoP proof 'typ' header is invalid".to_string())
                     }
                     E::ClaimMismatch { claim, .. } => {
                         Some(format!("The DPoP proof '{claim}' claim is invalid"))
@@ -233,9 +235,14 @@ impl DPoPProofError {
                     E::RequiredClaimMissing { claim } => Some(format!(
                         "The DPoP proof is missing the required '{claim}' claim"
                     )),
-                    E::JtiNotUnique => Some("The DPoP proof jti has already been used".to_string()),
-                    E::JtiTooLong { .. } => Some("The DPoP proof jti is too long".to_string()),
-                    E::JtiCheck { .. } | E::ExtraClaims { .. } => None,
+                    E::JtiNotUnique => {
+                        Some("The DPoP proof 'jti' claim has already been used".to_string())
+                    }
+                    E::JtiTooLong { .. } => {
+                        Some("The DPoP proof 'jti' claim is too long".to_string())
+                    }
+                    E::ExtraClaims { .. } => Some("The DPoP proof claims are invalid".to_string()),
+                    E::JtiCheck { .. } => None,
                 }
             }
         }
@@ -309,7 +316,7 @@ pub enum DPoPProofError {
         source: JwsParseError,
     },
     /// No embedded JWK in proof header.
-    #[snafu(display("DPoP proof is missing the JWK header"))]
+    #[snafu(display("DPoP proof is missing the 'jwk' header"))]
     MissingJwkHeader,
     /// JWK contains `x5u`, rejected for SSRF prevention.
     #[snafu(display("DPoP proof JWK contains unsupported x5u parameter"))]

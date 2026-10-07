@@ -612,7 +612,7 @@ mod tests {
             ),
             vec![
                 "Bearer".to_string(),
-                r#"DPoP error="invalid_dpop_proof", error_description="The DPoP proof is missing the JWK header""#.to_string(),
+                r#"DPoP error="invalid_dpop_proof", error_description="The DPoP proof is missing the required 'jwk' header""#.to_string(),
             ],
         );
         assert_eq!(
@@ -629,8 +629,8 @@ mod tests {
         assert_eq!(
             m.challenges(Some(&IntrospectionCallError::TokenInactive), None, None),
             vec![
-                r#"Bearer error="invalid_token", error_description="The access token is revoked""#,
-                r#"DPoP error="invalid_token", error_description="The access token is revoked""#,
+                r#"Bearer error="invalid_token", error_description="The access token is inactive""#,
+                r#"DPoP error="invalid_token", error_description="The access token is inactive""#,
             ],
         );
     }

@@ -11,8 +11,13 @@ single-issuer validator.
 
 The issuer is read from the token's payload **without verifying the
 signature**, and is used only to select a registered validator. Routing grants
-no trust and does not add claim checks to the selected validator. Opaque tokens
-cannot use this routing mechanism.
+no trust and does not add claim checks to the selected validator. Routing
+currently supports compact JWS tokens only. Encrypted JWTs (JWE) and opaque
+tokens cannot use this routing mechanism.
+
+Routing errors distinguish malformed tokens (`Parse`), unsupported encrypted
+formats (`UnsupportedEncryptedToken`), and missing or unknown issuers
+(`UnrecognizedIssuer`). All return `invalid_token` to the client.
 
 When configuring the router, configure each selected validator to verify the
 token's authenticity, issuer, audience, and sender constraints. In particular,
