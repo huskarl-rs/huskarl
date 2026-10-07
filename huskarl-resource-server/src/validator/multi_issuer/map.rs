@@ -1,7 +1,7 @@
 //! Claim normalization adapter for [`MultiIssuerValidator`](super::MultiIssuerValidator).
 
 use crate::{
-    AccessTokenValidator, ValidatedRequest,
+    AccessTokenValidator,
     core::platform::{MaybeSendBoxFuture, MaybeSendSync},
     validator::{
         ValidationResult,
@@ -10,6 +10,8 @@ use crate::{
 };
 
 /// Wraps a validator, normalizing its source-specific claims into a common type `C`.
+///
+/// For fallible normalization, use [`TryMapClaims`](super::TryMapClaims).
 ///
 /// The mapping is an ordinary `Fn(SourceClaims) -> C`; the library attaches no
 /// semantics to it. Use this to give several per-issuer validators a single
@@ -77,32 +79,10 @@ where
                 .await;
 
             ValidationResult {
-                outcome: result.outcome.map(|opt| opt.map(|v| self.remap(v))),
+                outcome: result.outcome.map(|opt| opt.map(|v| v.map_claims(&self.f))),
                 dpop_nonce: result.dpop_nonce,
             }
         })
-    }
-}
-
-impl<V, F, C> MapClaims<V, F>
-where
-    V: AccessTokenValidator,
-    F: Fn(V::Claims) -> C,
-{
-    /// Transforms only the extra-claims payload; the universal token fields
-    /// (`iss`, `sub`, `aud`, `exp`, `cnf`, …) pass through unchanged.
-    fn remap(&self, v: ValidatedRequest<V::Claims>) -> ValidatedRequest<C> {
-        ValidatedRequest {
-            iss: v.iss,
-            sub: v.sub,
-            aud: v.aud,
-            jti: v.jti,
-            iat: v.iat,
-            exp: v.exp,
-            cnf: v.cnf,
-            claims: (self.f)(v.claims),
-            introspection_jwt: v.introspection_jwt,
-        }
     }
 }
 
