@@ -93,3 +93,56 @@ let validator = MultiIssuerValidator::<Principal>::builder()
 # Ok(())
 # }
 ```
+
+## Keeping subjects distinct across issuers
+
+A `sub` is only unique per issuer, so `request.sub` alone can conflate subjects
+from the two issuers. Namespace them with
+[`MapRequest`](crate::validator::multi_issuer::MapRequest), which sees the whole
+validated request, and wrap each source before mapping its claims:
+
+```
+use huskarl_resource_server::validator::{
+    AccessTokenValidator, ValidatedRequest,
+    metadata::ProvideValidatorMetadata,
+    multi_issuer::{MapClaims, MapRequest, MultiIssuerValidator},
+};
+
+/// Prefixes every subject `validator` accepts with `namespace`, which must not
+/// contain `|` (otherwise two namespaces could yield the same subject).
+fn namespace_subjects<V>(
+    namespace: &'static str,
+    validator: V,
+) -> impl AccessTokenValidator<Claims = V::Claims> + ProvideValidatorMetadata
+where
+    V: AccessTokenValidator + ProvideValidatorMetadata,
+{
+    MapRequest::new(validator, move |mut request: ValidatedRequest<V::Claims>| {
+        request.sub = request.sub.map(|sub| format!("{namespace}|{sub}"));
+        request
+    })
+}
+# #[derive(Clone, serde::Deserialize)]
+# struct PartnerClaims { email: Option<String>, email_verified: Option<bool> }
+# #[derive(Clone)]
+# struct Principal { email: Option<String>, scopes: Vec<String> }
+# fn example(
+#     partner: impl AccessTokenValidator<Claims = PartnerClaims> + ProvideValidatorMetadata + 'static,
+# ) {
+
+let validator = MultiIssuerValidator::<Principal>::builder()
+    .source(
+        "https://login.partner.example",
+        MapClaims::new(
+            namespace_subjects("partner", partner),
+            |c: PartnerClaims| Principal {
+                email: c.email.filter(|_| c.email_verified == Some(true)),
+                scopes: Vec::new(),
+            },
+        ),
+    )
+    // ...and likewise for Okta.
+    .build();
+# let _ = validator;
+# }
+```

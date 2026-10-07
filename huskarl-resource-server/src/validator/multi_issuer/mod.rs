@@ -6,7 +6,9 @@
 //! Pingora guard, or any other consumer exactly like a single-issuer validator.
 //!
 //! Per-issuer validators usually have different claims types; wrap each in
-//! [`MapClaims`] or [`TryMapClaims`] to give them a common type. For why
+//! [`MapClaims`] or [`TryMapClaims`] to give them a common type. To read or
+//! rewrite universal token fields such as `sub`, map the whole request with
+//! [`MapRequest`] or [`TryMapRequest`] instead. For why
 //! issuer-based routing is safe and how to unify claim types, see the
 //! [multi-issuer routing
 //! explanation](crate::_docs::explanation::multi_issuer_routing); for a worked
@@ -27,9 +29,11 @@ use std::collections::HashMap;
 use base64::prelude::*;
 pub use error::MultiIssuerError;
 use http::{HeaderName, header::AUTHORIZATION};
-pub use map::MapClaims;
+pub use map::{MapClaims, MapRequest};
 use serde::Deserialize;
-pub use try_map::{TryMapClaims, TryMapClaimsError};
+#[allow(deprecated)]
+pub use try_map::TryMapClaimsError;
+pub use try_map::{TryMapClaims, TryMapError, TryMapRequest};
 
 use crate::{
     AccessTokenValidator,
