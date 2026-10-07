@@ -73,7 +73,7 @@ pub fn extract_token(
 pub enum TokenExtractError {
     /// The token header value is not valid UTF-8.
     #[snafu(display("the access token header value is not valid UTF-8"))]
-    #[strum(message = "The access token header value is not a valid string")]
+    #[strum(message = "The access token header value is invalid")]
     TokenNotString {
         /// The underlying string conversion error.
         source: ToStrError,
@@ -93,7 +93,7 @@ pub enum TokenExtractError {
         "unsupported access token scheme '{token_type}'; this resource server \
          accepts Bearer and DPoP"
     ))]
-    #[strum(message = "The access token type is unsupported")]
+    #[strum(message = "The authentication scheme is not supported")]
     UnsupportedTokenType {
         /// The unrecognised token type scheme.
         token_type: String,

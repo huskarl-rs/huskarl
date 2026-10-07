@@ -1,7 +1,10 @@
 //! Error type for [`MultiIssuerValidator`](super::MultiIssuerValidator).
 
+use snafu::{IntoError as _, Snafu};
+
 use crate::{
     TokenType,
+    core::jwt::JwsParseError,
     error::{Challenge, ToRfc6750Error, TokenErrorCode, TokenValidationError},
     validator::{extract::TokenExtractError, observe::ValidationOutcome},
 };
@@ -13,16 +16,20 @@ use crate::{
 /// Inner-validator failures are wrapped in [`MultiIssuerError::Validation`] and
 /// preserve their [`Challenge`], observation outcome, attempted scheme, and
 /// [`std::error::Error::source`] chain.
-#[derive(Debug)]
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(super)))]
 #[non_exhaustive]
 pub enum MultiIssuerError {
     /// The access token could not be extracted from the request headers.
+    #[snafu(display("token presentation error"))]
     Extract {
         /// The underlying extraction error.
         source: TokenExtractError,
     },
-    /// A token was present, but its `iss` claim was missing, unparseable, or did
-    /// not match any registered issuer. Treated as `invalid_token`.
+    /// A token was present, but its `iss` claim was missing or did not match
+    /// any registered issuer. Treated as `invalid_token`.
+    // Debug-quote the unverified issuer so control characters are escaped.
+    #[snafu(display("unrecognized token issuer{}", iss.as_ref().map(|iss| format!(": {iss:?}")).unwrap_or_default()))]
     UnrecognizedIssuer {
         /// The token's `iss` claim as peeked from the **unverified** payload,
         /// when one could be read. Diagnostic only — an attacker controls it,
@@ -34,45 +41,33 @@ pub enum MultiIssuerError {
     /// The inner error supplies the challenge and remains available through
     /// [`std::error::Error::source`]. The registered `issuer` is returned by
     /// [`ToRfc6750Error::issuer`] and is safe to use as a bounded metrics label.
+    #[snafu(display("token validation error (issuer {issuer})"))]
     Validation {
         /// The registered issuer the token routed to.
         issuer: String,
         /// The inner validator's error.
+        #[snafu(source)]
         error: Box<dyn ToRfc6750Error>,
     },
+    // Append new variants so existing discriminants stay stable for
+    // cargo-semver-checks.
+    /// The token could not be parsed as compact JWS for issuer routing.
+    #[snafu(display("malformed access token"))]
+    Parse {
+        /// The underlying parsing error.
+        source: JwsParseError,
+    },
+    /// No decryption path is configured for issuer routing.
+    ///
+    /// Currently returned for any five-segment token, without validating it as
+    /// JWE. Treated as `invalid_token`.
+    #[snafu(display("unsupported five-segment (possibly JWE) token"))]
+    UnsupportedEncryptedToken,
 }
 
 impl From<TokenExtractError> for MultiIssuerError {
     fn from(source: TokenExtractError) -> Self {
-        Self::Extract { source }
-    }
-}
-
-impl std::fmt::Display for MultiIssuerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Extract { .. } => f.write_str("token presentation error"),
-            // Debug-quoted: the peeked value is attacker-controlled, so escape
-            // any control characters before it reaches a log line.
-            Self::UnrecognizedIssuer { iss } => match iss {
-                Some(iss) => write!(f, "unrecognized token issuer: {iss:?}"),
-                None => f.write_str("unrecognized token issuer"),
-            },
-            // The inner error is rendered by the next source-chain link.
-            Self::Validation { issuer, .. } => {
-                write!(f, "token validation error (issuer {issuer})")
-            }
-        }
-    }
-}
-
-impl std::error::Error for MultiIssuerError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Extract { source } => Some(source),
-            Self::UnrecognizedIssuer { .. } => None,
-            Self::Validation { error, .. } => Some(&**error),
-        }
+        ExtractSnafu.into_error(source)
     }
 }
 
@@ -80,17 +75,27 @@ impl ToRfc6750Error for MultiIssuerError {
     fn challenge(&self) -> Challenge {
         match self {
             Self::Extract { source } => source.challenge(),
+            Self::Parse { .. } => {
+                Challenge::new(TokenValidationError::Client(TokenErrorCode::InvalidToken))
+                    .with_description("The access token is malformed")
+            }
+            Self::UnsupportedEncryptedToken => {
+                Challenge::new(TokenValidationError::Client(TokenErrorCode::InvalidToken))
+                    .with_description("The access token format is not supported")
+            }
             Self::Validation { error, .. } => error.challenge(),
             Self::UnrecognizedIssuer { .. } => {
                 Challenge::new(TokenValidationError::Client(TokenErrorCode::InvalidToken))
-                    .with_description("unrecognized token issuer")
+                    .with_description("The access token issuer is not recognized")
             }
         }
     }
     fn attempted_scheme(&self) -> Option<TokenType> {
         match self {
             Self::Extract { source } => source.attempted_scheme(),
-            Self::UnrecognizedIssuer { .. } => None,
+            Self::Parse { .. }
+            | Self::UnsupportedEncryptedToken
+            | Self::UnrecognizedIssuer { .. } => None,
             Self::Validation { error, .. } => error.attempted_scheme(),
         }
     }
@@ -98,6 +103,7 @@ impl ToRfc6750Error for MultiIssuerError {
     fn validation_outcome(&self, challenge: &Challenge) -> ValidationOutcome {
         match self {
             Self::Extract { .. } => ValidationOutcome::ExtractError,
+            Self::Parse { .. } | Self::UnsupportedEncryptedToken => ValidationOutcome::InvalidToken,
             Self::UnrecognizedIssuer { .. } => ValidationOutcome::UnrecognizedIssuer,
             Self::Validation { error, .. } => error.validation_outcome(challenge),
         }
@@ -108,7 +114,10 @@ impl ToRfc6750Error for MultiIssuerError {
             // Only the registered issuer is a trusted, bounded label; the
             // peeked `iss` of an unrecognized issuer is attacker-controlled.
             Self::Validation { issuer, .. } => Some(issuer),
-            Self::Extract { .. } | Self::UnrecognizedIssuer { .. } => None,
+            Self::Extract { .. }
+            | Self::Parse { .. }
+            | Self::UnsupportedEncryptedToken
+            | Self::UnrecognizedIssuer { .. } => None,
         }
     }
 }

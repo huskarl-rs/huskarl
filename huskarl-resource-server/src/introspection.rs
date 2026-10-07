@@ -664,7 +664,7 @@ impl ToRfc6750Error for IntrospectionCallError {
         };
         let challenge = Challenge::new(error);
         match self {
-            Self::TokenInactive => challenge.with_description("The access token is revoked"),
+            Self::TokenInactive => challenge.with_description("The access token is inactive"),
             _ => challenge,
         }
     }
@@ -860,7 +860,7 @@ mod call_classification {
         ));
         assert_eq!(
             challenge.description.as_deref(),
-            Some("The access token is revoked"),
+            Some("The access token is inactive"),
         );
     }
 

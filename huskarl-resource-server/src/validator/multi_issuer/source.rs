@@ -8,6 +8,9 @@
 //! [`ProvideValidatorMetadata`] into a single trait object (a trait object can
 //! name only one non-auto trait).
 
+use snafu::IntoError as _;
+
+use super::error::ValidationSnafu;
 use crate::{
     AccessTokenValidator,
     core::platform::{MaybeSendBoxFuture, MaybeSendSync},
@@ -72,10 +75,10 @@ where
                         Ok(Some(validated))
                     }
                     Ok(None) => Ok(None),
-                    Err(e) => Err(MultiIssuerError::Validation {
+                    Err(e) => Err(ValidationSnafu {
                         issuer: self.issuer.clone(),
-                        error: Box::new(e),
-                    }),
+                    }
+                    .into_error(Box::new(e))),
                 },
                 dpop_nonce: result.dpop_nonce,
             }

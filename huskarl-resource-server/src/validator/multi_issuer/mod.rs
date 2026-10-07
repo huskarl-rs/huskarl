@@ -5,6 +5,9 @@
 //! implements [`AccessTokenValidator`], so it drops into a `ValidatorLayer`,
 //! Pingora guard, or any other consumer exactly like a single-issuer validator.
 //!
+//! Routing supports compact JWS tokens only; encrypted and opaque tokens are
+//! not supported.
+//!
 //! Per-issuer validators usually have different claims types; wrap each in
 //! [`MapClaims`] or [`TryMapClaims`] to give them a common type. To read or
 //! rewrite universal token fields such as `sub`, map the whole request with
@@ -31,13 +34,20 @@ pub use error::MultiIssuerError;
 use http::{HeaderName, header::AUTHORIZATION};
 pub use map::{MapClaims, MapRequest};
 use serde::Deserialize;
+use snafu::prelude::*;
 #[allow(deprecated)]
 pub use try_map::TryMapClaimsError;
 pub use try_map::{TryMapClaims, TryMapError, TryMapRequest};
 
+use self::error::{
+    ExtractSnafu, ParseSnafu, UnrecognizedIssuerSnafu, UnsupportedEncryptedTokenSnafu,
+};
 use crate::{
     AccessTokenValidator,
-    core::platform::{MaybeSendBoxFuture, MaybeSendSync},
+    core::{
+        jwt::JwsParseError,
+        platform::{MaybeSendBoxFuture, MaybeSendSync},
+    },
     error::ToRfc6750Error,
     validator::{
         ValidationResult,
@@ -125,7 +135,7 @@ impl<C: MaybeSendSync + 'static> AccessTokenValidator for MultiIssuerValidator<C
         Box::pin(async move {
             // Extract the token. No token is an unauthenticated request, matching
             // the single-issuer validators (`Ok(None)`), not an error.
-            let token = match extract_token(headers, &self.token_header) {
+            let token = match extract_token(headers, &self.token_header).context(ExtractSnafu) {
                 Ok(Some((_token_type, token))) => token,
                 Ok(None) => {
                     return ValidationResult {
@@ -135,19 +145,27 @@ impl<C: MaybeSendSync + 'static> AccessTokenValidator for MultiIssuerValidator<C
                 }
                 Err(e) => {
                     return ValidationResult {
-                        outcome: Err(MultiIssuerError::Extract { source: e }),
+                        outcome: Err(e),
                         dpop_nonce: None,
                     };
                 }
             };
 
             // Route on the unverified issuer; the selected validator does all
-            // real verification. A missing/unparseable/unregistered issuer is
-            // rejected.
-            let iss = peek_issuer(token.expose_secret());
+            // real verification. Preserve parsing failures separately from
+            // missing or unregistered issuers.
+            let iss = match peek_issuer(token.expose_secret()) {
+                Ok(iss) => iss,
+                Err(error) => {
+                    return ValidationResult {
+                        outcome: Err(error),
+                        dpop_nonce: None,
+                    };
+                }
+            };
             let Some(validator) = iss.as_ref().and_then(|iss| self.by_issuer.get(iss)) else {
                 return ValidationResult {
-                    outcome: Err(MultiIssuerError::UnrecognizedIssuer { iss }),
+                    outcome: UnrecognizedIssuerSnafu { iss }.fail(),
                     dpop_nonce: None,
                 };
             };
@@ -172,27 +190,39 @@ impl<C> ProvideValidatorMetadata for MultiIssuerValidator<C> {
 /// Reads the `iss` claim from a JWS compact payload **without verifying the
 /// signature**.
 ///
-/// The result is used only to select a validator (see the [module
-/// documentation](self)); it carries no trust. Returns `None` if the token is
-/// not a three-part JWS, the payload is not valid base64url JSON, or it has no
-/// string `iss`.
-fn peek_issuer(token: &str) -> Option<String> {
+/// Returns an untrusted routing hint, or `None` for an absent or null issuer.
+/// Rejects five-segment tokens as unsupported JWE. The header and signature
+/// are not decoded here.
+fn peek_issuer(token: &str) -> Result<Option<String>, MultiIssuerError> {
     #[derive(Deserialize)]
     struct IssOnly {
-        iss: String,
+        iss: Option<String>,
     }
 
-    let mut parts = token.split('.');
-    let _header = parts.next()?;
-    let payload = parts.next()?;
-    parts.next()?; // require a signature segment
-    if parts.next().is_some() {
-        return None; // more than three segments is not a JWS
-    }
+    // Bound the scan even for hostile input containing many separators.
+    let mut parts = token.splitn(6, '.');
+    let payload = match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some(_), Some(payload), Some(_), None, None, None) => payload,
+        (Some(_), Some(_), Some(_), Some(_), Some(_), None) => {
+            return UnsupportedEncryptedTokenSnafu.fail();
+        }
+        _ => return Err(JwsParseError::InvalidFormat).context(ParseSnafu),
+    };
 
-    let bytes = BASE64_URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|source| JwsParseError::Base64 { source })
+        .context(ParseSnafu)?;
     serde_json::from_slice::<IssOnly>(&bytes)
-        .ok()
+        .map_err(|source| JwsParseError::Claims { source })
+        .context(ParseSnafu)
         .map(|i| i.iss)
 }
 
@@ -287,14 +317,14 @@ mod tests {
         "iss-a"
     )]
     fn reads_iss_from_unverified_payload(#[case] token: String, #[case] expected: &str) {
-        assert_eq!(peek_issuer(&token).as_deref(), Some(expected));
+        assert_eq!(peek_issuer(&token).unwrap().as_deref(), Some(expected));
     }
 
     #[rstest]
     #[case::single_segment("not-a-jwt".to_owned())]
     // No signature segment: not a JWS.
     #[case::two_segments(format!("{}.{}", seg(r#"{"alg":"none"}"#), seg(r#"{"iss":"iss-a"}"#)))]
-    // More than three segments (e.g. a JWE) is not a compact JWS.
+    // Four segments is neither compact JWS nor compact JWE.
     #[case::four_segments(format!(
         "{}.{}.{}.{}",
         seg(r#"{"alg":"none"}"#),
@@ -302,19 +332,150 @@ mod tests {
         seg("sig"),
         seg("extra"),
     ))]
+    #[case::six_segments("a.b.c.d.e.f".to_owned())]
     fn wrong_segment_count_is_rejected(#[case] token: String) {
-        assert_eq!(peek_issuer(&token), None);
+        assert!(matches!(
+            peek_issuer(&token),
+            Err(MultiIssuerError::Parse {
+                source: JwsParseError::InvalidFormat
+            })
+        ));
     }
 
     #[rstest]
     // `!` is outside the base64url alphabet.
-    #[case::non_base64url("not!base64".to_owned())]
-    #[case::not_json(seg("this is not json"))]
-    #[case::no_iss(seg(r#"{"sub":"abc","aud":"api"}"#))]
-    // `iss` deserializes as a `String`; a numeric value fails to parse.
-    #[case::non_string_iss(seg(r#"{"iss":42}"#))]
-    fn malformed_payload_is_rejected(#[case] payload_b64: String) {
-        assert_eq!(peek_issuer(&token_with_payload(&payload_b64)), None);
+    #[case::non_base64url("not!base64".to_owned(), true)]
+    #[case::not_json(seg("this is not json"), false)]
+    // `iss` deserializes as an `Option<String>`; a numeric value fails to parse.
+    #[case::non_string_iss(seg(r#"{"iss":42}"#), false)]
+    fn malformed_payload_is_rejected(#[case] payload_b64: String, #[case] base64_error: bool) {
+        let error = peek_issuer(&token_with_payload(&payload_b64)).unwrap_err();
+        if base64_error {
+            assert!(matches!(
+                error,
+                MultiIssuerError::Parse {
+                    source: JwsParseError::Base64 { .. }
+                }
+            ));
+        } else {
+            assert!(matches!(
+                error,
+                MultiIssuerError::Parse {
+                    source: JwsParseError::Claims { .. }
+                }
+            ));
+        }
+    }
+
+    #[rstest]
+    #[case::single_character("b".to_owned(), true)]
+    #[case::invalid_base64(token_with_payload("b"), true)]
+    #[case::invalid_json(token_with_payload(&seg("not json")), true)]
+    #[case::array_payload(token_with_payload(&seg("[]")), true)]
+    #[case::string_payload(token_with_payload(&seg(r#""x""#)), true)]
+    #[case::invalid_issuer(token_with_payload(&seg(r#"{"iss":42}"#)), true)]
+    #[case::missing_issuer(token_with_payload(&seg(r#"{"sub":"abc"}"#)), false)]
+    #[case::null_issuer(token_with_payload(&seg(r#"{"iss":null}"#)), false)]
+    #[case::unknown_issuer(token_with_payload(&seg(r#"{"iss":"unknown"}"#)), false)]
+    #[tokio::test]
+    async fn routing_distinguishes_malformed_tokens_from_unrecognized_issuers(
+        #[case] token: String,
+        #[case] malformed: bool,
+    ) {
+        use crate::{
+            error::{TokenErrorCode, TokenValidationError},
+            validator::observe::ValidationOutcome,
+        };
+
+        let validator = MultiIssuerValidator::<()>::builder().build();
+        let mut headers = http::HeaderMap::new();
+        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        let result = validator
+            .validate_request(
+                &headers,
+                &http::Method::GET,
+                &http::Uri::from_static("/"),
+                None,
+            )
+            .await;
+        let error = result.outcome.unwrap_err();
+        let challenge = error.challenge();
+        assert_eq!(
+            challenge.error,
+            TokenValidationError::Client(TokenErrorCode::InvalidToken)
+        );
+        assert_eq!(error.issuer(), None);
+        assert!(result.dpop_nonce.is_none());
+        if malformed {
+            assert!(matches!(error, MultiIssuerError::Parse { .. }));
+            assert_eq!(
+                challenge.description.as_deref(),
+                Some("The access token is malformed")
+            );
+            assert_eq!(
+                error.validation_outcome(&challenge),
+                ValidationOutcome::InvalidToken
+            );
+            assert!(
+                std::error::Error::source(&error)
+                    .unwrap()
+                    .is::<JwsParseError>()
+            );
+        } else {
+            assert!(matches!(error, MultiIssuerError::UnrecognizedIssuer { .. }));
+            assert_eq!(
+                error.validation_outcome(&challenge),
+                ValidationOutcome::UnrecognizedIssuer
+            );
+        }
+    }
+
+    #[rstest]
+    // The empty encrypted-key segment is possible with direct encryption.
+    #[case::jwe_shape(format!("{}..{}.{}.{}", seg(r#"{"alg":"dir","enc":"A256GCM"}"#), seg("iv"), seg("ciphertext"), seg("tag")))]
+    // Classification is a shape hint, not a claim that this is a valid JWE.
+    #[case::unvalidated_segments("a.b.c.d.e".to_owned())]
+    #[tokio::test]
+    async fn five_segment_tokens_report_unsupported_encryption(#[case] token: String) {
+        use crate::{
+            error::{TokenErrorCode, TokenValidationError},
+            validator::observe::ValidationOutcome,
+        };
+
+        let validator = MultiIssuerValidator::<()>::builder().build();
+        let mut headers = http::HeaderMap::new();
+        headers.insert(AUTHORIZATION, format!("Bearer {token}").parse().unwrap());
+        let result = validator
+            .validate_request(
+                &headers,
+                &http::Method::GET,
+                &http::Uri::from_static("/"),
+                None,
+            )
+            .await;
+        let error = result.outcome.unwrap_err();
+        assert!(matches!(error, MultiIssuerError::UnsupportedEncryptedToken));
+        let challenge = error.challenge();
+        assert_eq!(
+            challenge.error,
+            TokenValidationError::Client(TokenErrorCode::InvalidToken)
+        );
+        assert_eq!(
+            challenge.description.as_deref(),
+            Some("The access token format is not supported")
+        );
+        assert_eq!(
+            error.to_string(),
+            "unsupported five-segment (possibly JWE) token"
+        );
+        assert_eq!(
+            error.validation_outcome(&challenge),
+            ValidationOutcome::InvalidToken
+        );
+        assert_eq!(error.issuer(), None);
+        assert_eq!(error.attempted_scheme(), None);
+        assert!(std::error::Error::source(&error).is_none());
+        assert!(result.dpop_nonce.is_none());
     }
 
     /// A [`SourceValidator`] double that only carries metadata.

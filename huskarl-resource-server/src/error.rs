@@ -546,6 +546,13 @@ pub trait ToRfc6750Error: std::error::Error + MaybeSendSync {
     }
 }
 
+// Let Snafu preserve concrete sources behind application-defined token errors.
+impl snafu::AsErrorSource for dyn ToRfc6750Error {
+    fn as_error_source(&self) -> &(dyn std::error::Error + 'static) {
+        self
+    }
+}
+
 impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
     fn attempted_scheme(&self) -> Option<TokenType> {
         None
@@ -561,6 +568,8 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
             } => TokenValidationError::server(ServerStatus::INTERNAL_SERVER_ERROR),
             _ => TokenValidationError::Client(TokenErrorCode::InvalidToken),
         };
+        // Client descriptions use sentence case without a trailing period,
+        // quote protocol field names, and omit internal details and claim values.
         let description = match self {
             // Server failures do not expose token details to the client.
             E::JtiCheck { .. }
@@ -576,13 +585,18 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
             E::UnrecognizedCriticalHeader { .. } => Some(
                 "The access token contains unrecognized critical header parameters".to_string(),
             ),
-            E::Expired { .. } => Some("The access token expired".to_string()),
+            E::Expired { .. } => Some("The access token has expired".to_string()),
             E::NotYetValid { .. } => Some("The access token is not yet valid".to_string()),
             E::IssuedInFuture { .. } => {
                 Some("The access token was issued in the future".to_string())
             }
             E::TokenTooOld { .. } => Some("The access token is too old".to_string()),
-            E::InvalidTokenType { .. } => Some("The access token type is invalid".to_string()),
+            E::InvalidTokenType { .. } => {
+                Some("The access token 'typ' header is invalid".to_string())
+            }
+            E::ClaimMismatch { claim: "aud", .. } => {
+                Some("The access token is not intended for this resource".to_string())
+            }
             E::ClaimMismatch { claim, .. } => {
                 Some(format!("The access token '{claim}' claim is invalid"))
             }
@@ -590,11 +604,9 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
                 "The access token is missing the required '{claim}' claim"
             )),
             E::JtiNotUnique => {
-                Some("The access token 'jti' claim value was previously seen".to_string())
+                Some("The access token 'jti' claim has already been used".to_string())
             }
-            E::ExtraClaims { .. } => {
-                Some("The access token does not contain the required claims".to_string())
-            }
+            E::ExtraClaims { .. } => Some("The access token claims are invalid".to_string()),
             E::JtiTooLong { .. } => Some("The access token 'jti' claim is too long".to_string()),
         };
         let challenge = Challenge::new(error);
@@ -608,6 +620,93 @@ impl ToRfc6750Error for crate::core::jwt::validator::JwtValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Equivalent JWT checks use the same wording for tokens and DPoP proofs.
+    #[test]
+    fn jwt_and_dpop_descriptions_agree() {
+        use crate::{
+            core::{
+                jwt::{JwsParseError, validator::JwtValidationError as E},
+                platform::SystemTime,
+            },
+            validator::dpop_proof::DPoPProofError,
+        };
+
+        let errors: &[fn() -> E] = &[
+            || E::Parse {
+                source: JwsParseError::InvalidFormat,
+            },
+            || E::UnsignedToken,
+            || E::Expired {
+                expiration: SystemTime::UNIX_EPOCH,
+                now: SystemTime::UNIX_EPOCH,
+            },
+            || E::InvalidTokenType {
+                typ: Some("private-type".into()),
+            },
+            || E::JtiNotUnique,
+            || E::JtiTooLong {
+                len: 100,
+                max_len: 50,
+            },
+            || E::ClaimMismatch {
+                claim: "sub",
+                expected: "private-expected".into(),
+                actual: "private-actual".into(),
+            },
+            || E::RequiredClaimMissing { claim: "sub" },
+            || E::ExtraClaims {
+                source: serde_json::from_str::<u64>("null").unwrap_err(),
+            },
+        ];
+        for make in errors {
+            let token = make().challenge().description.unwrap();
+            let proof = DPoPProofError::InvalidProof { source: make() }
+                .error_description()
+                .unwrap();
+            assert_eq!(token.replace("access token", "DPoP proof"), proof);
+            assert!(token.starts_with("The "));
+            assert!(!token.contains("private-"));
+        }
+    }
+
+    #[test]
+    fn equivalent_validator_failures_have_matching_descriptions() {
+        use crate::{
+            core::jwt::{JwsParseError, validator::JwtValidationError as E},
+            validator::{
+                introspection::error::IntrospectionValidateError, multi_issuer::MultiIssuerError,
+            },
+        };
+
+        let jwt_audience = E::ClaimMismatch {
+            claim: "aud",
+            expected: "private-expected".into(),
+            actual: "private-actual".into(),
+        }
+        .challenge();
+        let introspection_audience = IntrospectionValidateError::Audience {
+            token_type: TokenType::Bearer,
+            expected: "private-expected".into(),
+            actual: vec!["private-actual".into()],
+        }
+        .challenge();
+        assert_eq!(jwt_audience.description, introspection_audience.description);
+        assert!(!jwt_audience.description.unwrap().contains("private-"));
+
+        assert_eq!(
+            E::Parse {
+                source: JwsParseError::InvalidFormat
+            }
+            .challenge()
+            .description,
+            MultiIssuerError::Parse {
+                source: JwsParseError::InvalidFormat
+            }
+            .challenge()
+            .description,
+        );
+    }
 
     // Shared table of every code emitted by this crate.
     const EMITTED: &[(TokenErrorCode, &str)] = &[
