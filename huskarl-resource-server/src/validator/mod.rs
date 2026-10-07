@@ -133,6 +133,42 @@ pub struct ValidatedRequest<Claims> {
     pub introspection_jwt: Option<String>,
 }
 
+impl<Claims> ValidatedRequest<Claims> {
+    /// Transforms the extra claims, preserving all universal token fields and
+    /// the raw introspection JWT.
+    pub fn map_claims<C, F>(self, f: F) -> ValidatedRequest<C>
+    where
+        F: FnOnce(Claims) -> C,
+    {
+        let Ok(mapped) =
+            self.try_map_claims::<C, std::convert::Infallible, _>(|claims| Ok(f(claims)));
+        mapped
+    }
+
+    /// Transforms the extra claims with a fallible function, preserving all
+    /// universal token fields and the raw introspection JWT on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns the mapper's error if the transformation fails.
+    pub fn try_map_claims<C, E, F>(self, f: F) -> Result<ValidatedRequest<C>, E>
+    where
+        F: FnOnce(Claims) -> Result<C, E>,
+    {
+        Ok(ValidatedRequest {
+            iss: self.iss,
+            sub: self.sub,
+            aud: self.aud,
+            jti: self.jti,
+            iat: self.iat,
+            exp: self.exp,
+            cnf: self.cnf,
+            claims: f(self.claims)?,
+            introspection_jwt: self.introspection_jwt,
+        })
+    }
+}
+
 impl<C> From<ValidatedJwt<C>> for ValidatedRequest<C> {
     fn from(jwt: ValidatedJwt<C>) -> Self {
         Self {

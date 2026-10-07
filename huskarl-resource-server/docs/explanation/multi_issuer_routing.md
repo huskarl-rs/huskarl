@@ -32,3 +32,12 @@ type `C` by wrapping each in
 [`MapClaims`](crate::validator::multi_issuer::MapClaims), whose mapping is a
 plain `Fn(SourceClaims) -> C`. For a worked two-issuer example, see the [multi-issuer
 guide](crate::_docs::guide::multi_issuer).
+
+When normalization can fail, use
+[`TryMapClaims`](crate::validator::multi_issuer::TryMapClaims) with a
+`Fn(SourceClaims) -> Result<C, E>`. The application chooses `E`, which must
+implement [`ToRfc6750Error`](crate::error::ToRfc6750Error) to describe the HTTP
+rejection. Validation and mapping failures remain distinct variants of
+[`TryMapClaimsError`](crate::validator::multi_issuer::TryMapClaimsError).
+Mapping runs only for successfully validated tokens; a mapping failure rejects
+the request while preserving any DPoP nonce supplied by the validator.

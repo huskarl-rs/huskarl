@@ -6,8 +6,9 @@
 //! Pingora guard, or any other consumer exactly like a single-issuer validator.
 //!
 //! Per-issuer validators usually have different claims types; wrap each in
-//! [`MapClaims`] to give them a common type. For why issuer-based routing is
-//! safe and how to unify claim types, see the [multi-issuer routing
+//! [`MapClaims`] or [`TryMapClaims`] to give them a common type. For why
+//! issuer-based routing is safe and how to unify claim types, see the
+//! [multi-issuer routing
 //! explanation](crate::_docs::explanation::multi_issuer_routing); for a worked
 //! two-issuer example, see the [multi-issuer
 //! guide](crate::_docs::guide::multi_issuer).
@@ -19,6 +20,7 @@
 pub mod error;
 mod map;
 mod source;
+mod try_map;
 
 use std::collections::HashMap;
 
@@ -27,6 +29,7 @@ pub use error::MultiIssuerError;
 use http::{HeaderName, header::AUTHORIZATION};
 pub use map::MapClaims;
 use serde::Deserialize;
+pub use try_map::{TryMapClaims, TryMapClaimsError};
 
 use crate::{
     AccessTokenValidator,
@@ -84,9 +87,9 @@ impl<C: MaybeSendSync + 'static, S: multi_issuer_validator_builder::State>
     /// Registers `validator` for tokens whose `iss` claim equals `issuer`.
     ///
     /// The validator must produce `Claims = C`; wrap source-specific validators
-    /// in [`MapClaims`] to normalize their claims into `C`. If the same issuer is
-    /// registered twice, the last registration wins. Call repeatedly, once per
-    /// authorization server.
+    /// in [`MapClaims`] or [`TryMapClaims`] to normalize their claims into `C`.
+    /// If the same issuer is registered twice, the last registration wins. Call
+    /// repeatedly, once per authorization server.
     pub fn source<V>(mut self, issuer: impl Into<String>, validator: V) -> Self
     where
         V: AccessTokenValidator<Claims = C> + ProvideValidatorMetadata + 'static,
