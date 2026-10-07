@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.6](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.5...huskarl-resource-server-v0.11.6) - 2026-10-07
+
+### Added
+
+- *(resource-server)* Add TryMapClaims for multi issuer router. ([#341](https://github.com/huskarl-rs/huskarl/pull/341))
+
 ## [0.11.5](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.4...huskarl-resource-server-v0.11.5) - 2026-10-06
 
 ### Other
