@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.8](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.7...huskarl-resource-server-v0.11.8) - 2026-10-07
+
+### Fixed
+
+- *(resource-server)* Distinguish invalid tokens when attempting to route by issuer. ([#345](https://github.com/huskarl-rs/huskarl/pull/345))
+
 ## [0.11.7](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.6...huskarl-resource-server-v0.11.7) - 2026-10-07
 
 ### Added
