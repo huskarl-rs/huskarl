@@ -43,7 +43,8 @@ pub(super) fn check_str_claim(
             }
             None => return Err(RequiredClaimMissingSnafu { claim }.build()),
         },
-        ClaimCheck::RequireAny(vs) => match value {
+        ClaimCheck::IfPresentAny(_) if value.is_none() => {}
+        ClaimCheck::RequireAny(vs) | ClaimCheck::IfPresentAny(vs) => match value {
             Some(val) if vs.iter().any(|x| val == x.as_str()) => {}
             Some(val) => {
                 return Err(ClaimMismatchSnafu {
@@ -83,7 +84,8 @@ pub(super) fn check_aud(check: &ClaimCheck, aud: &[String]) -> Result<(), JwtVal
                 actual: aud.join(", "),
             }
         ),
-        ClaimCheck::RequireAny(vs) => ensure!(
+        ClaimCheck::IfPresentAny(_) if aud.is_empty() => {}
+        ClaimCheck::RequireAny(vs) | ClaimCheck::IfPresentAny(vs) => ensure!(
             vs.iter().any(|v| aud.contains(v)),
             ClaimMismatchSnafu {
                 claim: "aud",
@@ -116,7 +118,8 @@ pub(super) fn check_typ(check: &ClaimCheck, typ: Option<&str>) -> Result<(), Jwt
                 typ: typ.map(Into::into)
             }
         ),
-        ClaimCheck::RequireAny(allowed) => match typ {
+        ClaimCheck::IfPresentAny(_) if typ.is_none() => {}
+        ClaimCheck::RequireAny(allowed) | ClaimCheck::IfPresentAny(allowed) => match typ {
             None => return RequiredClaimMissingSnafu { claim: "typ" }.fail(),
             Some(v)
                 if allowed

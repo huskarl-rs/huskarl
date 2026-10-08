@@ -6,6 +6,8 @@
 pub enum ClaimCheck {
     /// If claim is present, it must equal this value. Lack of value is acceptable.
     IfPresent(String),
+    /// If present, the claim must match one of these values. Absence is acceptable.
+    IfPresentAny(Vec<String>),
     /// Claim must be present, value must match one of these.
     RequireAny(Vec<String>),
     /// Claim must be present and equal this value.
@@ -21,6 +23,11 @@ impl ClaimCheck {
     /// If claim is present, it must equal this value. Lack of value is acceptable.
     pub fn if_present(value: impl Into<String>) -> Self {
         Self::IfPresent(value.into())
+    }
+
+    /// If present, the claim must match one of these values. Absence is acceptable.
+    pub fn if_present_any(values: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::IfPresentAny(values.into_iter().map(Into::into).collect())
     }
 
     /// Claim must be present, and value must match one of these.

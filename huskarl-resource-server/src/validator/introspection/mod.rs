@@ -159,7 +159,9 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// multiple resources, a token minted for another resource still
         /// introspects as `active`. Pass this resource's identifier as a
         /// plain string (equivalent to [`ClaimCheck::required_value`]; use
-        /// [`ClaimCheck::require_any`] for several), or opt out explicitly
+        /// [`ClaimCheck::require_any`] for several). Use
+        /// [`ClaimCheck::if_present_any`] to accept any of several audiences
+        /// while also allowing an absent `aud`, or opt out explicitly
         /// with [`ClaimCheck::NoCheck`] when the authorization server scopes
         /// tokens to a single resource or omits `aud` from its introspection
         /// responses.
@@ -492,7 +494,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> ProvideValidatorMetada
 ///
 /// Mirrors the `aud` semantics of [`JwtValidator`](crate::core::jwt::validator::JwtValidator):
 /// a token with no `aud` fails `Present`/`RequiredValue`/`RequireAny` but
-/// passes `IfPresent`. Unrecognized future check variants fail closed.
+/// passes `IfPresent`/`IfPresentAny`. Unrecognized future check variants fail closed.
 fn check_audience(check: &ClaimCheck, aud: &[String]) -> Result<(), String> {
     let ok = match check {
         ClaimCheck::NoCheck => true,
@@ -500,6 +502,7 @@ fn check_audience(check: &ClaimCheck, aud: &[String]) -> Result<(), String> {
         ClaimCheck::RequiredValue(v) => aud.contains(v),
         ClaimCheck::RequireAny(vs) => vs.iter().any(|v| aud.contains(v)),
         ClaimCheck::IfPresent(v) => aud.is_empty() || aud.contains(v),
+        ClaimCheck::IfPresentAny(vs) => aud.is_empty() || vs.iter().any(|v| aud.contains(v)),
         _ => false,
     };
     if ok {
@@ -508,7 +511,7 @@ fn check_audience(check: &ClaimCheck, aud: &[String]) -> Result<(), String> {
     Err(match check {
         ClaimCheck::Present => "any audience".to_owned(),
         ClaimCheck::RequiredValue(v) | ClaimCheck::IfPresent(v) => v.clone(),
-        ClaimCheck::RequireAny(vs) => vs.join(" or "),
+        ClaimCheck::RequireAny(vs) | ClaimCheck::IfPresentAny(vs) => vs.join(" or "),
         _ => "a supported audience check".to_owned(),
     })
 }
@@ -570,6 +573,26 @@ mod tests {
         assert!(check_audience(&check, &[]).is_ok());
         assert!(check_audience(&check, &auds(&["api://rs1"])).is_ok());
         assert!(check_audience(&check, &auds(&["api://rs2"])).is_err());
+    }
+
+    #[test]
+    fn audience_if_present_any() {
+        let check = ClaimCheck::if_present_any(["api://a", "api://b"]);
+        assert!(check_audience(&check, &[]).is_ok());
+        assert!(check_audience(&check, &auds(&["api://a"])).is_ok());
+        assert!(check_audience(&check, &auds(&["api://b"])).is_ok());
+        assert!(check_audience(&check, &auds(&["api://c", "api://b"])).is_ok());
+        assert_eq!(
+            check_audience(&check, &auds(&["api://c", "api://d"])),
+            Err("api://a or api://b".to_owned()),
+        );
+    }
+
+    #[test]
+    fn audience_empty_if_present_any_accepts_only_absence() {
+        let check = ClaimCheck::if_present_any(Vec::<String>::new());
+        assert!(check_audience(&check, &[]).is_ok());
+        assert!(check_audience(&check, &auds(&["api://a"])).is_err());
     }
 
     #[test]
