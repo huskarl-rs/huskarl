@@ -70,6 +70,7 @@ entries:
       grant_types:
         - authorization_code
         - refresh_token
+        - urn:ietf:params:oauth:grant-type:device_code
       redirect_uris:
         - matching_mode: strict
           url: http://127.0.0.1:9002/callback
@@ -85,3 +86,19 @@ entries:
     attrs:
       name: Huskarl key-binding tests
       provider: !KeyOf bound-key-provider
+  - model: authentik_flows.flow
+    id: device-flow
+    identifiers:
+      slug: huskarl-device-code
+    attrs:
+      name: Huskarl device code
+      title: Authorize your device
+      designation: stage_configuration
+      authentication: require_authenticated
+  # Sets the device-code flow on the default brand, which applies to the whole
+  # instance. Acceptable here since the stack exists only for these tests.
+  - model: authentik_brands.brand
+    identifiers:
+      default: true
+    attrs:
+      flow_device_code: !KeyOf device-flow

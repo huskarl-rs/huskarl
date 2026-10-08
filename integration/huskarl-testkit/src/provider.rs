@@ -59,6 +59,11 @@ pub trait TestProvider: Send + Sync {
         None
     }
 
+    /// Log in and approve a device request using its verification URI and user code.
+    async fn approve_device(&self, _verification_uri: &str, _user_code: &str) -> Result<(), Error> {
+        Err("approve_device is not implemented for this provider".into())
+    }
+
     /// Drive an interactive auth-code login at `authorize_url` to completion.
     async fn authenticate(&self, _authorize_url: &str) -> Result<(), Error> {
         Err("authenticate is not implemented for this provider".into())

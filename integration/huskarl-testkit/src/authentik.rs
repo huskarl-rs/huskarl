@@ -28,7 +28,8 @@ impl AuthentikProvider {
     pub const FEATURES: Features = Features::CLIENT_CREDENTIALS
         .union(Features::INTROSPECTION)
         .union(Features::AUTH_CODE)
-        .union(Features::OPENID_KEY_BINDING);
+        .union(Features::OPENID_KEY_BINDING)
+        .union(Features::DEVICE);
     const CLIENT_ID: &str = "huskarl-rs";
 
     const REDIRECT_URI: &str = "http://127.0.0.1:9001/callback";
@@ -90,6 +91,21 @@ impl TestProvider for AuthentikProvider {
             .into());
         }
         let bound_key = spec.features.contains(Features::OPENID_KEY_BINDING);
+        if spec.features == Features::DEVICE.union(Features::OPENID_KEY_BINDING) {
+            if !spec.redirect_uris.is_empty()
+                || spec.signing_jwk.is_some()
+                || spec.audience.is_some()
+            {
+                return Err("Authentik device client does not support redirects, custom audience or registered keys".into());
+            }
+            self.auth_code.store(false, Ordering::Relaxed);
+            self.bound_key.store(true, Ordering::Relaxed);
+            return Ok(ProvisionedClient {
+                client_id: "huskarl-bound-key".into(),
+                secret: Some("huskarl-bound-key-secret".into()),
+                redirect_uris: vec![],
+            });
+        }
         if spec.features == Features::AUTH_CODE
             || spec.features == Features::AUTH_CODE.union(Features::OPENID_KEY_BINDING)
         {
@@ -115,9 +131,9 @@ impl TestProvider for AuthentikProvider {
         }
         if spec
             .features
-            .intersects(Features::AUTH_CODE | Features::OPENID_KEY_BINDING)
+            .intersects(Features::AUTH_CODE | Features::OPENID_KEY_BINDING | Features::DEVICE)
         {
-            return Err("Authentik uses separate auth-code and client-credentials clients".into());
+            return Err("Authentik uses separate clients for auth-code, device, and client-credentials flows".into());
         }
         if spec
             .audience
@@ -139,6 +155,16 @@ impl TestProvider for AuthentikProvider {
     }
 
     async fn authenticate(&self, authorize_url: &str) -> Result<(), Error> {
+        self.drive_flow(authorize_url, None).await
+    }
+
+    async fn approve_device(&self, verification_uri: &str, user_code: &str) -> Result<(), Error> {
+        self.drive_flow(verification_uri, Some(user_code)).await
+    }
+}
+
+impl AuthentikProvider {
+    async fn drive_flow(&self, authorize_url: &str, user_code: Option<&str>) -> Result<(), Error> {
         // Each login gets an isolated session. Drive the same challenge API as
         // Authentik's browser UI, preserving its original query and CSRF cookie.
         let redirect_uri = if self.bound_key.load(Ordering::Relaxed) {
@@ -159,7 +185,7 @@ impl TestProvider for AuthentikProvider {
         .await?;
         for _ in 0..4 {
             let page_url = page.url().clone();
-            if page_url.as_str().split('?').next() == Some(redirect_uri) {
+            if user_code.is_none() && page_url.as_str().split('?').next() == Some(redirect_uri) {
                 return Ok(());
             }
             if page_url.origin() != origin.origin() {
@@ -203,6 +229,12 @@ impl TestProvider for AuthentikProvider {
                     "ak-stage-password" => {
                         json!({"component": component, "password": "huskarl-test-password"})
                     }
+                    "ak-provider-oauth2-device-code" if user_code.is_some() => {
+                        json!({"component": component, "code": user_code.unwrap()})
+                    }
+                    "ak-provider-oauth2-device-code-finish" if user_code.is_some() => {
+                        return Ok(());
+                    }
                     "xak-flow-redirect" => {
                         redirect = Some(
                             origin.join(
@@ -241,7 +273,8 @@ impl TestProvider for AuthentikProvider {
             }
             let redirect = redirect.ok_or("Authentik login exceeded challenge limit")?;
             if redirect.origin() != origin.origin()
-                && redirect.as_str().split('?').next() != Some(redirect_uri)
+                && (user_code.is_some()
+                    || redirect.as_str().split('?').next() != Some(redirect_uri))
             {
                 return Err("Authentik flow redirected to an unexpected origin".into());
             }

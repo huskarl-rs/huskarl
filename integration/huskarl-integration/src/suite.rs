@@ -20,6 +20,7 @@ use huskarl::{
         authorization_code::{AuthorizationCodeGrant, StartInput, StartOutput, bind_loopback},
         client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
         core::OAuth2ExchangeGrant,
+        device_authorization::{self, DeviceAuthorizationGrant, PollResult},
         refresh::{RefreshGrant, RefreshGrantParameters},
     },
     token::id_token::IdTokenValidator,
@@ -480,6 +481,72 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         client.client_id
     );
     assert!(id_token.sub.is_some(), "id_token should carry a subject");
+}
+
+/// Device authorization with a pending poll, user approval, and bound refresh.
+pub async fn device_flow(provider: &dyn TestProvider, features: Features) {
+    let (client, secret) =
+        provision_with_secret(provider, ClientSpec::builder().features(features).build()).await;
+    let http = http_client();
+    let metadata = fetch_metadata(provider, &http, Transport::Plain).await;
+    let key =
+        PrivateKey::generate(GenerateAlgorithm::Es256, None).expect("generate device binding key");
+    let expected_jkt = key.as_private_jwk().public_jwk().thumbprint();
+    let grant = DeviceAuthorizationGrant::builder_from_metadata(&metadata)
+        .expect("device authorization endpoint")
+        .client_id(&client.client_id)
+        .http_client(http.clone())
+        .client_auth(ClientSecret::new(ProvidedSecret::new(secret)))
+        .dpop(DPoP::builder().signer(key).build())
+        .build();
+    let started = grant
+        .start(device_authorization::StartInput::scope(bon::vec![
+            "openid",
+            "bound_key",
+            "offline_access"
+        ]))
+        .await
+        .expect("start device authorization");
+    assert!(started.pending_state.openid_bound_key_requested);
+    assert_eq!(
+        started.pending_state.dpop_jkt.as_deref(),
+        Some(expected_jkt.as_str())
+    );
+    let persisted = serde_json::to_vec(&started.pending_state).expect("serialize device state");
+    let mut pending = serde_json::from_slice::<device_authorization::PendingState>(&persisted)
+        .expect("restore device state");
+    let response = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+        tokio::time::sleep(std::time::Duration::from_secs(pending.interval_secs.into())).await;
+        assert!(matches!(
+            grant
+                .poll(&mut pending, None)
+                .await
+                .expect("poll before approval"),
+            PollResult::Pending
+        ));
+        provider
+            .approve_device(&started.verification_uri, &started.user_code)
+            .await
+            .expect("approve device");
+        grant
+            .poll_to_completion(&mut pending, None)
+            .await
+            .expect("complete device authorization")
+    })
+    .await
+    .expect("device flow timed out");
+    // The device grant exposes the raw ID token. Validation here is an explicit
+    // interoperability check, not automatic device-grant behavior.
+    assert_bound_refreshes(
+        provider,
+        &metadata,
+        &http,
+        &client.client_id,
+        grant.to_refresh_grant(),
+        response,
+        &expected_jkt,
+    )
+    .await;
 }
 
 async fn assert_bound_refreshes(
