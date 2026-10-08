@@ -437,6 +437,19 @@ async fn aud_empty_when_required() {
 // --- typ claim checks ---
 
 #[tokio::test]
+async fn typ_if_present_any_absent_ok() {
+    // Header: {"alg":"RS256"}; claims: {}. Signature accepted by MockVerifier.
+    let token = "eyJhbGciOiJSUzI1NiJ9.e30.AA";
+    let validator = JwtValidator::builder()
+        .verifier(MockVerifier)
+        .typ(ClaimCheck::if_present_any(["JWT", "dpop+id_token"]))
+        .build();
+
+    let result = validator.validate::<()>(token).await;
+    assert!(result.is_ok(), "Expected Ok, got {:?}", result.err());
+}
+
+#[tokio::test]
 async fn typ_required_value_mismatch() {
     let validator = JwtValidator::builder()
         .verifier(MockVerifier)
@@ -725,4 +738,45 @@ async fn jti_too_long() {
         .validate_parsed_jws::<serde_json::Value>(parsed)
         .await;
     assert!(matches!(result, Err(JwtValidationError::JtiTooLong { .. })));
+}
+
+#[rstest]
+#[case(None, true)]
+#[case(Some("JWT"), true)]
+#[case(Some("application/JWT"), true)]
+#[case(Some("DPOP+ID_TOKEN"), true)]
+#[case(Some("application/dpop+id_token"), true)]
+#[case(Some("at+jwt"), false)]
+#[case(Some("dpop+jwt"), false)]
+#[case(Some(""), false)]
+fn optional_type_allowlist(#[case] typ: Option<&str>, #[case] accepted: bool) {
+    let check = ClaimCheck::if_present_any(["JWT", "dpop+id_token"]);
+    assert_eq!(checks::check_typ(&check, typ).is_ok(), accepted);
+}
+
+#[rstest]
+#[case(None, true)]
+#[case(Some("first"), true)]
+#[case(Some("second"), true)]
+#[case(Some("FIRST"), false)]
+#[case(Some("other"), false)]
+fn optional_claim_allowlist(#[case] value: Option<&str>, #[case] accepted: bool) {
+    let check = ClaimCheck::if_present_any(["first", "second"]);
+    assert_eq!(
+        checks::check_str_claim("iss", &check, value).is_ok(),
+        accepted
+    );
+    let audiences: Vec<String> = value.into_iter().map(String::from).collect();
+    assert_eq!(checks::check_aud(&check, &audiences).is_ok(), accepted);
+}
+
+#[test]
+fn empty_optional_allowlist_accepts_only_absence() {
+    let check = ClaimCheck::if_present_any(Vec::<String>::new());
+    assert!(checks::check_typ(&check, None).is_ok());
+    assert!(checks::check_typ(&check, Some("JWT")).is_err());
+    assert!(checks::check_str_claim("iss", &check, None).is_ok());
+    assert!(checks::check_str_claim("iss", &check, Some("issuer")).is_err());
+    assert!(checks::check_aud(&check, &[]).is_ok());
+    assert!(checks::check_aud(&check, &["audience".into()]).is_err());
 }
