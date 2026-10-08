@@ -136,7 +136,34 @@ impl TokenResponse {
     }
 }
 
-#[derive(Debug, Clone)]
+/// Request proof key thumbprint and refresh-token binding policy.
+///
+/// Used by [`RawTokenResponse::into_token_response_with_context`]. The conversion
+/// stores the request proof's key thumbprint in the returned access-token value
+/// only when `token_type` is `DPoP`. When `bind_refresh_token` is `true`, it also
+/// stores the same thumbprint in any returned `RefreshToken` value, including
+/// for bearer responses.
+/// Built-in grants record new bindings for public clients (RFC 9449 §5), and
+/// refresh grants preserve any existing binding for either client type. Without a request proof thumbprint,
+/// refresh tokens remain unbound.
+///
+/// This context neither establishes nor validates an ID-token binding. ID
+/// tokens remain subject to their own protocol-specific validation.
+#[derive(Debug, Clone, Default, Builder)]
+#[builder(on(String, into))]
+pub struct TokenResponseContext {
+    /// Thumbprint of the key used to sign the token request's proof. Required
+    /// for a `DPoP` access-token response. Also used for refresh-token binding
+    /// when `bind_refresh_token` is `true`.
+    dpop_jkt: Option<String>,
+    /// Whether to store `dpop_jkt` in a returned `RefreshToken` value, independently
+    /// of the access-token type. Defaults to `false`. If `dpop_jkt` is `None`,
+    /// the refresh token remains unbound even when this is `true`.
+    #[builder(default)]
+    bind_refresh_token: bool,
+}
+
+#[derive(Debug)]
 enum ResolvedTokenType {
     DPoP {
         jkt: String,
@@ -156,10 +183,16 @@ impl RawTokenResponse {
     /// Converts the raw response into a validated [`TokenResponse`].
     ///
     /// Resolves the `token_type` (`bearer` or `DPoP`, case-insensitive) and
-    /// builds the typed access and refresh tokens. `received_at` anchors
-    /// `expires_in` to wall-clock expiry; `dpop_jkt` is the `DPoP` key
+    /// builds the typed access and refresh tokens. The expiry time is calculated
+    /// from `received_at` and `expires_in`; `dpop_jkt` is the `DPoP` key
     /// thumbprint the token is bound to, required when `token_type` is
     /// `DPoP`.
+    ///
+    /// For compatibility, this method also stores the thumbprint in the returned
+    /// `RefreshToken` value only for `DPoP` responses. It has no
+    /// client-authentication context. Use
+    /// [`into_token_response_with_context`](Self::into_token_response_with_context)
+    /// to resolve refresh binding independently, as built-in grants do.
     ///
     /// # Errors
     ///
@@ -171,9 +204,43 @@ impl RawTokenResponse {
         dpop_jkt: Option<String>,
         received_at: crate::core::platform::SystemTime,
     ) -> Result<TokenResponse, InvalidTokenResponse> {
-        let token_type = self.resolve_token_type(dpop_jkt)?;
-        let access_token = self.build_access_token(token_type.clone(), received_at);
-        let refresh_token = self.build_refresh_token(token_type);
+        let bind_refresh_token = self.token_type.eq_ignore_ascii_case("DPoP");
+        self.into_token_response_with_context(
+            TokenResponseContext::builder()
+                .maybe_dpop_jkt(dpop_jkt)
+                .bind_refresh_token(bind_refresh_token)
+                .build(),
+            received_at,
+        )
+    }
+
+    /// Resolves access and refresh bindings independently using request context.
+    ///
+    /// Calculates the expiry time from `received_at` and `expires_in`.
+    /// The access-token type follows `token_type`. If `bind_refresh_token` is
+    /// `true`, stores the same `dpop_jkt` supplied in `context` in any returned
+    /// `RefreshToken` value, even for a bearer response. Without a thumbprint,
+    /// the returned value contains no `DPoP` binding.
+    /// No ID-token validation or binding is performed here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidTokenResponse::InvalidTokenType`] for an unknown token
+    /// type, or [`InvalidTokenResponse::NoDPoPThumbprint`] for a `DPoP` response
+    /// without the request proof's key thumbprint, regardless of
+    /// `bind_refresh_token`.
+    pub fn into_token_response_with_context(
+        self,
+        context: TokenResponseContext,
+        received_at: crate::core::platform::SystemTime,
+    ) -> Result<TokenResponse, InvalidTokenResponse> {
+        let refresh_token_dpop_jkt = context
+            .dpop_jkt
+            .clone()
+            .filter(|_| context.bind_refresh_token);
+        let token_type = self.resolve_token_type(context.dpop_jkt)?;
+        let access_token = self.build_access_token(token_type, received_at);
+        let refresh_token = self.build_refresh_token(refresh_token_dpop_jkt);
 
         Ok(TokenResponse {
             raw: self,
@@ -230,17 +297,9 @@ impl RawTokenResponse {
         }
     }
 
-    fn build_refresh_token(&self, token_type: ResolvedTokenType) -> Option<RefreshToken> {
+    fn build_refresh_token(&self, dpop_jkt: Option<String>) -> Option<RefreshToken> {
         let refresh_token = self.refresh_token.as_ref()?;
-
-        let result = match token_type {
-            ResolvedTokenType::DPoP { jkt } => RefreshToken::new(refresh_token.clone(), Some(jkt)),
-            ResolvedTokenType::Bearer | ResolvedTokenType::NotApplicable => {
-                RefreshToken::new(refresh_token.clone(), None)
-            }
-        };
-
-        Some(result)
+        Some(RefreshToken::new(refresh_token.clone(), dpop_jkt))
     }
 }
 
@@ -530,6 +589,90 @@ mod test {
             access_token.expose_header_value().unwrap(),
             HeaderValue::from_static("Bearer 2YotnFZFEjr1zCsicMWpAA")
         );
+    }
+
+    #[rstest::rstest]
+    #[case::bearer("Bearer", Some("proof"), false, None, None)]
+    #[case::public_bearer("Bearer", Some("proof"), true, None, Some("proof"))]
+    #[case::confidential_dpop("DPoP", Some("proof"), false, Some("proof"), None)]
+    #[case::public_dpop("DPoP", Some("proof"), true, Some("proof"), Some("proof"))]
+    #[case::public_without_dpop("Bearer", None, true, None, None)]
+    #[case::confidential_without_dpop("Bearer", None, false, None, None)]
+    fn refresh_binding_policy_is_independent_of_access_token_type(
+        #[case] token_type: &str,
+        #[case] request_key: Option<&str>,
+        #[case] bind_refresh_token: bool,
+        #[case] access_key: Option<&str>,
+        #[case] refresh_key: Option<&str>,
+    ) {
+        let response = RawTokenResponse::builder()
+            .access_token("access")
+            .token_type(token_type)
+            .refresh_token("refresh")
+            .build()
+            .into_token_response_with_context(
+                super::TokenResponseContext::builder()
+                    .maybe_dpop_jkt(request_key.map(str::to_owned))
+                    .bind_refresh_token(bind_refresh_token)
+                    .build(),
+                SystemTime::now(),
+            )
+            .unwrap();
+        assert_eq!(response.access_token().dpop_jkt(), access_key);
+        assert_eq!(response.refresh_token().unwrap().dpop_jkt(), refresh_key);
+    }
+
+    #[rstest::rstest]
+    #[case(false)]
+    #[case(true)]
+    fn dpop_response_requires_a_thumbprint(#[case] bind_refresh_token: bool) {
+        let error = RawTokenResponse::builder()
+            .access_token("access")
+            .token_type("DPoP")
+            .build()
+            .into_token_response_with_context(
+                super::TokenResponseContext::builder()
+                    .bind_refresh_token(bind_refresh_token)
+                    .build(),
+                SystemTime::now(),
+            )
+            .unwrap_err();
+        assert_eq!(error, InvalidTokenResponse::NoDPoPThumbprint);
+    }
+
+    #[test]
+    fn context_builder_leaves_refresh_tokens_unbound_by_default() {
+        let response = RawTokenResponse::builder()
+            .access_token("access")
+            .token_type("DPoP")
+            .refresh_token("refresh")
+            .build()
+            .into_token_response_with_context(
+                super::TokenResponseContext::builder()
+                    .dpop_jkt("proof")
+                    .build(),
+                SystemTime::now(),
+            )
+            .unwrap();
+        assert_eq!(response.access_token().dpop_jkt(), Some("proof"));
+        assert_eq!(response.refresh_token().unwrap().dpop_jkt(), None);
+    }
+
+    #[rstest::rstest]
+    #[case("Bearer", None)]
+    #[case("DPoP", Some("key"))]
+    fn legacy_conversion_preserves_refresh_binding_behavior(
+        #[case] token_type: &str,
+        #[case] expected_key: Option<&str>,
+    ) {
+        let response = RawTokenResponse::builder()
+            .access_token("access")
+            .token_type(token_type)
+            .refresh_token("refresh")
+            .build()
+            .into_token_response(Some("key".into()), SystemTime::now())
+            .unwrap();
+        assert_eq!(response.refresh_token().unwrap().dpop_jkt(), expected_key);
     }
 
     #[test]

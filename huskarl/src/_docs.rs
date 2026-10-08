@@ -72,6 +72,9 @@ pub mod guide {
 
 /// Understanding-oriented background on how the crate works and why.
 pub mod explanation {
+    #[doc = include_str!("../docs/explanation/dpop_bindings.md")]
+    pub mod dpop_bindings {}
+
     #[doc = include_str!("../docs/explanation/error_handling.md")]
     pub mod error_handling {}
 

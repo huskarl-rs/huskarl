@@ -12,6 +12,7 @@ pub(crate) mod form;
 pub use grant::OAuth2ExchangeGrant;
 pub use token_response::{
     InvalidTokenResponse, RawTokenResponse, RawTokenResponseBuilder, TokenResponse,
+    TokenResponseContext, TokenResponseContextBuilder,
 };
 
 /// Resolves the endpoint used for client-authenticated requests at grant
