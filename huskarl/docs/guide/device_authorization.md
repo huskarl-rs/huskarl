@@ -107,3 +107,50 @@ let token: &AccessToken = response.access_token();
 # Ok(())
 # }
 ```
+
+## 5. Validate an ID token if the provider returns one
+
+Neither [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html#Authentication)
+nor [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628.html) defines ID-token
+issuance for the device grant. Some providers nevertheless return ID tokens
+when `openid` is requested. [OpenID Connect Key Binding draft 03](https://openid.net/specs/openid-connect-key-binding-1_0-03.html#section-3)
+explicitly covers the device flow for key-bound ID tokens; it is not a final standard.
+
+Check your provider's support before requesting `openid` in `start()`.
+Polling returns any ID token without validating it. Before using its identity
+claims, validate it with the OP's verification keys, issuer, and your client ID:
+
+```rust
+use huskarl::{
+    core::crypto::verifier::JwsVerifier,
+    grant::core::TokenResponse,
+    token::id_token::IdTokenValidator,
+};
+# async fn validate(
+#     verifier: impl JwsVerifier + 'static,
+#     response: &TokenResponse,
+# ) -> Result<(), Box<dyn std::error::Error>> {
+let validator = IdTokenValidator::builder()
+    .verifier(verifier)
+    .issuer("https://my-issuer")
+    .audience("client_id")
+    .build();
+
+if let Some(id_token) = response.id_token() {
+    let claims = validator.validate(id_token, None).await?;
+    // Use the validated identity claims within your application.
+}
+# Ok(())
+# }
+```
+
+## Request a key-bound ID token
+
+Configure a [DPoP signer](crate::_docs::guide::dpop) and request `openid` and `bound_key`. On the validator builder above, add
+`.openid_bound_key_requested(pending_state.openid_bound_key_requested)` to
+accept `dpop+id_token` as well as ordinary ID tokens if the OP ignores `bound_key`.
+
+Retain the original signing key for subsequent refreshes, including for
+confidential clients. See the [refresh guide](crate::_docs::guide::refresh)
+and [key-binding behavior](crate::_docs::explanation::dpop_bindings#id-token-key-binding)
+for validation limits and draft compatibility.
