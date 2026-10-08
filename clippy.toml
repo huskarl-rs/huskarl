@@ -5,3 +5,7 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+
+# Protocol names rather than code identifiers, so `doc_markdown` should not
+# require backticks around them. `..` keeps clippy's default list.
+doc-valid-idents = ["OpenID", "DPoP", ".."]
