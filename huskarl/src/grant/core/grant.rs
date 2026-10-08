@@ -88,6 +88,12 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         None
     }
 
+    /// Whether this exchange belongs to an authentication that requested OIDC
+    /// Key Binding. Retains the refresh-token proof key for both client types.
+    fn openid_bound_key_requested(&self, _params: &Self::Parameters) -> bool {
+        false
+    }
+
     /// Returns the token endpoint URL as published in authorization server
     /// metadata.
     ///
@@ -180,6 +186,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             let endpoint = self.effective_token_endpoint();
             let bind_refresh_token = self.bind_refresh_token(&params);
             let dpop_code_hash = self.request_dpop_code_hash(&params);
+            let openid_bound_key_requested = self.openid_bound_key_requested(&params);
             let form = self.build_form(params);
 
             let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
@@ -200,6 +207,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             let context = TokenResponseContext::builder()
                 .maybe_dpop_jkt(dpop_jkt)
                 .bind_refresh_token(bind_refresh_token)
+                .openid_bound_key_requested(openid_bound_key_requested)
                 .build();
             Ok(raw_token_response.into_token_response_with_context(
                 context,

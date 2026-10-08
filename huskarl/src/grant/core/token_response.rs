@@ -143,8 +143,9 @@ impl TokenResponse {
 /// only when `token_type` is `DPoP`. When `bind_refresh_token` is `true`, it also
 /// stores the same thumbprint in any returned `RefreshToken` value, including
 /// for bearer responses.
-/// Built-in grants record new bindings for public clients (RFC 9449 §5), and
-/// refresh grants preserve any existing binding for either client type. Without a request proof thumbprint,
+/// Built-in grants record new bindings for public clients (RFC 9449 §5) or
+/// when OIDC Key Binding was requested. Refresh grants preserve any existing
+/// binding for either client type. Without a request proof thumbprint,
 /// refresh tokens remain unbound.
 ///
 /// This context neither establishes nor validates an ID-token binding. ID
@@ -154,13 +155,19 @@ impl TokenResponse {
 pub struct TokenResponseContext {
     /// Thumbprint of the key used to sign the token request's proof. Required
     /// for a `DPoP` access-token response. Also used for refresh-token binding
-    /// when `bind_refresh_token` is `true`.
+    /// when `bind_refresh_token` or `openid_bound_key_requested` is `true`.
     dpop_jkt: Option<String>,
     /// Whether to store `dpop_jkt` in a returned `RefreshToken` value, independently
-    /// of the access-token type. Defaults to `false`. If `dpop_jkt` is `None`,
+    /// of the access-token type. OIDC Key Binding also retains the thumbprint
+    /// when this is `false`. Defaults to `false`. If `dpop_jkt` is `None`,
     /// the refresh token remains unbound even when this is `true`.
     #[builder(default)]
     bind_refresh_token: bool,
+    /// Retain the original proof key for OIDC Key Binding, regardless of client
+    /// authentication or access-token type. Records the request even if the OP
+    /// ignores `bound_key`; it does not assert that the ID token was bound.
+    #[builder(default)]
+    openid_bound_key_requested: bool,
 }
 
 #[derive(Debug)]
@@ -217,8 +224,9 @@ impl RawTokenResponse {
     /// Resolves access and refresh bindings independently using request context.
     ///
     /// Calculates the expiry time from `received_at` and `expires_in`.
-    /// The access-token type follows `token_type`. If `bind_refresh_token` is
-    /// `true`, stores the same `dpop_jkt` supplied in `context` in any returned
+    /// The access-token type follows `token_type`. If `bind_refresh_token` or
+    /// `openid_bound_key_requested` is `true`, stores the same `dpop_jkt`
+    /// supplied in `context` in any returned
     /// `RefreshToken` value, even for a bearer response. Without a thumbprint,
     /// the returned value contains no `DPoP` binding.
     /// No ID-token validation or binding is performed here.
@@ -237,10 +245,13 @@ impl RawTokenResponse {
         let refresh_token_dpop_jkt = context
             .dpop_jkt
             .clone()
-            .filter(|_| context.bind_refresh_token);
+            .filter(|_| context.bind_refresh_token || context.openid_bound_key_requested);
         let token_type = self.resolve_token_type(context.dpop_jkt)?;
         let access_token = self.build_access_token(token_type, received_at);
-        let refresh_token = self.build_refresh_token(refresh_token_dpop_jkt);
+        let mut refresh_token = self.build_refresh_token(refresh_token_dpop_jkt);
+        if let Some(refresh_token) = &mut refresh_token {
+            refresh_token.openid_bound_key_requested = context.openid_bound_key_requested;
+        }
 
         Ok(TokenResponse {
             raw: self,

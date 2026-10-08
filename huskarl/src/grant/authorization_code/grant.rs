@@ -638,6 +638,10 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
             .then(|| crate::grant::core::openid_code_hash(&params.code))
     }
 
+    fn openid_bound_key_requested(&self, params: &Self::Parameters) -> bool {
+        params.openid_bound_key_requested
+    }
+
     fn to_refresh_grant(&self) -> refresh::RefreshGrant {
         refresh::RefreshGrant::builder()
             .client_id(self.client_id.clone())
