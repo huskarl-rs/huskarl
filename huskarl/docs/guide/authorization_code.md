@@ -260,3 +260,15 @@ address family, so a `localhost` redirect may resolve to the family it did not
 bind and the callback never arrives.
 
 Requires the `authorization-flow-loopback` feature.
+
+## Request a key-bound ID token
+
+Configure the grant's
+[DPoP signer](crate::_docs::guide::dpop). In the `start()` example above, use
+`StartInput::scope(bon::vec!["openid", "bound_key", "profile"])` to request binding.
+
+Completion accepts both bound and ordinary ID tokens; the OP may ignore
+`bound_key`. Retain the original signing key for subsequent refreshes, including
+for confidential clients. See [key-binding behavior](crate::_docs::explanation::dpop_bindings#id-token-key-binding)
+for validation limits and draft compatibility, and the
+[refresh guide](crate::_docs::guide::refresh) for saving the returned refresh token.

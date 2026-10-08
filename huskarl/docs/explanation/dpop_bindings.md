@@ -34,8 +34,9 @@ complete token value and access to the signing key.
 ## Confidential clients authenticate refresh requests
 
 Confidential clients authenticate at the token endpoint using client
-credentials or mTLS. Built-in grants leave the DPoP key thumbprint absent
-from newly acquired `RefreshToken` values for these clients.
+credentials or mTLS. For ordinary DPoP, built-in grants leave the key thumbprint
+absent from newly acquired `RefreshToken` values for these clients. OIDC Key
+Binding retains it for both client types, as described below.
 
 When no binding is stored, the refresh grant uses the signer's current key
 if DPoP is configured, or sends no proof otherwise. A stored thumbprint is
@@ -55,3 +56,52 @@ confidential. DPoP itself does not authenticate the client.
 
 For the steps to configure a refresh request and retain the required keys,
 see the [refresh guide](crate::_docs::guide::refresh).
+
+## ID-token key binding
+
+Support targets [OpenID Connect Key Binding draft 03](https://openid.net/specs/openid-connect-key-binding-1_0-03.html).
+
+To request binding, configure a DPoP signer and request both `openid` and
+`bound_key` in an authorization-code or device flow. Use a dedicated key with
+an algorithm the provider supports. Huskarl exposes the optional discovery
+advertisements (`scopes_supported` and `dpop_signing_alg_values_supported`)
+but does not require them.
+
+| Request | Binding behavior |
+| --- | --- |
+| Authorization, including PAR/JAR, or device authorization | Sends the key's thumbprint as `dpop_jkt` |
+| Code exchange or device polling | Adds `c_s256`: base64url SHA-256 of `code` or `device_code`, without padding |
+| Refresh | Uses the original key; omits `c_s256` |
+
+Nonce retries use fresh proofs with the same code hash. Both client types
+retain the original key binding through refresh-token rotation, even with
+bearer access tokens or when the OP ignores `bound_key`. DPoP access tokens
+remain bound to the request proof's key.
+
+### ID-token validation
+
+`openid_bound_key_requested` records the request, not whether the OP honored
+it. Authorization-code completion performs its usual ID-token checks and
+additionally accepts `dpop+id_token`; ordinary ID tokens, including those
+without `typ`, remain accepted. Device and refresh grants return raw ID tokens
+for explicit validation with `IdTokenValidator`.
+
+These paths neither compare `cnf` with the requested key nor verify possession.
+The compact token preserves `cnf.jwk`, which `ConfirmationClaim` does not expose
+as a typed field.
+ID tokens stay within the RP; use access tokens for protected resources.
+
+### State and key lifetimes
+
+- **During authorization:** retain the complete `PendingState` until completion
+  and any ID-token validation. Serialize it in full if saving between requests
+  or device polls. Discard it afterwards; refreshes do not use it.
+- **After authorization:** retain the returned `RefreshToken`. To save and
+  restore it, serialize and deserialize the complete object. `RefreshToken::new`
+  does not restore `openid_bound_key_requested`, even if given the thumbprint.
+- **Throughout both:** keep the original private key available to the signer.
+  The saved objects identify the key by thumbprint; neither contains it.
+
+Older saved state defaults to no OIDC binding request; older device state also
+has no thumbprint. Existing flows are not upgraded automatically.
+
