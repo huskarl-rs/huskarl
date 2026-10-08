@@ -11,6 +11,10 @@ use crate::{
 pub struct NoAuth;
 
 impl ClientAuthentication for NoAuth {
+    fn authenticates_client(&self) -> bool {
+        false
+    }
+
     fn authentication_context<'a>(
         &'a self,
         ctx: AuthenticationContext<'a>,

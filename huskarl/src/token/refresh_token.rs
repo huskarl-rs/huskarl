@@ -7,6 +7,10 @@ use crate::core::secrets::SecretString;
 ///
 /// May be `DPoP`-bound (RFC 9449): [`dpop_jkt`](Self::dpop_jkt) carries the
 /// thumbprint of the key the refresh request must be proven with.
+/// Built-in grants retain this binding for public clients independently of the
+/// access token's type. Confidential clients use client authentication instead
+/// and may select a new proof key when no refresh binding is stored. A stored
+/// thumbprint is always honored and preserved in replacement refresh tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshToken {
     token: SecretString,

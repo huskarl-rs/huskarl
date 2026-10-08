@@ -14,7 +14,7 @@ use crate::{
     grant::{
         core::{
             form::{OAuth2FormRequest, with_dpop_nonce_retry},
-            token_response::{RawTokenResponse, TokenResponse},
+            token_response::{RawTokenResponse, TokenResponse, TokenResponseContext},
         },
         refresh::RefreshGrant,
     },
@@ -59,6 +59,25 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Often bound for authorization code grants or refresh grants.
     fn bound_dpop_jkt(_params: &Self::Parameters) -> Option<&str> {
         None
+    }
+
+    /// Returns `true` if the client uses no client authentication in the request
+    /// or through mTLS. A client identifier alone does not make it confidential.
+    ///
+    /// Override for authentication mechanisms not represented by
+    /// [`client_auth`](Self::client_auth) or [`HttpClient::uses_mtls`].
+    fn is_public_client(&self) -> bool {
+        !self.http_client().uses_mtls()
+            && !self
+                .client_auth()
+                .is_some_and(ClientAuthentication::authenticates_client)
+    }
+
+    /// Whether a returned refresh token must retain the request proof key.
+    /// Defaults to public-client binding under RFC 9449 §5. Refresh grants also
+    /// preserve an existing binding, regardless of client authentication.
+    fn bind_refresh_token(&self, _params: &Self::Parameters) -> bool {
+        self.is_public_client()
     }
 
     /// Returns the token endpoint URL as published in authorization server
@@ -151,6 +170,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
 
             let http_client = self.http_client();
             let endpoint = self.effective_token_endpoint();
+            let bind_refresh_token = self.bind_refresh_token(&params);
             let form = self.build_form(params);
 
             let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
@@ -167,8 +187,14 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                     .await
             })?;
 
-            Ok(raw_token_response
-                .into_token_response(dpop_jkt, crate::core::platform::SystemTime::now())?)
+            let context = TokenResponseContext::builder()
+                .maybe_dpop_jkt(dpop_jkt)
+                .bind_refresh_token(bind_refresh_token)
+                .build();
+            Ok(raw_token_response.into_token_response_with_context(
+                context,
+                crate::core::platform::SystemTime::now(),
+            )?)
         }
     }
 

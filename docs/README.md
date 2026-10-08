@@ -104,6 +104,7 @@ trade-off.
 
 ### OAuth clients
 
+- [DPoP bindings and client authentication](../huskarl/docs/explanation/dpop_bindings.md)
 - [The client error model](../huskarl/docs/explanation/error_handling.md)
 - [How a grant token source resolves a token](../huskarl/docs/explanation/token_source_resolution.md)
 - [InMemoryTokenCache refresh-ahead and jitter](../huskarl/docs/explanation/refresh_timing.md)

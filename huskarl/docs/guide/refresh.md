@@ -109,3 +109,30 @@ let token: &AccessToken = response.access_token();
 # Ok(())
 # }
 ```
+
+## Refresh tokens when using DPoP
+
+Store the complete [`RefreshToken`](crate::token::RefreshToken), including its
+key thumbprint, rather than just the token string.
+
+For a public client using DPoP, keep the signing key available for as long as
+you use the refresh token, even if the server returned a bearer access token.
+If you rotate signing keys, keep the old key available to the signer. When the
+stored refresh token contains a key thumbprint, the request fails before it is
+sent if that key is unavailable.
+
+For refresh tokens saved by older versions after a bearer response, no key
+thumbprint was recorded. With DPoP configured, the refresh grant uses the
+signer's current key. If it differs from the original key, the server may
+reject the request with `invalid_grant`. Keep the original key as the current
+key when using these tokens, or obtain a new refresh token through the
+original grant flow.
+
+For a confidential client, retain the original [client authentication
+configuration](crate::_docs::guide::client_authentication). If you also use
+DPoP and the refresh token has no stored binding, configure the signer with
+the current key. A stored binding always requires its original key, including
+for confidential clients. See the explanation below for legacy saved bindings.
+
+See [DPoP bindings and client authentication](crate::_docs::explanation::dpop_bindings)
+for how access-token and refresh-token bindings differ.

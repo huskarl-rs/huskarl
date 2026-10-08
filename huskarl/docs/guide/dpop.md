@@ -7,11 +7,11 @@ generation, access-token binding, and nonce handling all follow from it.
 
 ## 1. Create the proof signer
 
-[`DPoP`](crate::core::dpop::DPoP) wraps an asymmetric signing key. The key
-*is* the binding: tokens obtained through this value can only be used with
-it. A fresh key generated at startup is the normal deployment — the binding
-only needs to outlive the tokens, and a per-process key never touches
-storage:
+[`DPoP`](crate::core::dpop::DPoP) wraps an asymmetric signing key. Keep the
+key available for as long as you use tokens bound to it. If a public client's
+refresh tokens must survive a restart, load a stored key instead of generating
+a new one at startup. For tokens used only during the current process, generate
+a key as follows:
 
 ```rust
 use huskarl::core::dpop::DPoP;
@@ -31,8 +31,8 @@ same key is intended.
 
 ## 2. Attach it to the grant
 
-Every grant takes the same `dpop` builder option. Token requests then carry
-a proof, and the tokens that come back are bound to the key:
+Every grant takes the same `dpop` builder option. Set it to send a proof with
+each token request:
 
 ```rust
 # use huskarl::core::client_auth::NoAuth;
@@ -113,14 +113,20 @@ let proof = resource_dpop
 # }
 ```
 
-## 4. Refresh keeps the binding
+## 4. Configure refresh requests
 
 A refresh grant made with `to_refresh_grant` inherits the grant's DPoP
-configuration alongside its client authentication (see [the refresh
-guide](crate::_docs::guide::refresh)), so refreshed access tokens stay bound
-to the same key — as does the
-[`GrantTokenSource`](crate::cache::GrantTokenSource) refresh path, which
-does this for you.
+configuration alongside its client authentication.
+[`GrantTokenSource`](crate::cache::GrantTokenSource) also copies these settings
+when it refreshes a token.
+
+For a public client, retain the key used to obtain the refresh token. For a
+confidential client, keep client authentication configured; refresh requests
+use the current DPoP signing key. Follow the [refresh
+guide](crate::_docs::guide::refresh) to store the token and retain the required
+keys. See [DPoP bindings and client
+authentication](crate::_docs::explanation::dpop_bindings) for the reason these
+clients behave differently.
 
 ## Validating DPoP on the server side
 

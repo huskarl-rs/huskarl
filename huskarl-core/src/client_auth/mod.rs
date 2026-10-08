@@ -45,6 +45,17 @@ use crate::{
 /// the same way next time — while a transient failure of an underlying fetch
 /// (such as a secret store) retains that fetch's classification.
 pub trait ClientAuthentication: MaybeSendSync {
+    /// Whether this method authenticates the client, rather than only sending
+    /// its identifier. Defaults to `true` for custom authentication methods.
+    /// Override this to return `false` if the implementation only sends a
+    /// client identifier without authenticating the client.
+    ///
+    /// [`NoAuth`] returns `false`. Grants also consider transport-level mTLS
+    /// authentication when deciding whether a client is public.
+    fn authenticates_client(&self) -> bool {
+        true
+    }
+
     /// Returns the authentication parameters for the request described by
     /// `ctx` (see [`AuthenticationContext`]).
     fn authentication_context<'a>(
@@ -54,6 +65,10 @@ pub trait ClientAuthentication: MaybeSendSync {
 }
 
 impl<T: ClientAuthentication + ?Sized> ClientAuthentication for &T {
+    fn authenticates_client(&self) -> bool {
+        (**self).authenticates_client()
+    }
+
     fn authentication_context<'a>(
         &'a self,
         ctx: AuthenticationContext<'a>,
@@ -63,6 +78,10 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for &T {
 }
 
 impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Box<T> {
+    fn authenticates_client(&self) -> bool {
+        (**self).authenticates_client()
+    }
+
     fn authentication_context<'a>(
         &'a self,
         ctx: AuthenticationContext<'a>,
@@ -72,6 +91,10 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Box<T> {
 }
 
 impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Arc<T> {
+    fn authenticates_client(&self) -> bool {
+        (**self).authenticates_client()
+    }
+
     fn authentication_context<'a>(
         &'a self,
         ctx: AuthenticationContext<'a>,
@@ -124,6 +147,23 @@ pub struct AuthenticationParams<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrappers_preserve_authentication_classification() {
+        let no_auth = NoAuth;
+        let borrowed: &dyn ClientAuthentication = &no_auth;
+        let boxed: Box<dyn ClientAuthentication> = Box::new(NoAuth);
+        let shared: Arc<dyn ClientAuthentication> = Arc::new(NoAuth);
+        assert!(!ClientAuthentication::authenticates_client(&borrowed));
+        assert!(!boxed.authenticates_client());
+        assert!(!shared.authenticates_client());
+        assert!(
+            ClientSecret::new(crate::secrets::ProvidedSecret::new(
+                crate::secrets::SecretString::new("secret")
+            ))
+            .authenticates_client()
+        );
+    }
 
     #[tokio::test]
     async fn erased_authentication_dispatches() {

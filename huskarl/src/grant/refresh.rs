@@ -167,6 +167,10 @@ impl OAuth2ExchangeGrant for RefreshGrant {
         params.refresh_token.dpop_jkt()
     }
 
+    fn bind_refresh_token(&self, params: &Self::Parameters) -> bool {
+        self.is_public_client() || params.refresh_token.dpop_jkt().is_some()
+    }
+
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {
         RefreshGrantForm {
             grant_type: "refresh_token",
@@ -350,3 +354,6 @@ mod session_keyed_dpop_tests {
             .expect_err("binding a session key onto a NoDPoP grant must error");
     }
 }
+
+#[cfg(all(test, not(target_family = "wasm")))]
+mod binding_tests;
