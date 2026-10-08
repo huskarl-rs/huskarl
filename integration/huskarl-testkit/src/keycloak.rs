@@ -21,7 +21,18 @@ pub struct KeycloakProvider {
 }
 
 impl KeycloakProvider {
-    pub const FEATURES: Features = Features::all();
+    // Keep capabilities explicit: new test features need provider support and
+    // provisioning before they can run against this harness.
+    pub const FEATURES: Features = Features::CLIENT_CREDENTIALS
+        .union(Features::AUTH_CODE)
+        .union(Features::DEVICE)
+        .union(Features::REFRESH)
+        .union(Features::INTROSPECTION)
+        .union(Features::DPOP)
+        .union(Features::MTLS)
+        .union(Features::PAR)
+        .union(Features::JAR)
+        .union(Features::PRIVATE_KEY_JWT);
 
     /// Provider on a fresh realm of the local integration Keycloak.
     pub async fn local() -> Result<Self, Error> {

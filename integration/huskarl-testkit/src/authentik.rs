@@ -19,6 +19,7 @@ use crate::{
 
 pub struct AuthentikProvider {
     auth_code: AtomicBool,
+    bound_key: AtomicBool,
 }
 
 impl AuthentikProvider {
@@ -26,15 +27,18 @@ impl AuthentikProvider {
     // which Authentik does not issue.
     pub const FEATURES: Features = Features::CLIENT_CREDENTIALS
         .union(Features::INTROSPECTION)
-        .union(Features::AUTH_CODE);
+        .union(Features::AUTH_CODE)
+        .union(Features::OPENID_KEY_BINDING);
     const CLIENT_ID: &str = "huskarl-rs";
 
     const REDIRECT_URI: &str = "http://127.0.0.1:9001/callback";
+    const BOUND_REDIRECT_URI: &str = "http://127.0.0.1:9002/callback";
     const BASE: &str = "http://127.0.0.1:9000";
 
     pub async fn local() -> Result<Self, Error> {
         Ok(Self {
             auth_code: AtomicBool::new(false),
+            bound_key: AtomicBool::new(false),
         })
     }
 }
@@ -46,7 +50,9 @@ impl TestProvider for AuthentikProvider {
     }
 
     fn issuer(&self, _transport: Transport) -> String {
-        let slug = if self.auth_code.load(Ordering::Relaxed) {
+        let slug = if self.bound_key.load(Ordering::Relaxed) {
+            "huskarl-bound-key"
+        } else if self.auth_code.load(Ordering::Relaxed) {
             "huskarl-authcode"
         } else {
             "huskarl"
@@ -58,8 +64,21 @@ impl TestProvider for AuthentikProvider {
         true
     }
 
-    fn auth_code_redirect_uri(&self, _features: Features) -> Option<String> {
-        Some(Self::REDIRECT_URI.to_owned())
+    // Authentik binds the ID token but always issues Bearer access tokens:
+    // https://docs.goauthentik.io/add-secure-apps/providers/oauth2/key-binding/
+    fn bound_key_access_token_type(&self) -> Option<&str> {
+        Some("Bearer")
+    }
+
+    fn auth_code_redirect_uri(&self, features: Features) -> Option<String> {
+        Some(
+            if features.contains(Features::OPENID_KEY_BINDING) {
+                Self::BOUND_REDIRECT_URI
+            } else {
+                Self::REDIRECT_URI
+            }
+            .to_owned(),
+        )
     }
 
     async fn provision_client(&self, spec: ClientSpec) -> Result<ProvisionedClient, Error> {
@@ -70,21 +89,34 @@ impl TestProvider for AuthentikProvider {
             )
             .into());
         }
-        if spec.features == Features::AUTH_CODE {
-            if spec.redirect_uris != [Self::REDIRECT_URI]
+        let bound_key = spec.features.contains(Features::OPENID_KEY_BINDING);
+        if spec.features == Features::AUTH_CODE
+            || spec.features == Features::AUTH_CODE.union(Features::OPENID_KEY_BINDING)
+        {
+            let redirect_uri = self.auth_code_redirect_uri(spec.features).unwrap();
+            if spec.redirect_uris != [redirect_uri]
                 || spec.signing_jwk.is_some()
                 || spec.audience.is_some()
             {
                 return Err("Authentik auth-code client requires its fixed redirect and no custom audience or key".into());
             }
             self.auth_code.store(true, Ordering::Relaxed);
+            self.bound_key.store(bound_key, Ordering::Relaxed);
+            let client_id = if bound_key {
+                "huskarl-bound-key"
+            } else {
+                "huskarl-authcode"
+            };
             return Ok(ProvisionedClient {
-                client_id: "huskarl-authcode".to_owned(),
-                secret: Some("huskarl-authcode-secret".into()),
+                client_id: client_id.to_owned(),
+                secret: Some(format!("{client_id}-secret").into()),
                 redirect_uris: spec.redirect_uris,
             });
         }
-        if spec.features.contains(Features::AUTH_CODE) {
+        if spec
+            .features
+            .intersects(Features::AUTH_CODE | Features::OPENID_KEY_BINDING)
+        {
             return Err("Authentik uses separate auth-code and client-credentials clients".into());
         }
         if spec
@@ -98,6 +130,7 @@ impl TestProvider for AuthentikProvider {
             return Err("Authentik static client does not support redirects or client keys".into());
         }
         self.auth_code.store(false, Ordering::Relaxed);
+        self.bound_key.store(false, Ordering::Relaxed);
         Ok(ProvisionedClient {
             client_id: Self::CLIENT_ID.to_owned(),
             secret: Some("huskarl-authentik-secret".into()),
@@ -108,6 +141,11 @@ impl TestProvider for AuthentikProvider {
     async fn authenticate(&self, authorize_url: &str) -> Result<(), Error> {
         // Each login gets an isolated session. Drive the same challenge API as
         // Authentik's browser UI, preserving its original query and CSRF cookie.
+        let redirect_uri = if self.bound_key.load(Ordering::Relaxed) {
+            Self::BOUND_REDIRECT_URI
+        } else {
+            Self::REDIRECT_URI
+        };
         let cookies = Arc::new(reqwest::cookie::Jar::default());
         let browser = reqwest::Client::builder()
             .cookie_provider(cookies.clone())
@@ -121,7 +159,7 @@ impl TestProvider for AuthentikProvider {
         .await?;
         for _ in 0..4 {
             let page_url = page.url().clone();
-            if page_url.as_str().split('?').next() == Some(Self::REDIRECT_URI) {
+            if page_url.as_str().split('?').next() == Some(redirect_uri) {
                 return Ok(());
             }
             if page_url.origin() != origin.origin() {
@@ -203,7 +241,7 @@ impl TestProvider for AuthentikProvider {
             }
             let redirect = redirect.ok_or("Authentik login exceeded challenge limit")?;
             if redirect.origin() != origin.origin()
-                && redirect.as_str().split('?').next() != Some(Self::REDIRECT_URI)
+                && redirect.as_str().split('?').next() != Some(redirect_uri)
             {
                 return Err("Authentik flow redirected to an unexpected origin".into());
             }

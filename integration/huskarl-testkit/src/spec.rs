@@ -30,6 +30,8 @@ bitflags! {
         const JAR = 1 << 8;
         /// RFC 7523 / OIDC Core §9; requires a registered `signing_jwk`.
         const PRIVATE_KEY_JWT = 1 << 9;
+        /// OIDC Key Binding via authorization code, including refresh.
+        const OPENID_KEY_BINDING = 1 << 10;
     }
 }
 

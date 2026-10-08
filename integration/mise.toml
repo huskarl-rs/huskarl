@@ -112,7 +112,8 @@ run = """
 docker compose -f authentik/docker-compose.yml up -d
 for i in $(seq 1 180); do
   if curl --max-time 2 -sf http://127.0.0.1:9000/application/o/huskarl/.well-known/openid-configuration >/dev/null 2>&1 &&
-     curl --max-time 2 -sf http://127.0.0.1:9000/application/o/huskarl-authcode/.well-known/openid-configuration >/dev/null 2>&1; then
+     curl --max-time 2 -sf http://127.0.0.1:9000/application/o/huskarl-authcode/.well-known/openid-configuration >/dev/null 2>&1 &&
+     curl --max-time 2 -sf http://127.0.0.1:9000/application/o/huskarl-bound-key/.well-known/openid-configuration >/dev/null 2>&1; then
     echo "authentik ready"; exit 0
   fi
   sleep 2

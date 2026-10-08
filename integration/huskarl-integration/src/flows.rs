@@ -102,6 +102,10 @@ pub const FLOWS: &[Flow] = &[
         body: auth_code,
         variants: &[
             Variant {
+                name: "bound_key_refresh",
+                required: Features::AUTH_CODE.union(Features::OPENID_KEY_BINDING),
+            },
+            Variant {
                 name: "direct",
                 required: Features::AUTH_CODE,
             },

@@ -167,7 +167,24 @@ A separate client, `huskarl-authcode` / `huskarl-authcode-secret`, uses a strict
 as `huskarl-test-user` / `huskarl-test-password` through Authentik’s default
 authentication flow using its flow executor API, then exchanges the code with
 PKCE and validates the ID token. This exercises ordinary OIDC independently of
-the future `bound_key` feature; key binding is not enabled on this client.
+key binding; `bound_key` is not enabled on this client.
+
+A third confidential client, `huskarl-bound-key` / `huskarl-bound-key-secret`,
+uses `http://127.0.0.1:9002/callback` and enables `openid`, `bound_key`, and
+`offline_access`. The `auth_code::bound_key_refresh` variant requests binding
+with an ES256 key, completes PKCE login, and checks the signed ID token has
+`typ: dpop+id_token` and the requested public key in `cnf.jwk`. It then restores
+serialized refresh-token state and refreshes twice, validating the returned ID
+tokens and retained binding. Access tokens remain Bearer throughout, as specified
+by [Authentik's key-binding implementation](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/key-binding/).
+This is provider interoperability coverage; it adds no consumer proof-of-possession
+validation to Huskarl. Device-flow interoperability is not covered yet.
+
+To run just this variant against the running stack:
+
+```sh
+cargo test -p huskarl-integration --test authentik --features authentik -- auth_code::bound_key_refresh
+```
 
 The generic refresh test requires a refresh token from client credentials,
 which Authentik does not issue, so it is skipped along with unsupported variants.
