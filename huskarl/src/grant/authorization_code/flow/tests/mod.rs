@@ -17,7 +17,7 @@ use crate::{
         server_metadata::AuthorizationServerMetadata,
     },
     grant::authorization_code::{
-        error::{BuildError, StartError},
+        error::{BuildError, FlowError, StartError},
         types::{CompleteInput, ResponseMode, StartInput},
     },
     token::AccessToken,

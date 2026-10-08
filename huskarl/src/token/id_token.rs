@@ -217,6 +217,11 @@ pub struct IdTokenValidator {
     required_acr: Option<String>,
     /// If set, restricts accepted signature algorithms to this set.
     allowed_algorithms: Option<HashSet<String>>,
+    /// Whether `openid bound_key` was requested with a `DPoP` key.
+    /// Allows `dpop+id_token` in addition to ordinary ID-token types; the
+    /// provider may ignore the scope. Does not verify proof of possession.
+    #[builder(default)]
+    openid_bound_key_requested: bool,
 }
 
 impl IdTokenValidator {
@@ -236,11 +241,16 @@ impl IdTokenValidator {
         id_token: &IdToken,
         expected_nonce: Option<&str>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
+        let typ = if self.openid_bound_key_requested {
+            ClaimCheck::if_present_any(["JWT", "dpop+id_token"])
+        } else {
+            ClaimCheck::if_present("JWT")
+        };
         let jwt_validator = JwtValidator::builder()
             .verifier(self.verifier.clone())
             .iss(ClaimCheck::required_value(self.issuer.clone()))
             .aud(ClaimCheck::required_value(self.audience.clone()))
-            .typ(ClaimCheck::if_present("JWT"))
+            .typ(typ)
             .require_exp(true)
             .require_iat(true)
             .clock_leeway(self.clock_leeway)
@@ -464,6 +474,62 @@ mod tests {
             .expect("token should validate");
         assert_eq!(validated.sub.as_deref(), Some(SUB));
         assert_eq!(validated.iss.as_deref(), Some(ISS));
+    }
+
+    #[rstest]
+    #[case::ordinary(false)]
+    #[case::bound_key_requested(true)]
+    #[tokio::test]
+    async fn absent_type_remains_accepted(#[case] bound_key: bool) {
+        use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
+
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(&signer, IdTokenClaims::default()).await;
+        let payload = token.token().split('.').nth(1).unwrap();
+        let input = format!(
+            "{}.{}",
+            BASE64_URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256"}"#),
+            payload,
+        );
+        let signature = signer
+            .select_signer()
+            .await
+            .sign(input.as_bytes())
+            .await
+            .unwrap();
+        let token = IdToken::from(format!(
+            "{input}.{}",
+            BASE64_URL_SAFE_NO_PAD.encode(signature),
+        ));
+        let mut validator = validator(verifier, None, None);
+        validator.openid_bound_key_requested = bound_key;
+        validator.validate(&token, None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn bound_type_still_checks_nonce() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = Jwt::builder()
+            .typ("dpop+id_token")
+            .iss(ISS)
+            .aud(vec![AUD.to_owned()])
+            .sub(SUB)
+            .issued_now_expires_after(Duration::from_hours(1))
+            .claims(IdTokenClaims {
+                nonce: Some("actual".to_owned()),
+                ..IdTokenClaims::default()
+            })
+            .build()
+            .to_jws_compact(&*signer.select_signer().await)
+            .await
+            .unwrap();
+        let mut validator = validator(verifier, None, None);
+        validator.openid_bound_key_requested = true;
+        let error = validator
+            .validate(&IdToken::from(token.expose_secret()), Some("expected"))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, IdTokenValidationError::NonceMismatch));
     }
 
     #[tokio::test]

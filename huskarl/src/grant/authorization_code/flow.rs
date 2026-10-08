@@ -450,6 +450,7 @@ impl AuthorizationCodeGrant {
                 .to_owned();
 
             let validator = IdTokenValidator::builder()
+                .openid_bound_key_requested(pending_state.openid_bound_key_requested)
                 .verifier(verifier)
                 .issuer(issuer)
                 .audience(self.client_id.clone())
