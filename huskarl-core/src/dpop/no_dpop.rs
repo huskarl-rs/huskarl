@@ -29,14 +29,15 @@ impl AuthorizationServerDPoP for NoDPoP {
         Box::pin(async { None })
     }
 
-    fn proof<'a>(
+    fn proof_with_code_hash<'a>(
         &'a self,
         _method: &'a Method,
         _uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async move {
-            if dpop_jkt.is_some() {
+            if dpop_jkt.is_some() || code_hash.is_some() {
                 Err(DPoPNotConfiguredSnafu.build().into())
             } else {
                 Ok(None)
@@ -99,6 +100,11 @@ mod tests {
 
         let _err = dpop
             .proof(&Method::POST, &uri, Some("jkt"))
+            .await
+            .unwrap_err();
+
+        let _err = dpop
+            .proof_with_code_hash(&Method::POST, &uri, None, Some("code-hash"))
             .await
             .unwrap_err();
 
