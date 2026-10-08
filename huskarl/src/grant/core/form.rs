@@ -25,6 +25,9 @@ pub(crate) struct OAuth2FormRequest<'a, F: Serialize> {
     /// Public-key thumbprint to request a DPoP-bound token with, when needed by
     /// the grant.
     dpop_jkt: Option<&'a str>,
+    /// Optional OIDC Key Binding code hash for the `c_s256` proof claim.
+    /// Hashes the authorization `code` or `device_code`, depending on the grant.
+    dpop_code_hash: Option<&'a str>,
 }
 
 impl<F: Serialize> OAuth2FormRequest<'_, F> {
@@ -49,7 +52,12 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
 
         if let Some(proof) = self
             .dpop
-            .proof(&parts.method, &parts.uri, self.dpop_jkt)
+            .proof_with_code_hash(
+                &parts.method,
+                &parts.uri,
+                self.dpop_jkt,
+                self.dpop_code_hash,
+            )
             .await?
         {
             let mut proof_value =

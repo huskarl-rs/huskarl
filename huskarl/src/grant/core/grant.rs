@@ -80,6 +80,14 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         self.is_public_client()
     }
 
+    /// Returns the OIDC Key Binding `c_s256` code hash, when requested.
+    /// Hash the authorization `code` or `device_code`, depending on the grant,
+    /// with SHA-256 and encode as base64url without padding.
+    /// Ordinary OAuth exchanges omit this claim.
+    fn request_dpop_code_hash(&self, _params: &Self::Parameters) -> Option<String> {
+        None
+    }
+
     /// Returns the token endpoint URL as published in authorization server
     /// metadata.
     ///
@@ -171,6 +179,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             let http_client = self.http_client();
             let endpoint = self.effective_token_endpoint();
             let bind_refresh_token = self.bind_refresh_token(&params);
+            let dpop_code_hash = self.request_dpop_code_hash(&params);
             let form = self.build_form(params);
 
             let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
@@ -180,6 +189,7 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                     .auth_params(auth_params)
                     .dpop(self.dpop())
                     .maybe_dpop_jkt(dpop_jkt.as_deref())
+                    .maybe_dpop_code_hash(dpop_code_hash.as_deref())
                     .form(&form)
                     .uri(endpoint.as_uri())
                     .build()

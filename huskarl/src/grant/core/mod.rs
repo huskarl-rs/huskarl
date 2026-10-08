@@ -54,3 +54,12 @@ pub(crate) fn requests_openid_bound_key(scopes: Option<&[String]>) -> bool {
             && scopes.iter().any(|scope| scope == "bound_key")
     })
 }
+
+/// The OpenID Connect Key Binding `c_s256` proof claim: the SHA-256 hash of
+/// the authorization `code` or `device_code`, base64url-encoded without padding.
+pub(crate) fn openid_code_hash(code: &str) -> String {
+    use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
+    use sha2::{Digest as _, Sha256};
+
+    BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(code.as_bytes()))
+}

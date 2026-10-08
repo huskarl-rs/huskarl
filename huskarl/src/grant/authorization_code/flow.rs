@@ -420,6 +420,7 @@ impl AuthorizationCodeGrant {
         // default key has rotated. Proof creation fails before HTTP if absent.
         let token = self
             .exchange(AuthorizationCodeGrantParameters {
+                openid_bound_key_requested: pending_state.openid_bound_key_requested,
                 dpop_jkt: pending_state.dpop_jkt.clone(),
                 code,
                 pkce_verifier: pending_state.pkce_verifier.clone(),

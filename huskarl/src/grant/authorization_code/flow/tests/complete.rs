@@ -610,3 +610,125 @@ async fn jarm_alg_outside_allowlist_rejected() {
         "got {err:?}"
     );
 }
+
+/// Records token proofs and challenges the first attempt for a nonce.
+#[derive(Clone)]
+struct CodeHashHttp {
+    proofs: Arc<Mutex<Vec<serde_json::Value>>>,
+    response: Bytes,
+}
+
+impl HttpClient for CodeHashHttp {
+    fn execute(
+        &self,
+        request: http::Request<Bytes>,
+        _idempotency: Idempotency,
+    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+        let proof = request.headers()["DPoP"].to_str().unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let form: std::collections::HashMap<String, String> =
+            crate::core::oauth_form::from_str(std::str::from_utf8(request.body()).unwrap())
+                .unwrap();
+        assert_eq!(form["code"], "SplxlOBeZQQYbYS6WxSbIA");
+        assert!(!form.contains_key("c_s256"));
+        let mut proofs = self.proofs.lock().unwrap();
+        let first = proofs.is_empty();
+        proofs.push(claims);
+        let mut headers = http::HeaderMap::new();
+        let (status, body) = if first {
+            headers.insert("DPoP-Nonce", "exchange-nonce".parse().unwrap());
+            (
+                http::StatusCode::BAD_REQUEST,
+                Bytes::from_static(br#"{"error":"use_dpop_nonce"}"#),
+            )
+        } else {
+            (http::StatusCode::OK, self.response.clone())
+        };
+        Box::pin(async move {
+            Ok(HttpResponse {
+                status,
+                headers,
+                body,
+            })
+        })
+    }
+}
+
+#[rstest]
+#[case::bound_key(true)]
+#[case::ordinary_oidc(false)]
+#[tokio::test]
+async fn code_hash_survives_nonce_retry(#[case] bound_key: bool) {
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+    let (mut grant, issuer_key) = jarm_grant("").await;
+    // A regular ID token remains valid when the OP ignores bound_key.
+    let id_token = mint_jarm(
+        &issuer_key,
+        "https://as.example.com",
+        "client",
+        serde_json::json!({"sub": "user"}),
+    )
+    .await;
+    let http = CodeHashHttp {
+        proofs: Arc::default(),
+        response: serde_json::to_vec(&serde_json::json!({
+            "access_token": "token",
+            "token_type": "DPoP",
+            "id_token": id_token,
+        }))
+        .unwrap()
+        .into(),
+    };
+    grant.http_client = Arc::new(http.clone());
+    grant.send_oidc_nonce = Some(false);
+    let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+    grant.dpop = Arc::new(crate::core::dpop::DPoP::builder().signer(key).build());
+    let scopes = if bound_key {
+        bon::vec!["openid", "bound_key"]
+    } else {
+        bon::vec!["openid"]
+    };
+    let started = grant.start(StartInput::scope(scopes)).await.unwrap();
+    // Exercise persisted callback state rather than the original in-memory value.
+    let state = serde_json::from_str::<PendingState>(
+        &serde_json::to_string(&started.pending_state).unwrap(),
+    )
+    .unwrap();
+    let output = grant
+        .complete(
+            &state,
+            CompleteInput::builder()
+                .code("SplxlOBeZQQYbYS6WxSbIA")
+                .state(state.state.clone())
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert!(output.id_token.is_some());
+    let proofs = http.proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 2);
+    for proof in proofs.iter() {
+        if bound_key {
+            // OIDC Key Binding section 2.3 example: full SHA-256, no padding.
+            assert_eq!(
+                proof["c_s256"],
+                "o1uBp9eSe3DsmScN0jYriFgKKFdK-BLywC9WRpV5GG8"
+            );
+        } else {
+            assert!(proof.get("c_s256").is_none());
+        }
+        assert_eq!(proof["htm"], "POST");
+        assert_eq!(proof["htu"], "https://as.example.com/token");
+        assert!(proof.get("ath").is_none());
+    }
+    assert!(proofs[0].get("nonce").is_none());
+    assert_eq!(proofs[1]["nonce"], "exchange-nonce");
+    assert!(proofs[0]["jti"].is_string());
+    assert_ne!(proofs[0]["jti"], proofs[1]["jti"]);
+}
