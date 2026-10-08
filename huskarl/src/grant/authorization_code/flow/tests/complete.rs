@@ -240,6 +240,7 @@ fn pending(openid_requested: bool) -> PendingState {
         nonce: None,
         dpop_jkt: None,
         openid_requested,
+        openid_bound_key_requested: false,
         response_mode: None,
     }
 }

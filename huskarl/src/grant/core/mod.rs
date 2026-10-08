@@ -45,3 +45,12 @@ pub(crate) fn join_space(items: Option<&[String]>) -> Option<String> {
 
     (!joined.is_empty()).then_some(joined)
 }
+
+/// Whether `scopes` request OpenID Connect Key Binding: both `openid` and
+/// `bound_key` must be present.
+pub(crate) fn requests_openid_bound_key(scopes: Option<&[String]>) -> bool {
+    scopes.is_some_and(|scopes| {
+        scopes.iter().any(|scope| scope == "openid")
+            && scopes.iter().any(|scope| scope == "bound_key")
+    })
+}
