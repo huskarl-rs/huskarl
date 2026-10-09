@@ -25,7 +25,7 @@ use crate::{
             AuthorizationCodeGrantParameters,
             error::{
                 CompleteError, ConstructingAuthorizationUrlSnafu, CreatingRequestObjectSnafu,
-                EncodingParametersSnafu, FlowError, IdTokenIssuerNotConfiguredSnafu,
+                EncodingParametersSnafu, IdTokenIssuerNotConfiguredSnafu,
                 IdTokenVerifierNotConfiguredSnafu, IssuerMismatchSnafu,
                 JarmIssuerNotConfiguredSnafu, JarmMissingParameterSnafu, JarmValidationSnafu,
                 JarmVerifierNotConfiguredSnafu, MissingIdTokenSnafu, MissingIssuerSnafu,
@@ -413,13 +413,8 @@ impl AuthorizationCodeGrant {
             }
         }
 
-        // Reject a different session key before spending the authorization code.
-        if pending_state.dpop_jkt.is_some()
-            && self.dpop.get_current_thumbprint().await != pending_state.dpop_jkt
-        {
-            return Err(FlowError::DPoPKeyMismatch.into());
-        }
-
+        // Select the original proof key by its stored thumbprint, even if the
+        // default key has rotated. Proof creation fails before HTTP if absent.
         let token = self
             .exchange(AuthorizationCodeGrantParameters {
                 dpop_jkt: pending_state.dpop_jkt.clone(),

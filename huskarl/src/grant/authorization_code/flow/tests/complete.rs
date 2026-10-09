@@ -49,8 +49,11 @@ async fn session_key_signs_par_and_token() {
 
 /// A different key bound at completion than the one bound at PAR time is
 /// rejected before the token request goes out.
+#[rstest]
+#[case::wrong_key(true)]
+#[case::no_dpop(false)]
 #[tokio::test]
-async fn mismatched_session_key_at_complete_is_rejected() {
+async fn unavailable_key_at_complete_is_rejected(#[case] dpop_configured: bool) {
     use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
 
     let http = RecordingHttp::default();
@@ -63,9 +66,13 @@ async fn mismatched_session_key_at_complete_is_rejected() {
         .await
         .unwrap();
 
-    let result = grant
+    let mut completion_grant = grant
         .with_session_dpop_key(PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap())
-        .unwrap()
+        .unwrap();
+    if !dpop_configured {
+        completion_grant.dpop = Arc::new(crate::core::dpop::NoDPoP);
+    }
+    let result = completion_grant
         .complete(
             &output.pending_state,
             CompleteInput::builder()
@@ -81,6 +88,110 @@ async fn mismatched_session_key_at_complete_is_rejected() {
         !seen.iter().any(|(p, _)| p.ends_with("/token")),
         "no token request should be made on mismatch: {seen:?}"
     );
+}
+
+/// Records the `DPoP` proof sent with each token request, delegating
+/// responses to [`RecordingHttp`].
+#[derive(Clone, Default)]
+struct TokenProofHttp {
+    inner: RecordingHttp,
+    token_proofs: Arc<Mutex<Vec<String>>>,
+}
+
+impl HttpClient for TokenProofHttp {
+    fn execute(
+        &self,
+        request: http::Request<Bytes>,
+        idempotency: Idempotency,
+    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+        if request.uri().path().ends_with("/token")
+            && let Some(proof) = request.headers().get("DPoP")
+        {
+            self.token_proofs
+                .lock()
+                .unwrap()
+                .push(proof.to_str().unwrap().to_owned());
+        }
+        self.inner.execute(request, idempotency)
+    }
+}
+
+/// After the signer's default key rotates, completion still proves the token
+/// request with the key bound at authorization time, if it can be found by
+/// thumbprint. Without it, completion fails before the token request.
+#[rstest]
+#[case::original_retained(true)]
+#[case::original_dropped(false)]
+#[tokio::test]
+async fn rotated_key_at_complete_uses_original(#[case] retain_original: bool) {
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+    use crate::core::{
+        crypto::signer::{AsymmetricJwsSignerSelector as _, MultiKeySigner},
+        dpop::DPoP,
+    };
+
+    let http = TokenProofHttp::default();
+    let original_key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+    let original_jkt = original_key.as_private_jwk().public_jwk().thumbprint();
+    let original = original_key.select_asymmetric_signer().await;
+    let mut grant = session_keyed_par_grant(http.inner.clone()).await;
+    grant.http_client = Arc::new(http.clone());
+    grant.dpop = Arc::new(DPoP::builder().signer(original_key).build());
+
+    let output = grant
+        .start(StartInput::scope(bon::vec!["api"]))
+        .await
+        .unwrap();
+    assert_eq!(
+        output.pending_state.dpop_jkt.as_deref(),
+        Some(original_jkt.as_str())
+    );
+
+    // Rotate the default key after authorization.
+    let replacement = PrivateKey::generate(GenerateAlgorithm::Es256, None)
+        .unwrap()
+        .select_asymmetric_signer()
+        .await;
+    let additional = if retain_original {
+        vec![original]
+    } else {
+        Vec::new()
+    };
+    grant.dpop = Arc::new(
+        DPoP::builder()
+            .signer(MultiKeySigner::new(replacement, additional))
+            .build(),
+    );
+
+    let result = grant
+        .complete(
+            &output.pending_state,
+            CompleteInput::builder()
+                .code("the-code")
+                .state(output.pending_state.state.clone())
+                .build(),
+        )
+        .await;
+
+    let token_proofs = std::mem::take(&mut *http.token_proofs.lock().unwrap());
+    if !retain_original {
+        let _err = result.expect_err("an unavailable original key must be rejected");
+        assert!(
+            token_proofs.is_empty(),
+            "no token request should be made without the original key"
+        );
+        return;
+    }
+
+    result.unwrap();
+    assert_eq!(token_proofs.len(), 1);
+    let proof_validator =
+        huskarl_resource_server::validator::dpop_proof::DPoPProofValidator::builder()
+            .jws_verifier_platform(Arc::new(huskarl_crypto_native::NativeVerifierPlatform))
+            .build();
+    let proof = proof_validator.validate(&token_proofs[0]).await.unwrap();
+    assert_eq!(proof.thumbprint.as_deref(), Some(original_jkt.as_str()));
 }
 
 /// Serves one canned token-endpoint response.
