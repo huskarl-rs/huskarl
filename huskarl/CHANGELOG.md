@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.6](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.5...huskarl-v0.11.6) - 2026-10-09
+
+### Fixed
+
+- *(client)* Allow DPoP key to rotate during authorization code grant ([#351](https://github.com/huskarl-rs/huskarl/pull/351))
+- Separate refresh-token DPoP binding from access-token type ([#347](https://github.com/huskarl-rs/huskarl/pull/347))
+
+### Other
+
+- Implement experimental OpenID Connect Key Binding draft 03 ([#352](https://github.com/huskarl-rs/huskarl/pull/352))
+
 ## [0.11.5](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.4...huskarl-v0.11.5) - 2026-10-06
 
 ### Other

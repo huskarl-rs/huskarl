@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.9](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.8...huskarl-resource-server-v0.11.9) - 2026-10-09
+
+### Added
+
+- Support "any if present" option for JWT validator and introspection. ([#349](https://github.com/huskarl-rs/huskarl/pull/349))
+
 ## [0.11.8](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.7...huskarl-resource-server-v0.11.8) - 2026-10-07
 
 ### Fixed
