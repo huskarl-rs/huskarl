@@ -88,7 +88,9 @@ for explicit validation with `IdTokenValidator`.
 
 These paths neither compare `cnf` with the requested key nor verify possession.
 The compact token preserves `cnf.jwk`, which `ConfirmationClaim` does not expose
-as a typed field.
+as a typed field. For presentations within the RP, use
+`IdTokenPresentationValidator` with an application-specific proof verifier
+(see `_docs::guide::id_token_presentations`).
 ID tokens stay within the RP; use access tokens for protected resources.
 
 ### State and key lifetimes

@@ -9,7 +9,7 @@ impl<T> MaybeSend for T {}
 
 /// Marker trait for types that may be `Sync`, depending on platform.
 pub trait MaybeSync {}
-impl<T> MaybeSync for T {}
+impl<T: ?Sized> MaybeSync for T {}
 
 /// Marker trait for types that may be `Send + Sync`, depending on platform.
 pub trait MaybeSendSync: MaybeSend + MaybeSync {}

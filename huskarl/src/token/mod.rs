@@ -2,6 +2,7 @@
 
 mod access_token;
 pub mod id_token;
+pub mod id_token_presentation;
 mod refresh_token;
 
 pub use access_token::{AccessToken, BearerAccessToken, DPoPAccessToken, NonAccessToken};

@@ -192,6 +192,12 @@ pub struct StandardOidcAddressClaims {
 ///
 /// Build one with [`builder`](Self::builder); call [`validate`](Self::validate)
 /// to check a token and recover its claims.
+///
+/// This validates an authentication response received from the OP using the
+/// initiating client's expectations. For proof-bearing presentations received
+/// by another component of the same RP, use
+/// [`IdTokenPresentationValidator`](super::id_token_presentation::IdTokenPresentationValidator).
+/// Accepting an ID token here does not verify possession of its bound key.
 #[derive(Debug, Builder)]
 #[builder(on(String, into))]
 pub struct IdTokenValidator {
