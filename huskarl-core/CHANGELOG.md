@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.7](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.6...huskarl-core-v0.10.7) - 2026-10-09
+
+### Added
+
+- Support "any if present" option for JWT validator and introspection. ([#349](https://github.com/huskarl-rs/huskarl/pull/349))
+
+### Fixed
+
+- Separate refresh-token DPoP binding from access-token type ([#347](https://github.com/huskarl-rs/huskarl/pull/347))
+
+### Other
+
+- Implement experimental OpenID Connect Key Binding draft 03 ([#352](https://github.com/huskarl-rs/huskarl/pull/352))
+
 ## [0.10.6](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.5...huskarl-core-v0.10.6) - 2026-10-06
 
 ### Other
