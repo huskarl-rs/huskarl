@@ -131,6 +131,13 @@ pub struct AuthorizationServerMetadata {
     pub jwks_uri: Option<EndpointUrl>,
     /// The URL of the authorization server's OAuth 2.0 Dynamic Client Registration endpoint.
     pub registration_endpoint: Option<EndpointUrl>,
+    /// Whether the server supports retrieving client metadata from a `client_id`
+    /// URL (OAuth Client ID Metadata Document, draft-02 §6).
+    ///
+    /// Defaults to `false` when absent.
+    #[serde(default)]
+    #[builder(default)]
+    pub client_id_metadata_document_supported: bool,
     /// Array containing a list of the OAuth 2.0 "scope" values that this authorization server supports.
     pub scopes_supported: Option<Vec<String>>,
     /// Array containing a list of the RFC 9396 `authorization_details` type values
