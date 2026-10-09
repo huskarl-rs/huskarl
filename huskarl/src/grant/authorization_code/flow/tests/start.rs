@@ -1,5 +1,51 @@
 use super::*;
 
+#[cfg(feature = "experimental-oidc-key-binding")]
+#[rstest]
+#[case(true, vec!["openid", "bound_key"], true)]
+#[case(false, vec!["openid", "bound_key"], false)]
+#[case(true, vec!["openid"], false)]
+#[case(true, vec!["bound_key"], false)]
+#[case(true, vec![], false)]
+#[tokio::test]
+async fn openid_bound_key_request_is_persisted(
+    #[case] dpop_enabled: bool,
+    #[case] scopes: Vec<&str>,
+    #[case] expected: bool,
+) {
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+    let mut grant = Grant::builder()
+        .client_id("client")
+        .http_client(NoHttp)
+        .client_auth(NoAuth)
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+        .redirect_uri("http://127.0.0.1/cb")
+        .build()
+        .await
+        .unwrap();
+    make_oidc_capable(&mut grant);
+    if dpop_enabled {
+        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+        grant.dpop = Arc::new(crate::core::dpop::DPoP::builder().signer(key).build());
+    }
+    let output = grant
+        .start(StartInput::scope(
+            scopes.into_iter().map(String::from).collect(),
+        ))
+        .await
+        .unwrap();
+    let query: std::collections::HashMap<String, String> =
+        crate::core::oauth_form::from_str(output.authorization_url.query().unwrap()).unwrap();
+    assert_eq!(query.contains_key("dpop_jkt"), dpop_enabled);
+    assert_eq!(output.pending_state.openid_bound_key_requested, expected);
+
+    let json = serde_json::to_string(&output.pending_state).unwrap();
+    let restored: PendingState = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.openid_bound_key_requested, expected);
+}
+
 async fn start_url(grant: &Grant) -> String {
     grant
         .start(StartInput::scope(bon::vec!["profile"]))

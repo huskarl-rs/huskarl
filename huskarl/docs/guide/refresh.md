@@ -112,8 +112,10 @@ let token: &AccessToken = response.access_token();
 
 ## Refresh tokens when using DPoP
 
-Store the complete [`RefreshToken`](crate::token::RefreshToken), including its
-key thumbprint, rather than just the token string.
+Retain the returned [`RefreshToken`](crate::token::RefreshToken). If saving it,
+serialize and deserialize the complete object: this preserves the secret,
+key thumbprint, and OIDC request flag. `RefreshToken::new` does not restore
+that flag. Pending authorization state is no longer needed.
 
 For a public client using DPoP, keep the signing key available for as long as
 you use the refresh token, even if the server returned a bearer access token.
@@ -133,6 +135,16 @@ configuration](crate::_docs::guide::client_authentication). If you also use
 DPoP and the refresh token has no stored binding, configure the signer with
 the current key. A stored binding always requires its original key, including
 for confidential clients. See the explanation below for legacy saved bindings.
+
+For [OIDC key binding](crate::_docs::explanation::dpop_bindings#id-token-key-binding),
+both client types must retain the original private key, even if the OP ignored
+`bound_key` or issued bearer access tokens. Rotated refresh tokens preserve
+the binding.
+
+Refresh responses contain unvalidated ID tokens. When using `IdTokenValidator`,
+set `.openid_bound_key_requested(...)` from the refresh token used in the request
+to allow bound ID-token types. This requires `experimental-oidc-key-binding`;
+it does not check `cnf` or proof of possession.
 
 See [DPoP bindings and client authentication](crate::_docs::explanation::dpop_bindings)
 for how access-token and refresh-token bindings differ.

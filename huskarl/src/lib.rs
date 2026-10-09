@@ -76,6 +76,11 @@ Further grants — CIBA, provider-specific flows — can be implemented in this
 crate or by external crates. The [`registration`] module implements OAuth 2.0
 Dynamic Client Registration (RFC 7591).
 
+The opt-in `experimental-oidc-key-binding` Cargo feature targets OpenID Connect
+Key Binding draft 03 and is disabled by default. Its API, behavior, and
+experimental persisted state may change or be removed in a minor release;
+it is excluded from the stable API compatibility guarantee.
+
 */
 
 #![forbid(unsafe_code)]

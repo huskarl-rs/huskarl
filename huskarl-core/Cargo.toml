@@ -18,6 +18,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [features]
+# Unstable support forwarded by huskarl; disabled by default.
+experimental-oidc-key-binding = []
+
 default = ["url"]
 
 # When enabled, an EndpointUrl can be constructed from a url::Url.

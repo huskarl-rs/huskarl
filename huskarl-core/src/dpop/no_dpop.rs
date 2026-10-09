@@ -44,6 +44,23 @@ impl AuthorizationServerDPoP for NoDPoP {
         })
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        _method: &'a Method,
+        _uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        Box::pin(async move {
+            if dpop_jkt.is_some() || code_hash.is_some() {
+                Err(DPoPNotConfiguredSnafu.build().into())
+            } else {
+                Ok(None)
+            }
+        })
+    }
+
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         Arc::new(NoDPoP)
     }
@@ -99,6 +116,12 @@ mod tests {
 
         let _err = dpop
             .proof(&Method::POST, &uri, Some("jkt"))
+            .await
+            .unwrap_err();
+
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let _err = dpop
+            .proof_with_code_hash(&Method::POST, &uri, None, Some("code-hash"))
             .await
             .unwrap_err();
 

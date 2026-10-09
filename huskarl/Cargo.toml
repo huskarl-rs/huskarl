@@ -20,6 +20,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [features]
+# Draft 03 API and behavior may change or be removed in minor releases.
+experimental-oidc-key-binding = ["huskarl-core/experimental-oidc-key-binding"]
+
 default = ["default-jws-verifier-platform"]
 
 # When enabled, emits counters for grant and token-source outcomes.

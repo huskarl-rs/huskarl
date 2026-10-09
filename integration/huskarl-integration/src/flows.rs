@@ -46,7 +46,19 @@ fn auth_code(p: &dyn TestProvider, f: Features) -> BoxFuture<'_> {
     Box::pin(suite::auth_code_flow(p, f))
 }
 
+fn device(p: &dyn TestProvider, f: Features) -> BoxFuture<'_> {
+    Box::pin(suite::device_flow(p, f))
+}
+
 pub const FLOWS: &[Flow] = &[
+    Flow {
+        name: "device",
+        body: device,
+        variants: &[Variant {
+            name: "bound_key_refresh",
+            required: Features::DEVICE.union(Features::OPENID_KEY_BINDING),
+        }],
+    },
     Flow {
         name: "client_credentials",
         body: client_credentials,
@@ -101,6 +113,10 @@ pub const FLOWS: &[Flow] = &[
         name: "auth_code",
         body: auth_code,
         variants: &[
+            Variant {
+                name: "bound_key_refresh",
+                required: Features::AUTH_CODE.union(Features::OPENID_KEY_BINDING),
+            },
             Variant {
                 name: "direct",
                 required: Features::AUTH_CODE,

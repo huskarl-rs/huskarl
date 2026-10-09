@@ -2,14 +2,17 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
 use http::Method;
 use huskarl::{
     authorizer::HttpAuthorizer,
     cache::{GrantTokenSource, InMemoryRefreshTokenStore, InMemoryTokenCache},
     core::{
         client_auth::{Audience, ClientAuthentication, ClientSecret, JwtBearer},
+        crypto::verifier::JwsVerifierFactory,
         dpop::DPoP,
-        jwk::JwksSource,
+        jwk::{JwksSource, PublicJwk},
+        jwt::parse_compact_jws,
         secrets::{ProvidedSecret, SecretString},
         server_metadata::AuthorizationServerMetadata,
     },
@@ -17,10 +20,15 @@ use huskarl::{
         authorization_code::{AuthorizationCodeGrant, StartInput, StartOutput, bind_loopback},
         client_credentials::{ClientCredentialsGrant, ClientCredentialsGrantParameters},
         core::OAuth2ExchangeGrant,
-        refresh::RefreshGrantParameters,
+        device_authorization::{self, DeviceAuthorizationGrant, PollResult},
+        refresh::{RefreshGrant, RefreshGrantParameters},
     },
+    token::id_token::IdTokenValidator,
 };
-use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+use huskarl_crypto_native::{
+    NativeVerifierPlatform,
+    asymmetric::signer::{GenerateAlgorithm, PrivateKey},
+};
 use huskarl_reqwest::{ReqwestClient, mtls::MtlsPem};
 use huskarl_resource_server::{
     core::jwt::validator::ClaimCheck,
@@ -343,6 +351,15 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         }
     };
 
+    let bound_key = features.contains(Features::OPENID_KEY_BINDING);
+    let proof_key = bound_key.then(|| {
+        PrivateKey::generate(GenerateAlgorithm::Es256, None).expect("generate binding key")
+    });
+    let expected_jkt = proof_key
+        .as_ref()
+        .map(|key| key.as_private_jwk().public_jwk().thumbprint());
+    let dpop = proof_key.map(|key| DPoP::builder().signer(key).build());
+
     let jar_key = features.contains(Features::JAR).then(|| {
         PrivateKey::generate(GenerateAlgorithm::Es256, Some("jar-key".to_owned()))
             .expect("generate JAR key")
@@ -371,6 +388,7 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         .redirect_uri(&redirect_uri)
         // jws_verifier_factory defaults to a JwksSource wired from http_client.
         .maybe_jar(jar_key)
+        .maybe_dpop(dpop)
         // Knob defaults to true, so force off explicitly for the non-PAR variants.
         .prefer_pushed_authorization_requests(features.contains(Features::PAR))
         .build()
@@ -382,10 +400,16 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         pending_state,
         ..
     } = grant
-        .start(StartInput::scope(bon::vec!["openid"]))
+        .start(StartInput::scope(if bound_key {
+            bon::vec!["openid", "bound_key", "offline_access"]
+        } else {
+            bon::vec!["openid"]
+        }))
         .await
         .expect("start auth-code flow");
 
+    assert_eq!(pending_state.openid_bound_key_requested, bound_key);
+    assert_eq!(pending_state.dpop_jkt, expected_jkt);
     let authorization_url = authorization_url.to_string();
 
     // Guard against a false green: assert each variant changed the wire shape.
@@ -431,7 +455,23 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
     })
     .await
     .expect("auth-code flow timed out — login likely did not reach the loopback callback");
-    let id_token = token_and_id.expect("complete auth-code flow").id_token;
+    let completed = token_and_id.expect("complete auth-code flow");
+    if let Some(expected_jkt) = expected_jkt {
+        // Completion already validated the initial ID token; the helper also
+        // checks its raw wire shape, since the typed confirmation claim does not
+        // expose jwk.
+        assert_bound_refreshes(
+            provider,
+            &metadata,
+            &http,
+            &client.client_id,
+            grant.to_refresh_grant(),
+            completed.token_response.clone(),
+            &expected_jkt,
+        )
+        .await;
+    }
+    let id_token = completed.id_token;
 
     let id_token = id_token.expect("id_token present for the openid scope");
     assert!(
@@ -441,6 +481,147 @@ pub async fn auth_code_flow(provider: &dyn TestProvider, features: Features) {
         client.client_id
     );
     assert!(id_token.sub.is_some(), "id_token should carry a subject");
+}
+
+/// Device authorization with a pending poll, user approval, and bound refresh.
+pub async fn device_flow(provider: &dyn TestProvider, features: Features) {
+    let (client, secret) =
+        provision_with_secret(provider, ClientSpec::builder().features(features).build()).await;
+    let http = http_client();
+    let metadata = fetch_metadata(provider, &http, Transport::Plain).await;
+    let key =
+        PrivateKey::generate(GenerateAlgorithm::Es256, None).expect("generate device binding key");
+    let expected_jkt = key.as_private_jwk().public_jwk().thumbprint();
+    let grant = DeviceAuthorizationGrant::builder_from_metadata(&metadata)
+        .expect("device authorization endpoint")
+        .client_id(&client.client_id)
+        .http_client(http.clone())
+        .client_auth(ClientSecret::new(ProvidedSecret::new(secret)))
+        .dpop(DPoP::builder().signer(key).build())
+        .build();
+    let started = grant
+        .start(device_authorization::StartInput::scope(bon::vec![
+            "openid",
+            "bound_key",
+            "offline_access"
+        ]))
+        .await
+        .expect("start device authorization");
+    assert!(started.pending_state.openid_bound_key_requested);
+    assert_eq!(
+        started.pending_state.dpop_jkt.as_deref(),
+        Some(expected_jkt.as_str())
+    );
+    let persisted = serde_json::to_vec(&started.pending_state).expect("serialize device state");
+    let mut pending = serde_json::from_slice::<device_authorization::PendingState>(&persisted)
+        .expect("restore device state");
+    let response = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+        tokio::time::sleep(std::time::Duration::from_secs(pending.interval_secs.into())).await;
+        assert!(matches!(
+            grant
+                .poll(&mut pending, None)
+                .await
+                .expect("poll before approval"),
+            PollResult::Pending
+        ));
+        provider
+            .approve_device(&started.verification_uri, &started.user_code)
+            .await
+            .expect("approve device");
+        grant
+            .poll_to_completion(&mut pending, None)
+            .await
+            .expect("complete device authorization")
+    })
+    .await
+    .expect("device flow timed out");
+    // The device grant exposes the raw ID token. Validation here is an explicit
+    // interoperability check, not automatic device-grant behavior.
+    assert_bound_refreshes(
+        provider,
+        &metadata,
+        &http,
+        &client.client_id,
+        grant.to_refresh_grant(),
+        response,
+        &expected_jkt,
+    )
+    .await;
+}
+
+async fn assert_bound_refreshes(
+    provider: &dyn TestProvider,
+    metadata: &AuthorizationServerMetadata,
+    http: &ReqwestClient,
+    client_id: &str,
+    refresh_grant: RefreshGrant,
+    mut response: huskarl::grant::core::TokenResponse,
+    expected_jkt: &str,
+) {
+    let verifier = JwksSource::builder()
+        .http_client(http.clone())
+        .build()
+        .build(metadata.jwks_uri.as_ref(), Arc::new(NativeVerifierPlatform))
+        .await
+        .expect("build ID-token verifier");
+    let validator = IdTokenValidator::builder()
+        .verifier(verifier)
+        .issuer(metadata.issuer.clone())
+        .audience(client_id)
+        .openid_bound_key_requested(true)
+        .build();
+    let access_token_type = provider.bound_key_access_token_type();
+    let initial = validator
+        .validate(response.id_token().expect("initial ID token"), None)
+        .await
+        .expect("validate initial ID token");
+    assert!(initial.sub.is_some());
+    assert_bound_id_token(&response, expected_jkt, access_token_type);
+    for _ in 0..2 {
+        let refresh = response
+            .refresh_token()
+            .expect("offline_access refresh token");
+        assert!(refresh.openid_bound_key_requested());
+        assert_eq!(refresh.dpop_jkt(), Some(expected_jkt));
+        // Exercise the state a caller would restore after a process restart.
+        let persisted = serde_json::to_vec(refresh).expect("serialize refresh state");
+        let restored = serde_json::from_slice(&persisted).expect("restore refresh state");
+        response = refresh_grant
+            .exchange(RefreshGrantParameters::refresh_token(restored))
+            .await
+            .expect("refresh bound ID token");
+        let validated = validator
+            .validate(response.id_token().expect("refreshed ID token"), None)
+            .await
+            .expect("validate refreshed ID token");
+        assert_eq!(validated.sub, initial.sub);
+        assert_bound_id_token(&response, expected_jkt, access_token_type);
+    }
+}
+
+// These assertions test the OP's response, not a consumer-side PoP protocol.
+fn assert_bound_id_token(
+    response: &huskarl::grant::core::TokenResponse,
+    expected_jkt: &str,
+    access_token_type: Option<&str>,
+) {
+    if let Some(access_token_type) = access_token_type {
+        assert_eq!(response.access_token().token_type(), access_token_type);
+    }
+    let raw = response.id_token().expect("bound ID token").token();
+    let parsed = parse_compact_jws::<(), serde_json::Value>(raw).expect("parse ID token");
+    assert_eq!(parsed.header.typ.as_deref(), Some("dpop+id_token"));
+    let payload = BASE64_URL_SAFE_NO_PAD
+        .decode(raw.split('.').nth(1).unwrap())
+        .unwrap();
+    let claims: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    let jwk = &claims["cnf"]["jwk"];
+    assert!(
+        jwk.get("d").is_none(),
+        "ID token must contain only the public key"
+    );
+    let public: PublicJwk = serde_json::from_value(jwk.clone()).expect("cnf.jwk public key");
+    assert_eq!(public.thumbprint(), expected_jkt);
 }
 
 fn redirect_uri_port(uri: &str) -> Option<u16> {

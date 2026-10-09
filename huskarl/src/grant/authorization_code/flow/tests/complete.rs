@@ -240,6 +240,8 @@ fn pending(openid_requested: bool) -> PendingState {
         nonce: None,
         dpop_jkt: None,
         openid_requested,
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        openid_bound_key_requested: false,
         response_mode: None,
     }
 }
@@ -608,4 +610,205 @@ async fn jarm_alg_outside_allowlist_rejected() {
         matches!(complete_cause(&err), CompleteError::JarmValidation { .. }),
         "got {err:?}"
     );
+}
+
+/// Records token proofs and challenges the first attempt for a nonce.
+#[derive(Clone)]
+struct CodeHashHttp {
+    proofs: Arc<Mutex<Vec<serde_json::Value>>>,
+    compact_proofs: Arc<Mutex<Vec<String>>>,
+    response: Bytes,
+}
+
+impl HttpClient for CodeHashHttp {
+    fn execute(
+        &self,
+        request: http::Request<Bytes>,
+        _idempotency: Idempotency,
+    ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+        let proof = request.headers()["DPoP"].to_str().unwrap();
+        self.compact_proofs.lock().unwrap().push(proof.to_owned());
+        let claims: serde_json::Value = serde_json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(proof.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        let form: std::collections::HashMap<String, String> =
+            crate::core::oauth_form::from_str(std::str::from_utf8(request.body()).unwrap())
+                .unwrap();
+        assert_eq!(form["code"], "SplxlOBeZQQYbYS6WxSbIA");
+        assert!(!form.contains_key("c_s256"));
+        let mut proofs = self.proofs.lock().unwrap();
+        let first = proofs.is_empty();
+        proofs.push(claims);
+        let mut headers = http::HeaderMap::new();
+        let (status, body) = if first {
+            headers.insert("DPoP-Nonce", "exchange-nonce".parse().unwrap());
+            (
+                http::StatusCode::BAD_REQUEST,
+                Bytes::from_static(br#"{"error":"use_dpop_nonce"}"#),
+            )
+        } else {
+            (http::StatusCode::OK, self.response.clone())
+        };
+        Box::pin(async move {
+            Ok(HttpResponse {
+                status,
+                headers,
+                body,
+            })
+        })
+    }
+}
+
+/// Checks that proofs retain the original key after rotation and across a
+/// nonce retry, and which ID-token types completion accepts for each request.
+#[rstest]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::bound_key(true, "dpop+id_token", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::bound_key_media_type(true, "application/dpop+id_token", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::provider_ignores_scope(true, "JWT", true)
+)]
+#[case::ordinary_oidc(false, "JWT", true)]
+#[cfg_attr(
+    not(feature = "experimental-oidc-key-binding"),
+    case::disabled_scope(true, "JWT", true)
+)]
+#[case::unsolicited_bound_token(false, "dpop+id_token", false)]
+#[case::access_token_type(true, "at+jwt", false)]
+#[case::proof_type(true, "dpop+jwt", false)]
+#[tokio::test]
+async fn bound_key_exchange_proofs_and_id_token_type(
+    #[case] bound_key: bool,
+    #[case] token_type: &str,
+    #[case] accepted: bool,
+) {
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+    use crate::core::crypto::signer::{
+        AsymmetricJwsSignerSelector as _, JwsSignerSelector as _, MultiKeySigner,
+    };
+
+    let (mut grant, issuer_key) = jarm_grant("").await;
+    let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+    let original_jkt = key.as_private_jwk().public_jwk().thumbprint();
+    let original = key.select_asymmetric_signer().await;
+    let claims = if token_type.ends_with("dpop+id_token") {
+        serde_json::json!({"cnf": {"jwk": key.as_private_jwk().public_jwk()}})
+    } else {
+        serde_json::json!({})
+    };
+    let id_token = crate::core::jwt::Jwt::builder()
+        .typ(token_type)
+        .iss("https://as.example.com".to_owned())
+        .aud(vec!["client".to_owned()])
+        .sub("user".to_owned())
+        .issued_now_expires_after(Duration::from_mins(5))
+        .claims(claims)
+        .build()
+        .to_jws_compact(&*issuer_key.select_signer().await)
+        .await
+        .unwrap();
+    let http = CodeHashHttp {
+        proofs: Arc::default(),
+        compact_proofs: Arc::default(),
+        response: serde_json::to_vec(&serde_json::json!({
+            "access_token": "token",
+            "token_type": "DPoP",
+            "id_token": id_token.expose_secret(),
+        }))
+        .unwrap()
+        .into(),
+    };
+    grant.http_client = Arc::new(http.clone());
+    grant.send_oidc_nonce = Some(false);
+    grant.dpop = Arc::new(crate::core::dpop::DPoP::builder().signer(key).build());
+    let scopes = if bound_key {
+        bon::vec!["openid", "bound_key"]
+    } else {
+        bon::vec!["openid"]
+    };
+    let started = grant.start(StartInput::scope(scopes)).await.unwrap();
+    // Rotate the default after authorization, retaining the key bound to the code.
+    let replacement = PrivateKey::generate(GenerateAlgorithm::Es256, None)
+        .unwrap()
+        .select_asymmetric_signer()
+        .await;
+    grant.dpop = Arc::new(
+        crate::core::dpop::DPoP::builder()
+            .signer(MultiKeySigner::new(replacement, vec![original]))
+            .build(),
+    );
+    // Exercise persisted callback state rather than the original in-memory value.
+    let state = serde_json::from_str::<PendingState>(
+        &serde_json::to_string(&started.pending_state).unwrap(),
+    )
+    .unwrap();
+    let output = grant
+        .complete(
+            &state,
+            CompleteInput::builder()
+                .code("SplxlOBeZQQYbYS6WxSbIA")
+                .state(state.state.clone())
+                .build(),
+        )
+        .await;
+    if accepted {
+        let output = output.unwrap();
+        assert!(output.id_token.is_some());
+        assert_eq!(
+            output.token_response.id_token().unwrap().token(),
+            id_token.expose_secret(),
+        );
+    } else {
+        let error = output.unwrap_err();
+        assert!(
+            matches!(
+                error.cause().downcast_ref::<FlowError>(),
+                Some(FlowError::ValidatingIdToken {
+                    source: crate::token::id_token::IdTokenValidationError::Jwt {
+                        source: crate::core::jwt::validator::JwtValidationError::InvalidTokenType { .. }
+                    }
+                })
+            ),
+            "{error:?}"
+        );
+    }
+    let compact_proofs = std::mem::take(&mut *http.compact_proofs.lock().unwrap());
+    let proof_validator =
+        huskarl_resource_server::validator::dpop_proof::DPoPProofValidator::builder()
+            .jws_verifier_platform(Arc::new(huskarl_crypto_native::NativeVerifierPlatform))
+            .build();
+    for compact in compact_proofs {
+        let proof = proof_validator.validate(&compact).await.unwrap();
+        assert_eq!(proof.thumbprint.as_deref(), Some(original_jkt.as_str()));
+    }
+    let proofs = http.proofs.lock().unwrap();
+    assert_eq!(proofs.len(), 2);
+    for proof in proofs.iter() {
+        if bound_key && cfg!(feature = "experimental-oidc-key-binding") {
+            // OIDC Key Binding section 2.3 example: full SHA-256, no padding.
+            assert_eq!(
+                proof["c_s256"],
+                "o1uBp9eSe3DsmScN0jYriFgKKFdK-BLywC9WRpV5GG8"
+            );
+        } else {
+            assert!(proof.get("c_s256").is_none());
+        }
+        assert_eq!(proof["htm"], "POST");
+        assert_eq!(proof["htu"], "https://as.example.com/token");
+        assert!(proof.get("ath").is_none());
+    }
+    assert!(proofs[0].get("nonce").is_none());
+    assert_eq!(proofs[1]["nonce"], "exchange-nonce");
+    assert!(proofs[0]["jti"].is_string());
+    assert_ne!(proofs[0]["jti"], proofs[1]["jti"]);
 }

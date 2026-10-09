@@ -52,6 +52,19 @@ pub trait AuthorizationServerDPoP: sealed::Sealed + MaybeSendSync {
         dpop_jkt: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
 
+    /// Creates a token-endpoint proof with an optional OIDC Key Binding
+    /// `c_s256` claim: the base64url-encoded SHA-256 hash of the authorization
+    /// `code` or `device_code`, without padding. Pass `None` for ordinary
+    /// OAuth requests.
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
+
     /// Returns the corresponding resource server variant.
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP>;
 
@@ -105,6 +118,17 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for &T {
         (**self).proof(method, uri, dpop_jkt)
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_with_code_hash(method, uri, dpop_jkt, code_hash)
+    }
+
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         (**self).to_resource_server_dpop()
     }
@@ -135,6 +159,17 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Box<T> {
         (**self).proof(method, uri, dpop_jkt)
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_with_code_hash(method, uri, dpop_jkt, code_hash)
+    }
+
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         (**self).to_resource_server_dpop()
     }
@@ -163,6 +198,17 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Arc<T> {
         dpop_jkt: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         (**self).proof(method, uri, dpop_jkt)
+    }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_with_code_hash(method, uri, dpop_jkt, code_hash)
     }
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {

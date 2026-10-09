@@ -168,6 +168,9 @@ impl AuthorizationCodeGrant {
         };
 
         let dpop_jkt = self.dpop.get_current_thumbprint().await;
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let openid_bound_key_requested = dpop_jkt.is_some()
+            && crate::grant::core::requests_openid_bound_key(start_input.scope.as_deref());
 
         let payload = build_authorization_payload(
             self,
@@ -207,6 +210,8 @@ impl AuthorizationCodeGrant {
                 // The raw scope fact, not `is_oidc`: completion re-resolves
                 // against the grant's `oidc` override.
                 openid_requested: start_input.requests_openid(),
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                openid_bound_key_requested,
                 state: start_input.state,
                 nonce: nonce_sent.then_some(start_input.nonce),
                 dpop_jkt,
@@ -417,6 +422,8 @@ impl AuthorizationCodeGrant {
         // default key has rotated. Proof creation fails before HTTP if absent.
         let token = self
             .exchange(AuthorizationCodeGrantParameters {
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                openid_bound_key_requested: pending_state.openid_bound_key_requested,
                 dpop_jkt: pending_state.dpop_jkt.clone(),
                 code,
                 pkce_verifier: pending_state.pkce_verifier.clone(),
@@ -445,7 +452,11 @@ impl AuthorizationCodeGrant {
                 .ok_or_else(|| Error::from(IdTokenIssuerNotConfiguredSnafu.build()))?
                 .to_owned();
 
-            let validator = IdTokenValidator::builder()
+            let validator = IdTokenValidator::builder();
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            let validator =
+                validator.openid_bound_key_requested(pending_state.openid_bound_key_requested);
+            let validator = validator
                 .verifier(verifier)
                 .issuer(issuer)
                 .audience(self.client_id.clone())

@@ -180,6 +180,11 @@ impl OAuth2ExchangeGrant for RefreshGrant {
             authorization_details: params.authorization_details,
         }
     }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn openid_bound_key_requested(&self, params: &Self::Parameters) -> bool {
+        params.refresh_token.openid_bound_key_requested()
+    }
 }
 
 /// Parameters when requesting a token using the refresh grant.

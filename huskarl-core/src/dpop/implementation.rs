@@ -39,6 +39,37 @@ pub struct DPoP {
     nonce: Arc<Mutex<Option<Arc<String>>>>,
 }
 
+impl DPoP {
+    fn create_proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        Box::pin(async move {
+            // See comment in `update_nonce` for why poison recovery is intentional here.
+            let nonce = self
+                .nonce
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+
+            let Some(dpop_jkt) = dpop_jkt else {
+                return Err(Error::from(DPoPKeyError::NoThumbprint));
+            };
+
+            let signer = self
+                .signer
+                .select_signer_by_thumbprint(dpop_jkt)
+                .await
+                .ok_or_else(|| Error::from(DPoPKeyError::NoMatchingKey))?;
+
+            sign_proof(&*signer, method, uri, None, nonce, code_hash).await
+        })
+    }
+}
+
 impl AuthorizationServerDPoP for DPoP {
     fn update_nonce(&self, nonce: String) {
         // If the lock is poisoned (a thread panicked while holding it), we recover
@@ -65,26 +96,18 @@ impl AuthorizationServerDPoP for DPoP {
         uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
-        Box::pin(async move {
-            // See comment in `update_nonce` for why poison recovery is intentional here.
-            let nonce = self
-                .nonce
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
+        self.create_proof(method, uri, dpop_jkt, None)
+    }
 
-            let Some(dpop_jkt) = dpop_jkt else {
-                return Err(Error::from(DPoPKeyError::NoThumbprint));
-            };
-
-            let signer = self
-                .signer
-                .select_signer_by_thumbprint(dpop_jkt)
-                .await
-                .ok_or_else(|| Error::from(DPoPKeyError::NoMatchingKey))?;
-
-            sign_proof(&*signer, method, uri, None, nonce).await
-        })
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        self.create_proof(method, uri, dpop_jkt, code_hash)
     }
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
@@ -145,6 +168,18 @@ impl AuthorizationServerDPoP for SessionKeyedDPoP {
         _method: &'a Method,
         _uri: &'a Uri,
         _dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        // Reached only when no per-session key was bound.
+        Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
+    }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        _method: &'a Method,
+        _uri: &'a Uri,
+        _dpop_jkt: Option<&'a str>,
+        _code_hash: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         // Reached only when no per-session key was bound.
         Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
@@ -248,6 +283,7 @@ impl ResourceServerDPoP for ResourceDPoP {
                 uri,
                 Some(access_token.expose_secret()),
                 nonce,
+                None,
             )
             .await
         })
@@ -310,6 +346,7 @@ async fn sign_proof(
     htu: &Uri,
     token: Option<&str>,
     nonce: Option<Arc<String>>,
+    code_hash: Option<&str>,
 ) -> Result<Option<SecretString>, Error> {
     #[derive(Debug, Clone, Serialize)]
     struct DPoPClaims<'a> {
@@ -317,6 +354,8 @@ async fn sign_proof(
         htu: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         ath: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        c_s256: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         nonce: Option<Arc<String>>,
     }
@@ -327,6 +366,7 @@ async fn sign_proof(
             .context(NormalizingUriSnafu)?
             .to_string(),
         ath: token.map(hash_access_token_for_dpop),
+        c_s256: code_hash,
         nonce,
     };
 

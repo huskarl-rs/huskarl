@@ -45,3 +45,26 @@ pub(crate) fn join_space(items: Option<&[String]>) -> Option<String> {
 
     (!joined.is_empty()).then_some(joined)
 }
+
+/// Whether `scopes` request OpenID Connect Key Binding: both `openid` and
+/// `bound_key` must be present.
+#[cfg(feature = "experimental-oidc-key-binding")]
+pub(crate) fn requests_openid_bound_key(scopes: Option<&[String]>) -> bool {
+    scopes.is_some_and(|scopes| {
+        scopes.iter().any(|scope| scope == "openid")
+            && scopes.iter().any(|scope| scope == "bound_key")
+    })
+}
+
+/// The OpenID Connect Key Binding `c_s256` proof claim: the SHA-256 hash of
+/// the authorization `code` or `device_code`, base64url-encoded without padding.
+#[cfg(feature = "experimental-oidc-key-binding")]
+pub(crate) fn openid_code_hash(code: &str) -> String {
+    use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
+    use sha2::{Digest as _, Sha256};
+
+    BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(code.as_bytes()))
+}
+
+#[cfg(all(test, not(feature = "experimental-oidc-key-binding")))]
+mod key_binding_disabled_tests;

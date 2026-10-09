@@ -9,9 +9,9 @@ generation, access-token binding, and nonce handling all follow from it.
 
 [`DPoP`](crate::core::dpop::DPoP) wraps an asymmetric signing key. Keep the
 key available for as long as you use tokens bound to it. If a public client's
-refresh tokens must survive a restart, load a stored key instead of generating
-a new one at startup. For tokens used only during the current process, generate
-a key as follows:
+refresh tokens, or refresh tokens from an OIDC key-binding flow, must survive a
+restart, load a stored key instead of generating a new one at startup. For
+tokens used only during the current process, generate a key as follows:
 
 ```rust
 use huskarl::core::dpop::DPoP;
@@ -122,11 +122,20 @@ when it refreshes a token.
 
 For a public client, retain the key used to obtain the refresh token. For a
 confidential client, keep client authentication configured; refresh requests
-use the current DPoP signing key. Follow the [refresh
+use the current DPoP signing key unless OIDC Key Binding was requested. In
+that case, both client types retain the original key. Follow the [refresh
 guide](crate::_docs::guide::refresh) to store the token and retain the required
 keys. See [DPoP bindings and client
 authentication](crate::_docs::explanation::dpop_bindings) for the reason these
 clients behave differently.
+
+## Request key-bound ID tokens
+
+Enable `experimental-oidc-key-binding` and request `openid` and `bound_key` in
+an [authorization-code](crate::_docs::guide::authorization_code) or
+[device](crate::_docs::guide::device_authorization) flow. Keep the original
+private key available for authorization and refreshes. See
+[key-binding behavior and draft compatibility](crate::_docs::explanation::dpop_bindings#id-token-key-binding).
 
 ## Validating DPoP on the server side
 

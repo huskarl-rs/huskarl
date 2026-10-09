@@ -1948,6 +1948,7 @@ dependencies = [
 name = "huskarl-integration"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "bon",
  "http",
  "huskarl",

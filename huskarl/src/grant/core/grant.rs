@@ -80,6 +80,22 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         self.is_public_client()
     }
 
+    /// Returns the OIDC Key Binding `c_s256` code hash, when requested.
+    /// Hash the authorization `code` or `device_code`, depending on the grant,
+    /// with SHA-256 and encode as base64url without padding.
+    /// Ordinary OAuth exchanges omit this claim.
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn request_dpop_code_hash(&self, _params: &Self::Parameters) -> Option<String> {
+        None
+    }
+
+    /// Whether this exchange belongs to an authentication that requested OIDC
+    /// Key Binding. Retains the refresh-token proof key for both client types.
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn openid_bound_key_requested(&self, _params: &Self::Parameters) -> bool {
+        false
+    }
+
     /// Returns the token endpoint URL as published in authorization server
     /// metadata.
     ///
@@ -171,26 +187,32 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             let http_client = self.http_client();
             let endpoint = self.effective_token_endpoint();
             let bind_refresh_token = self.bind_refresh_token(&params);
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            let dpop_code_hash = self.request_dpop_code_hash(&params);
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            let openid_bound_key_requested = self.openid_bound_key_requested(&params);
             let form = self.build_form(params);
 
             let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
                 let auth_params = self.authentication_params().await?;
 
-                OAuth2FormRequest::builder()
+                let request = OAuth2FormRequest::builder()
                     .auth_params(auth_params)
                     .dpop(self.dpop())
                     .maybe_dpop_jkt(dpop_jkt.as_deref())
                     .form(&form)
-                    .uri(endpoint.as_uri())
-                    .build()
-                    .execute(http_client)
-                    .await
+                    .uri(endpoint.as_uri());
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                let request = request.maybe_dpop_code_hash(dpop_code_hash.as_deref());
+                request.build().execute(http_client).await
             })?;
 
             let context = TokenResponseContext::builder()
                 .maybe_dpop_jkt(dpop_jkt)
-                .bind_refresh_token(bind_refresh_token)
-                .build();
+                .bind_refresh_token(bind_refresh_token);
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            let context = context.openid_bound_key_requested(openid_bound_key_requested);
+            let context = context.build();
             Ok(raw_token_response.into_token_response_with_context(
                 context,
                 crate::core::platform::SystemTime::now(),

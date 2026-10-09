@@ -156,15 +156,19 @@ impl DeviceAuthorizationGrant {
     /// HTTP request, or response parsing fails, or if the endpoint rejects the
     /// request.
     pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
+        let dpop_jkt = self.dpop().get_current_thumbprint().await;
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let openid_bound_key_requested = dpop_jkt.is_some()
+            && crate::grant::core::requests_openid_bound_key(start_input.scope.as_deref());
         let payload = DeviceAuthorizationRequest {
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            dpop_jkt: dpop_jkt.as_deref().filter(|_| openid_bound_key_requested),
             scope: crate::grant::core::join_space(start_input.scope.as_deref()),
             resource: start_input.resource.as_deref(),
             authorization_details: start_input.authorization_details.as_deref(),
         };
 
         let device_auth_endpoint = &self.effective_device_authorization_endpoint;
-
-        let dpop_jkt = self.dpop().get_current_thumbprint().await;
 
         let response: DeviceAuthorizationResponse = with_dpop_nonce_retry!({
             // The assertion is sent to the device authorization endpoint, not
@@ -209,6 +213,10 @@ impl DeviceAuthorizationGrant {
             .pending_state(PendingState {
                 device_code: response.device_code,
                 interval_secs: response.interval,
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                dpop_jkt: dpop_jkt.filter(|_| openid_bound_key_requested),
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                openid_bound_key_requested,
             })
             .build())
     }
@@ -282,6 +290,10 @@ impl DeviceAuthorizationGrant {
         let token_or_err = self
             .exchange(super::grant::DeviceAuthorizationGrantParameters {
                 device_code: pending_state.device_code.clone(),
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                dpop_jkt: pending_state.dpop_jkt.clone(),
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                openid_bound_key_requested: pending_state.openid_bound_key_requested,
                 resource,
             })
             .await;
@@ -310,6 +322,13 @@ impl DeviceAuthorizationGrant {
 #[derive(Debug, Clone, Builder)]
 #[builder(on(String, into))]
 pub struct DeviceAuthorizationGrantParameters {
+    /// The proof key selected by the device authorization request, when bound.
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    dpop_jkt: Option<String>,
+    /// Whether the device authorization requested `openid bound_key` with `DPoP`.
+    #[builder(default)]
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    openid_bound_key_requested: bool,
     /// The device verification code, `device_code`, from the device authorization response.
     device_code: String,
     /// The target resource(s) for the access token.
@@ -330,6 +349,22 @@ impl OAuth2ExchangeGrant for DeviceAuthorizationGrant {
     type Parameters = DeviceAuthorizationGrantParameters;
     type Form<'a> = DeviceAuthorizationGrantForm;
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn bound_dpop_jkt(params: &Self::Parameters) -> Option<&str> {
+        params.dpop_jkt.as_deref()
+    }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn request_dpop_code_hash(&self, params: &Self::Parameters) -> Option<String> {
+        params
+            .openid_bound_key_requested
+            .then(|| crate::grant::core::openid_code_hash(&params.device_code))
+    }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn openid_bound_key_requested(&self, params: &Self::Parameters) -> bool {
+        params.openid_bound_key_requested
+    }
     fn client_id(&self) -> Option<&str> {
         Some(&self.client_id)
     }
@@ -436,6 +471,9 @@ pub const DEFAULT_MAX_TRANSIENT_POLL_FAILURES: u32 = 5;
 
 #[derive(Debug, Serialize)]
 struct DeviceAuthorizationRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    dpop_jkt: Option<&'a str>,
     scope: Option<String>,
     resource: Option<&'a [String]>,
     authorization_details: Option<&'a [crate::core::AuthorizationDetail]>,
@@ -463,6 +501,16 @@ pub struct StartOutput {
 #[builder(on(String, into))]
 #[non_exhaustive]
 pub struct PendingState {
+    /// Proof-key thumbprint sent as `dpop_jkt` when requesting OIDC Key Binding.
+    #[serde(default)]
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    pub dpop_jkt: Option<String>,
+    /// Whether `openid bound_key` was requested with a `DPoP` key.
+    /// Records the request, not whether the OP established ID-token binding.
+    #[serde(default)]
+    #[builder(default)]
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    pub openid_bound_key_requested: bool,
     /// The device verification code.
     pub device_code: String,
     /// The minimum amount of time in seconds the client should wait between polling requests.
@@ -474,10 +522,18 @@ pub struct PendingState {
 // the token exchange (RFC 8628 §5.2), so it may not appear in `Debug` output.
 impl core::fmt::Debug for PendingState {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PendingState")
+        let mut debug = f.debug_struct("PendingState");
+        debug
             .field("device_code", &"[REDACTED]")
-            .field("interval_secs", &self.interval_secs)
-            .finish()
+            .field("interval_secs", &self.interval_secs);
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        debug
+            .field(
+                "openid_bound_key_requested",
+                &self.openid_bound_key_requested,
+            )
+            .field("dpop_jkt", &self.dpop_jkt);
+        debug.finish()
     }
 }
 
@@ -614,6 +670,10 @@ mod tests {
 
     fn pending() -> PendingState {
         PendingState {
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            dpop_jkt: None,
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            openid_bound_key_requested: false,
             device_code: "dev-code".to_string(),
             interval_secs: 5,
         }
@@ -653,6 +713,8 @@ mod tests {
                 .build(),
         ];
         let payload = DeviceAuthorizationRequest {
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            dpop_jkt: None,
             scope: Some("openid".into()),
             resource: None,
             authorization_details: Some(&details),
@@ -879,6 +941,10 @@ mod tests {
             r#"{"access_token":"at-123","token_type":"bearer"}"#,
         );
         let mut state = PendingState {
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            dpop_jkt: None,
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            openid_bound_key_requested: false,
             device_code: "dev-code".to_string(),
             interval_secs: 0,
         };
@@ -1114,3 +1180,8 @@ mod tests {
         assert_eq!(terminal.retry_advice(), RetryAdvice::No);
     }
 }
+
+#[cfg(test)]
+#[cfg(feature = "experimental-oidc-key-binding")]
+#[path = "key_binding_tests.rs"]
+mod key_binding_tests;

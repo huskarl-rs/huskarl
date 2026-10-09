@@ -14,12 +14,13 @@ node-oidc = []
 okta = []
 
 [dependencies]
-huskarl = { workspace = true, default-features = true, features = ["authorization-flow-loopback"] }
+huskarl = { workspace = true, default-features = true, features = ["authorization-flow-loopback", "experimental-oidc-key-binding"] }
 # DPoP proof signing keys for the DPoP variant.
 huskarl-crypto-native = { workspace = true }
 huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }
 huskarl-resource-server = { path = "../../huskarl-resource-server", default-features = true }
 huskarl-testkit = { path = "../huskarl-testkit" }
+base64 = { workspace = true }
 bon = { workspace = true }
 http = "1"
 # Custom `harness = false` test harness for the per-provider `tests/*.rs`.

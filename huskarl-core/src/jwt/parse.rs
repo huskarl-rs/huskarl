@@ -58,6 +58,52 @@ pub fn parse_compact_jws<
 >(
     token: &str,
 ) -> Result<ParsedJws<H, C>, JwsParseError> {
+    parse_with_payload(token, |_| Ok(())).map(|(parsed, ())| parsed)
+}
+
+/// Parses a compact JWS and its `cnf` claim into a caller-selected type.
+///
+/// Use this for confirmation methods not represented by [`crate::jwt::ConfirmationClaim`].
+/// The returned JWS retains the usual registered claims and can be passed to
+/// [`JwtValidator::validate_parsed_jws`](crate::jwt::validator::JwtValidator::validate_parsed_jws).
+/// Neither the token nor the separately returned confirmation is authenticated
+/// until that validation succeeds. Missing or null `cnf` returns `None`.
+///
+/// This experimental compatibility bridge may be removed when the shared
+/// confirmation type supports these methods in a future breaking release.
+///
+/// # Errors
+///
+/// Returns an error for malformed compact JWS data or claims, including a `cnf`
+/// value that cannot be deserialized as `Confirmation`.
+#[cfg(feature = "experimental-oidc-key-binding")]
+pub fn parse_compact_jws_with_confirmation<
+    H: Clone + for<'de> Deserialize<'de>,
+    C: Clone + for<'de> Deserialize<'de>,
+    Confirmation: for<'de> Deserialize<'de>,
+>(
+    token: &str,
+) -> Result<(ParsedJws<H, C>, Option<Confirmation>), JwsParseError> {
+    #[derive(Deserialize)]
+    struct Payload<T> {
+        cnf: Option<T>,
+    }
+
+    parse_with_payload(token, |payload| {
+        let payload: Payload<Confirmation> =
+            serde_json::from_slice(payload).context(ClaimsSnafu)?;
+        Ok(payload.cnf)
+    })
+}
+
+fn parse_with_payload<
+    H: Clone + for<'de> Deserialize<'de>,
+    C: Clone + for<'de> Deserialize<'de>,
+    T,
+>(
+    token: &str,
+    extract: impl FnOnce(&[u8]) -> Result<T, JwsParseError>,
+) -> Result<(ParsedJws<H, C>, T), JwsParseError> {
     // `splitn(4, ..)` bounds the work done on hostile input: a token of N
     // dots is rejected after at most four iterator steps, with no
     // proportional allocation.
@@ -79,12 +125,16 @@ pub fn parse_compact_jws<
         .decode(signature_b64)
         .context(Base64Snafu)?;
 
-    Ok(ParsedJws {
-        header: serde_json::from_slice(&header).context(HeaderSnafu)?,
-        claims: serde_json::from_slice(&claims).context(ClaimsSnafu)?,
-        signing_input,
-        signature,
-    })
+    let extra = extract(&claims)?;
+    Ok((
+        ParsedJws {
+            header: serde_json::from_slice(&header).context(HeaderSnafu)?,
+            claims: serde_json::from_slice(&claims).context(ClaimsSnafu)?,
+            signing_input,
+            signature,
+        },
+        extra,
+    ))
 }
 
 #[cfg(test)]
@@ -156,5 +206,105 @@ mod tests {
             parse_err(&hostile),
             super::JwsParseError::InvalidFormat
         ));
+    }
+}
+
+#[cfg(all(test, feature = "experimental-oidc-key-binding"))]
+mod confirmation_tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::jwt::JwkConfirmationClaim;
+
+    fn token(payload: &str) -> String {
+        format!(
+            "{}.{}.AA",
+            BASE64_URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256"}"#),
+            BASE64_URL_SAFE_NO_PAD.encode(payload)
+        )
+    }
+
+    fn jwk() -> Value {
+        json!({"kty":"EC", "crv":"P-256",
+            "x":"f83OJ3D2xF4Oyv7l-lkyU-iLN6v2Rn5SQkCRUgvAJMY",
+            "y":"x_FEzRu9m36HLN_tue659lnhW8b2b7bZwzkHBJGi8z0"})
+    }
+
+    #[test]
+    fn parses_confirmation_without_losing_registered_or_extra_claims() {
+        let payload = json!({"iss":"issuer", "aud":"client", "sub":"user",
+            "custom":42, "cnf":{"jwk":jwk(), "jkt":"thumbprint"}});
+        let compact = token(&payload.to_string());
+        let (parsed, confirmation) =
+            parse_compact_jws_with_confirmation::<(), Value, Value>(&compact).unwrap();
+        let ordinary = parse_compact_jws::<(), Value>(&compact).unwrap();
+        assert_eq!(parsed.signing_input, ordinary.signing_input);
+        assert_eq!(parsed.signature, ordinary.signature);
+        assert_eq!(parsed.header.alg, ordinary.header.alg);
+        assert_eq!(
+            serde_json::to_value(&parsed.claims).unwrap(),
+            serde_json::to_value(&ordinary.claims).unwrap()
+        );
+        assert_eq!(
+            parsed.claims.cnf.unwrap().jkt.as_deref(),
+            Some("thumbprint")
+        );
+        assert_eq!(confirmation.unwrap(), payload["cnf"]);
+    }
+
+    #[test]
+    fn shared_jwk_confirmation_is_typed_and_strict() {
+        let payload = json!({"cnf":{"jwk":jwk()}});
+        let compact = token(&payload.to_string());
+        let (_, confirmation) =
+            parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&compact).unwrap();
+        let expected: crate::jwk::PublicJwk = serde_json::from_value(jwk()).unwrap();
+        assert_eq!(confirmation.unwrap().jwk, expected);
+
+        for cnf in [
+            json!({"jwk":jwk(), "jkt":"other"}),
+            json!({"jwk":jwk(), "unknown":null}),
+            json!({}),
+            json!({"jwk":"malformed"}),
+        ] {
+            let compact = token(&json!({"cnf":cnf}).to_string());
+            // Preserve the existing parser's handling of unrecognized jwk data.
+            assert!(parse_compact_jws::<(), ()>(&compact).is_ok());
+            assert!(matches!(
+                parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&compact),
+                Err(JwsParseError::Claims { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn absent_confirmation_and_duplicate_members_are_handled() {
+        for payload in ["{}", r#"{"cnf":null}"#] {
+            let (_, confirmation) =
+                parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&token(
+                    payload,
+                ))
+                .unwrap();
+            assert!(confirmation.is_none());
+        }
+        let duplicate = format!(r#"{{"cnf":{{"jwk":{0}}},"cnf":{{"jwk":{0}}}}}"#, jwk());
+        assert!(matches!(
+            parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&token(&duplicate)),
+            Err(JwsParseError::Claims { .. })
+        ));
+    }
+
+    #[test]
+    fn confirmation_parser_uses_compact_jws_format_checks() {
+        for compact in [
+            "a.b".to_owned(),
+            "a.b.c.d".to_owned(),
+            ".".repeat(1_000_000),
+        ] {
+            assert!(matches!(
+                parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&compact),
+                Err(JwsParseError::InvalidFormat)
+            ));
+        }
     }
 }
