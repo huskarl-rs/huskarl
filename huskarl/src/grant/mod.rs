@@ -47,6 +47,12 @@ pub enum GrantOutcome {
     /// JARM response arrived that was never asked for — a downgrade attempt.
     JarmDowngrade,
     /// The `DPoP` key differs from the one bound at authorization time.
+    ///
+    /// No longer emitted: completion selects the original key by thumbprint,
+    /// and an unavailable key is reported as [`Other`](Self::Other).
+    #[deprecated(
+        note = "No longer emitted: completion selects the original DPoP key by thumbprint; unavailable keys produce GrantOutcome::Other. Scheduled for removal in the next breaking release."
+    )]
     DPoPKeyMismatch,
     /// The server returned a well-formed error response.
     Rejected,
@@ -68,6 +74,7 @@ impl GrantOutcome {
             Self::IssuerMismatch => "issuer_mismatch",
             Self::StateMismatch => "state_mismatch",
             Self::JarmDowngrade => "jarm_downgrade",
+            #[allow(deprecated)] // Preserve the legacy label until the variant is removed.
             Self::DPoPKeyMismatch => "dpop_key_mismatch",
             Self::Rejected => "rejected",
             Self::Protocol => "protocol",

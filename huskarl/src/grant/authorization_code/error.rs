@@ -171,13 +171,6 @@ pub(crate) enum FlowError {
         /// The underlying error.
         source: Error,
     },
-    /// The grant's `DPoP` key differs from the one bound at authorization time.
-    #[snafu(display(
-        "the grant's DPoP key does not match the key bound at authorization time \
-         (dpop_jkt); bind the same session key used at start"
-    ))]
-    #[classify(no)]
-    DPoPKeyMismatch,
     /// The ID token in the token response failed validation.
     #[snafu(display("validating ID token"))]
     #[classify(with = FlowError::id_token_validation_origin)]
@@ -217,8 +210,6 @@ impl FlowError {
     pub(crate) fn outcome(&self) -> crate::grant::GrantOutcome {
         use crate::grant::GrantOutcome as O;
         match self {
-            // A mismatched session key is not a server protocol failure.
-            Self::DPoPKeyMismatch => O::DPoPKeyMismatch,
             Self::ValidatingIdToken { .. } => O::Protocol,
             // These failures do not establish that the server misbehaved.
             Self::CreatingRequestObject { .. }
@@ -545,7 +536,6 @@ mod classification {
         use crate::grant::GrantOutcome as O;
 
         let cases = [
-            (FlowError::DPoPKeyMismatch, O::DPoPKeyMismatch),
             (
                 FlowError::ValidatingIdToken {
                     source: crate::token::id_token::IdTokenValidationError::SubjectMissing,
@@ -597,11 +587,6 @@ mod classification {
         assert_eq!(
             completion_outcome(&Error::from(CompleteError::StateMismatch)),
             O::StateMismatch
-        );
-
-        assert_eq!(
-            completion_outcome(&Error::from(FlowError::DPoPKeyMismatch)),
-            O::DPoPKeyMismatch
         );
 
         // Shared token-response causes are identified by their verdict.
