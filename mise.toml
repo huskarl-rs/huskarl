@@ -3,7 +3,9 @@
 "aqua:wasm-bindgen/wasm-pack" = "0.15.0"
 "cargo:cargo-docs-rs" = "1.0.4"
 "cargo:cargo-fuzz" = "0.13.2"
+"cargo:cargo-hack" = "latest"
 "cargo:cargo-llvm-cov" = "0.8.7"
+"cargo:cargo-minimal-versions" = "0.1.37"
 "cargo:cargo-msrv" = "0.19.3"
 "cargo:cargo-nextest" = "0.9.140"
 "cargo:cargo-reedme" = "0.6.1"
@@ -105,3 +107,19 @@ run = [
   "cargo +nightly reedme",
   "CARGO_BUILD_TARGET=wasm32-unknown-unknown cargo +nightly reedme --manifest-path huskarl-crypto-webcrypto/Cargo.toml",
 ]
+
+[tasks."minimal-versions"]
+description = "Check the published crates against the minimum dependency versions their manifests declare"
+usage = '''
+flag "--direct" help="Lower only directly-declared deps (-Z direct-minimal-versions)"
+'''
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+cargo minimal-versions check ${usage_direct:+--direct} \
+  -p huskarl -p huskarl-core -p huskarl-macros -p huskarl-crypto-native \
+  -p huskarl-reqwest -p huskarl-redis -p huskarl-resource-server \
+  -p huskarl-google-cloud
+cargo minimal-versions check ${usage_direct:+--direct} \
+  -p huskarl-crypto-webcrypto --target wasm32-unknown-unknown
+'''
