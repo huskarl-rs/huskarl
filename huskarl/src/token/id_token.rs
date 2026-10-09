@@ -220,6 +220,50 @@ pub struct IdTokenValidator {
 }
 
 impl IdTokenValidator {
+    /// Validates an ID token returned by a refresh against the originally
+    /// validated authentication (OIDC Core §12.2).
+    ///
+    /// Applies this validator's usual restrictions and requires unchanged
+    /// issuer, subject, and audiences. A nonce may be omitted; when present it
+    /// must match. An `auth_time` must match the original when both contain it.
+    /// Keep the original claims across subsequent refreshes.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid token or changed authentication claims.
+    pub async fn validate_refresh(
+        &self,
+        id_token: &IdToken,
+        original: &ValidatedJwt<IdTokenClaims>,
+    ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
+        let refreshed = self.validate(id_token, None).await?;
+        let same_audiences = refreshed.aud.iter().collect::<HashSet<_>>()
+            == original.aud.iter().collect::<HashSet<_>>();
+        for (claim, matches) in [
+            ("iss", refreshed.iss == original.iss),
+            ("sub", refreshed.sub == original.sub),
+            ("aud", same_audiences),
+            (
+                "nonce",
+                refreshed
+                    .claims
+                    .nonce
+                    .as_ref()
+                    .is_none_or(|nonce| original.claims.nonce.as_ref() == Some(nonce)),
+            ),
+            (
+                "auth_time",
+                refreshed
+                    .claims
+                    .auth_time
+                    .zip(original.claims.auth_time)
+                    .is_none_or(|(new, old)| new == old),
+            ),
+        ] {
+            ensure!(matches, RefreshClaimMismatchSnafu { claim });
+        }
+        Ok(refreshed)
+    }
+
     /// Validates `id_token` against this validator's configuration and returns
     /// its verified claims.
     ///
@@ -318,6 +362,12 @@ impl IdTokenValidator {
 #[derive(Debug, Snafu)]
 #[non_exhaustive]
 pub enum IdTokenValidationError {
+    /// A refreshed ID token changed an original authentication claim.
+    #[snafu(display("refreshed ID token '{claim}' does not match the original authentication"))]
+    RefreshClaimMismatch {
+        /// The mismatching claim name (never its value).
+        claim: &'static str,
+    },
     /// Base JWT errors.
     #[snafu(display("validating the ID token as a JWT"))]
     Jwt {
@@ -399,6 +449,79 @@ mod tests {
     const ISS: &str = "https://issuer.example.com";
     const AUD: &str = "client-123";
     const SUB: &str = "user-abc";
+
+    #[rstest]
+    #[case("valid", None)]
+    #[case("omitted_optional_claims", None)]
+    #[case("issuer", Some("jwt"))]
+    #[case("subject", Some("sub"))]
+    #[case("audience", Some("aud"))]
+    #[case("nonce", Some("nonce"))]
+    #[case("auth_time", Some("auth_time"))]
+    #[tokio::test]
+    async fn refresh_preserves_original_authentication(
+        #[case] change: &str,
+        #[case] expected_error: Option<&str>,
+    ) {
+        let (signer, verifier) = signer_and_verifier().await;
+        let validator = IdTokenValidator::builder()
+            .verifier(verifier)
+            .issuer(ISS)
+            .audience(AUD)
+            .trusted_audiences(vec!["trusted-extra".into()])
+            .build();
+        let original_claims = IdTokenClaims {
+            nonce: Some("original-nonce".into()),
+            auth_time: Some(100),
+            ..Default::default()
+        };
+        let original = validator
+            .validate(
+                &mint_standard(&signer, original_claims.clone()).await,
+                Some("original-nonce"),
+            )
+            .await
+            .unwrap();
+        let mut claims = original_claims;
+        match change {
+            "nonce" => claims.nonce = Some("changed".into()),
+            "auth_time" => claims.auth_time = Some(200),
+            "omitted_optional_claims" => {
+                claims.nonce = None;
+                claims.auth_time = None;
+            }
+            _ => {}
+        }
+        let token = mint(
+            &signer,
+            if change == "issuer" {
+                "https://wrong.example"
+            } else {
+                ISS
+            },
+            if change == "audience" {
+                vec![AUD.into(), "trusted-extra".into()]
+            } else {
+                vec![AUD.into()]
+            },
+            Some(if change == "subject" {
+                "different-user"
+            } else {
+                SUB
+            }),
+            claims,
+        )
+        .await;
+        let result = validator.validate_refresh(&token, &original).await;
+        match expected_error {
+            None => {
+                result.unwrap();
+            }
+            Some("jwt") => assert!(matches!(result, Err(IdTokenValidationError::Jwt { .. }))),
+            Some(expected) => assert!(matches!(result,
+                Err(IdTokenValidationError::RefreshClaimMismatch { claim }) if claim == expected)),
+        }
+    }
 
     /// Mints an ES256 signer paired with a verifier built from its public JWK,
     /// so signed tokens verify end-to-end against the validator.
