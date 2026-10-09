@@ -146,7 +146,8 @@ if let Some(id_token) = response.id_token() {
 
 ## Request a key-bound ID token
 
-Configure a [DPoP signer](crate::_docs::guide::dpop) and request `openid` and `bound_key`. On the validator builder above, add
+Enable `experimental-oidc-key-binding`, configure a [DPoP signer](crate::_docs::guide::dpop),
+and request `openid` and `bound_key`. On the validator builder above, add
 `.openid_bound_key_requested(pending_state.openid_bound_key_requested)` to
 accept `dpop+id_token` as well as ordinary ID tokens if the OP ignores `bound_key`.
 

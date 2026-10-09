@@ -14,7 +14,7 @@ node-oidc = []
 okta = []
 
 [dependencies]
-huskarl = { workspace = true, default-features = true, features = ["authorization-flow-loopback"] }
+huskarl = { workspace = true, default-features = true, features = ["authorization-flow-loopback", "experimental-oidc-key-binding"] }
 # DPoP proof signing keys for the DPoP variant.
 huskarl-crypto-native = { workspace = true }
 huskarl-reqwest = { workspace = true, features = ["rustls-tls"] }

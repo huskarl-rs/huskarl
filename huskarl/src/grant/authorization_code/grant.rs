@@ -567,6 +567,7 @@ impl AuthorizationCodeGrant {
 pub struct AuthorizationCodeGrantParameters {
     /// Whether the authorization request used `openid bound_key` with `DPoP`.
     #[builder(default)]
+    #[cfg(feature = "experimental-oidc-key-binding")]
     pub(super) openid_bound_key_requested: bool,
     /// The bound `DPoP` JWT thumbprint, if any has already been computed.
     pub(super) dpop_jkt: Option<String>,
@@ -632,12 +633,14 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
         params.dpop_jkt.as_deref()
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
     fn request_dpop_code_hash(&self, params: &Self::Parameters) -> Option<String> {
         params
             .openid_bound_key_requested
             .then(|| crate::grant::core::openid_code_hash(&params.code))
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
     fn openid_bound_key_requested(&self, params: &Self::Parameters) -> bool {
         params.openid_bound_key_requested
     }

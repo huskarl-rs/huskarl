@@ -263,7 +263,7 @@ Requires the `authorization-flow-loopback` feature.
 
 ## Request a key-bound ID token
 
-Configure the grant's
+Enable `experimental-oidc-key-binding` and configure the grant's
 [DPoP signer](crate::_docs::guide::dpop). In the `start()` example above, use
 `StartInput::scope(bon::vec!["openid", "bound_key", "profile"])` to request binding.
 

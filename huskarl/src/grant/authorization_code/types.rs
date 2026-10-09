@@ -526,6 +526,7 @@ pub struct PendingState {
     /// Records the request, not whether the provider established ID-token
     /// binding. Defaults to `false` for previously persisted states.
     #[serde(default)]
+    #[cfg(feature = "experimental-oidc-key-binding")]
     pub openid_bound_key_requested: bool,
     /// Whether the requested scope contained `openid`; completion then
     /// requires an ID token (OIDC Core 1.0 §3.1.3.3). `false` for states
@@ -545,7 +546,8 @@ pub struct PendingState {
 // the ID token, so none of them may appear in `Debug` output.
 impl std::fmt::Debug for PendingState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingState")
+        let mut debug = f.debug_struct("PendingState");
+        debug
             .field("redirect_uri", &self.redirect_uri)
             .field(
                 "pkce_verifier",
@@ -554,13 +556,14 @@ impl std::fmt::Debug for PendingState {
             .field("state", &"[REDACTED]")
             .field("nonce", &self.nonce.as_ref().map(|_| "[REDACTED]"))
             .field("dpop_jkt", &self.dpop_jkt)
-            .field(
-                "openid_bound_key_requested",
-                &self.openid_bound_key_requested,
-            )
             .field("openid_requested", &self.openid_requested)
-            .field("response_mode", &self.response_mode)
-            .finish()
+            .field("response_mode", &self.response_mode);
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        debug.field(
+            "openid_bound_key_requested",
+            &self.openid_bound_key_requested,
+        );
+        debug.finish()
     }
 }
 
@@ -625,6 +628,7 @@ mod tests {
         }"#;
         let state: PendingState = serde_json::from_str(old).unwrap();
         assert_eq!(state.nonce.as_deref(), Some("n"));
+        #[cfg(feature = "experimental-oidc-key-binding")]
         assert!(!state.openid_bound_key_requested);
     }
 
@@ -637,6 +641,7 @@ mod tests {
             nonce: None,
             dpop_jkt: None,
             openid_requested: false,
+            #[cfg(feature = "experimental-oidc-key-binding")]
             openid_bound_key_requested: false,
             response_mode: Some(ResponseMode::QueryJwt),
         };
@@ -767,6 +772,7 @@ mod tests {
             nonce: Some("id-token-nonce".to_owned()),
             dpop_jkt: Some("jkt-thumbprint".to_owned()),
             openid_requested: true,
+            #[cfg(feature = "experimental-oidc-key-binding")]
             openid_bound_key_requested: true,
             response_mode: Some(ResponseMode::QueryJwt),
         };

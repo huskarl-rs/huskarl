@@ -196,7 +196,7 @@ pub struct StandardOidcAddressClaims {
 /// This validates an authentication response received from the OP using the
 /// initiating client's expectations. For proof-bearing presentations received
 /// by another component of the same RP, use
-/// [`IdTokenPresentationValidator`](super::id_token_presentation::IdTokenPresentationValidator).
+/// `IdTokenPresentationValidator` (requires `experimental-oidc-key-binding`).
 /// Accepting an ID token here does not verify possession of its bound key.
 #[derive(Debug, Builder)]
 #[builder(on(String, into))]
@@ -227,6 +227,7 @@ pub struct IdTokenValidator {
     /// Allows `dpop+id_token` in addition to ordinary ID-token types; the
     /// provider may ignore the scope. Does not verify proof of possession.
     #[builder(default)]
+    #[cfg(feature = "experimental-oidc-key-binding")]
     openid_bound_key_requested: bool,
 }
 
@@ -247,10 +248,12 @@ impl IdTokenValidator {
         id_token: &IdToken,
         expected_nonce: Option<&str>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
+        let typ = ClaimCheck::if_present("JWT");
+        #[cfg(feature = "experimental-oidc-key-binding")]
         let typ = if self.openid_bound_key_requested {
             ClaimCheck::if_present_any(["JWT", "dpop+id_token"])
         } else {
-            ClaimCheck::if_present("JWT")
+            typ
         };
         let jwt_validator = JwtValidator::builder()
             .verifier(self.verifier.clone())
@@ -484,10 +487,15 @@ mod tests {
 
     #[rstest]
     #[case::ordinary(false)]
-    #[case::bound_key_requested(true)]
+    #[cfg_attr(
+        feature = "experimental-oidc-key-binding",
+        case::bound_key_requested(true)
+    )]
     #[tokio::test]
     async fn absent_type_remains_accepted(#[case] bound_key: bool) {
         use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
+        #[cfg(not(feature = "experimental-oidc-key-binding"))]
+        assert!(!bound_key);
 
         let (signer, verifier) = signer_and_verifier().await;
         let token = mint_standard(&signer, IdTokenClaims::default()).await;
@@ -507,11 +515,17 @@ mod tests {
             "{input}.{}",
             BASE64_URL_SAFE_NO_PAD.encode(signature),
         ));
-        let mut validator = validator(verifier, None, None);
-        validator.openid_bound_key_requested = bound_key;
+        let validator = validator(verifier, None, None);
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let validator = {
+            let mut validator = validator;
+            validator.openid_bound_key_requested = bound_key;
+            validator
+        };
         validator.validate(&token, None).await.unwrap();
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
     #[tokio::test]
     async fn bound_type_still_checks_nonce() {
         let (signer, verifier) = signer_and_verifier().await;

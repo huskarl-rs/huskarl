@@ -76,6 +76,7 @@ pub fn parse_compact_jws<
 ///
 /// Returns an error for malformed compact JWS data or claims, including a `cnf`
 /// value that cannot be deserialized as `Confirmation`.
+#[cfg(feature = "experimental-oidc-key-binding")]
 pub fn parse_compact_jws_with_confirmation<
     H: Clone + for<'de> Deserialize<'de>,
     C: Clone + for<'de> Deserialize<'de>,
@@ -208,7 +209,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "experimental-oidc-key-binding"))]
 mod confirmation_tests {
     use serde_json::{Value, json};
 

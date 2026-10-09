@@ -131,7 +131,7 @@ clients behave differently.
 
 ## Request key-bound ID tokens
 
-Request `openid` and `bound_key` in
+Enable `experimental-oidc-key-binding` and request `openid` and `bound_key` in
 an [authorization-code](crate::_docs::guide::authorization_code) or
 [device](crate::_docs::guide::device_authorization) flow. Keep the original
 private key available for authorization and refreshes. See

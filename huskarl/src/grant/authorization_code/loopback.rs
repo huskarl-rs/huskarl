@@ -641,6 +641,7 @@ mod tests {
             nonce: None,
             dpop_jkt: None,
             openid_requested: false,
+            #[cfg(feature = "experimental-oidc-key-binding")]
             openid_bound_key_requested: false,
             response_mode: None,
         }

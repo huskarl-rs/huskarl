@@ -69,6 +69,7 @@ pub mod guide {
     #[doc = include_str!("../docs/guide/dpop.md")]
     pub mod dpop {}
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
     #[doc = include_str!("../docs/guide/id_token_presentations.md")]
     pub mod id_token_presentations {}
 }

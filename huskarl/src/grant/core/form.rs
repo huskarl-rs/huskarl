@@ -27,6 +27,7 @@ pub(crate) struct OAuth2FormRequest<'a, F: Serialize> {
     dpop_jkt: Option<&'a str>,
     /// Optional OIDC Key Binding code hash for the `c_s256` proof claim.
     /// Hashes the authorization `code` or `device_code`, depending on the grant.
+    #[cfg(feature = "experimental-oidc-key-binding")]
     dpop_code_hash: Option<&'a str>,
 }
 
@@ -50,7 +51,8 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
         parts.method = Method::POST;
         parts.uri = self.uri.clone();
 
-        if let Some(proof) = self
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let proof = self
             .dpop
             .proof_with_code_hash(
                 &parts.method,
@@ -58,8 +60,13 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
                 self.dpop_jkt,
                 self.dpop_code_hash,
             )
-            .await?
-        {
+            .await?;
+        #[cfg(not(feature = "experimental-oidc-key-binding"))]
+        let proof = self
+            .dpop
+            .proof(&parts.method, &parts.uri, self.dpop_jkt)
+            .await?;
+        if let Some(proof) = proof {
             let mut proof_value =
                 HeaderValue::from_str(proof.expose_secret()).context(ProofNotAHeaderValueSnafu)?;
             proof_value.set_sensitive(true);

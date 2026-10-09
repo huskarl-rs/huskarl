@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(feature = "experimental-oidc-key-binding")]
 #[rstest]
 #[case(true, vec!["openid", "bound_key"], true)]
 #[case(false, vec!["openid", "bound_key"], false)]

@@ -240,6 +240,7 @@ fn pending(openid_requested: bool) -> PendingState {
         nonce: None,
         dpop_jkt: None,
         openid_requested,
+        #[cfg(feature = "experimental-oidc-key-binding")]
         openid_bound_key_requested: false,
         response_mode: None,
     }
@@ -664,10 +665,23 @@ impl HttpClient for CodeHashHttp {
 /// Checks that proofs retain the original key after rotation and across a
 /// nonce retry, and which ID-token types completion accepts for each request.
 #[rstest]
-#[case::bound_key(true, "dpop+id_token", true)]
-#[case::bound_key_media_type(true, "application/dpop+id_token", true)]
-#[case::provider_ignores_scope(true, "JWT", true)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::bound_key(true, "dpop+id_token", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::bound_key_media_type(true, "application/dpop+id_token", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::provider_ignores_scope(true, "JWT", true)
+)]
 #[case::ordinary_oidc(false, "JWT", true)]
+#[cfg_attr(
+    not(feature = "experimental-oidc-key-binding"),
+    case::disabled_scope(true, "JWT", true)
+)]
 #[case::unsolicited_bound_token(false, "dpop+id_token", false)]
 #[case::access_token_type(true, "at+jwt", false)]
 #[case::proof_type(true, "dpop+jwt", false)]
@@ -780,7 +794,7 @@ async fn bound_key_exchange_proofs_and_id_token_type(
     let proofs = http.proofs.lock().unwrap();
     assert_eq!(proofs.len(), 2);
     for proof in proofs.iter() {
-        if bound_key {
+        if bound_key && cfg!(feature = "experimental-oidc-key-binding") {
             // OIDC Key Binding section 2.3 example: full SHA-256, no padding.
             assert_eq!(
                 proof["c_s256"],

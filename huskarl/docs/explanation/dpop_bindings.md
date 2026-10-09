@@ -59,7 +59,9 @@ see the [refresh guide](crate::_docs::guide::refresh).
 
 ## ID-token key binding
 
-Support targets [OpenID Connect Key Binding draft 03](https://openid.net/specs/openid-connect-key-binding-1_0-03.html).
+[OpenID Connect Key Binding draft 03](https://openid.net/specs/openid-connect-key-binding-1_0-03.html)
+requires the opt-in `experimental-oidc-key-binding` feature. Its API, behavior,
+and serialized experimental fields may change or be removed in minor releases.
 
 To request binding, configure a DPoP signer and request both `openid` and
 `bound_key` in an authorization-code or device flow. Use a dedicated key with
@@ -107,3 +109,7 @@ ID tokens stay within the RP; use access tokens for protected resources.
 Older saved state defaults to no OIDC binding request; older device state also
 has no thumbprint. Existing flows are not upgraded automatically.
 
+Keep the feature enabled for these sessions. When disabled, `bound_key` is an
+ordinary scope: no code hashes, bound ID-token types, or OIDC refresh bindings
+are enabled, and experimental fields are discarded. Existing authorization-code
+and refresh-token thumbprints still follow ordinary DPoP rules.

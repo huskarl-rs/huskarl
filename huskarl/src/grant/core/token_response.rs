@@ -144,9 +144,9 @@ impl TokenResponse {
 /// stores the same thumbprint in any returned `RefreshToken` value, including
 /// for bearer responses.
 /// Built-in grants record new bindings for public clients (RFC 9449 §5) or
-/// when OIDC Key Binding was requested. Refresh grants preserve any existing
-/// binding for either client type. Without a request proof thumbprint,
-/// refresh tokens remain unbound.
+/// when OIDC Key Binding was requested with `experimental-oidc-key-binding`.
+/// Refresh grants preserve any existing binding for either client type.
+/// Without a request proof thumbprint, refresh tokens remain unbound.
 ///
 /// This context neither establishes nor validates an ID-token binding. ID
 /// tokens remain subject to their own protocol-specific validation.
@@ -167,6 +167,7 @@ pub struct TokenResponseContext {
     /// authentication or access-token type. Records the request even if the OP
     /// ignores `bound_key`; it does not assert that the ID token was bound.
     #[builder(default)]
+    #[cfg(feature = "experimental-oidc-key-binding")]
     openid_bound_key_requested: bool,
 }
 
@@ -226,9 +227,9 @@ impl RawTokenResponse {
     /// Calculates the expiry time from `received_at` and `expires_in`.
     /// The access-token type follows `token_type`. If `bind_refresh_token` or
     /// `openid_bound_key_requested` is `true`, stores the same `dpop_jkt`
-    /// supplied in `context` in any returned
-    /// `RefreshToken` value, even for a bearer response. Without a thumbprint,
-    /// the returned value contains no `DPoP` binding.
+    /// supplied in `context` in any returned `RefreshToken` value, even for a
+    /// bearer response. Without a thumbprint, the returned value contains no
+    /// `DPoP` binding.
     /// No ID-token validation or binding is performed here.
     ///
     /// # Errors
@@ -242,13 +243,16 @@ impl RawTokenResponse {
         context: TokenResponseContext,
         received_at: crate::core::platform::SystemTime,
     ) -> Result<TokenResponse, InvalidTokenResponse> {
-        let refresh_token_dpop_jkt = context
-            .dpop_jkt
-            .clone()
-            .filter(|_| context.bind_refresh_token || context.openid_bound_key_requested);
+        let bind_refresh_token = context.bind_refresh_token;
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let bind_refresh_token = bind_refresh_token || context.openid_bound_key_requested;
+        let refresh_token_dpop_jkt = context.dpop_jkt.clone().filter(|_| bind_refresh_token);
         let token_type = self.resolve_token_type(context.dpop_jkt)?;
         let access_token = self.build_access_token(token_type, received_at);
-        let mut refresh_token = self.build_refresh_token(refresh_token_dpop_jkt);
+        let refresh_token = self.build_refresh_token(refresh_token_dpop_jkt);
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let mut refresh_token = refresh_token;
+        #[cfg(feature = "experimental-oidc-key-binding")]
         if let Some(refresh_token) = &mut refresh_token {
             refresh_token.openid_bound_key_requested = context.openid_bound_key_requested;
         }

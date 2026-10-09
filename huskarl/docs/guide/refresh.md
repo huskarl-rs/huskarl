@@ -143,7 +143,8 @@ the binding.
 
 Refresh responses contain unvalidated ID tokens. When using `IdTokenValidator`,
 set `.openid_bound_key_requested(...)` from the refresh token used in the request
-to allow bound ID-token types. It does not check `cnf` or proof of possession.
+to allow bound ID-token types. This requires `experimental-oidc-key-binding`;
+it does not check `cnf` or proof of possession.
 
 See [DPoP bindings and client authentication](crate::_docs::explanation::dpop_bindings)
 for how access-token and refresh-token bindings differ.

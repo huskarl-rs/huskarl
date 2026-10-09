@@ -39,27 +39,8 @@ pub struct DPoP {
     nonce: Arc<Mutex<Option<Arc<String>>>>,
 }
 
-impl AuthorizationServerDPoP for DPoP {
-    fn update_nonce(&self, nonce: String) {
-        // If the lock is poisoned (a thread panicked while holding it), we recover
-        // the guard and proceed. A stale nonce just causes the server to reject the
-        // next DPoP proof and return a fresh nonce, so the worst case is one extra
-        // round-trip rather than a hard failure.
-        let _ = self
-            .nonce
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(Arc::new(nonce));
-    }
-
-    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
-        Box::pin(async move {
-            let signer = self.signer.select_asymmetric_signer().await;
-            Some(signer.public_key_jwk().thumbprint())
-        })
-    }
-
-    fn proof_with_code_hash<'a>(
+impl DPoP {
+    fn create_proof<'a>(
         &'a self,
         method: &'a Method,
         uri: &'a Uri,
@@ -86,6 +67,47 @@ impl AuthorizationServerDPoP for DPoP {
 
             sign_proof(&*signer, method, uri, None, nonce, code_hash).await
         })
+    }
+}
+
+impl AuthorizationServerDPoP for DPoP {
+    fn update_nonce(&self, nonce: String) {
+        // If the lock is poisoned (a thread panicked while holding it), we recover
+        // the guard and proceed. A stale nonce just causes the server to reject the
+        // next DPoP proof and return a fresh nonce, so the worst case is one extra
+        // round-trip rather than a hard failure.
+        let _ = self
+            .nonce
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(Arc::new(nonce));
+    }
+
+    fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>> {
+        Box::pin(async move {
+            let signer = self.signer.select_asymmetric_signer().await;
+            Some(signer.public_key_jwk().thumbprint())
+        })
+    }
+
+    fn proof<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        self.create_proof(method, uri, dpop_jkt, None)
+    }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        self.create_proof(method, uri, dpop_jkt, code_hash)
     }
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
@@ -141,6 +163,17 @@ impl AuthorizationServerDPoP for SessionKeyedDPoP {
         Box::pin(async { None })
     }
 
+    fn proof<'a>(
+        &'a self,
+        _method: &'a Method,
+        _uri: &'a Uri,
+        _dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        // Reached only when no per-session key was bound.
+        Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
+    }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
     fn proof_with_code_hash<'a>(
         &'a self,
         _method: &'a Method,

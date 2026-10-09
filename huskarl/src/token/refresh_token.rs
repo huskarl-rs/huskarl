@@ -10,14 +10,16 @@ use crate::core::secrets::SecretString;
 /// Built-in grants retain this binding for public clients independently of the
 /// access token's type. Confidential clients use client authentication instead
 /// and may select a new proof key when no refresh binding is stored. OIDC Key
-/// Binding records the original proof key for both client types. A stored
-/// thumbprint is always honored and preserved in replacement refresh tokens.
+/// Binding (with `experimental-oidc-key-binding`) records the original proof key
+/// for both client types. A stored thumbprint is always honored and preserved
+/// in replacement refresh tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshToken {
     token: SecretString,
     #[serde(skip_serializing_if = "Option::is_none")]
     dpop_jkt: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg(feature = "experimental-oidc-key-binding")]
     pub(crate) openid_bound_key_requested: bool,
 }
 
@@ -32,22 +34,27 @@ impl RefreshToken {
         Self {
             token,
             dpop_jkt,
+            #[cfg(feature = "experimental-oidc-key-binding")]
             openid_bound_key_requested: false,
         }
     }
 }
 
 impl PartialEq for RefreshToken {
-    /// Equal when the secret value, `DPoP` binding and OIDC request flag match.
+    /// Equal when the secret value and `DPoP` binding match. With
+    /// `experimental-oidc-key-binding` enabled, the OIDC request flag must also
+    /// match.
     ///
     /// `SecretString` has no `PartialEq` of its own (secrets are not casually
     /// comparable), so this is hand-rolled. It is a plain, **not** constant-time
     /// comparison — refresh tokens are high-entropy and are only compared
     /// against the client's own stored values, never attacker-supplied input.
     fn eq(&self, other: &Self) -> bool {
-        self.token.expose_secret() == other.token.expose_secret()
-            && self.dpop_jkt == other.dpop_jkt
-            && self.openid_bound_key_requested == other.openid_bound_key_requested
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        if self.openid_bound_key_requested != other.openid_bound_key_requested {
+            return false;
+        }
+        self.token.expose_secret() == other.token.expose_secret() && self.dpop_jkt == other.dpop_jkt
     }
 }
 
@@ -70,6 +77,7 @@ impl RefreshToken {
     /// Retained as protocol context independently of the stored key binding.
     /// This records the request, not confirmation that the OP bound the ID token.
     #[must_use]
+    #[cfg(feature = "experimental-oidc-key-binding")]
     pub fn openid_bound_key_requested(&self) -> bool {
         self.openid_bound_key_requested
     }
@@ -83,6 +91,7 @@ mod tests {
     fn legacy_state_keeps_ordinary_refresh_semantics() {
         let token: RefreshToken =
             serde_json::from_str(r#"{"token":"refresh","dpop_jkt":"legacy-key"}"#).unwrap();
+        #[cfg(feature = "experimental-oidc-key-binding")]
         assert!(!token.openid_bound_key_requested());
         assert_eq!(
             token,
@@ -93,8 +102,11 @@ mod tests {
             serde_json::to_string(&token).unwrap(),
             r#"{"token":"refresh","dpop_jkt":"legacy-key"}"#
         );
-        let mut bound = token.clone();
-        bound.openid_bound_key_requested = true;
-        assert_ne!(bound, token);
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        {
+            let mut bound = token.clone();
+            bound.openid_bound_key_requested = true;
+            assert_ne!(bound, token);
+        }
     }
 }

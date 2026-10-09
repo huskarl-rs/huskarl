@@ -1,5 +1,13 @@
 # Validate an ID-token presentation
 
+Requires the opt-in `experimental-oidc-key-binding` Cargo feature (disabled by
+default). This targets draft 03: its API, behavior, and persisted experimental
+state may change or be removed in a minor release.
+
+```sh
+cargo add huskarl --features experimental-oidc-key-binding
+```
+
 Use `IdTokenPresentationValidator` when a component of your relying party
 receives a key-bound ID token and proof from another component. Continue to use
 `IdTokenValidator` for the response from the OP during authentication.

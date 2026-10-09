@@ -79,12 +79,30 @@ impl HttpClient for RecordingHttp {
 #[case::public_dpop(Some(false), false, "DPoP", false)]
 #[case::secret_dpop(Some(true), false, "DPoP", false)]
 #[case::mtls_dpop(Some(false), true, "DPoP", false)]
-#[case::openid_public_bearer(Some(false), false, "Bearer", true)]
-#[case::openid_secret_bearer(Some(true), false, "Bearer", true)]
-#[case::openid_mtls_bearer(Some(false), true, "Bearer", true)]
-#[case::openid_public_dpop(Some(false), false, "DPoP", true)]
-#[case::openid_secret_dpop(Some(true), false, "DPoP", true)]
-#[case::openid_mtls_dpop(Some(false), true, "DPoP", true)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_public_bearer(Some(false), false, "Bearer", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_secret_bearer(Some(true), false, "Bearer", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_mtls_bearer(Some(false), true, "Bearer", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_public_dpop(Some(false), false, "DPoP", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_secret_dpop(Some(true), false, "DPoP", true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_mtls_dpop(Some(false), true, "DPoP", true)
+)]
 #[tokio::test]
 async fn acquisition_and_refresh_preserve_required_binding(
     #[case] authenticate: Option<bool>,
@@ -133,6 +151,20 @@ async fn acquisition_and_refresh_preserve_required_binding(
         .build();
     let public = authenticate != Some(true) && !mtls;
     assert_eq!(grant.is_public_client(), public);
+    let ordinary = async {
+        let response = grant
+            .exchange(
+                JwtBearerGrantParameters::builder()
+                    .assertion("assertion")
+                    .build(),
+            )
+            .await
+            .unwrap();
+        (response, grant.to_refresh_grant())
+    };
+    #[cfg(not(feature = "experimental-oidc-key-binding"))]
+    let (response, refresh_grant) = ordinary.await;
+    #[cfg(feature = "experimental-oidc-key-binding")]
     let (response, refresh_grant) = if bound_key {
         use crate::grant::authorization_code::{
             AuthorizationCodeGrant, AuthorizationCodeGrantParameters,
@@ -160,15 +192,7 @@ async fn acquisition_and_refresh_preserve_required_binding(
             .unwrap();
         (response, oidc.to_refresh_grant())
     } else {
-        let response = grant
-            .exchange(
-                JwtBearerGrantParameters::builder()
-                    .assertion("assertion")
-                    .build(),
-            )
-            .await
-            .unwrap();
-        (response, grant.to_refresh_grant())
+        ordinary.await
     };
     let pinned = public || bound_key;
     assert_eq!(
@@ -188,6 +212,7 @@ async fn acquisition_and_refresh_preserve_required_binding(
         &replacement_jkt
     };
     for _ in 0..2 {
+        #[cfg(feature = "experimental-oidc-key-binding")]
         assert_eq!(refresh.openid_bound_key_requested(), bound_key);
         // Persistence must preserve both the key and the OIDC request flag.
         refresh = serde_json::from_str(&serde_json::to_string(&refresh).unwrap()).unwrap();
@@ -311,13 +336,21 @@ async fn confidential_refresh_preserves_stored_binding(
 
 #[rstest::rstest]
 #[case::public(false, false)]
-#[case::openid_public(false, true)]
-#[case::openid_confidential(true, true)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_public(false, true)
+)]
+#[cfg_attr(
+    feature = "experimental-oidc-key-binding",
+    case::openid_confidential(true, true)
+)]
 #[tokio::test]
 async fn bound_refresh_without_original_key_fails_before_http(
     #[case] confidential: bool,
     #[case] bound_key: bool,
 ) {
+    #[cfg(not(feature = "experimental-oidc-key-binding"))]
+    assert!(!bound_key);
     let auth: Arc<dyn ClientAuthentication> = if confidential {
         Arc::new(ClientSecret::new(ProvidedSecret::new(SecretString::new(
             "secret",
@@ -344,8 +377,13 @@ async fn bound_refresh_without_original_key_fails_before_http(
         )
         .build();
     for grant in [unconfigured, wrong_key] {
-        let mut refresh = RefreshToken::new("refresh".into(), Some("original-key".into()));
-        refresh.openid_bound_key_requested = bound_key;
+        let refresh = RefreshToken::new("refresh".into(), Some("original-key".into()));
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        let refresh = {
+            let mut refresh = refresh;
+            refresh.openid_bound_key_requested = bound_key;
+            refresh
+        };
         let err = grant
             .exchange(RefreshGrantParameters::refresh_token(refresh))
             .await
