@@ -4,7 +4,7 @@
 //! audience-confusion boundary, unrecognized issuers, unauthenticated requests,
 //! and metadata union.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 use httpmock::prelude::*;
 use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
@@ -17,18 +17,47 @@ use huskarl_resource_server::{
         jwt::Jwt,
         platform::SystemTime,
     },
-    error::{TokenErrorCode, TokenValidationError},
+    error::{ToRfc6750Error, TokenErrorCode, TokenValidationError},
     validator::{
         AccessTokenValidator,
         custom::CustomValidator,
+        extract::TokenExtractError,
         metadata::ProvideValidatorMetadata,
         multi_issuer::{MapClaims, MultiIssuerError, MultiIssuerValidator},
     },
 };
 use serde::{Deserialize, Serialize};
 
+mod support;
+
 const GOOGLE_AUDIENCE: &str = "google-oauth-client-id";
 const OKTA_AUDIENCE: &str = "api://my-resource";
+
+#[tokio::test]
+async fn rejects_unsupported_scheme_before_parsing_jwt() {
+    let source = support::Stub::new("bearer");
+    let calls = source.calls.clone();
+    let validator = MultiIssuerValidator::builder()
+        .source("issuer", source)
+        .build();
+
+    // A supported scheme would reach JWT parsing and report a malformed token.
+    let result = support::validate(&validator, &support::headers("Basic malformed")).await;
+    let error = result.outcome.unwrap_err();
+    assert!(matches!(
+        &error,
+        MultiIssuerError::Extract {
+            source: TokenExtractError::UnsupportedTokenType { token_type },
+        } if token_type == "Basic"
+    ));
+    assert_eq!(
+        error.challenge().error,
+        TokenValidationError::Client(TokenErrorCode::InvalidRequest)
+    );
+    assert_eq!(error.issuer(), None);
+    assert!(result.dpop_nonce.is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
 
 #[derive(Clone, Deserialize)]
 struct GoogleIdClaims {

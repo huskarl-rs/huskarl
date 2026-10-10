@@ -295,6 +295,10 @@ impl<V: ToRfc6750Error + 'static, E: ToRfc6750Error + 'static> ToRfc6750Error
     fn issuer(&self) -> Option<&str> {
         self.error().issuer()
     }
+
+    fn branch_label(&self) -> Option<&str> {
+        self.error().branch_label()
+    }
 }
 
 #[cfg(all(test, not(target_family = "wasm")))]

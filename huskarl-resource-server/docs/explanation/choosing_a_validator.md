@@ -3,7 +3,7 @@
 A resource server has two jobs: validate the access token presented with a
 request, and decide whether that token authorizes the request. This crate does
 the first. Which [`AccessTokenValidator`](crate::validator::AccessTokenValidator)
-you reach for depends on how your authorization server's tokens are verified.
+you reach for depends on how your API's credentials are verified.
 
 ## [`Rfc9068Validator`](crate::validator::rfc9068::Rfc9068Validator)
 
@@ -43,3 +43,12 @@ validator. It reads the unverified `iss` claim to select a configured validator.
 Opaque tokens cannot be routed this way because they expose no issuer claim.
 See the [multi-issuer routing
 explanation](crate::_docs::explanation::multi_issuer_routing).
+
+## [`PrefixRoutingValidator`](crate::validator::prefix_routing::PrefixRoutingValidator)
+
+Use this when your API accepts credentials with reserved token prefixes, such
+as API keys, alongside OAuth tokens. It selects a validator by the credential's
+prefix without decoding the token. An optional fallback can handle JWTs through
+`MultiIssuerValidator`. Choose this when you control the credential prefixes;
+each selected validator remains responsible for authenticating its credential.
+See the [prefix routing guide](crate::_docs::guide::prefix_routing).

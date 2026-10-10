@@ -1,26 +1,18 @@
-//! Accept access tokens from several issuers with one validator.
+//! Route compact JWS access tokens by their unverified `iss` claim.
 //!
-//! [`MultiIssuerValidator`] routes each request to a per-issuer validator by
-//! reading the token's `iss` claim, then delegates the full validation to it. It
-//! implements [`AccessTokenValidator`], so it drops into a `ValidatorLayer`,
-//! Pingora guard, or any other consumer exactly like a single-issuer validator.
+//! [`MultiIssuerValidator`] delegates full validation to the registered issuer's
+//! validator. Encrypted and opaque tokens are unsupported; use
+//! [`super::prefix_routing`] to route credentials by a reserved prefix.
 //!
-//! Routing supports compact JWS tokens only; encrypted and opaque tokens are
-//! not supported.
+//! Tokens must use the Bearer or DPoP authentication scheme. Each selected
+//! validator enforces its own scheme and sender-constraint requirements.
 //!
-//! Per-issuer validators usually have different claims types; wrap each in
-//! [`MapClaims`] or [`TryMapClaims`] to give them a common type. To read or
-//! rewrite universal token fields such as `sub`, map the whole request with
-//! [`MapRequest`] or [`TryMapRequest`] instead. For why
-//! issuer-based routing is safe and how to unify claim types, see the
-//! [multi-issuer routing
-//! explanation](crate::_docs::explanation::multi_issuer_routing); for a worked
-//! two-issuer example, see the [multi-issuer
-//! guide](crate::_docs::guide::multi_issuer).
+//! [`MapClaims`] and [`TryMapClaims`] unify branch claims types; [`MapRequest`]
+//! and [`TryMapRequest`] map the whole validated request.
 //!
-//! One [`ObservedValidator`](crate::validator::observe::ObservedValidator)
-//! around the composite observes the whole deployment per issuer — sources do
-//! not need their own wrappers.
+//! See the [multi-issuer guide](crate::_docs::guide::multi_issuer) for configuration
+//! and the [routing explanation](crate::_docs::explanation::multi_issuer_routing)
+//! for trust boundaries and claim mapping.
 
 pub mod error;
 mod map;
@@ -239,52 +231,12 @@ fn union_metadata<C>(
     sources: &[(String, Box<dyn SourceValidator<C>>)],
     resource: Option<&str>,
 ) -> ValidatorMetadata {
-    let mut authorization_servers = Vec::new();
-    let mut dpop_algs: Vec<String> = Vec::new();
-    let mut all_require_dpop = !sources.is_empty();
-    let mut any_dpop_supported = false;
-    let mut any_mtls_bound_supported = false;
-    let mut realm: Option<Option<String>> = None;
-    let mut resource_metadata: Option<Option<String>> = None;
-
-    for (_issuer, validator) in sources {
-        let m = validator.validator_metadata(resource);
-        realm = match realm {
-            None => Some(m.realm.clone()),
-            Some(r) if r == m.realm => Some(r),
-            Some(_) => Some(None),
-        };
-        resource_metadata = match resource_metadata {
-            None => Some(m.resource_metadata.clone()),
-            Some(r) if r == m.resource_metadata => Some(r),
-            Some(_) => Some(None),
-        };
-        any_dpop_supported |= m.supports_dpop();
-        any_mtls_bound_supported |= m.tls_client_certificate_bound_access_tokens == Some(true);
-        if let Some(servers) = m.authorization_servers {
-            authorization_servers.extend(servers);
-        }
-        if let Some(algs) = m.dpop_signing_alg_values_supported {
-            for alg in algs {
-                if !dpop_algs.contains(&alg) {
-                    dpop_algs.push(alg);
-                }
-            }
-        }
-        all_require_dpop &= m.dpop_bound_access_tokens_required.unwrap_or(false);
-    }
-
-    ValidatorMetadata {
-        realm: realm.flatten(),
-        authorization_servers: (!authorization_servers.is_empty()).then_some(authorization_servers),
-        dpop_supported: Some(any_dpop_supported),
-        dpop_signing_alg_values_supported: (!dpop_algs.is_empty()).then_some(dpop_algs),
-        dpop_bound_access_tokens_required: Some(all_require_dpop),
-        tls_client_certificate_bound_access_tokens: any_mtls_bound_supported.then_some(true),
-        resource: resource.map(str::to_owned),
-        bearer_methods_supported: Some(vec!["header"]),
-        resource_metadata: resource_metadata.flatten(),
-    }
+    super::metadata::union_metadata(
+        sources
+            .iter()
+            .map(|(_, validator)| validator.validator_metadata(resource)),
+        resource,
+    )
 }
 
 #[cfg(test)]

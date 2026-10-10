@@ -3,6 +3,12 @@
 //! Wrap any [`AccessTokenValidator`] in an [`ObservedValidator`] to record
 //! metrics, emit structured log events, or trigger alerts on each validation
 //! attempt without touching the validator itself.
+//!
+//! Wrapping a composite validator observes all of its branches and routing
+//! failures. For [`MultiIssuerValidator`](super::multi_issuer::MultiIssuerValidator),
+//! one wrapper provides per-issuer observations through [`ValidationEvent::iss`]
+//! whenever a trusted issuer is known. Prefix routers report the selected
+//! branch on failures through [`ValidationEvent::branch_label`].
 
 use std::sync::Arc;
 
@@ -95,6 +101,11 @@ pub struct ValidationEvent<'a> {
     /// unrecognized-issuer rejections, whose unverified `iss` would let
     /// clients mint arbitrary label values.
     pub iss: Option<&'a str>,
+    /// The configured branch label on a routed failure, independent of `iss`.
+    ///
+    /// Provided by [`ToRfc6750Error::branch_label`]. `None` for successful or
+    /// anonymous requests and failures that carry no selected branch.
+    pub branch_label: Option<&'a str>,
 }
 
 /// A callback invoked after each token validation attempt.
@@ -204,11 +215,13 @@ impl<V: AccessTokenValidator> AccessTokenValidator for ObservedValidator<V> {
                     outcome: ValidationOutcome::Success,
                     error: None,
                     iss: validated.iss.as_deref(),
+                    branch_label: None,
                 },
                 Ok(None) => ValidationEvent {
                     outcome: ValidationOutcome::NoToken,
                     error: None,
                     iss: None,
+                    branch_label: None,
                 },
                 Err(e) => {
                     let challenge = e.challenge();
@@ -216,6 +229,7 @@ impl<V: AccessTokenValidator> AccessTokenValidator for ObservedValidator<V> {
                         outcome: e.validation_outcome(&challenge),
                         error: Some(e),
                         iss: e.issuer(),
+                        branch_label: e.branch_label(),
                     }
                 }
             };

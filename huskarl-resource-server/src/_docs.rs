@@ -46,6 +46,9 @@ pub mod guide {
     #[doc = include_str!("../docs/guide/multi_issuer.md")]
     pub mod multi_issuer {}
 
+    #[doc = include_str!("../docs/guide/prefix_routing.md")]
+    pub mod prefix_routing {}
+
     #[doc = include_str!("../docs/guide/dpop.md")]
     pub mod dpop {}
 }

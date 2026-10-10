@@ -109,6 +109,13 @@ impl ToRfc6750Error for MultiIssuerError {
         }
     }
 
+    fn branch_label(&self) -> Option<&str> {
+        match self {
+            Self::Validation { error, .. } => error.branch_label(),
+            _ => None,
+        }
+    }
+
     fn issuer(&self) -> Option<&str> {
         match self {
             // Only the registered issuer is a trusted, bounded label; the
