@@ -58,6 +58,7 @@ guides to adapt that path to your application.
   [custom JWTs](../huskarl-resource-server/docs/guide/custom.md), or by
   [introspection](../huskarl-resource-server/docs/guide/introspection.md)
 - [Accept tokens from several issuers](../huskarl-resource-server/docs/guide/multi_issuer.md)
+- [Accept API keys alongside OAuth tokens](../huskarl-resource-server/docs/guide/prefix_routing.md)
 - [Validate DPoP-bound tokens](../huskarl-resource-server/docs/guide/dpop.md)
 
 ### Work with shared infrastructure

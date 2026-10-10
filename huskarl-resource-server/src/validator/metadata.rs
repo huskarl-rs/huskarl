@@ -349,6 +349,59 @@ pub trait ProvideValidatorMetadata {
     fn validator_metadata(&self, resource: Option<&str>) -> ValidatorMetadata;
 }
 
+/// Combines the capabilities of alternative validators without inventing issuers.
+pub(crate) fn union_metadata(
+    sources: impl IntoIterator<Item = ValidatorMetadata>,
+    resource: Option<&str>,
+) -> ValidatorMetadata {
+    let mut sources = sources.into_iter().peekable();
+    let mut authorization_servers = Vec::new();
+    let mut dpop_algs: Vec<String> = Vec::new();
+    let mut all_require_dpop = sources.peek().is_some();
+    let mut any_dpop_supported = false;
+    let mut any_mtls_bound_supported = false;
+    let mut realm: Option<Option<String>> = None;
+    let mut resource_metadata: Option<Option<String>> = None;
+
+    for m in sources {
+        realm = match realm {
+            None => Some(m.realm.clone()),
+            Some(r) if r == m.realm => Some(r),
+            Some(_) => Some(None),
+        };
+        resource_metadata = match resource_metadata {
+            None => Some(m.resource_metadata.clone()),
+            Some(r) if r == m.resource_metadata => Some(r),
+            Some(_) => Some(None),
+        };
+        any_dpop_supported |= m.supports_dpop();
+        any_mtls_bound_supported |= m.tls_client_certificate_bound_access_tokens == Some(true);
+        if let Some(servers) = m.authorization_servers {
+            authorization_servers.extend(servers);
+        }
+        if let Some(algs) = m.dpop_signing_alg_values_supported {
+            for alg in algs {
+                if !dpop_algs.contains(&alg) {
+                    dpop_algs.push(alg);
+                }
+            }
+        }
+        all_require_dpop &= m.dpop_bound_access_tokens_required.unwrap_or(false);
+    }
+
+    ValidatorMetadata {
+        realm: realm.flatten(),
+        authorization_servers: (!authorization_servers.is_empty()).then_some(authorization_servers),
+        dpop_supported: Some(any_dpop_supported),
+        dpop_signing_alg_values_supported: (!dpop_algs.is_empty()).then_some(dpop_algs),
+        dpop_bound_access_tokens_required: Some(all_require_dpop),
+        tls_client_certificate_bound_access_tokens: any_mtls_bound_supported.then_some(true),
+        resource: resource.map(str::to_owned),
+        bearer_methods_supported: Some(vec!["header"]),
+        resource_metadata: resource_metadata.flatten(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

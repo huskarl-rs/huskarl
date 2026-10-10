@@ -8,7 +8,17 @@
 //! [`custom::CustomValidator`] for an authorization server that follows neither.
 //! See [choosing a validator](crate::_docs::explanation::choosing_a_validator)
 //! for the trade-offs, and [`multi_issuer`] to accept more than one issuer.
+//! To combine application-defined API-key validators with JWT validation, use
+//! [`prefix_routing::PrefixRoutingValidator`] with an optional fallback.
+//!
+//! Single validators and routers implement the same [`AccessTokenValidator`]
+//! interface, so either can be used with a `ValidatorLayer`, Pingora guard, or
+//! another consumer of that trait. Adapters that advertise capabilities also
+//! require [`metadata::ProvideValidatorMetadata`].
+//!
 //! Wrap any validator in an [`observe::ObservedValidator`] to record metrics.
+//! One wrapper around a router observes every validation attempt, including
+//! routing failures; individual branches do not need their own wrappers.
 
 mod binding;
 mod common;
@@ -21,6 +31,7 @@ pub mod introspection;
 pub mod metadata;
 pub mod multi_issuer;
 pub mod observe;
+pub mod prefix_routing;
 pub mod rfc9068;
 
 use crate::{
@@ -41,12 +52,20 @@ pub const DEFAULT_CLOCK_LEEWAY: Duration = Duration::from_secs(10);
 
 /// A trait for validators that authenticate and validate access tokens from HTTP requests.
 ///
-/// Implementations handle token extraction from request headers, JWT validation,
+/// Implementations handle token extraction from request headers, credential validation,
 /// and sender-constraint binding checks (`DPoP`, mTLS).
 ///
 /// The `outcome` field of [`ValidationResult`] is `Ok(None)` when no authentication header is
 /// present (unauthenticated request), `Ok(Some(_))` when a valid token is found, and `Err(_)`
 /// when a token is present but invalid.
+///
+/// # Implementing
+///
+/// Reject unsupported schemes and sender constraints with `Err(_)`. Returning
+/// `Ok(Some(_))` requires full credential and binding validation; populating
+/// [`ValidatedRequest::cnf`] does not trigger later checks.
+/// See the [prefix routing guide](crate::_docs::guide::prefix_routing) for
+/// application-defined validators.
 pub trait AccessTokenValidator: MaybeSendSync {
     /// The application-specific claims type extracted from the token.
     type Claims: MaybeSendSync;

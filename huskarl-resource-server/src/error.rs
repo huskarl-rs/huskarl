@@ -498,15 +498,17 @@ macro_rules! forwarding_table {
 ///
 /// Implementations provide the client-visible [`Challenge`] separately from
 /// contextual metadata such as the attempted authentication scheme, observation
-/// outcome, and trusted issuer.
+/// outcome, trusted issuer, and configured branch label.
 ///
 /// # Implementing
 ///
 /// An error that wraps another [`ToRfc6750Error`] must return the inner
 /// [`Challenge`] unchanged and expose the inner error through
 /// [`std::error::Error::source`]. The wrapper should report contextual values
-/// itself: the presented scheme, validation stage, and registered issuer may be
-/// known only at that layer.
+/// itself: the presented scheme, validation stage, registered issuer, and
+/// configured branch label may be known only at that layer. Forward the inner
+/// [`branch_label`](Self::branch_label) unless the wrapper supplies its own
+/// routing context; document the precedence when overriding it.
 ///
 /// [`forwarding_table!`](crate::forwarding_table) can verify challenge
 /// forwarding in tests.
@@ -542,6 +544,14 @@ pub trait ToRfc6750Error: std::error::Error + MaybeSendSync {
     /// registered issuers), never unverified token contents — an attacker could
     /// otherwise mint unbounded label values. Defaults to `None`.
     fn issuer(&self) -> Option<&str> {
+        None
+    }
+
+    /// The configured routing branch that failed, if known.
+    ///
+    /// This is separate from the token issuer. Return only configured, bounded
+    /// labels, never presented token values. Error wrappers should forward it.
+    fn branch_label(&self) -> Option<&str> {
         None
     }
 }

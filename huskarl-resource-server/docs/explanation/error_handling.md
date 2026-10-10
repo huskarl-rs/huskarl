@@ -14,15 +14,15 @@ of information:
 - [`Challenge`](crate::error::Challenge) contains response metadata: the error
   classification, client-safe description, required scope, and additional
   challenge parameters.
-- `attempted_scheme`, `validation_outcome`, and `issuer` describe the context in
-  which the failure occurred.
+- `attempted_scheme`, `validation_outcome`, `issuer`, and `branch_label`
+  describe the context in which the failure occurred.
 
 This distinction matters for composed validators. A wrapper preserves the inner
 challenge because the underlying failure still determines the wire response.
 It reports context itself because only the wrapper may know whether the token
 was presented as `Bearer` or `DPoP`, which validation stage failed, or which
-registered issuer was selected. The inner error remains available through
-[`std::error::Error::source`] for diagnostics and downcasting.
+registered issuer or credential branch was selected. The inner error remains
+available through [`std::error::Error::source`] for diagnostics and downcasting.
 
 A challenge owns its description, parameters, and scope. Code that needs both
 response and observation metadata can build it once, then pass the same value
@@ -95,6 +95,18 @@ routine protocol outcomes separate from conditions that may need investigation:
 [`issuer`](crate::error::ToRfc6750Error::issuer) is a metrics label, so it must
 return only configured or registered values — never unverified token contents,
 which an attacker could use to mint unbounded label cardinality.
+
+A credential branch and a token issuer describe different things. An API key
+may have no issuer claim, but its configured branch still identifies which
+validator rejected it. [`branch_label`](crate::error::ToRfc6750Error::branch_label)
+keeps that routing context separate from `issuer`, so observing API-key failures
+does not require inventing an issuer. Like issuer labels, branch labels come
+from configuration rather than credential contents.
+
+[`ObservedValidator`](crate::validator::observe::ObservedValidator) includes
+this label on routed failures. Successful and anonymous requests have no failure
+branch label. Label defaults and precedence for nested routers are described in
+[`prefix_routing`](crate::validator::prefix_routing).
 
 ## Nonce and missing-token responses
 
