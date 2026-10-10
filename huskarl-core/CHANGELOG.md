@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.7...huskarl-core-v0.10.8) - 2026-10-10
+
+### Added
+
+- *(core)* Add client_id_metadata_document_supported to AS metadata ([#353](https://github.com/huskarl-rs/huskarl/pull/353))
+
 ## [0.10.7](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.6...huskarl-core-v0.10.7) - 2026-10-09
 
 ### Added
