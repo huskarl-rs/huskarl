@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.10](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.9...huskarl-resource-server-v0.11.10) - 2026-10-10
+
+### Added
+
+- *(resource-server)* Add prefix routing validator ([#355](https://github.com/huskarl-rs/huskarl/pull/355))
+
 ## [0.11.9](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.8...huskarl-resource-server-v0.11.9) - 2026-10-09
 
 ### Added
