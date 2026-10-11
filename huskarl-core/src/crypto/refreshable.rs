@@ -145,11 +145,17 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
             return Ok(GatedRefresh::Blocked);
         }
 
+        self.reload(record).await?;
+        Ok(GatedRefresh::Refreshed)
+    }
+
+    // The caller holds refresh_lock through publication and outcome recording.
+    async fn reload(&self, record: impl FnOnce(bool)) -> Result<(), Error> {
         match self.factory.call().await {
             Ok(new_value) => {
                 self.value.store(Arc::new(new_value));
                 record(true);
-                Ok(GatedRefresh::Refreshed)
+                Ok(())
             }
             Err(e) => {
                 record(false);
@@ -163,9 +169,14 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     /// return immediately without waiting.
     ///
     /// Returns `Ok(true)` if this call fetched and swapped a new value, or
-    /// `Ok(false)` if a refresh was already in flight (or had just completed) and
-    /// this call did nothing.
-    pub(crate) async fn try_refresh_ahead(&self) -> Result<bool, Error> {
+    /// `Ok(false)` if a refresh was already in flight, had just completed, or
+    /// the gate declined the attempt. The gate and outcome recording run under the
+    /// refresh lock, just as in [`refresh_gated`](Self::refresh_gated).
+    pub(crate) async fn try_refresh_ahead(
+        &self,
+        gate: impl FnOnce() -> bool,
+        record: impl FnOnce(bool),
+    ) -> Result<bool, Error> {
         let cur = self.value.load_full();
         let Ok(_lock) = self.refresh_lock.try_lock() else {
             // Another caller is refreshing; don't block, keep serving `cur`.
@@ -175,9 +186,16 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
             // A refresh landed between our load and taking the lock.
             return Ok(false);
         }
+        if !gate() {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                decision = "defer_refresh",
+                "Refresh policy declined the attempt"
+            );
+            return Ok(false);
+        }
 
-        let new_value = self.factory.call().await?;
-        self.value.store(Arc::new(new_value));
+        self.reload(record).await?;
         Ok(true)
     }
 
@@ -328,7 +346,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     ///
     /// Does **not** consider the TTL — that is a *staleness* bound, not an
     /// attempt-permission. See [`should_refresh_stale`](Self::should_refresh_stale)
-    /// versus [`policy_permits_miss_refresh`](Self::policy_permits_miss_refresh).
+    /// versus the miss path's under-lock [`claim_refresh_attempt`](Self::claim_refresh_attempt).
     fn policy_permits_attempt(&self, now: Instant, ts: &RefreshTimestamps) -> bool {
         // Cold: no value has ever loaded, so every request is failing now — recover
         // far more urgently than the warm `failure_backoff`/`min_refresh_interval`,
@@ -393,22 +411,6 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         self.policy_permits_attempt(now, &ts)
     }
 
-    /// Miss-path gate: policy permits an attempt, *regardless of staleness*. A
-    /// miss — no held key matched an arriving token — is itself the trigger (a
-    /// key was likely *added* upstream), so the TTL, which bounds removals, must
-    /// not gate it; only the abuse-prevention floor does. This is what makes the
-    /// miss-triggered reload a genuine fast path for key additions *within* the
-    /// TTL window, rather than a no-op until the TTL happens to expire.
-    fn policy_permits_miss_refresh(&self) -> bool {
-        let now = Instant::now();
-        let ts = self
-            .timestamps
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        self.policy_permits_attempt(now, &ts)
-    }
-
     fn record_refresh(&self, success: bool) {
         #[cfg(feature = "tracing")]
         tracing::debug!(
@@ -457,66 +459,55 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         self.refresh_with_policy(true).await
     }
 
-    /// Miss-triggered refresh (blocking): a held-key *miss* asks for a reload.
-    /// Gated by the rate-limit/backoff policy but **not** the TTL — a miss is
-    /// itself the trigger (a key was likely *added* upstream), so a fresh-but-
-    /// incomplete keyset must still be allowed to reload and pick it up. This is
-    /// what makes [`RetryingVerifier`](crate::crypto::verifier::RetryingVerifier)
-    /// and [`RetryingDecryptor`](crate::crypto::cipher::RetryingDecryptor) a
-    /// genuine fast path for key additions *within* the TTL window, rather than a
-    /// no-op until the TTL happens to expire. Returns `true` if this call
-    /// refreshed successfully, `false` if the policy blocked it or it failed.
+    /// Waits for a concurrent refresh or attempts a reload after a key miss.
+    /// New attempts obey rate limiting and backoff, but are not TTL-gated.
+    /// Returns `true` after a successful reload or adoption, and `false` if
+    /// policy blocks the attempt or the reload fails.
     pub(crate) async fn try_refresh_on_miss(&self) -> bool {
-        // Cheap pre-check so clearly-blocked callers don't queue on the lock.
-        if !self.policy_permits_miss_refresh() {
-            return false;
-        }
-
+        // Join an in-flight refresh before evaluating the attempt policy. Its
+        // claimed timestamp throttles new fetches, not adoption of its result.
+        // The under-lock gate still blocks another fetch after failure.
         self.refresh_with_policy(false).await
     }
 
-    /// Runs a blocking refresh whose policy gate is evaluated **under** the
-    /// single-flight lock, claiming `last_refresh_attempt` before the factory
-    /// runs. A failed fetch stores nothing — the pointer-swap dedup cannot
-    /// de-duplicate it — so without the under-lock claim, every waiter queued
-    /// behind a failing fetch would pass the pre-lock policy check and then
-    /// re-invoke the factory in turn, bypassing `min_refresh_interval` and
-    /// `failure_backoff` exactly when the upstream is struggling.
-    ///
-    /// The outcome is likewise recorded while the lock is still held, so a
-    /// failure's `failure_backoff` blocks the queued waiters even when
-    /// `min_refresh_interval` is zero (where the claimed attempt is inert).
-    ///
-    /// `ttl_gated` re-checks staleness under the lock too (the stale path);
-    /// the miss path passes `false` — a miss is its own trigger.
+    // Called only with the refresh lock held. The pre-lock policy checks are
+    // optimizations; this gate is authoritative for every policy-gated path.
+    // Claiming the attempt before the factory runs means a cancelled warm fetch
+    // still counts against `min_refresh_interval`.
+    fn claim_refresh_attempt(&self, ttl_gated: bool) -> bool {
+        let now = Instant::now();
+        let mut ts = self
+            .timestamps
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if ttl_gated
+            && let Some(last) = ts.last_refreshed
+            && now
+                .checked_duration_since(last)
+                .is_some_and(|elapsed| elapsed < self.ttl)
+        {
+            return false;
+        }
+        if !self.policy_permits_attempt(now, &ts) {
+            return false;
+        }
+        // Claim the attempt while still under the refresh lock so queued
+        // waiters observe it the moment they acquire the lock.
+        ts.last_refresh_attempt = Some(now);
+        true
+    }
+
+    /// Waits for a refresh using [`Refreshable::refresh_gated`], claiming the
+    /// attempt and recording its outcome under the lock. `ttl_gated` additionally
+    /// requires staleness; the miss path passes `false`.
     async fn refresh_with_policy(&self, ttl_gated: bool) -> bool {
-        let gate = || {
-            let now = Instant::now();
-            let mut ts = self
-                .timestamps
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-            if ttl_gated
-                && let Some(last) = ts.last_refreshed
-                && now
-                    .checked_duration_since(last)
-                    .is_some_and(|elapsed| elapsed < self.ttl)
-            {
-                return false;
-            }
-            if !self.policy_permits_attempt(now, &ts) {
-                return false;
-            }
-            // Claim the attempt while still under the refresh lock so queued
-            // waiters observe it the moment they acquire the lock.
-            ts.last_refresh_attempt = Some(now);
-            true
-        };
-
         match self
             .inner
-            .refresh_gated(gate, |success| self.record_refresh(success))
+            .refresh_gated(
+                || self.claim_refresh_attempt(ttl_gated),
+                |success| self.record_refresh(success),
+            )
             .await
         {
             // Adopted: another task's refresh landed while we waited; it
@@ -537,15 +528,21 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         if !self.should_refresh_stale() {
             return;
         }
-        // The seam for a future opt-in *async* mode: the elected caller could
-        // hand this refresh to a runtime spawn and return immediately, serving
-        // the still-in-TTL keyset. Kept as one `.await` so that stays local.
-        match self.inner.try_refresh_ahead().await {
-            Ok(true) => self.record_refresh(true),
-            // Another caller won the single-flight; let them record the attempt.
-            Ok(false) => {}
-            Err(_) => self.record_refresh(false),
-        }
+        self.refresh_ahead_with_policy().await;
+    }
+
+    // Separate from the cheap pre-check so a delayed reader must re-evaluate
+    // policy even if another attempt completed after it observed staleness.
+    async fn refresh_ahead_with_policy(&self) {
+        // The outcome is recorded under the lock; a busy lock, an adopted
+        // refresh, or a policy block leaves the current value in place.
+        let _ = self
+            .inner
+            .try_refresh_ahead(
+                || self.claim_refresh_attempt(true),
+                |success| self.record_refresh(success),
+            )
+            .await;
     }
 
     /// Forces a refresh bypassing the scheduling policy, but still records the outcome.
@@ -654,6 +651,50 @@ mod tests {
             "a second miss within min_refresh_interval is blocked"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2, "no extra fetch");
+    }
+
+    #[tokio::test]
+    async fn concurrent_misses_adopt_in_flight_refresh_without_an_extra_fetch() {
+        // Exercise both read-triggered and miss-triggered refreshes. Yielding
+        // inside the factory lets the miss callers arrive after the attempt
+        // has been claimed, but before the replacement is published.
+        for read_triggered in [true, false] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let counter = calls.clone();
+            let sr = ScheduledRefreshable::builder()
+                .factory(move || {
+                    let n = counter.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        if n > 0 {
+                            tokio::task::yield_now().await;
+                        }
+                        Ok(n)
+                    })
+                })
+                .ttl(Duration::ZERO)
+                .min_refresh_interval(Duration::from_mins(1))
+                .build()
+                .await
+                .unwrap();
+            let ((), first, second) = tokio::join!(biased;
+                async {
+                    if read_triggered {
+                        sr.poll_refresh_ahead().await;
+                    } else {
+                        assert!(sr.try_refresh_on_miss().await);
+                    }
+                },
+                sr.try_refresh_on_miss(),
+                sr.try_refresh_on_miss(),
+            );
+            assert!(first && second, "misses must adopt the in-flight refresh");
+            assert_eq!(*sr.load_full(), 1);
+            assert!(
+                !sr.try_refresh_on_miss().await,
+                "new fetches stay throttled"
+            );
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+        }
     }
 
     /// The manual `refresh_if_stale` stays TTL-gated (the outbound staleness poll
@@ -846,6 +887,98 @@ mod tests {
             2,
             "a stale value is reloaded on the read path"
         );
+    }
+
+    #[tokio::test]
+    async fn delayed_reader_rechecks_backoff_after_a_failed_refresh() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(failing_after_first(calls.clone()))
+            .ttl(Duration::ZERO)
+            .min_refresh_interval(Duration::ZERO)
+            .failure_backoff(Duration::from_hours(1))
+            .build()
+            .await
+            .unwrap();
+        // Reader A passes its cheap pre-check, then reader B completes a
+        // failed reload before A acquires the lock. No pointer swap occurs.
+        assert!(sr.should_refresh_stale());
+        sr.poll_refresh_ahead().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        sr.refresh_ahead_with_policy().await;
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "reader A must observe B's backoff under the lock"
+        );
+        assert_eq!(*sr.load_full(), 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_read_refresh_remains_rate_limited() {
+        use futures_util::FutureExt as _;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let sr = ScheduledRefreshable::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    if n == 1 {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(n)
+                })
+            })
+            .ttl(Duration::ZERO)
+            .min_refresh_interval(Duration::from_hours(1))
+            .build()
+            .await
+            .unwrap();
+
+        // Poll the fetch once, then cancel it without waiting on a timer.
+        assert!(sr.poll_refresh_ahead().now_or_never().is_none());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        sr.poll_refresh_ahead().await;
+        assert!(!sr.try_refresh_on_miss().await);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(*sr.load_full(), 0, "the original value is retained");
+    }
+
+    #[tokio::test]
+    async fn read_refresh_does_not_block_concurrent_readers() {
+        use futures_util::FutureExt as _;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let release = Arc::new(tokio::sync::Notify::new());
+        let notify = release.clone();
+        let sr = ScheduledRefreshable::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                let notify = notify.clone();
+                Box::pin(async move {
+                    if n > 0 {
+                        notify.notified().await;
+                    }
+                    Ok(n)
+                })
+            })
+            .ttl(Duration::ZERO)
+            .min_refresh_interval(Duration::ZERO)
+            .build()
+            .await
+            .unwrap();
+
+        let mut refresh = Box::pin(sr.poll_refresh_ahead());
+        assert!(futures_util::poll!(&mut refresh).is_pending());
+        assert_eq!(sr.poll_refresh_ahead().now_or_never(), Some(()));
+        assert_eq!(*sr.load_full(), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        release.notify_one();
+        refresh.await;
+        assert_eq!(*sr.load_full(), 1);
     }
 
     /// A factory whose first call (the initial build) fails and every later call
