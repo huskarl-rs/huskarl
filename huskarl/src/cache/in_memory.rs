@@ -7,7 +7,7 @@ use rand::RngExt as _;
 use crate::{
     cache::{GrantTokenSource, RefreshTokenStore, TokenCache, TokenError, TokenSource},
     core::{
-        Error,
+        Error, RetryAdvice,
         dpop::ResourceServerDPoP,
         platform::{Duration, MaybeSendBoxFuture},
         time::{Clock, Timer},
@@ -203,7 +203,15 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
     }
 
     async fn acquire(&self) -> Result<Arc<TokenResponse>, TokenError> {
+        // A primed token replaces the old one, even if the new token is expired.
+        // Drop the old token now so later calls cannot return it.
+        if self.source.has_pending_token() {
+            self.cached.store(None);
+        }
         let token = self.source.token().await?;
+        if !self.is_valid(&token) {
+            return Err(Error::new(RetryAdvice::RETRY, "access token expired").into());
+        }
         self.cached.store(Some(token.clone()));
         Ok(token)
     }
@@ -225,34 +233,37 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
         token.is_expired_at(self.clock.now(), self.default_expires_in, trigger)
     }
 
-    /// Refreshes a token that is valid but past the refresh trigger (the
-    /// jitter band or the refresh-ahead window), without blocking concurrent
-    /// callers.
+    /// Starts an early refresh. Other callers can use the cached token while
+    /// it remains valid.
     ///
-    /// One caller is elected via a non-blocking lock; the rest are handed the
-    /// still-valid `current` token. Because that token still covers the request,
-    /// a failed refresh is swallowed (a later call retries) — the slack is the
-    /// point of refreshing early.
-    async fn refresh_ahead_now(&self, current: Arc<TokenResponse>) -> Arc<TokenResponse> {
-        // Non-blocking: if the lock is held, another caller is already
-        // refreshing (ahead or at the hard margin). Serve the valid token.
+    /// If refresh fails, returns the cached token only if it is still valid
+    /// and has not been replaced by a primed token. Otherwise returns the error.
+    async fn refresh_ahead_now(
+        &self,
+        current: Arc<TokenResponse>,
+    ) -> Result<Arc<TokenResponse>, TokenError> {
+        // If another caller is refreshing, use the current token while it is
+        // valid. Otherwise wait for the refresh.
         let Ok(_refresh_lock) = self.refresh_lock.try_lock() else {
-            return current;
+            if self.is_valid(&current) {
+                return Ok(current);
+            }
+            return self.token().await;
         };
 
-        // Re-check under the lock: a concurrent refresh may have already moved
-        // the token out of the window, or a pending token may now supersede it.
+        // Another caller may have refreshed already. Reuse its token unless
+        // it needs an early refresh or a primed replacement is waiting.
         if !self.source.has_pending_token()
             && let Some(token) = self.get_valid_cached()
             && !self.in_refresh_window(&token)
         {
-            return token;
+            return Ok(token);
         }
 
         match self.acquire().await {
-            Ok(token) => token,
-            // Serve the current token and let a later call retry.
-            Err(_) => current,
+            Ok(token) => Ok(token),
+            // The old token may have expired or been removed during refresh.
+            Err(error) => self.get_valid_cached().ok_or(error),
         }
     }
 }
@@ -264,23 +275,18 @@ impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
     )]
     fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
         Box::pin(async move {
-            // A token freshly injected into the source (e.g. via `prime`) must
-            // supersede any still-valid cached token, so don't short-circuit on
-            // the cache while one is pending.
+            // Use the cache unless a primed replacement is waiting.
             if !self.source.has_pending_token()
                 && let Some(token) = self.get_valid_cached()
             {
-                // Valid, but past the refresh trigger (jitter band or
-                // refresh-ahead window): refresh now on the non-blocking path so
-                // other callers aren't stalled. With neither jitter nor
-                // refresh-ahead this never fires — the original fast path.
+                // Refresh early while other callers can still use this token.
                 if self.in_refresh_window(&token) {
                     #[cfg(feature = "tracing")]
                     tracing::trace!(
                         decision = "refresh_ahead",
                         "Cached token entered its refresh window"
                     );
-                    return Ok(self.refresh_ahead_now(token).await);
+                    return self.refresh_ahead_now(token).await;
                 }
                 #[cfg(feature = "tracing")]
                 tracing::trace!(decision = "cache_hit", "Serving cached token");
@@ -292,11 +298,10 @@ impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
                 "No usable cached token; acquiring from source"
             );
 
-            // Single-flight: concurrent callers coalesce onto one acquisition.
+            // Only one caller at a time asks the source for a token.
             let _refresh_lock = self.refresh_lock.lock().await;
 
-            // Re-check under the lock: another caller may have consumed the
-            // pending token and cached it while we waited.
+            // Another caller may have filled the cache while we waited.
             if !self.source.has_pending_token()
                 && let Some(token) = self.get_valid_cached()
             {
@@ -542,8 +547,8 @@ mod tests {
             ]))
             .build();
 
-        // The first (already-expired) token is served once, then refetched.
-        assert_eq!(access_of(&cache.token().await.unwrap()), "expired");
+        // Never serve an already-expired token, even on its first acquisition.
+        assert!(cache.token().await.is_err());
         assert_eq!(access_of(&cache.token().await.unwrap()), "fresh");
         assert_eq!(cache.source().calls(), 2);
     }
@@ -671,6 +676,50 @@ mod tests {
         assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
         // Refresh attempted (calls == 2) but failed; t1 is served regardless.
         assert_eq!(access_of(&cache.token().await.unwrap()), "t1");
+        assert_eq!(cache.source().calls(), 2);
+    }
+
+    #[tokio::test]
+    async fn refresh_ahead_does_not_fall_back_to_a_superseded_token() {
+        let cache = refresh_ahead_cache([Ok(token("old", 100)), Ok(token("expired", 0))]);
+        let current = cache.token().await.unwrap();
+
+        // A replacement arrives just before the early refresh starts.
+        cache.source().set_pending(true);
+        assert!(cache.refresh_ahead_now(current).await.is_err());
+        assert!(cache.get_valid_cached().is_none());
+    }
+
+    #[tokio::test]
+    async fn refresh_ahead_waits_when_current_retires_before_try_lock() {
+        let time = crate::core::time::ManualTime::default();
+        let cache = InMemoryTokenCache::builder()
+            .source(FakeSource::new([
+                Ok(local_token(&time, Some(100))),
+                Ok(local_token(&time, Some(1000))),
+            ]))
+            .clock(time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_ahead(Duration::from_secs(20))
+            .refresh_jitter(None)
+            .build();
+        cache.token().await.unwrap();
+        time.advance(Duration::from_secs(80)).unwrap();
+        let current = cache.get_valid_cached().unwrap();
+        assert!(cache.in_refresh_window(&current));
+
+        let refresh_lock = cache.refresh_lock.lock().await;
+        // The token expires after we select it, while another refresh holds
+        // the lock. The caller must wait instead of returning the expired token.
+        time.advance(Duration::from_secs(20)).unwrap();
+        let mut refresh = std::pin::pin!(cache.refresh_ahead_now(current.clone()));
+        assert!(futures_util::poll!(&mut refresh).is_pending());
+        assert_eq!(cache.source().calls(), 1);
+
+        drop(refresh_lock);
+        let replacement = refresh.await.unwrap();
+        assert!(!Arc::ptr_eq(&replacement, &current));
+        assert!(cache.is_valid(&replacement));
         assert_eq!(cache.source().calls(), 2);
     }
 
@@ -832,8 +881,7 @@ mod tests {
             .expires_margin(Duration::ZERO)
             .refresh_jitter(None)
             .build();
-        second.token().await.unwrap();
-        assert!(second.get_valid_cached().is_none());
+        assert!(second.token().await.is_err());
         assert!(cache.get_valid_cached().is_none());
     }
 
@@ -867,7 +915,76 @@ mod tests {
         assert!(outer.get_valid_cached().is_some());
         cache_time.advance(Duration::from_secs(20)).unwrap();
         assert!(outer.get_valid_cached().is_none());
+        assert!(outer.token().await.is_err());
         assert!(Arc::ptr_eq(&cached, &inner.token().await.unwrap()));
+    }
+
+    struct SlowRefreshSource {
+        source: FakeSource,
+        time: crate::core::time::ManualTime,
+        delay: Duration,
+        delay_from_call: usize,
+    }
+
+    impl TokenSource for SlowRefreshSource {
+        fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
+            Box::pin(async move {
+                let result = self.source.token().await;
+                if self.source.calls() >= self.delay_from_call {
+                    self.time.advance(self.delay).unwrap();
+                }
+                result
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_rechecks_retirement_before_serving_old_token() {
+        for delay in [9, 10] {
+            let time = crate::core::time::ManualTime::default();
+            let response = local_token(&time, Some(100));
+            let cache = InMemoryTokenCache::builder()
+                .source(SlowRefreshSource {
+                    source: FakeSource::new([
+                        Ok(response),
+                        Err(Error::new(RetryAdvice::RETRY, "refresh failed")),
+                    ]),
+                    time: time.clone(),
+                    delay: Duration::from_secs(delay),
+                    delay_from_call: 2,
+                })
+                .clock(time.clone())
+                .expires_margin(Duration::from_secs(10))
+                .refresh_ahead(Duration::from_secs(20))
+                .refresh_jitter(None)
+                .build();
+            cache.token().await.unwrap();
+            time.advance(Duration::from_secs(80)).unwrap();
+            let result = cache.token().await;
+            assert_eq!(result.is_ok(), delay < 10);
+            if let Err(error) = result {
+                assert!(format!("{error:#}").contains("refresh failed"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn token_that_expires_during_acquisition_is_not_served() {
+        let time = crate::core::time::ManualTime::default();
+        let response = local_token(&time, Some(100));
+        let cache = InMemoryTokenCache::builder()
+            .source(SlowRefreshSource {
+                source: FakeSource::new([Ok(response)]),
+                time: time.clone(),
+                delay: Duration::from_secs(100),
+                delay_from_call: 1,
+            })
+            .clock(time.clone())
+            .expires_margin(Duration::ZERO)
+            .refresh_jitter(None)
+            .build();
+        assert!(cache.token().await.is_err());
+        assert!(cache.get_valid_cached().is_none());
     }
 
     #[tokio::test]

@@ -72,9 +72,15 @@ early-refresh window. The cache does not clamp it to the lifetime: a
 sufficiently large value puts every newly acquired token in that window.
 
 While the cached token is still valid, one caller acquires the refresh lock
-without waiting and performs the refresh inline. **That caller waits for the
-refresh; concurrent callers receive the cached token.** If the refresh fails,
-the elected caller receives the existing token and a later call retries.
+without waiting and starts the refresh. That caller waits for the refresh to
+finish; concurrent callers receive the cached token.
+
+If the refresh fails, the cache checks the cached token again. If the token has
+reached its retirement threshold, the cache returns the refresh error. Otherwise,
+it returns the cached token.
+
+The cache also rejects newly acquired tokens that have already reached their
+retirement threshold.
 
 ## Why jitter is enabled by default
 
