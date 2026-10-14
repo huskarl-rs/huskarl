@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.7](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.6...huskarl-v0.11.7) - 2026-10-14
+
+### Added
+
+- *(client)* Add method to validate ID tokens returned from refresh grant. ([#322](https://github.com/huskarl-rs/huskarl/pull/322))
+
 ## [0.11.6](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.5...huskarl-v0.11.6) - 2026-10-09
 
 ### Fixed
