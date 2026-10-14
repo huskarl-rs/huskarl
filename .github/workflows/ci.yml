@@ -149,7 +149,9 @@ jobs:
           docker compose up --wait                                                # Keycloak (8080 + 8444)
           docker compose -f dex/docker-compose.yml up -d                          # Dex (5556)
           docker compose -f node-oidc-provider/docker-compose.yml up -d --build   # node-oidc (3000)
-          mise run authentik:up
+          # This task only needs Docker and curl. Without --skip-tools, mise
+          # installs every missing dev tool after mise-action saved its cache.
+          mise run --skip-tools authentik:up
           docker compose -f redis/docker-compose.yml up --wait                    # Redis (6379)
           # Dex and node-oidc images carry no healthcheck, so wait on their
           # discovery endpoints from the host (mirrors the mise `*:up` tasks).
