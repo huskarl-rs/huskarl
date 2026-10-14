@@ -76,6 +76,9 @@ pub mod guide {
 
 /// Understanding-oriented background on how the crate works and why.
 pub mod explanation {
+    #[doc = include_str!("../docs/explanation/oidc_refresh.md")]
+    pub mod oidc_refresh {}
+
     #[doc = include_str!("../docs/explanation/dpop_bindings.md")]
     pub mod dpop_bindings {}
 

@@ -591,9 +591,11 @@ async fn assert_bound_refreshes(
             .await
             .expect("refresh bound ID token");
         let validated = validator
-            .validate(response.id_token().expect("refreshed ID token"), None)
+            // Both refreshes must preserve the initial authentication, even
+            // when an intermediate response omits optional identity claims.
+            .validate_refresh(response.id_token().expect("refreshed ID token"), &initial)
             .await
-            .expect("validate refreshed ID token");
+            .expect("validate bound ID token against the original authentication");
         assert_eq!(validated.sub, initial.sub);
         assert_bound_id_token(&response, expected_jkt, access_token_type);
     }
