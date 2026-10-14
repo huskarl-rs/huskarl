@@ -7,30 +7,37 @@ backend = "aqua:EmbarkStudios/cargo-deny"
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-arm64"]
 checksum = "sha256:995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598345"
 
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-arm64-musl"]
 checksum = "sha256:995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598345"
 
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-x64"]
 checksum = "sha256:9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598214"
 
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-x64-musl"]
 checksum = "sha256:9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598214"
 
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.macos-arm64"]
 checksum = "sha256:fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471597689"
 
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.macos-x64"]
 checksum = "sha256:248da7f581724e470071990c088ffc55c811981715f4cbdb258621fb79f8b7a6"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598357"
 
 [tools."aqua:EmbarkStudios/cargo-deny"."platforms.windows-x64"]
 checksum = "sha256:975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc"
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471599057"
 
 [[tools."aqua:wasm-bindgen/wasm-pack"]]
 version = "0.15.0"
@@ -39,30 +46,37 @@ backend = "aqua:wasm-bindgen/wasm-pack"
 [tools."aqua:wasm-bindgen/wasm-pack"."platforms.linux-arm64"]
 checksum = "sha256:e17ef0806381c3a0acb9c9ddad643a49facaa5a2ecf657a421d4d8f3357a24b7"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/420850444"
 
 [tools."aqua:wasm-bindgen/wasm-pack"."platforms.linux-arm64-musl"]
 checksum = "sha256:e17ef0806381c3a0acb9c9ddad643a49facaa5a2ecf657a421d4d8f3357a24b7"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/420850444"
 
 [tools."aqua:wasm-bindgen/wasm-pack"."platforms.linux-x64"]
 checksum = "sha256:c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/420850440"
 
 [tools."aqua:wasm-bindgen/wasm-pack"."platforms.linux-x64-musl"]
 checksum = "sha256:c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/420850440"
 
 [tools."aqua:wasm-bindgen/wasm-pack"."platforms.macos-arm64"]
 checksum = "sha256:d3f1a4a33e95f8f0d7801b024e08624c479999ac96aa150908b2394015cd0363"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/420850460"
 
 [tools."aqua:wasm-bindgen/wasm-pack"."platforms.macos-x64"]
 checksum = "sha256:d3f1a4a33e95f8f0d7801b024e08624c479999ac96aa150908b2394015cd0363"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/420850460"
 
 [tools."aqua:wasm-bindgen/wasm-pack"."platforms.windows-x64"]
 checksum = "sha256:518dc51180c7bc864699c9279b3bc99025bc109123e0249a34ba34d130a509bf"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-pc-windows-msvc.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/420850448"
 
 [[tools."cargo:cargo-docs-rs"]]
 version = "1.0.4"
@@ -72,9 +86,17 @@ backend = "cargo:cargo-docs-rs"
 version = "0.13.2"
 backend = "cargo:cargo-fuzz"
 
+[[tools."cargo:cargo-hack"]]
+version = "0.6.45"
+backend = "cargo:cargo-hack"
+
 [[tools."cargo:cargo-llvm-cov"]]
 version = "0.8.7"
 backend = "cargo:cargo-llvm-cov"
+
+[[tools."cargo:cargo-minimal-versions"]]
+version = "0.1.37"
+backend = "cargo:cargo-minimal-versions"
 
 [[tools."cargo:cargo-msrv"]]
 version = "0.19.3"
@@ -96,34 +118,6 @@ backend = "cargo:cargo-semver-checks"
 version = "0.10.2"
 backend = "cargo:cargo-vet"
 
-[[tools.release-plz]]
-version = "0.3.159"
-backend = "aqua:release-plz/release-plz"
-
-[tools.release-plz."platforms.linux-arm64"]
-checksum = "sha256:58b80ecce86ac24cbecf3f4cf37eeb0412583a0adf3a8ae608b6a4eb71737f35"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.159/release-plz-aarch64-unknown-linux-musl.tar.gz"
-
-[tools.release-plz."platforms.linux-arm64-musl"]
-checksum = "sha256:58b80ecce86ac24cbecf3f4cf37eeb0412583a0adf3a8ae608b6a4eb71737f35"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.159/release-plz-aarch64-unknown-linux-musl.tar.gz"
-
-[tools.release-plz."platforms.linux-x64"]
-checksum = "sha256:b634dcb4a1b0724e00e924ab50e685704ef2bf8c6ebb809f4ac2ab16ac8458d9"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.159/release-plz-x86_64-unknown-linux-musl.tar.gz"
-
-[tools.release-plz."platforms.linux-x64-musl"]
-checksum = "sha256:b634dcb4a1b0724e00e924ab50e685704ef2bf8c6ebb809f4ac2ab16ac8458d9"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.159/release-plz-x86_64-unknown-linux-musl.tar.gz"
-
-[tools.release-plz."platforms.macos-arm64"]
-checksum = "sha256:c9ff7e895a018c6d6c1cd62c85d0ff296a8e6dd1647bc816b9251d8056b72e2f"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.159/release-plz-aarch64-apple-darwin.tar.gz"
-
-[tools.release-plz."platforms.windows-x64"]
-checksum = "sha256:cd6d49c63a8800a40599e2f85a488e9c5efbacba6e53e3e45eb71aa02b1b2876"
-url = "https://github.com/release-plz/release-plz/releases/download/release-plz-v0.3.159/release-plz-x86_64-pc-windows-msvc.tar.gz"
-
 [[tools.wasmtime]]
 version = "46.0.1"
 backend = "aqua:bytecodealliance/wasmtime"
@@ -131,36 +125,43 @@ backend = "aqua:bytecodealliance/wasmtime"
 [tools.wasmtime."platforms.linux-arm64"]
 checksum = "sha256:071c4def2a08f0ebc95c52dfd4f2886eb697ba495804217cf76e13b09d70a1be"
 url = "https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-aarch64-linux.tar.xz"
+url_api = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/assets/456907520"
 provenance = "github-attestations"
 
 [tools.wasmtime."platforms.linux-arm64-musl"]
 checksum = "sha256:071c4def2a08f0ebc95c52dfd4f2886eb697ba495804217cf76e13b09d70a1be"
 url = "https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-aarch64-linux.tar.xz"
+url_api = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/assets/456907520"
 provenance = "github-attestations"
 
 [tools.wasmtime."platforms.linux-x64"]
 checksum = "sha256:9ae0b17ea298bcc52277a8208d6ab7fae8e1a89579672f9d82f9d86c116edb62"
 url = "https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-x86_64-linux.tar.xz"
+url_api = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/assets/456907584"
 provenance = "github-attestations"
 
 [tools.wasmtime."platforms.linux-x64-musl"]
 checksum = "sha256:9ae0b17ea298bcc52277a8208d6ab7fae8e1a89579672f9d82f9d86c116edb62"
 url = "https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-x86_64-linux.tar.xz"
+url_api = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/assets/456907584"
 provenance = "github-attestations"
 
 [tools.wasmtime."platforms.macos-arm64"]
 checksum = "sha256:acee50be70dbe90b0ab2ac7db1321fc44715153a1b1cc58291c97b6d7cffc558"
 url = "https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-aarch64-macos.tar.xz"
+url_api = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/assets/456907523"
 provenance = "github-attestations"
 
 [tools.wasmtime."platforms.macos-x64"]
 checksum = "sha256:0513db67e7089c7e5f743a01427782bc4def83854222f4bc9b1d75f0b925240b"
 url = "https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-x86_64-macos.tar.xz"
+url_api = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/assets/456907587"
 provenance = "github-attestations"
 
 [tools.wasmtime."platforms.windows-x64"]
 checksum = "sha256:99f038066b16cb3aaf63c1d282a9d7ba7befafbadf7aa8827cc4c712d96bc31a"
 url = "https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-x86_64-windows.zip"
+url_api = "https://api.github.com/repos/bytecodealliance/wasmtime/releases/assets/456907605"
 provenance = "github-attestations"
 
 [[tools.zizmor]]
@@ -170,6 +171,7 @@ backend = "aqua:zizmorcore/zizmor"
 [tools.zizmor."platforms.linux-arm64"]
 checksum = "sha256:46fceee9a8262dca0e61f8463204e1f0f3a63bf6c20fa3ef9a5c1b3cff7b17b0"
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.27.0/zizmor-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/476453094"
 provenance = "github-attestations"
 
 [tools.zizmor."platforms.linux-arm64-musl"]
@@ -178,6 +180,7 @@ provenance = "github-attestations"
 [tools.zizmor."platforms.linux-x64"]
 checksum = "sha256:277f2bd8fd37cf60c42ab7afca6faa884e65440fa31e02b44bdaae60f62a358f"
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.27.0/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/476453097"
 provenance = "github-attestations"
 
 [tools.zizmor."platforms.linux-x64-musl"]
@@ -186,14 +189,17 @@ provenance = "github-attestations"
 [tools.zizmor."platforms.macos-arm64"]
 checksum = "sha256:81336423d1b280c5dd0cdd8644a1e5f3238ab3ceb8d6e4334dfd05dab95a8a86"
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.27.0/zizmor-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/476453095"
 provenance = "github-attestations"
 
 [tools.zizmor."platforms.macos-x64"]
 checksum = "sha256:51cd82d1f6914cbb7f4402dbdc19bd989a7599078e5ddeaf837d1ab901c97328"
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.27.0/zizmor-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/476453098"
 provenance = "github-attestations"
 
 [tools.zizmor."platforms.windows-x64"]
 checksum = "sha256:a8c5d02d638bacf9ae5779b08b0291455c67e7e835be56995f35483518dcd70a"
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.27.0/zizmor-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/476453096"
 provenance = "github-attestations"
