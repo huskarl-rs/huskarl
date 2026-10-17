@@ -169,8 +169,14 @@ impl ClientAuthentication for JwtBearer {
                 .claims(())
                 .build();
 
+            let signer = self.signer.select_signer().await;
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                client_auth = diagnostic_auth_method(&signer.jws_algorithm()),
+                "Selected JWT client authentication method"
+            );
             let assertion = jwt
-                .to_jws_compact(&*self.signer.select_signer().await)
+                .to_jws_compact(&*signer)
                 .await
                 .context(SigningAssertionSnafu)?;
 
@@ -213,6 +219,17 @@ impl From<MissingTokenEndpoint> for Error {
     }
 }
 
+// Never expose an extension algorithm's arbitrary string as diagnostic data.
+#[cfg(feature = "tracing")]
+fn diagnostic_auth_method(algorithm: &str) -> &'static str {
+    match algorithm {
+        "HS256" | "HS384" | "HS512" => "client_secret_jwt",
+        "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" | "ES256" | "ES384" | "ES512"
+        | "ES256K" | "EdDSA" | "Ed25519" | "Ed448" => "private_key_jwt",
+        _ => "jwt_assertion",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::LazyLock;
@@ -225,6 +242,17 @@ mod tests {
         client_auth::{ClientAuthentication, FormValue},
         crypto::signer::JwsSigner,
     };
+
+    #[cfg(feature = "tracing")]
+    #[test]
+    fn diagnostic_authentication_method_is_bounded() {
+        assert_eq!(super::diagnostic_auth_method("HS256"), "client_secret_jwt");
+        assert_eq!(super::diagnostic_auth_method("ES256"), "private_key_jwt");
+        assert_eq!(
+            super::diagnostic_auth_method("secret-extension-algorithm"),
+            "jwt_assertion"
+        );
+    }
 
     #[derive(Debug, Clone)]
     struct MockJwsSigner {

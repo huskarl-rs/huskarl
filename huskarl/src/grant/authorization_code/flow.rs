@@ -128,11 +128,22 @@ impl AuthorizationCodeGrant {
     /// # Errors
     ///
     /// May return an error if the configuration is invalid, or the PAR endpoint returns an error.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.grant.start", level = "info", skip_all)
+    )]
     pub async fn start(&self, start_input: StartInput) -> Result<StartOutput, Error> {
         // An OIDC flow must end in ID-token validation (OIDC Core 1.0
         // §3.1.3.3), so a grant that can never validate one fails here,
         // before the user is redirected to the authorization server.
         let is_oidc = self.oidc.unwrap_or_else(|| start_input.requests_openid());
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            oidc = is_oidc,
+            verifier_configured = self.jws_verifier.is_some(),
+            issuer_configured = self.issuer.is_some(),
+            "Selected authorization flow policy"
+        );
         if is_oidc {
             if self.jws_verifier.is_none() {
                 return Err(Error::new(
@@ -154,16 +165,22 @@ impl AuthorizationCodeGrant {
                 .any(|m| m == method)
         };
         let pkce = if self.disable_pkce {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(pkce_method = "disabled", "PKCE disabled by configuration");
             None
         } else if supports_method("plain") && !supports_method("S256") {
             // The server explicitly advertises `plain` but not `S256`; honor
             // that rather than send a challenge it cannot verify.
+            #[cfg(feature = "tracing")]
+            tracing::trace!(pkce_method = "plain", "Selected advertised PKCE method");
             Some(Pkce::generate_plain_pair())
         } else {
             // PKCE with S256 is always applied otherwise (RFC 9700 §2.1.1),
             // even when the server metadata omits the optional
             // `code_challenge_methods_supported` field — servers ignore
             // unrecognized request parameters (RFC 6749 §3.1).
+            #[cfg(feature = "tracing")]
+            tracing::trace!(pkce_method = "S256", "Selected PKCE method");
             Some(Pkce::generate_s256_pair())
         };
 
@@ -190,9 +207,21 @@ impl AuthorizationCodeGrant {
             && (self.prefer_pushed_authorization_requests
                 || self.require_pushed_authorization_requests)
         {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                decision = "pushed_authorization_request",
+                jar = request_object.is_some(),
+                "Delivering authorization request via PAR"
+            );
             self.deliver_via_par(&payload, request_object.as_ref(), par_url)
                 .await?
         } else {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                decision = "direct_authorization_request",
+                jar = request_object.is_some(),
+                "Delivering authorization request by redirect"
+            );
             self.deliver_direct(&payload, request_object.as_ref())?
         };
 
@@ -334,6 +363,10 @@ impl AuthorizationCodeGrant {
     /// failed, a check failed against the callback parameters, a received ID
     /// token could not be validated, or an OIDC flow's token response carried
     /// no ID token.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.grant.complete", level = "info", skip_all)
+    )]
     pub async fn complete(
         &self,
         pending_state: &PendingState,
@@ -348,16 +381,25 @@ impl AuthorizationCodeGrant {
     #[allow(unused_variables)]
     #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_self))]
     fn observe_completion(&self, result: &Result<CompleteOutput, Error>) {
-        #[cfg(feature = "metrics")]
+        #[cfg(any(feature = "metrics", feature = "tracing"))]
         {
             use crate::grant::GrantOutcome;
             let outcome = match result {
                 Ok(_) => GrantOutcome::Success,
                 Err(err) => super::error::completion_outcome(err),
             };
-            let mut labels = self.metric_labels.clone();
-            labels.push(::metrics::Label::new("outcome", outcome.as_str()));
-            ::metrics::counter!("huskarl.grant.complete", labels).increment(1);
+            #[cfg(feature = "tracing")]
+            tracing::info!(
+                operation = "huskarl.grant.complete",
+                outcome = outcome.as_str(),
+                "Authorization completion finished"
+            );
+            #[cfg(feature = "metrics")]
+            {
+                let mut labels = self.metric_labels.clone();
+                labels.push(::metrics::Label::new("outcome", outcome.as_str()));
+                ::metrics::counter!("huskarl.grant.complete", labels).increment(1);
+            }
         }
     }
 

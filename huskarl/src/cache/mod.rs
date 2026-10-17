@@ -188,7 +188,7 @@ impl GetTokenError {
     /// The outcome label for this failure.
     ///
     /// The exhaustive match requires every new failure variant to select a label.
-    #[cfg(any(feature = "metrics", test))]
+    #[cfg(any(feature = "metrics", feature = "tracing", test))]
     #[must_use]
     pub(crate) fn outcome(&self) -> TokenOutcome {
         match self {

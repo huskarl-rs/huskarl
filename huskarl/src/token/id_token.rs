@@ -239,14 +239,29 @@ pub struct IdTokenValidator {
 }
 
 impl IdTokenValidator {
-    #[cfg(feature = "metrics")]
+    #[cfg(any(feature = "metrics", feature = "tracing"))]
     fn observe_validation(result: &Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError>) {
-        let outcome = match result {
-            Ok(_) => IdTokenOutcome::Success,
-            Err(error) => error.outcome(),
-        };
-        ::metrics::counter!("huskarl.id_token.validate", "outcome" => outcome.as_str())
-            .increment(1);
+        #[cfg(feature = "metrics")]
+        {
+            let outcome = match result {
+                Ok(_) => IdTokenOutcome::Success,
+                Err(error) => error.outcome(),
+            };
+            ::metrics::counter!("huskarl.id_token.validate", "outcome" => outcome.as_str())
+                .increment(1);
+        }
+        #[cfg(feature = "tracing")]
+        match result {
+            Ok(_) => tracing::debug!(outcome = "success", "ID-token validation completed"),
+            // The JWT validator already emitted its precise reason, including
+            // parsing and application-claim failures, in this ID-token span.
+            Err(IdTokenValidationError::Jwt { .. }) => {}
+            Err(error) => tracing::debug!(
+                outcome = "error",
+                reason = error.outcome().as_str(),
+                "ID-token validation failed"
+            ),
+        }
     }
 
     /// Validates a refreshed ID token and checks that it belongs to the same
@@ -279,13 +294,17 @@ impl IdTokenValidator {
     ///
     /// # Errors
     /// Returns an error for an invalid token or changed authentication claims.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.id_token.validate", level = "debug", skip_all)
+    )]
     pub async fn validate_refresh(
         &self,
         id_token: &IdToken,
         original: &ValidatedJwt<IdTokenClaims>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
         let result = self.validate_refresh_inner(id_token, original).await;
-        #[cfg(feature = "metrics")]
+        #[cfg(any(feature = "metrics", feature = "tracing"))]
         Self::observe_validation(&result);
         result
     }
@@ -335,13 +354,17 @@ impl IdTokenValidator {
     /// Returns an [`IdTokenValidationError`] if any configured check fails —
     /// signature, `iss`, `aud`, `nonce`, `max_age`, `acr`, or signature
     /// algorithm.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.id_token.validate", level = "debug", skip_all)
+    )]
     pub async fn validate(
         &self,
         id_token: &IdToken,
         expected_nonce: Option<&str>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
         let result = self.validate_inner(id_token, expected_nonce).await;
-        #[cfg(feature = "metrics")]
+        #[cfg(any(feature = "metrics", feature = "tracing"))]
         Self::observe_validation(&result);
         result
     }
@@ -351,6 +374,13 @@ impl IdTokenValidator {
         id_token: &IdToken,
         expected_nonce: Option<&str>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            nonce_check_enabled = expected_nonce.is_some(),
+            authentication_age_check_enabled = self.max_age.is_some(),
+            acr_check_enabled = self.required_acr.is_some(),
+            "ID-token validation policy"
+        );
         let typ = ClaimCheck::if_present("JWT");
         #[cfg(feature = "experimental-oidc-key-binding")]
         let typ = if self.openid_bound_key_requested {

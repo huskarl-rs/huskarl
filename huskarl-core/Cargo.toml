@@ -18,6 +18,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [features]
+# Structured diagnostics; the application configures the subscriber.
+tracing = ["dep:tracing"]
+
 # Unstable support forwarded by huskarl; disabled by default.
 experimental-oidc-key-binding = []
 
@@ -37,6 +40,7 @@ fs = ["tokio/fs"]
 strict-propagation = []
 
 [dependencies]
+tracing = { workspace = true, optional = true }
 huskarl-macros = { workspace = true }
 arc-swap = "1"
 metrics = { workspace = true, optional = true }

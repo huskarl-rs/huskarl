@@ -18,6 +18,9 @@ pub(crate) struct OAuth2FormRequest<'a, F: Serialize> {
     uri: &'a Uri,
     /// Grant- or operation-specific form fields.
     form: &'a F,
+    /// Exchange context to enrich with the encoded grant type, including custom grants.
+    #[cfg(feature = "tracing")]
+    exchange_span: Option<&'a tracing::Span>,
     /// Client-authentication headers and form fields to merge into the request.
     auth_params: AuthenticationParams<'a>,
     /// `DPoP` implementation used to create a proof for this request.
@@ -37,6 +40,21 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
 
         let mut body =
             oauth_form::to_string(self.form).context(SerializingExchangeParametersSnafu)?;
+
+        #[cfg(feature = "tracing")]
+        if let Some(span) = self.exchange_span
+            && !span.is_disabled()
+        {
+            // Decode only the allowlisted field, never authentication parameters
+            // or the complete form. This also handles custom serialized grants.
+            if let Some(field) = body
+                .split('&')
+                .find(|field| field.starts_with("grant_type="))
+                && let Some((_, grant_type)) = form_urlencoded::parse(field.as_bytes()).next()
+            {
+                span.record("grant_type", grant_type.as_ref());
+            }
+        }
 
         if let Some(kv) = &self.auth_params.form_params {
             if !body.is_empty() {
@@ -89,6 +107,10 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     /// If the error is `use_dpop_nonce`, no retry is performed — wrap the call site
     /// with [`with_dpop_nonce_retry!`], which retries with freshly generated
     /// `auth_params`.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.http.form", level = "debug", skip_all)
+    )]
     pub(crate) async fn execute<R: for<'de> Deserialize<'de>>(
         &self,
         http_client: &dyn HttpClient,
@@ -96,13 +118,48 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
         let request = self.build_request().await?;
         // The body may consume one-shot state, and replaying it would reuse the
         // `jti` and DPoP proof. Higher layers must rebuild any retry.
-        let response = http_client.execute(request, Idempotency::Unknown).await?;
+        #[cfg(feature = "tracing")]
+        tracing::trace!(method = "POST", "Sending OAuth form request");
+        let response = http_client
+            .execute(request, Idempotency::Unknown)
+            .await
+            .inspect_err(|_| {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "transport_error",
+                    "OAuth form request failed before a response was received"
+                );
+            })?;
+        #[cfg(feature = "tracing")]
+        if response.status.is_success() {
+            tracing::trace!(
+                status = response.status.as_u16(),
+                "Received OAuth form response"
+            );
+        } else {
+            tracing::debug!(
+                status = response.status.as_u16(),
+                "Received OAuth form response"
+            );
+        }
 
         if let Some(nonce) = crate::authorizer::extract_dpop_nonce(&response.headers) {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(decision = "update_nonce", "Received DPoP nonce");
             self.dpop.update_nonce(nonce);
         }
 
-        parse_oauth2_response(response.status, &response.headers, &response.body)
+        let result = parse_oauth2_response(response.status, &response.headers, &response.body);
+        #[cfg(feature = "tracing")]
+        if let Err(error) = &result {
+            // Extension codes are server-controlled strings, just like descriptions.
+            let oauth_error = error.verdict().map(|verdict| match verdict.code() {
+                crate::core::OAuthErrorCode::Other(_) => "other",
+                code => code.as_str(),
+            });
+            tracing::debug!(outcome = "error", oauth_error, "OAuth form request failed");
+        }
+        result
     }
 
     /// Executes the form request, expecting an empty response body on success.
@@ -112,12 +169,39 @@ impl<F: Serialize> OAuth2FormRequest<'_, F> {
     ///
     /// The main current use of this endpoint is the revocation endpoint, which is
     /// not expected to require a `DPoP` nonce.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.http.form", level = "debug", skip_all)
+    )]
     pub(crate) async fn execute_empty_response(
         &self,
         http_client: &dyn HttpClient,
     ) -> Result<(), Error> {
         let request = self.build_request().await?;
-        let response = http_client.execute(request, Idempotency::Unknown).await?;
+        #[cfg(feature = "tracing")]
+        tracing::trace!(method = "POST", "Sending OAuth form request");
+        let response = http_client
+            .execute(request, Idempotency::Unknown)
+            .await
+            .inspect_err(|_| {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "transport_error",
+                    "OAuth form request failed before a response was received"
+                );
+            })?;
+        #[cfg(feature = "tracing")]
+        if response.status.is_success() {
+            tracing::trace!(
+                status = response.status.as_u16(),
+                "Received OAuth form response"
+            );
+        } else {
+            tracing::debug!(
+                status = response.status.as_u16(),
+                "Received OAuth form response"
+            );
+        }
 
         if response.status.is_success() {
             return Ok(());
@@ -287,7 +371,7 @@ impl HandleResponseError {
     /// Returns whether the response is unusable because its body could not be parsed.
     ///
     /// A parsed OAuth body is classified separately using the HTTP status.
-    #[cfg(any(feature = "metrics", test))]
+    #[cfg(any(feature = "metrics", feature = "tracing", test))]
     pub(crate) fn is_unusable_response(&self) -> bool {
         match self {
             Self::UnparseableErrorResponse { .. } | Self::UnparseableSuccessResponse { .. } => true,
@@ -310,6 +394,11 @@ macro_rules! with_dpop_nonce_retry {
                 *verdict.code() == $crate::core::OAuthErrorCode::UseDPoPNonce
             })
         {
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                decision = "retry_dpop_nonce",
+                "Retrying once with fresh authentication and DPoP proof"
+            );
             $body
         } else {
             result
@@ -560,3 +649,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "tracing", not(target_family = "wasm")))]
+mod tracing_tests;

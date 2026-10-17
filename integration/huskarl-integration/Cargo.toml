@@ -6,6 +6,8 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [features]
+# Opt-in console diagnostics for provider runs; RUST_LOG selects the detail.
+tracing = ["dep:tracing", "dep:tracing-subscriber", "huskarl/tracing", "huskarl-resource-server/tracing"]
 # Per-provider gate; without it that provider's tests are `#[ignore]`d.
 authentik = []
 keycloak = []
@@ -14,6 +16,8 @@ node-oidc = []
 okta = []
 
 [dependencies]
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "env-filter"], optional = true }
 huskarl = { workspace = true, default-features = true, features = ["authorization-flow-loopback", "experimental-oidc-key-binding"] }
 # DPoP proof signing keys for the DPoP variant.
 huskarl-crypto-native = { workspace = true }

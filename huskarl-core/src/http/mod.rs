@@ -13,7 +13,7 @@ mod metrics_client;
 use std::sync::Arc;
 
 use bytes::Bytes;
-pub(crate) use get::get;
+pub(crate) use get::{DocumentKind, get};
 use http::{HeaderMap, Request, StatusCode};
 #[cfg(feature = "metrics")]
 pub use metrics_client::MetricsHttpClient;
@@ -811,9 +811,14 @@ mod tests {
     async fn get_deserializes_through_dyn_client() {
         let client = FakeClient::new(StatusCode::OK, r#"{"value": 7}"#);
         let dyn_client: &dyn HttpClient = &client;
-        let doc: Doc = get(dyn_client, uri(), HeaderMap::new())
-            .await
-            .expect("get succeeds");
+        let doc: Doc = get(
+            dyn_client,
+            uri(),
+            HeaderMap::new(),
+            DocumentKind::AuthorizationServerMetadata,
+        )
+        .await
+        .expect("get succeeds");
         assert_eq!(doc.value, 7);
     }
 
@@ -821,9 +826,14 @@ mod tests {
     #[tokio::test]
     async fn get_classifies_a_5xx_as_a_retryable_server_condition() {
         let client = FakeClient::new(StatusCode::INTERNAL_SERVER_ERROR, "");
-        let err = get::<Doc>(&client, uri(), HeaderMap::new())
-            .await
-            .expect_err("non-2xx fails");
+        let err = get::<Doc>(
+            &client,
+            uri(),
+            HeaderMap::new(),
+            DocumentKind::AuthorizationServerMetadata,
+        )
+        .await
+        .expect_err("non-2xx fails");
         assert_eq!(err.retry_advice(), RetryAdvice::RETRY);
         assert!(err.verdict().is_none());
     }
@@ -836,9 +846,14 @@ mod tests {
             body: "",
             retry_after: Some("15"),
         };
-        let err = get::<Doc>(&client, uri(), HeaderMap::new())
-            .await
-            .expect_err("429 fails");
+        let err = get::<Doc>(
+            &client,
+            uri(),
+            HeaderMap::new(),
+            DocumentKind::AuthorizationServerMetadata,
+        )
+        .await
+        .expect_err("429 fails");
         assert_eq!(
             err.retry_advice(),
             RetryAdvice::retry_after(Duration::from_secs(15))
@@ -849,9 +864,14 @@ mod tests {
     #[tokio::test]
     async fn get_classifies_a_4xx_as_protocol() {
         let client = FakeClient::new(StatusCode::NOT_FOUND, "");
-        let err = get::<Doc>(&client, uri(), HeaderMap::new())
-            .await
-            .expect_err("non-2xx fails");
+        let err = get::<Doc>(
+            &client,
+            uri(),
+            HeaderMap::new(),
+            DocumentKind::AuthorizationServerMetadata,
+        )
+        .await
+        .expect_err("non-2xx fails");
         assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
 
@@ -865,7 +885,14 @@ mod tests {
         let boxed: Box<dyn HttpClient> =
             Box::new(FakeClient::new(StatusCode::OK, r#"{"value": 2}"#));
         takes_impl(&boxed);
-        let doc: Doc = get(&arc, uri(), HeaderMap::new()).await.expect("get");
+        let doc: Doc = get(
+            &arc,
+            uri(),
+            HeaderMap::new(),
+            DocumentKind::AuthorizationServerMetadata,
+        )
+        .await
+        .expect("get");
         assert_eq!(doc.value, 1);
     }
 }

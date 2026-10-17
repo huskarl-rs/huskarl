@@ -209,6 +209,10 @@ impl TokenIntrospection {
     /// HTTP request fails, the endpoint returns a non-success status, the
     /// response (or its JWT form) cannot be parsed, or the token is inactive
     /// ([`IntrospectionCallError::TokenInactive`]).
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.http.introspection", level = "debug", skip_all)
+    )]
     pub async fn introspect<C: HttpClient, Claims: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         http_client: &C,
@@ -265,7 +269,26 @@ impl TokenIntrospection {
         let response = http_client
             .execute(request, Idempotency::Idempotent)
             .await
-            .context(SendingSnafu)?;
+            .context(SendingSnafu)
+            .inspect_err(|_| {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "transport_error",
+                    "Introspection request failed before receiving a response"
+                );
+            })?;
+        #[cfg(feature = "tracing")]
+        if response.status.is_success() {
+            tracing::trace!(
+                status = response.status.as_u16(),
+                "Received token introspection response"
+            );
+        } else {
+            tracing::debug!(
+                status = response.status.as_u16(),
+                "Received token introspection response"
+            );
+        }
 
         let (introspection, introspection_jwt) = self.parse_response::<Claims>(response).await?;
 
@@ -301,6 +324,11 @@ impl TokenIntrospection {
                 ct.starts_with("application/token-introspection+jwt")
                     || ct.starts_with("token-introspection+jwt")
             });
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            response_format = if is_jwt_response { "jwt" } else { "json" },
+            "Decoding token introspection response"
+        );
         let body = response.body;
 
         if let Some(failed) = FailedResponse::new(status, &response.headers) {

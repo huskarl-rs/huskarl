@@ -34,6 +34,12 @@ ecosystem.
   [crypto strategy composition](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/crypto_strategies/).
 - **Look up the API:** use the crate modules and item pages in this reference.
 
+## Optional diagnostics
+
+Enable the default-off `tracing` feature for structured diagnostics. Your
+application configures the subscriber and filters; see
+[Enable diagnostic tracing](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/diagnostics/).
+
 ## The huskarl ecosystem
 
 This crate is one of three that fit together. Each carries its own how-to guides

@@ -147,11 +147,35 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> core::fmt::Debug for GrantTok
 }
 
 impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> TokenSource for GrantTokenSource<G, S> {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.token.acquire", level = "info", skip_all)
+    )]
     fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
         Box::pin(async move {
-            let token = self.token_inner().await?;
-            self.emit_success();
-            Ok(Arc::new(token))
+            let result: Result<_, TokenError> = async {
+                let token = self.token_inner().await?;
+                self.emit_success();
+                Ok(Arc::new(token))
+            }
+            .await;
+            #[cfg(feature = "tracing")]
+            {
+                let outcome = match &result {
+                    Ok(_) => crate::TokenOutcome::Success.as_str(),
+                    Err(error) => error
+                        .as_error()
+                        .cause()
+                        .downcast_ref::<GetTokenError>()
+                        .map_or("error", |cause| cause.outcome().as_str()),
+                };
+                tracing::info!(
+                    operation = "huskarl.token.acquire",
+                    outcome,
+                    "Token acquisition completed"
+                );
+            }
+            result
         })
     }
 
@@ -200,6 +224,10 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep acquisition ordering and its diagnostic decisions together"
+    )]
     async fn token_inner(&self) -> Result<TokenResponse, TokenError> {
         // A primed token is served once, ahead of any network call.
         if let Some(token) = self
@@ -208,6 +236,8 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             .unwrap_or_else(PoisonError::into_inner)
             .take()
         {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(decision = "use_pending_token", "Using the primed token");
             self.breaker.reset();
             return Ok(token);
         }
@@ -220,11 +250,32 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             Err(e) => e,
         };
 
+        #[cfg(feature = "tracing")]
+        if refresh_error.is_some() {
+            tracing::debug!(
+                decision = "try_exchange",
+                refresh_failed = true,
+                "Refresh failed; considering a fresh exchange"
+            );
+        } else {
+            tracing::trace!(
+                decision = "try_exchange",
+                refresh_failed = false,
+                "No refresh credential; considering a fresh exchange"
+            );
+        }
+
         // Gate only fresh exchanges; a retained refresh token remains usable.
         if let Err(remaining) = self
             .breaker
             .try_acquire(self.breaker_threshold, self.breaker_cooldown)
         {
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                decision = "backoff",
+                retry_after_secs = remaining.as_secs_f64(),
+                "Fresh exchange is in breaker cooldown"
+            );
             return Err(match refresh_error {
                 Some(source) if Recovery::implied_by(&source).leaves_a_live_path() => {
                     self.propagate_refresh_error(source)
@@ -267,6 +318,11 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         };
 
         let Some(params) = params else {
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                decision = "no_grant_parameters",
+                "No fresh exchange parameters are available"
+            );
             return Err(match refresh_error {
                 // Preserve a refresh failure when its credential remains usable.
                 Some(source) if Recovery::implied_by(&source).leaves_a_live_path() => {
@@ -341,25 +397,31 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         classification: Classification,
         cause: GetTokenError,
     ) -> TokenError {
-        #[cfg(feature = "metrics")]
-        {
-            let mut labels = self.metric_labels.clone();
-            labels.push(::metrics::Label::new("outcome", cause.outcome().as_str()));
-            ::metrics::counter!("huskarl.token.acquire", labels).increment(1);
-        }
+        #[cfg(any(feature = "metrics", feature = "tracing"))]
+        self.emit_outcome(cause.outcome());
         TokenError::new(recovery, Error::propagate(classification, cause))
     }
 
     /// Records a successful acquisition.
     #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_self))]
     fn emit_success(&self) {
+        #[cfg(any(feature = "metrics", feature = "tracing"))]
+        self.emit_outcome(crate::TokenOutcome::Success);
+    }
+
+    #[cfg(any(feature = "metrics", feature = "tracing"))]
+    #[cfg_attr(not(feature = "metrics"), allow(clippy::unused_self))]
+    fn emit_outcome(&self, outcome: crate::TokenOutcome) {
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            operation = "huskarl.token.acquire",
+            outcome = outcome.as_str(),
+            "Token acquisition classified"
+        );
         #[cfg(feature = "metrics")]
         {
             let mut labels = self.metric_labels.clone();
-            labels.push(::metrics::Label::new(
-                "outcome",
-                crate::TokenOutcome::Success.as_str(),
-            ));
+            labels.push(::metrics::Label::new("outcome", outcome.as_str()));
             ::metrics::counter!("huskarl.token.acquire", labels).increment(1);
         }
     }
@@ -574,6 +636,12 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         for attempt in 1..=MAX_ATTEMPTS {
             let refresh_token = self.refresh_store.get().await.map_err(Some)?.ok_or(None)?;
 
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                decision = "refresh",
+                attempt,
+                "Attempting refresh with the stored credential"
+            );
             let err = match self
                 .grant
                 .to_refresh_grant()
@@ -602,6 +670,12 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             {
                 return Err(Some(err));
             }
+
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                decision = "discard_refresh_token",
+                "Refresh credential was rejected with invalid_grant"
+            );
 
             // Compare-before-clear: re-read to see whether the rejected token is
             // still the current one before discarding it.

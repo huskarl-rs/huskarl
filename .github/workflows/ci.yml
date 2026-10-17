@@ -23,6 +23,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # huskarl-crypto-webcrypto is wasm32-only; the WASM job covers it.
       - run: cargo test --workspace --exclude huskarl-crypto-webcrypto
+      - name: Verify diagnostic output and secret exclusions
+        run: cargo test -p huskarl --all-features --lib tracing_tests
       - name: Compile all native examples, including feature-gated examples
         run: cargo check --workspace --exclude huskarl-crypto-webcrypto --examples --all-features
       - run: cargo test --manifest-path integration/huskarl-no-default-features/Cargo.toml --target-dir target

@@ -108,6 +108,27 @@ pub struct ValidationEvent<'a> {
     pub branch_label: Option<&'a str>,
 }
 
+// Reuse the public observation vocabulary without formatting the rejection or claims.
+#[cfg(feature = "tracing")]
+pub(super) fn trace_outcome<T, E: ToRfc6750Error>(result: &Result<Option<T>, E>) {
+    match result {
+        Ok(value) => tracing::trace!(
+            operation = "huskarl.token.validate",
+            outcome = if value.is_some() {
+                ValidationOutcome::Success.as_str()
+            } else {
+                ValidationOutcome::NoToken.as_str()
+            },
+            "Token validation completed"
+        ),
+        Err(error) => tracing::debug!(
+            operation = "huskarl.token.validate",
+            outcome = error.validation_outcome(&error.challenge()).as_str(),
+            "Token validation rejected the request"
+        ),
+    }
+}
+
 /// A callback invoked after each token validation attempt.
 ///
 /// Implement this trait (or use a closure) and wrap a validator in an

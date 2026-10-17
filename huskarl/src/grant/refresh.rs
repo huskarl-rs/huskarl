@@ -168,7 +168,20 @@ impl OAuth2ExchangeGrant for RefreshGrant {
     }
 
     fn bind_refresh_token(&self, params: &Self::Parameters) -> bool {
-        self.is_public_client() || params.refresh_token.dpop_jkt().is_some()
+        let public = self.is_public_client();
+        let retained = params.refresh_token.dpop_jkt().is_some();
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            refresh_binding_policy = if retained {
+                "retained_binding"
+            } else if public {
+                "public_client"
+            } else {
+                "confidential_client"
+            },
+            "Selected refresh-token binding policy"
+        );
+        public || retained
     }
 
     fn build_form(&self, params: Self::Parameters) -> Self::Form<'_> {

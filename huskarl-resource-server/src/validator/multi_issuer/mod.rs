@@ -117,6 +117,10 @@ impl<C: MaybeSendSync + 'static> AccessTokenValidator for MultiIssuerValidator<C
     type Claims = C;
     type Error = MultiIssuerError;
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.token.route", level = "debug", skip_all)
+    )]
     fn validate_request<'a>(
         &'a self,
         headers: &'a http::HeaderMap,
@@ -156,12 +160,22 @@ impl<C: MaybeSendSync + 'static> AccessTokenValidator for MultiIssuerValidator<C
                 }
             };
             let Some(validator) = iss.as_ref().and_then(|iss| self.by_issuer.get(iss)) else {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "unrecognized_issuer",
+                    "No registered validator matches the issuer"
+                );
                 return ValidationResult {
                     outcome: UnrecognizedIssuerSnafu { iss }.fail(),
                     dpop_nonce: None,
                 };
             };
 
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                decision = "route_registered_issuer",
+                "Delegating to the registered issuer validator"
+            );
             validator
                 .validate_request(headers, method, uri, client_cert_der)
                 .await
@@ -442,6 +456,10 @@ mod tests {
         type Claims = ();
         type Error = MultiIssuerError;
 
+        #[cfg_attr(
+            feature = "tracing",
+            tracing::instrument(name = "huskarl.token.route", level = "debug", skip_all)
+        )]
         fn validate_request<'a>(
             &'a self,
             _headers: &'a http::HeaderMap,

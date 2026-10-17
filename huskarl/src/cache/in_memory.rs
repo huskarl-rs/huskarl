@@ -233,6 +233,10 @@ impl<Src: TokenSource> InMemoryTokenCache<Src> {
 }
 
 impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.token.cache", level = "trace", skip_all)
+    )]
     fn token(&self) -> MaybeSendBoxFuture<'_, Result<Arc<TokenResponse>, TokenError>> {
         Box::pin(async move {
             // A token freshly injected into the source (e.g. via `prime`) must
@@ -246,10 +250,22 @@ impl<Src: TokenSource> TokenSource for InMemoryTokenCache<Src> {
                 // other callers aren't stalled. With neither jitter nor
                 // refresh-ahead this never fires — the original fast path.
                 if self.in_refresh_window(&token) {
+                    #[cfg(feature = "tracing")]
+                    tracing::trace!(
+                        decision = "refresh_ahead",
+                        "Cached token entered its refresh window"
+                    );
                     return Ok(self.refresh_ahead_now(token).await);
                 }
+                #[cfg(feature = "tracing")]
+                tracing::trace!(decision = "cache_hit", "Serving cached token");
                 return Ok(token);
             }
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                decision = "cache_miss",
+                "No usable cached token; acquiring from source"
+            );
 
             // Single-flight: concurrent callers coalesce onto one acquisition.
             let _refresh_lock = self.refresh_lock.lock().await;

@@ -147,6 +147,14 @@ impl<D: AeadDecryptor> AeadDecryptor for MetricsAeadDecryptor<D> {
                 Err(DecryptError::Other { .. }) => "error",
             };
 
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                operation = "huskarl.aead.decrypt",
+                name = self.name.as_str(),
+                outcome,
+                "Operation counted"
+            );
+
             ::metrics::counter!(
                 "huskarl.aead.decrypt",
                 "name" => self.name.clone(),
@@ -167,6 +175,14 @@ impl<D: AeadDecryptor> AeadDecryptor for MetricsAeadDecryptor<D> {
             } else {
                 "not_refreshed"
             };
+
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                operation = "huskarl.aead.refresh",
+                name = self.name.as_str(),
+                outcome,
+                "Operation counted"
+            );
 
             ::metrics::counter!(
                 "huskarl.aead.refresh",

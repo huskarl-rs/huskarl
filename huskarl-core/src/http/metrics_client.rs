@@ -73,6 +73,20 @@ impl<C: HttpClient> HttpClient for MetricsHttpClient<C> {
                 _ => "error",
             };
 
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                operation = "huskarl.http.request",
+                host = host.as_str(),
+                method = method.as_str(),
+                outcome,
+                status = result
+                    .as_ref()
+                    .ok()
+                    .map(|response| response.status.as_u16()),
+                transport_error = result.is_err(),
+                "HTTP request counted"
+            );
+
             ::metrics::counter!(
                 "huskarl.http.request",
                 "host" => host,

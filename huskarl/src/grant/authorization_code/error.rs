@@ -132,7 +132,7 @@ impl CompleteError {
     /// The outcome label for this failure.
     ///
     /// The exhaustive match requires every new variant to select a label.
-    #[cfg(any(feature = "metrics", test))]
+    #[cfg(any(feature = "metrics", feature = "tracing", test))]
     pub(crate) fn outcome(&self) -> crate::grant::GrantOutcome {
         use crate::grant::GrantOutcome as O;
         match self {
@@ -206,7 +206,7 @@ impl FlowError {
     /// The outcome label for this failure.
     ///
     /// The exhaustive match requires every new variant to select a label.
-    #[cfg(any(feature = "metrics", test))]
+    #[cfg(any(feature = "metrics", feature = "tracing", test))]
     pub(crate) fn outcome(&self) -> crate::grant::GrantOutcome {
         use crate::grant::GrantOutcome as O;
         match self {
@@ -225,7 +225,7 @@ impl FlowError {
 /// Grant-specific causes take precedence, followed by token-endpoint verdicts
 /// and unusable responses. Failures that establish none of these are reported
 /// as [`Other`](crate::grant::GrantOutcome::Other).
-#[cfg(any(feature = "metrics", test))]
+#[cfg(any(feature = "metrics", feature = "tracing", test))]
 pub(crate) fn completion_outcome(err: &Error) -> crate::grant::GrantOutcome {
     use crate::grant::GrantOutcome as O;
 

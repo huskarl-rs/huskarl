@@ -18,12 +18,16 @@ rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [features]
+# Structured diagnostics; the application configures the subscriber.
+tracing = ["dep:tracing", "huskarl-core/tracing"]
+
 default = ["default-jws-verifier-platform"]
 
 # When enabled, adds support for the platform default crypto implementation.
 default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypto-webcrypto"]
 
 [dependencies]
+tracing = { workspace = true, optional = true }
 huskarl-core = { workspace = true }
 
 bon = { workspace = true }

@@ -20,6 +20,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
 
 [features]
+# Structured diagnostics; the application configures the subscriber.
+tracing = ["dep:tracing", "huskarl-core/tracing"]
+
 # Draft 03 API and behavior may change or be removed in minor releases.
 experimental-oidc-key-binding = ["huskarl-core/experimental-oidc-key-binding"]
 
@@ -39,6 +42,7 @@ authorization-flow-loopback = ["dep:url", "tokio/net", "tokio/io-util", "tokio/t
 url = ["huskarl-core/url"]
 
 [dependencies]
+tracing = { workspace = true, optional = true }
 metrics = { workspace = true, optional = true }
 huskarl-core = { workspace = true }
 huskarl-macros = { workspace = true }
@@ -78,6 +82,7 @@ name = "basic_dpop"
 required-features = ["authorization-flow-loopback"]
 
 [dev-dependencies]
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
 huskarl = { path = ".", default-features = true }
 huskarl-core = { workspace = true, features = ["strict-propagation"] }
 # Only for the `EnumCount` exhaustiveness checks, via
