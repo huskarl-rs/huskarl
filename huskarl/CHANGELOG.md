@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.7](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.6...huskarl-v0.11.7) - 2026-10-18
+
+### Added
+
+- Tracing ([#359](https://github.com/huskarl-rs/huskarl/pull/359))
+- *(metrics)* count ID-token validation outcomes ([#358](https://github.com/huskarl-rs/huskarl/pull/358))
+- *(client)* Add method to validate ID tokens returned from refresh grant. ([#322](https://github.com/huskarl-rs/huskarl/pull/322))
+
 ## [0.11.6](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.5...huskarl-v0.11.6) - 2026-10-09
 
 ### Fixed
