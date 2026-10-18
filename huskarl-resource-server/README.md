@@ -44,6 +44,12 @@ This crate supplies their framework-independent validation primitives.
   [multi-issuer routing](https://docs.rs/huskarl-resource-server/latest/huskarl_resource_server/_docs/explanation/multi_issuer_routing/).
 - **Look up the API:** use the crate modules and item pages in this reference.
 
+## Optional diagnostics
+
+Enable the default-off `tracing` feature for structured diagnostics. Your
+application configures the subscriber and filters; see
+[Enable diagnostic tracing](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/diagnostics/index.html).
+
 ## The huskarl ecosystem
 
 This crate is one of three that fit together. Each carries its own how-to

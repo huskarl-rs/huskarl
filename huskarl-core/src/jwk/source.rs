@@ -139,9 +139,13 @@ impl JwsVerifierFactory for JwksSource {
                             ACCEPT,
                             HeaderValue::from_static("application/jwk-set+json, application/json"),
                         )]);
-                        let jwks: Jwks =
-                            crate::http::get(client.as_ref(), uri.as_uri().clone(), headers)
-                                .await?;
+                        let jwks: Jwks = crate::http::get(
+                            client.as_ref(),
+                            uri.as_uri().clone(),
+                            headers,
+                            crate::http::DocumentKind::Jwks,
+                        )
+                        .await?;
                         let public_jwks: PublicJwks = jwks.into();
 
                         if public_jwks.keys.len() > max_keys {

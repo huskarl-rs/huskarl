@@ -118,7 +118,13 @@ impl ClientAuthentication for ClientSecret {
                 .await
                 .context(FetchingSecretSnafu)?;
 
-            match select_method(ctx.allowed_methods, self.prefer_basic_auth) {
+            let method = select_method(ctx.allowed_methods, self.prefer_basic_auth);
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                client_auth = method.as_ref(),
+                "Selected client authentication method"
+            );
+            match method {
                 ClientSecretMethod::Basic => {
                     Self::basic_authentication_params(ctx.client_id, &client_secret.value)
                 }

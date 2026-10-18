@@ -103,11 +103,20 @@ impl<S: AeadEncryptorSelector> AeadEncryptorSelector for MetricsAeadEncryptorSel
     fn select_encryptor(&self) -> MaybeSendBoxFuture<'_, Arc<dyn AeadEncryptor>> {
         Box::pin(async move {
             let snapshot = self.inner.select_encryptor().await;
+            let kid = kid_label(snapshot.as_ref());
+
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                operation = "huskarl.aead.select",
+                name = self.name.as_ref(),
+                kid = kid.as_str(),
+                "Operation counted"
+            );
 
             ::metrics::counter!(
                 "huskarl.aead.select",
                 "name" => self.name.to_string(),
-                "kid" => kid_label(snapshot.as_ref()),
+                "kid" => kid,
             )
             .increment(1);
 
@@ -175,11 +184,21 @@ impl AeadEncryptor for MetricsAeadEncryptor {
             let result = self.inner.encrypt(plaintext, aad).await;
 
             let outcome = if result.is_ok() { "success" } else { "error" };
+            let kid = kid_label(self.inner.as_ref());
+
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                operation = "huskarl.aead.encrypt",
+                name = self.name.as_ref(),
+                kid = kid.as_str(),
+                outcome,
+                "Operation counted"
+            );
 
             ::metrics::counter!(
                 "huskarl.aead.encrypt",
                 "name" => self.name.to_string(),
-                "kid" => kid_label(self.inner.as_ref()),
+                "kid" => kid,
                 "outcome" => outcome,
             )
             .increment(1);

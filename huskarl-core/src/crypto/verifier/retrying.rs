@@ -44,6 +44,10 @@ impl<V: JwsVerifier + 'static> JwsVerifier for RetryingVerifier<V> {
         self.inner.key_match(key_match)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.jws.verify", level = "trace", skip_all)
+    )]
     fn verify<'a>(
         &'a self,
         input: &'a [u8],
@@ -56,9 +60,27 @@ impl<V: JwsVerifier + 'static> JwsVerifier for RetryingVerifier<V> {
                 // fetch); refresh once and retry. Everything else — including a
                 // signature mismatch — is returned as-is.
                 Err(VerifyError::NoMatchingKey) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::debug!(
+                        decision = "refresh_keys",
+                        outcome = "no_matching_key",
+                        "No matching verification key; attempting refresh"
+                    );
                     if self.inner.try_refresh().await {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(
+                            operation = "huskarl.jws.refresh",
+                            outcome = "refreshed",
+                            "Retrying verification after key refresh"
+                        );
                         self.inner.verify(input, signature, key_match).await
                     } else {
+                        #[cfg(feature = "tracing")]
+                        tracing::debug!(
+                            operation = "huskarl.jws.refresh",
+                            outcome = "not_refreshed",
+                            "Key refresh did not permit a retry"
+                        );
                         Err(VerifyError::NoMatchingKey)
                     }
                 }
@@ -124,6 +146,10 @@ mod tests {
             Some(KeyMatchStrength::ByAlgorithm)
         }
 
+        #[cfg_attr(
+            feature = "tracing",
+            tracing::instrument(name = "huskarl.jws.verify", level = "trace", skip_all)
+        )]
         fn verify<'a>(
             &'a self,
             _input: &'a [u8],

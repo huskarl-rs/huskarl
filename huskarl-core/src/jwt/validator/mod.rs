@@ -227,10 +227,43 @@ impl JwtValidator {
     /// # Errors
     ///
     /// Returns a [`JwtValidationError`] if the token is invalid.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.jwt.validate", level = "trace", skip_all)
+    )]
     pub async fn validate_parsed_jws<C: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         parsed_jwt: ParsedJws<(), C>,
     ) -> Result<ValidatedJwt<C>, JwtValidationError> {
+        let result = self.validate_parsed_inner(parsed_jwt).await;
+        #[cfg(feature = "tracing")]
+        match &result {
+            Ok(_) => tracing::trace!(
+                outcome = "success",
+                "JWT signature and registered claims validated"
+            ),
+            Err(error) => tracing::debug!(
+                outcome = "error",
+                reason = error.outcome().as_str(),
+                "JWT validation failed"
+            ),
+        }
+        result
+    }
+
+    async fn validate_parsed_inner<C: for<'de> Deserialize<'de> + Clone + 'static>(
+        &self,
+        parsed_jwt: ParsedJws<(), C>,
+    ) -> Result<ValidatedJwt<C>, JwtValidationError> {
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            audience_check_enabled = !matches!(self.aud, ClaimCheck::NoCheck),
+            token_type_check_enabled = !matches!(self.typ, ClaimCheck::NoCheck),
+            issuer_check_enabled = !matches!(self.iss, ClaimCheck::NoCheck),
+            subject_check_enabled = !matches!(self.sub, ClaimCheck::NoCheck),
+            replay_check_enabled = self.jti_checker.is_some(),
+            "JWT validation policy"
+        );
         let now = SystemTime::now();
 
         self.validate_header(&parsed_jwt.header.alg, &parsed_jwt.header.crit)?;
@@ -311,15 +344,33 @@ impl JwtValidator {
         &self,
         token: &str,
     ) -> Result<ValidatedJwt<C>, JwtValidationError> {
-        let parsed_jwt = parse_compact_jws::<(), serde_json::Value>(token).context(ParseSnafu)?;
+        let parsed_jwt = parse_compact_jws::<(), serde_json::Value>(token)
+            .context(ParseSnafu)
+            .inspect_err(|_| {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "error",
+                    reason = "malformed_jwt",
+                    "JWT parsing failed"
+                );
+            })?;
         let validated = self.validate_parsed_jws(parsed_jwt).await?;
-        validated.try_map_claims(|value| {
-            if std::any::TypeId::of::<C>() == std::any::TypeId::of::<()>() {
-                serde_json::from_value(serde_json::Value::Null).context(ExtraClaimsSnafu)
-            } else {
-                serde_json::from_value(value).context(ExtraClaimsSnafu)
-            }
-        })
+        validated
+            .try_map_claims(|value| {
+                if std::any::TypeId::of::<C>() == std::any::TypeId::of::<()>() {
+                    serde_json::from_value(serde_json::Value::Null).context(ExtraClaimsSnafu)
+                } else {
+                    serde_json::from_value(value).context(ExtraClaimsSnafu)
+                }
+            })
+            .inspect_err(|_| {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "error",
+                    reason = "invalid_extra_claims",
+                    "JWT application claims could not be decoded"
+                );
+            })
     }
 }
 

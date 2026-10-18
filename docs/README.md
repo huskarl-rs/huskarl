@@ -33,6 +33,8 @@ guides to adapt that path to your application.
 
 ## How-to guides
 
+- [Enable diagnostic tracing](../huskarl-core/docs/guide/diagnostics.md)
+
 ### Build an OAuth client
 
 - [Set up HTTP and client authentication](../huskarl/docs/guide/setup.md)

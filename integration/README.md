@@ -103,6 +103,25 @@ The `--test` target and `--features` flag differ per provider (note the
 
 ### Keycloak
 
+To inspect a provider flow through Huskarl's optional tracing, add the integration
+crate's `tracing` feature and set `RUST_LOG`. The harness installs a subscriber
+scoped to each trial, with a `provider_flow` span containing only the static flow
+and variant names. No application-global subscriber is installed.
+
+```sh
+RUST_LOG='off,huskarl=debug,huskarl_core=debug,huskarl_resource_server=debug,huskarl_integration=debug' \
+  cargo test -p huskarl-integration --test keycloak --features keycloak,tracing \
+  -- auth_code::par --exact --test-threads=1 --nocapture
+```
+
+Remove `auth_code::par --exact` for the complete Keycloak suite. Use `info` for
+short summaries or `trace` for execution detail. The example filters other
+dependencies out; avoid a blanket `RUST_LOG=trace` when reviewing authentication
+traffic, since third-party diagnostics have their own data policies. Use one test
+thread to keep console output chronological. Invalid filters fail the trial.
+Without `RUST_LOG`, the tracing harness defaults to INFO. Without the `tracing`
+feature, provider tests retain their existing behavior.
+
 ```sh
 mise run keycloak:test    # starts Keycloak, runs tests
 mise run keycloak:down    # stop when done

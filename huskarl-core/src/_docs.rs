@@ -19,6 +19,9 @@
 /// Task-oriented recipes for building JWTs, handling secrets, plugging in
 /// backends, and returning errors from extensions.
 pub mod guide {
+    #[doc = include_str!("../docs/guide/diagnostics.md")]
+    pub mod diagnostics {}
+
     #[doc = include_str!("../docs/guide/signing_a_jwt.md")]
     pub mod signing_a_jwt {}
 

@@ -123,6 +123,20 @@ impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
         if inner.is_cold() {
             ::metrics::counter!("huskarl.jws.cold_start").increment(1);
         }
+        #[cfg(feature = "tracing")]
+        if inner.is_cold() {
+            tracing::debug!(
+                operation = "huskarl.jws.initialize",
+                cold = true,
+                "Verification key source initialized"
+            );
+        } else {
+            tracing::trace!(
+                operation = "huskarl.jws.initialize",
+                cold = false,
+                "Verification key source initialized"
+            );
+        }
         Ok(Self { inner })
     }
 }

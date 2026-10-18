@@ -39,6 +39,12 @@ application control flow. See [caching tokens and wiring an
 authorizer](https://docs.rs/huskarl/latest/huskarl/_docs/guide/caching/) and the [error-handling
 guide](https://docs.rs/huskarl/latest/huskarl/_docs/guide/handling_errors/).
 
+## Optional diagnostics
+
+Enable the default-off `tracing` feature for structured diagnostics. Your
+application configures the subscriber and filters; see
+[Enable diagnostic tracing](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/diagnostics/index.html).
+
 ## The huskarl ecosystem
 
 This crate is one of three that fit together. Each carries its own how-to guides

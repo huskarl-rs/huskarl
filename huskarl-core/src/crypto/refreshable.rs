@@ -129,9 +129,19 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
         let _lock = self.refresh_lock.lock().await;
         if !Arc::ptr_eq(&self.value.load_full(), &cur) {
             // Another task already refreshed while we were waiting for the lock.
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                decision = "adopt_refresh",
+                "Using the concurrently refreshed value"
+            );
             return Ok(GatedRefresh::Adopted);
         }
         if !gate() {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                decision = "defer_refresh",
+                "Refresh policy declined the attempt"
+            );
             return Ok(GatedRefresh::Blocked);
         }
 
@@ -400,6 +410,12 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     }
 
     fn record_refresh(&self, success: bool) {
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            operation = "huskarl.crypto.refresh",
+            outcome = if success { "success" } else { "error" },
+            "Scheduled crypto refresh completed"
+        );
         let now = Instant::now();
         let mut ts = self
             .timestamps

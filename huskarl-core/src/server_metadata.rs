@@ -327,6 +327,7 @@ impl AuthorizationServerMetadata {
             http_client,
             configuration_endpoint.clone(),
             HeaderMap::new(),
+            crate::http::DocumentKind::AuthorizationServerMetadata,
         )
         .await
         .context(FetchingSnafu {
@@ -334,6 +335,12 @@ impl AuthorizationServerMetadata {
         })?;
 
         if metadata.issuer != issuer {
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                operation = "huskarl.discovery",
+                outcome = "issuer_mismatch",
+                "Discovery issuer differs from configuration"
+            );
             return Err(ServerMetadataError::IssuerMismatch {
                 expected: issuer.clone(),
                 actual: metadata.issuer.clone(),
@@ -341,6 +348,12 @@ impl AuthorizationServerMetadata {
             .into());
         }
 
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            operation = "huskarl.discovery",
+            outcome = "success",
+            "Discovery metadata accepted"
+        );
         Ok(metadata)
     }
 }

@@ -399,6 +399,15 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
     /// addressed, not a framework request object's origin-form path — see
     /// [`AccessTokenValidator::validate_request`]
     /// for the `DPoP` `htu` contract.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "huskarl.token.validate",
+            level = "debug",
+            skip_all,
+            fields(validation_strategy = "introspection")
+        )
+    )]
     pub async fn validate_request(
         &self,
         headers: &http::HeaderMap,
@@ -410,6 +419,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             .validate_inner(headers, http_method, http_uri, client_cert_der)
             .await;
 
+        #[cfg(feature = "tracing")]
+        super::observe::trace_outcome(&outcome);
         ValidationResult {
             outcome,
             dpop_nonce,

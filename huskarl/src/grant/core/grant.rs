@@ -77,7 +77,17 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Defaults to public-client binding under RFC 9449 §5. Refresh grants also
     /// preserve an existing binding, regardless of client authentication.
     fn bind_refresh_token(&self, _params: &Self::Parameters) -> bool {
-        self.is_public_client()
+        let public = self.is_public_client();
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            refresh_binding_policy = if public {
+                "public_client"
+            } else {
+                "confidential_client"
+            },
+            "Selected refresh-token binding policy"
+        );
+        public
     }
 
     /// Returns the OIDC Key Binding `c_s256` code hash, when requested.
@@ -149,6 +159,11 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
             // No client authentication: present nothing (no credentials, and no
             // `client_id`). The grant's own authorization stands on its own.
             let Some(client_auth) = self.client_auth() else {
+                #[cfg(feature = "tracing")]
+                tracing::trace!(
+                    client_auth = "none",
+                    "Grant carries no separate client authentication"
+                );
                 return Ok(AuthenticationParams::builder().build());
             };
             // Every authentication method identifies the client, so it needs a
@@ -179,44 +194,79 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         params: Self::Parameters,
     ) -> impl Future<Output = Result<TokenResponse, Error>> + MaybeSend {
         async move {
-            let dpop_jkt = match Self::bound_dpop_jkt(&params).map(ToString::to_string) {
-                Some(jkt) => Some(jkt),
-                None => self.dpop().get_current_thumbprint().await,
-            };
+            // Keep the actual exchange span even when it is disabled; the
+            // current span would then refer to the caller's context instead.
+            #[cfg(feature = "tracing")]
+            let exchange_span =
+                tracing::debug_span!("huskarl.grant.exchange", grant_type = tracing::field::Empty);
+            let exchange = async {
+                let dpop_jkt = match Self::bound_dpop_jkt(&params).map(ToString::to_string) {
+                    Some(jkt) => Some(jkt),
+                    None => self.dpop().get_current_thumbprint().await,
+                };
 
-            let http_client = self.http_client();
-            let endpoint = self.effective_token_endpoint();
-            let bind_refresh_token = self.bind_refresh_token(&params);
-            #[cfg(feature = "experimental-oidc-key-binding")]
-            let dpop_code_hash = self.request_dpop_code_hash(&params);
-            #[cfg(feature = "experimental-oidc-key-binding")]
-            let openid_bound_key_requested = self.openid_bound_key_requested(&params);
-            let form = self.build_form(params);
-
-            let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
-                let auth_params = self.authentication_params().await?;
-
-                let request = OAuth2FormRequest::builder()
-                    .auth_params(auth_params)
-                    .dpop(self.dpop())
-                    .maybe_dpop_jkt(dpop_jkt.as_deref())
-                    .form(&form)
-                    .uri(endpoint.as_uri());
+                let http_client = self.http_client();
+                #[cfg(feature = "tracing")]
+                tracing::trace!(
+                    mtls = http_client.uses_mtls(),
+                    "Selected transport authentication policy"
+                );
+                let endpoint = self.effective_token_endpoint();
+                // Trace the returned decision here so overrides are covered too;
+                // implementations may additionally trace their policy reason.
+                let bind_refresh_token = self.bind_refresh_token(&params);
                 #[cfg(feature = "experimental-oidc-key-binding")]
-                let request = request.maybe_dpop_code_hash(dpop_code_hash.as_deref());
-                request.build().execute(http_client).await
-            })?;
+                let dpop_code_hash = self.request_dpop_code_hash(&params);
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                let openid_bound_key_requested = self.openid_bound_key_requested(&params);
+                #[cfg(feature = "tracing")]
+                tracing::trace!(
+                    dpop = dpop_jkt.is_some(),
+                    bind_refresh_token,
+                    "Selected token binding policy"
+                );
+                let form = self.build_form(params);
 
-            let context = TokenResponseContext::builder()
-                .maybe_dpop_jkt(dpop_jkt)
-                .bind_refresh_token(bind_refresh_token);
-            #[cfg(feature = "experimental-oidc-key-binding")]
-            let context = context.openid_bound_key_requested(openid_bound_key_requested);
-            let context = context.build();
-            Ok(raw_token_response.into_token_response_with_context(
-                context,
-                crate::core::platform::SystemTime::now(),
-            )?)
+                let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
+                    let auth_params = self.authentication_params().await?;
+
+                    let request = OAuth2FormRequest::builder()
+                        .auth_params(auth_params)
+                        .dpop(self.dpop())
+                        .maybe_dpop_jkt(dpop_jkt.as_deref())
+                        .form(&form)
+                        .uri(endpoint.as_uri());
+                    #[cfg(feature = "tracing")]
+                    let request = request.exchange_span(&exchange_span);
+                    #[cfg(feature = "experimental-oidc-key-binding")]
+                    let request = request.maybe_dpop_code_hash(dpop_code_hash.as_deref());
+                    request.build().execute(http_client).await
+                })?;
+
+                let context = TokenResponseContext::builder()
+                    .maybe_dpop_jkt(dpop_jkt)
+                    .bind_refresh_token(bind_refresh_token);
+                #[cfg(feature = "experimental-oidc-key-binding")]
+                let context = context.openid_bound_key_requested(openid_bound_key_requested);
+                let context = context.build();
+                let response = raw_token_response.into_token_response_with_context(
+                    context,
+                    crate::core::platform::SystemTime::now(),
+                )?;
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "success",
+                    token_type = response.access_token().token_type(),
+                    expires_in_secs = response.raw_token_response().expires_in,
+                    refresh_token_present = response.refresh_token().is_some(),
+                    id_token_present = response.id_token().is_some(),
+                    "Token exchange completed"
+                );
+                Ok(response)
+            };
+            #[cfg(feature = "tracing")]
+            let exchange = tracing::Instrument::instrument(exchange, exchange_span.clone());
+            exchange.await
         }
     }
 

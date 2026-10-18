@@ -22,7 +22,31 @@ pub(super) struct ValidatorInner {
 }
 
 impl ValidatorInner {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "huskarl.token.validate",
+            level = "debug",
+            skip_all,
+            fields(validation_strategy = "jwt")
+        )
+    )]
     pub async fn validate_request<Claims: for<'de> Deserialize<'de> + Clone + 'static>(
+        &self,
+        headers: &http::HeaderMap,
+        http_method: &http::Method,
+        http_uri: &http::Uri,
+        client_cert_der: Option<&[u8]>,
+    ) -> ValidationResult<Claims, ValidateHeadersError> {
+        let result = self
+            .validate_inner(headers, http_method, http_uri, client_cert_der)
+            .await;
+        #[cfg(feature = "tracing")]
+        super::observe::trace_outcome(&result.outcome);
+        result
+    }
+
+    async fn validate_inner<Claims: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         headers: &http::HeaderMap,
         http_method: &http::Method,

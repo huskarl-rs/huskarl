@@ -20,6 +20,11 @@ impl ClientAuthentication for NoAuth {
         ctx: AuthenticationContext<'a>,
     ) -> MaybeSendBoxFuture<'a, Result<AuthenticationParams<'a>, Error>> {
         Box::pin(async move {
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                client_auth = "none",
+                "No client authentication in the request body or headers"
+            );
             Ok(AuthenticationParams::builder()
                 .form_params(bon::map! {
                     "client_id": ctx.client_id

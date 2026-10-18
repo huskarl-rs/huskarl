@@ -131,6 +131,15 @@ impl<V: JwsVerifier> JwsVerifier for MetricsJwsVerifier<V> {
                 Err(VerifyError::Other { .. }) => "error",
             };
 
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                operation = "huskarl.jws.verify",
+                name = self.name.as_str(),
+                alg,
+                outcome,
+                "Operation counted"
+            );
+
             ::metrics::counter!(
                 "huskarl.jws.verify",
                 "name" => self.name.clone(),
@@ -152,6 +161,14 @@ impl<V: JwsVerifier> JwsVerifier for MetricsJwsVerifier<V> {
             } else {
                 "not_refreshed"
             };
+
+            #[cfg(feature = "tracing")]
+            tracing::trace!(
+                operation = "huskarl.jws.refresh",
+                name = self.name.as_str(),
+                outcome,
+                "Operation counted"
+            );
 
             ::metrics::counter!(
                 "huskarl.jws.refresh",

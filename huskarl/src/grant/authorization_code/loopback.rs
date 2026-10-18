@@ -254,6 +254,10 @@ pub async fn complete_on_loopback(
     .await
 }
 
+#[cfg_attr(
+    feature = "tracing",
+    tracing::instrument(name = "huskarl.grant.callback", level = "debug", skip_all)
+)]
 async fn complete_on_loopback_with_timeouts(
     listener: &TcpListener,
     redirect_uri: &str,
@@ -271,6 +275,11 @@ async fn complete_on_loopback_with_timeouts(
 
     let renderer = renderer.unwrap_or_default();
 
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        phase = "waiting_for_callback",
+        "Waiting for the authorization callback"
+    );
     let result = loop {
         let (mut stream, _) = listener.accept().await.context(AcceptSnafu)?;
         // A failed read on one connection — a browser's speculative
@@ -300,6 +309,11 @@ async fn complete_on_loopback_with_timeouts(
                 break Err(e);
             }
         };
+        #[cfg(feature = "tracing")]
+        tracing::debug!(
+            phase = "callback_received",
+            "Parsed callback; completing authorization"
+        );
         let result = complete(complete_input).await.map_err(map_complete_error);
 
         // Redirect to a clean URL so the authorization code and state

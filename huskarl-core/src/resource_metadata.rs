@@ -180,6 +180,7 @@ impl ProtectedResourceMetadata {
             http_client,
             metadata_url.clone().into_uri(),
             HeaderMap::new(),
+            crate::http::DocumentKind::ResourceMetadata,
         )
         .await
         .with_context(|_| FetchingSnafu {
