@@ -117,3 +117,9 @@ Enable the `metrics` feature and configure deployment-specific labels on the
 token-source builder. Monitor `huskarl.token.acquire`; its `outcome` label uses
 the bounded [`TokenOutcome`](crate::TokenOutcome) values. OAuth codes and other
 attacker-controlled values are not emitted as labels.
+
+For ID-token validation, monitor `huskarl.id_token.validate`, grouping by
+`outcome`. With the same feature enabled,
+[`IdTokenValidator`](crate::token::id_token::IdTokenValidator) emits this counter
+automatically for initial and refresh validation. See
+[`IdTokenOutcome`](crate::token::id_token::IdTokenOutcome) for the label values.

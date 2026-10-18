@@ -480,5 +480,205 @@ impl crate::error::propagation::Cause for JwtValidationError {
     }
 }
 
+/// A bounded JWT validation failure classification for metrics and diagnostics.
+///
+/// Tokens, claim values, and backend messages are never included.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JwtValidationOutcome {
+    /// The token could not be parsed as a compact JWS.
+    ///
+    /// Label: `"malformed_jwt"`.
+    MalformedJwt,
+    /// No verification key matched the token.
+    ///
+    /// Label: `"no_matching_key"`.
+    NoMatchingKey,
+    /// Verification keys were unavailable.
+    ///
+    /// Label: `"keys_unavailable"`.
+    KeysUnavailable,
+    /// Multiple verification keys matched the token.
+    ///
+    /// Label: `"ambiguous_key"`.
+    AmbiguousKey,
+    /// The signature encoding was malformed.
+    ///
+    /// Label: `"malformed_signature"`.
+    MalformedSignature,
+    /// The signature did not verify.
+    ///
+    /// Label: `"signature_mismatch"`.
+    SignatureMismatch,
+    /// The verification backend failed.
+    ///
+    /// Label: `"error"`.
+    Error,
+    /// The token was unsigned.
+    ///
+    /// Label: `"unsigned_token"`.
+    UnsignedToken,
+    /// The signature algorithm was not permitted.
+    ///
+    /// Label: `"disallowed_algorithm"`.
+    DisallowedAlgorithm,
+    /// A critical header parameter was not recognized.
+    ///
+    /// Label: `"unrecognized_critical_header"`.
+    UnrecognizedCriticalHeader,
+    /// The token had expired.
+    ///
+    /// Label: `"expired"`.
+    Expired,
+    /// The token was not yet valid.
+    ///
+    /// Label: `"not_yet_valid"`.
+    NotYetValid,
+    /// The token was issued in the future.
+    ///
+    /// Label: `"issued_in_future"`.
+    IssuedInFuture,
+    /// The token exceeded the permitted age.
+    ///
+    /// Label: `"token_too_old"`.
+    TokenTooOld,
+    /// The token type was invalid.
+    ///
+    /// Label: `"invalid_token_type"`.
+    InvalidTokenType,
+    /// The audience did not match.
+    ///
+    /// Label: `"audience_mismatch"`.
+    AudienceMismatch,
+    /// The issuer did not match.
+    ///
+    /// Label: `"issuer_mismatch"`.
+    IssuerMismatch,
+    /// The subject did not match.
+    ///
+    /// Label: `"subject_mismatch"`.
+    SubjectMismatch,
+    /// Another claim did not match.
+    ///
+    /// Label: `"claim_mismatch"`.
+    ClaimMismatch,
+    /// The required audience was absent.
+    ///
+    /// Label: `"audience_missing"`.
+    AudienceMissing,
+    /// The required issuer was absent.
+    ///
+    /// Label: `"issuer_missing"`.
+    IssuerMissing,
+    /// The required subject was absent.
+    ///
+    /// Label: `"subject_missing"`.
+    SubjectMissing,
+    /// Another required claim was absent.
+    ///
+    /// Label: `"required_claim_missing"`.
+    RequiredClaimMissing,
+    /// The JTI exceeded the length limit.
+    ///
+    /// Label: `"jti_too_long"`.
+    JtiTooLong,
+    /// The JTI had already been used.
+    ///
+    /// Label: `"jti_not_unique"`.
+    JtiNotUnique,
+    /// The JTI uniqueness check failed.
+    ///
+    /// Label: `"jti_backend_error"`.
+    JtiBackendError,
+    /// Application claims could not be deserialized.
+    ///
+    /// Label: `"invalid_extra_claims"`.
+    InvalidExtraClaims,
+}
+
+impl JwtValidationOutcome {
+    /// Returns the value emitted in the `outcome` metrics label.
+    ///
+    /// See each variant for its label. Existing labels remain stable within a
+    /// semver-compatible release; new labels may be added. Consumers must
+    /// tolerate unknown labels.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MalformedJwt => "malformed_jwt",
+            Self::NoMatchingKey => "no_matching_key",
+            Self::KeysUnavailable => "keys_unavailable",
+            Self::AmbiguousKey => "ambiguous_key",
+            Self::MalformedSignature => "malformed_signature",
+            Self::SignatureMismatch => "signature_mismatch",
+            Self::Error => "error",
+            Self::UnsignedToken => "unsigned_token",
+            Self::DisallowedAlgorithm => "disallowed_algorithm",
+            Self::UnrecognizedCriticalHeader => "unrecognized_critical_header",
+            Self::Expired => "expired",
+            Self::NotYetValid => "not_yet_valid",
+            Self::IssuedInFuture => "issued_in_future",
+            Self::TokenTooOld => "token_too_old",
+            Self::InvalidTokenType => "invalid_token_type",
+            Self::AudienceMismatch => "audience_mismatch",
+            Self::IssuerMismatch => "issuer_mismatch",
+            Self::SubjectMismatch => "subject_mismatch",
+            Self::ClaimMismatch => "claim_mismatch",
+            Self::AudienceMissing => "audience_missing",
+            Self::IssuerMissing => "issuer_missing",
+            Self::SubjectMissing => "subject_missing",
+            Self::RequiredClaimMissing => "required_claim_missing",
+            Self::JtiTooLong => "jti_too_long",
+            Self::JtiNotUnique => "jti_not_unique",
+            Self::JtiBackendError => "jti_backend_error",
+            Self::InvalidExtraClaims => "invalid_extra_claims",
+        }
+    }
+}
+
+impl JwtValidationError {
+    /// Classifies the failure without exposing tokens, claim values, or backend messages.
+    #[must_use]
+    pub fn outcome(&self) -> JwtValidationOutcome {
+        match self {
+            Self::Parse { .. } => JwtValidationOutcome::MalformedJwt,
+            Self::Signature { source } => match source {
+                VerifyError::NoMatchingKey => JwtValidationOutcome::NoMatchingKey,
+                VerifyError::KeysUnavailable => JwtValidationOutcome::KeysUnavailable,
+                VerifyError::AmbiguousKeyMatch => JwtValidationOutcome::AmbiguousKey,
+                VerifyError::MalformedSignature { .. } => JwtValidationOutcome::MalformedSignature,
+                VerifyError::SignatureMismatch => JwtValidationOutcome::SignatureMismatch,
+                VerifyError::Other { .. } => JwtValidationOutcome::Error,
+            },
+            Self::UnsignedToken => JwtValidationOutcome::UnsignedToken,
+            Self::DisallowedAlgorithm { .. } => JwtValidationOutcome::DisallowedAlgorithm,
+            Self::UnrecognizedCriticalHeader { .. } => {
+                JwtValidationOutcome::UnrecognizedCriticalHeader
+            }
+            Self::Expired { .. } => JwtValidationOutcome::Expired,
+            Self::NotYetValid { .. } => JwtValidationOutcome::NotYetValid,
+            Self::IssuedInFuture { .. } => JwtValidationOutcome::IssuedInFuture,
+            Self::TokenTooOld { .. } => JwtValidationOutcome::TokenTooOld,
+            Self::InvalidTokenType { .. } => JwtValidationOutcome::InvalidTokenType,
+            Self::ClaimMismatch { claim, .. } => match *claim {
+                "aud" => JwtValidationOutcome::AudienceMismatch,
+                "iss" => JwtValidationOutcome::IssuerMismatch,
+                "sub" => JwtValidationOutcome::SubjectMismatch,
+                _ => JwtValidationOutcome::ClaimMismatch,
+            },
+            Self::RequiredClaimMissing { claim } => match *claim {
+                "aud" => JwtValidationOutcome::AudienceMissing,
+                "iss" => JwtValidationOutcome::IssuerMissing,
+                "sub" => JwtValidationOutcome::SubjectMissing,
+                _ => JwtValidationOutcome::RequiredClaimMissing,
+            },
+            Self::JtiTooLong { .. } => JwtValidationOutcome::JtiTooLong,
+            Self::JtiNotUnique => JwtValidationOutcome::JtiNotUnique,
+            Self::JtiCheck { .. } => JwtValidationOutcome::JtiBackendError,
+            Self::ExtraClaims { .. } => JwtValidationOutcome::InvalidExtraClaims,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;
