@@ -12,7 +12,8 @@ use snafu::{ensure, prelude::*};
 use crate::core::{
     crypto::verifier::JwsVerifier,
     jwt::validator::{
-        ClaimCheck, JwtValidationError, JwtValidator, ValidatedJwt, within_max_age_secs,
+        ClaimCheck, JwtValidationError, JwtValidationOutcome, JwtValidator, ValidatedJwt,
+        within_max_age_secs,
     },
     platform::{Duration, SystemTime},
 };
@@ -190,6 +191,12 @@ pub struct StandardOidcAddressClaims {
 /// [`JwsVerifier`]), `iss`, and `aud`, plus — when configured — `nonce`,
 /// `max_age`, `acr`, and the set of permitted signature algorithms.
 ///
+/// With the `metrics` feature, each completed [`validate`](Self::validate) or
+/// [`validate_refresh`](Self::validate_refresh) call increments
+/// `huskarl.id_token.validate` exactly once. Its bounded `outcome` label comes
+/// from [`IdTokenOutcome::as_str`]. No claim values are recorded. Cancelled
+/// calls do not emit an outcome.
+///
 /// Build one with [`builder`](Self::builder); call [`validate`](Self::validate)
 /// to check a token and recover its claims.
 ///
@@ -232,6 +239,16 @@ pub struct IdTokenValidator {
 }
 
 impl IdTokenValidator {
+    #[cfg(feature = "metrics")]
+    fn observe_validation(result: &Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError>) {
+        let outcome = match result {
+            Ok(_) => IdTokenOutcome::Success,
+            Err(error) => error.outcome(),
+        };
+        ::metrics::counter!("huskarl.id_token.validate", "outcome" => outcome.as_str())
+            .increment(1);
+    }
+
     /// Validates a refreshed ID token and checks that it belongs to the same
     /// sign-in as the original ID token (OIDC Core §12.2).
     ///
@@ -267,7 +284,18 @@ impl IdTokenValidator {
         id_token: &IdToken,
         original: &ValidatedJwt<IdTokenClaims>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
-        let refreshed = self.validate(id_token, None).await?;
+        let result = self.validate_refresh_inner(id_token, original).await;
+        #[cfg(feature = "metrics")]
+        Self::observe_validation(&result);
+        result
+    }
+
+    async fn validate_refresh_inner(
+        &self,
+        id_token: &IdToken,
+        original: &ValidatedJwt<IdTokenClaims>,
+    ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
+        let refreshed = self.validate_inner(id_token, None).await?;
         let same_audiences = refreshed.aud.iter().collect::<HashSet<_>>()
             == original.aud.iter().collect::<HashSet<_>>();
         for (claim, matches) in [
@@ -308,6 +336,17 @@ impl IdTokenValidator {
     /// signature, `iss`, `aud`, `nonce`, `max_age`, `acr`, or signature
     /// algorithm.
     pub async fn validate(
+        &self,
+        id_token: &IdToken,
+        expected_nonce: Option<&str>,
+    ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
+        let result = self.validate_inner(id_token, expected_nonce).await;
+        #[cfg(feature = "metrics")]
+        Self::observe_validation(&result);
+        result
+    }
+
+    async fn validate_inner(
         &self,
         id_token: &IdToken,
         expected_nonce: Option<&str>,
@@ -470,8 +509,107 @@ impl crate::core::error::propagation::Cause for IdTokenValidationError {
     }
 }
 
+/// Outcome of ID-token validation, suitable for a low-cardinality metrics label.
+///
+/// Emitted as `outcome` on `huskarl.id_token.validate` with the `metrics` feature.
+/// Claim values, tokens, and backend messages are never included.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdTokenOutcome {
+    /// The ID token was valid.
+    ///
+    /// Label: `"success"`.
+    Success,
+    /// JWT validation failed. Uses the underlying
+    /// [`JwtValidationOutcome::as_str`] label directly, without a prefix.
+    Jwt(JwtValidationOutcome),
+    /// The expected nonce passed to [`IdTokenValidator::validate`] was absent
+    /// from the token or did not match.
+    ///
+    /// Label: `"nonce_mismatch"`.
+    NonceMismatch,
+    /// The validator required `max_age`, but the token had no `auth_time` claim.
+    ///
+    /// Label: `"auth_time_missing"`.
+    AuthTimeMissing,
+    /// The token had no `sub` claim.
+    ///
+    /// Label: `"subject_missing"`.
+    SubjectMissing,
+    /// The authentication age exceeded the configured `max_age`, allowing for
+    /// clock leeway. Applies to both [`IdTokenValidator::validate`] and
+    /// [`IdTokenValidator::validate_refresh`].
+    ///
+    /// Label: `"auth_time_too_old"`.
+    AuthTimeTooOld,
+    /// The token included an audience other than the configured client audience
+    /// or an explicitly trusted audience.
+    ///
+    /// Label: `"untrusted_audience"`.
+    UntrustedAudience,
+    /// The validator required an authentication context (`acr`), but the claim
+    /// was absent.
+    ///
+    /// Label: `"acr_missing"`.
+    AcrMissing,
+    /// The token's `acr` claim did not match the configured authentication context.
+    ///
+    /// Label: `"acr_mismatch"`.
+    AcrMismatch,
+    /// [`IdTokenValidator::validate_refresh`] found a changed issuer, subject,
+    /// audience set, nonce, or authentication time under its continuity checks.
+    ///
+    /// Label: `"refresh_claim_mismatch"`.
+    RefreshClaimMismatch,
+}
+
+impl IdTokenOutcome {
+    /// Returns the value emitted in the `outcome` metrics label.
+    ///
+    /// See each variant for its label. Existing labels remain stable within a
+    /// semver-compatible release; new labels may be added. Consumers must
+    /// tolerate unknown labels.
+    /// [`Self::Jwt`] delegates to [`JwtValidationOutcome::as_str`].
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Jwt(outcome) => outcome.as_str(),
+            Self::NonceMismatch => "nonce_mismatch",
+            Self::AuthTimeMissing => "auth_time_missing",
+            Self::SubjectMissing => "subject_missing",
+            Self::AuthTimeTooOld => "auth_time_too_old",
+            Self::UntrustedAudience => "untrusted_audience",
+            Self::AcrMissing => "acr_missing",
+            Self::AcrMismatch => "acr_mismatch",
+            Self::RefreshClaimMismatch => "refresh_claim_mismatch",
+        }
+    }
+}
+
+impl IdTokenValidationError {
+    /// Classifies the failure without exposing claim values, tokens, or backend messages.
+    #[must_use]
+    pub fn outcome(&self) -> IdTokenOutcome {
+        match self {
+            Self::Jwt { source } => IdTokenOutcome::Jwt(source.outcome()),
+            Self::NonceMismatch => IdTokenOutcome::NonceMismatch,
+            Self::AuthTimeMissing => IdTokenOutcome::AuthTimeMissing,
+            Self::SubjectMissing => IdTokenOutcome::SubjectMissing,
+            Self::AuthTimeTooOld { .. } => IdTokenOutcome::AuthTimeTooOld,
+            Self::UntrustedAudience { .. } => IdTokenOutcome::UntrustedAudience,
+            Self::AcrMissing => IdTokenOutcome::AcrMissing,
+            Self::AcrMismatch { .. } => IdTokenOutcome::AcrMismatch,
+            Self::RefreshClaimMismatch { .. } => IdTokenOutcome::RefreshClaimMismatch,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "metrics")]
+    mod metrics_tests;
+
     use huskarl_crypto_native::{
         NativeVerifierPlatform,
         asymmetric::signer::{GenerateAlgorithm, PrivateKey},

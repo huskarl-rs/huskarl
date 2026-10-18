@@ -25,7 +25,7 @@ experimental-oidc-key-binding = ["huskarl-core/experimental-oidc-key-binding"]
 
 default = ["default-jws-verifier-platform"]
 
-# When enabled, emits counters for grant and token-source outcomes.
+# When enabled, emits counters for grant, token-source, and ID-token validation outcomes.
 metrics = ["dep:metrics", "huskarl-core/metrics"]
 
 # When enabled, adds support for the platform default crypto implementation.
