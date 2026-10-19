@@ -168,23 +168,23 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
     /// new value and swap it in; if another caller already holds the refresh lock,
     /// return immediately without waiting.
     ///
-    /// Returns `Ok(true)` if this call fetched and swapped a new value, or
-    /// `Ok(false)` if a refresh was already in flight, had just completed, or
-    /// the gate declined the attempt. The gate and outcome recording run under the
-    /// refresh lock, just as in [`refresh_gated`](Self::refresh_gated).
+    /// Returns `Ok(None)` if another caller holds the lock. Otherwise the gate and
+    /// outcome recording run under the refresh lock, just as in
+    /// [`refresh_gated`](Self::refresh_gated), and the result says whether this
+    /// call refreshed, adopted a refresh that landed first, or was blocked.
     pub(crate) async fn try_refresh_ahead(
         &self,
         gate: impl FnOnce() -> bool,
         record: impl FnOnce(bool),
-    ) -> Result<bool, Error> {
+    ) -> Result<Option<GatedRefresh>, Error> {
         let cur = self.value.load_full();
         let Ok(_lock) = self.refresh_lock.try_lock() else {
             // Another caller is refreshing; don't block, keep serving `cur`.
-            return Ok(false);
+            return Ok(None);
         };
         if !Arc::ptr_eq(&self.value.load_full(), &cur) {
             // A refresh landed between our load and taking the lock.
-            return Ok(false);
+            return Ok(Some(GatedRefresh::Adopted));
         }
         if !gate() {
             #[cfg(feature = "tracing")]
@@ -192,11 +192,11 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> Refreshable<V> {
                 decision = "defer_refresh",
                 "Refresh policy declined the attempt"
             );
-            return Ok(false);
+            return Ok(Some(GatedRefresh::Blocked));
         }
 
         self.reload(record).await?;
-        Ok(true)
+        Ok(Some(GatedRefresh::Refreshed))
     }
 
     /// Returns a cheap guard reference to the current value.
@@ -236,6 +236,7 @@ struct RefreshTimestamps {
 /// A [`Refreshable`] combined with TTL, failure-backoff, and rate-limiting policy.
 pub(crate) struct ScheduledRefreshable<V> {
     inner: Refreshable<V>,
+    metrics_name: Option<String>,
     ttl: Duration,
     failure_backoff: Duration,
     min_refresh_interval: Duration,
@@ -293,6 +294,8 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         /// succeeds in a cold state that self-heals, rather than failing. `None`
         /// (the default) keeps a failed initial fetch fatal.
         fallback: Option<V>,
+        /// Stable source name for refresh metrics (requires the metrics feature).
+        metrics_name: Option<String>,
     ) -> Result<Self, Error> {
         let now = Instant::now();
         let (initial, timestamps) = match (factory().await, fallback) {
@@ -322,6 +325,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         let cold = AtomicBool::new(timestamps.last_refreshed.is_none());
         Ok(Self {
             inner: Refreshable::from_seed(initial, factory),
+            metrics_name,
             ttl,
             failure_backoff,
             min_refresh_interval,
@@ -411,6 +415,15 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         self.policy_permits_attempt(now, &ts)
     }
 
+    fn metric(&self, trigger: &'static str, outcome: &'static str) {
+        #[cfg(feature = "metrics")]
+        if let Some(name) = &self.metrics_name {
+            metrics::counter!("huskarl.crypto.refresh", "name" => name.clone(), "trigger" => trigger, "outcome" => outcome).increment(1);
+        }
+        #[cfg(not(feature = "metrics"))]
+        let _ = (&self.metrics_name, trigger, outcome);
+    }
+
     fn record_refresh(&self, success: bool) {
         #[cfg(feature = "tracing")]
         tracing::debug!(
@@ -453,6 +466,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     pub(crate) async fn refresh_if_stale(&self) -> bool {
         // Cheap pre-check so clearly-blocked callers don't queue on the lock.
         if !self.should_refresh_stale() {
+            self.metric("stale", "skipped");
             return false;
         }
 
@@ -502,18 +516,30 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// attempt and recording its outcome under the lock. `ttl_gated` additionally
     /// requires staleness; the miss path passes `false`.
     async fn refresh_with_policy(&self, ttl_gated: bool) -> bool {
+        let trigger = if ttl_gated { "stale" } else { "miss" };
         match self
             .inner
             .refresh_gated(
                 || self.claim_refresh_attempt(ttl_gated),
-                |success| self.record_refresh(success),
+                |success| {
+                    self.record_refresh(success);
+                    self.metric(trigger, if success { "success" } else { "failure" });
+                },
             )
             .await
         {
             // Adopted: another task's refresh landed while we waited; it
             // records its own outcome.
-            Ok(GatedRefresh::Refreshed | GatedRefresh::Adopted) => true,
-            Ok(GatedRefresh::Blocked) | Err(_) => false,
+            Ok(GatedRefresh::Refreshed) => true,
+            Ok(GatedRefresh::Adopted) => {
+                self.metric(trigger, "adopted");
+                true
+            }
+            Ok(GatedRefresh::Blocked) => {
+                self.metric(trigger, "skipped");
+                false
+            }
+            Err(_) => false,
         }
     }
 
@@ -526,6 +552,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// no background task: reads drive reload attempts.
     pub(crate) async fn poll_refresh_ahead(&self) {
         if !self.should_refresh_stale() {
+            self.metric("read", "skipped");
             return;
         }
         self.refresh_ahead_with_policy().await;
@@ -534,28 +561,45 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     // Separate from the cheap pre-check so a delayed reader must re-evaluate
     // policy even if another attempt completed after it observed staleness.
     async fn refresh_ahead_with_policy(&self) {
-        // The outcome is recorded under the lock; a busy lock, an adopted
-        // refresh, or a policy block leaves the current value in place.
-        let _ = self
+        match self
             .inner
             .try_refresh_ahead(
                 || self.claim_refresh_attempt(true),
-                |success| self.record_refresh(success),
+                |success| {
+                    self.record_refresh(success);
+                    self.metric("read", if success { "success" } else { "failure" });
+                },
             )
-            .await;
+            .await
+        {
+            // The outcome was already recorded under the lock.
+            Ok(Some(GatedRefresh::Refreshed)) | Err(_) => {}
+            Ok(Some(GatedRefresh::Blocked)) => self.metric("read", "skipped"),
+            // Another caller owns or just finished the load; keep the current snapshot.
+            Ok(None | Some(GatedRefresh::Adopted)) => self.metric("read", "in_flight"),
+        }
     }
 
     /// Forces a refresh bypassing the scheduling policy, but still records the outcome.
     pub(crate) async fn refresh(&self) -> Result<bool, Error> {
         match self
             .inner
-            .refresh_gated(|| true, |success| self.record_refresh(success))
+            .refresh_gated(
+                || true,
+                |success| {
+                    self.record_refresh(success);
+                    self.metric("forced", if success { "success" } else { "failure" });
+                },
+            )
             .await?
         {
             GatedRefresh::Refreshed => Ok(true),
             // Adopted: the concurrent refresher recorded its own outcome.
             // Blocked is unreachable with an always-true gate.
-            GatedRefresh::Adopted | GatedRefresh::Blocked => Ok(false),
+            GatedRefresh::Adopted | GatedRefresh::Blocked => {
+                self.metric("forced", "adopted");
+                Ok(false)
+            }
         }
     }
 
@@ -1073,5 +1117,189 @@ mod tests {
             result.is_err(),
             "no fallback => a failed initial fetch is fatal"
         );
+    }
+
+    #[cfg(feature = "metrics")]
+    mod refresh_metrics {
+        use std::{
+            collections::HashMap,
+            sync::{Mutex, atomic::AtomicU64},
+        };
+
+        use metrics::{
+            Counter, CounterFn, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString,
+            Unit,
+        };
+
+        use super::*;
+
+        #[derive(Default)]
+        struct Count(AtomicU64);
+        impl CounterFn for Count {
+            fn increment(&self, value: u64) {
+                self.0.fetch_add(value, Ordering::SeqCst);
+            }
+            fn absolute(&self, value: u64) {
+                self.0.fetch_max(value, Ordering::SeqCst);
+            }
+        }
+
+        #[derive(Default)]
+        struct Capture(Mutex<HashMap<Key, Arc<Count>>>);
+        impl Recorder for Capture {
+            fn describe_counter(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+            fn describe_gauge(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+            fn describe_histogram(&self, _: KeyName, _: Option<Unit>, _: SharedString) {}
+            fn register_counter(&self, key: &Key, _: &Metadata<'_>) -> Counter {
+                Counter::from_arc(
+                    self.0
+                        .lock()
+                        .unwrap()
+                        .entry(key.clone())
+                        .or_default()
+                        .clone(),
+                )
+            }
+            fn register_gauge(&self, _: &Key, _: &Metadata<'_>) -> Gauge {
+                Gauge::noop()
+            }
+            fn register_histogram(&self, _: &Key, _: &Metadata<'_>) -> Histogram {
+                Histogram::noop()
+            }
+        }
+        impl Capture {
+            fn count(&self, trigger: &str, outcome: &str) -> u64 {
+                let has = |key: &Key, name: &str, value: &str| {
+                    key.labels().any(|l| l.key() == name && l.value() == value)
+                };
+                self.0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.name() == "huskarl.crypto.refresh"
+                            && has(key, "name", "source")
+                            && has(key, "trigger", trigger)
+                            && has(key, "outcome", outcome)
+                    })
+                    .map(|(_, count)| count.0.load(Ordering::SeqCst))
+                    .sum()
+            }
+            fn total(&self) -> u64 {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .map(|count| count.0.load(Ordering::SeqCst))
+                    .sum()
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn counts_loads_failures_and_policy_skips() {
+            let capture = Capture::default();
+            let _guard = metrics::set_default_local_recorder(&capture);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let counter = calls.clone();
+            // Construction and the first reload succeed; later reloads fail.
+            let sr = ScheduledRefreshable::builder()
+                .factory(move || {
+                    let n = counter.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        if n < 2 {
+                            Ok(n)
+                        } else {
+                            Err(Error::new(crate::error::RetryAdvice::RETRY, "down"))
+                        }
+                    })
+                })
+                .ttl(Duration::from_hours(1))
+                .min_refresh_interval(Duration::from_hours(1))
+                .failure_backoff(Duration::ZERO)
+                .metrics_name("source".to_owned())
+                .build()
+                .await
+                .unwrap();
+
+            assert!(!sr.refresh_if_stale().await, "within the TTL");
+            assert!(sr.try_refresh_on_miss().await);
+            assert!(!sr.try_refresh_on_miss().await, "minimum interval");
+            assert!(
+                sr.refresh().await.is_err(),
+                "forced refresh bypasses policy"
+            );
+            sr.poll_refresh_ahead().await;
+
+            assert_eq!(capture.count("stale", "skipped"), 1);
+            assert_eq!(capture.count("miss", "success"), 1);
+            assert_eq!(capture.count("miss", "skipped"), 1);
+            assert_eq!(capture.count("forced", "failure"), 1);
+            assert_eq!(capture.count("read", "skipped"), 1);
+            assert_eq!(capture.total(), 5, "construction is not counted");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn concurrent_callers_are_not_counted_as_loads() {
+            let capture = Capture::default();
+            let _guard = metrics::set_default_local_recorder(&capture);
+            let sr = ScheduledRefreshable::builder()
+                .factory(|| {
+                    Box::pin(async {
+                        tokio::task::yield_now().await;
+                        Ok(0_usize)
+                    })
+                })
+                .ttl(Duration::ZERO)
+                .min_refresh_interval(Duration::ZERO)
+                .failure_backoff(Duration::ZERO)
+                .metrics_name("source".to_owned())
+                .build()
+                .await
+                .unwrap();
+
+            tokio::join!(sr.poll_refresh_ahead(), sr.poll_refresh_ahead());
+            assert_eq!(capture.count("read", "success"), 1);
+            assert_eq!(capture.count("read", "in_flight"), 1);
+
+            let (a, b) = tokio::join!(sr.try_refresh_on_miss(), sr.try_refresh_on_miss());
+            assert!(a && b);
+            assert_eq!(capture.count("miss", "success"), 1);
+            assert_eq!(capture.count("miss", "adopted"), 1);
+        }
+
+        /// A read that the policy blocks under the lock is a skip, not a
+        /// concurrent load: no other caller is refreshing.
+        #[tokio::test(flavor = "current_thread")]
+        async fn read_blocked_under_the_lock_is_skipped_not_in_flight() {
+            let capture = Capture::default();
+            let _guard = metrics::set_default_local_recorder(&capture);
+            let sr = ScheduledRefreshable::builder()
+                .factory(failing_after_first(Arc::new(AtomicUsize::new(0))))
+                .ttl(Duration::ZERO)
+                .min_refresh_interval(Duration::ZERO)
+                .failure_backoff(Duration::from_hours(1))
+                .metrics_name("source".to_owned())
+                .build()
+                .await
+                .unwrap();
+
+            sr.poll_refresh_ahead().await;
+            sr.refresh_ahead_with_policy().await;
+
+            assert_eq!(capture.count("read", "failure"), 1);
+            assert_eq!(capture.count("read", "skipped"), 1);
+            assert_eq!(capture.count("read", "in_flight"), 0);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn unnamed_sources_emit_nothing() {
+            let capture = Capture::default();
+            let _guard = metrics::set_default_local_recorder(&capture);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let sr = scheduled(calls, Duration::ZERO, Duration::ZERO, Duration::ZERO).await;
+            sr.poll_refresh_ahead().await;
+            assert!(sr.try_refresh_on_miss().await);
+            assert_eq!(capture.total(), 0);
+        }
     }
 }

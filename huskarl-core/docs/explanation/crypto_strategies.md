@@ -284,3 +284,12 @@ bound on the sealer traits accept either world unchanged.
 | Ambiguous key match    | n/a — default key, or by thumbprint         | fails closed: wrong-key acceptance is a risk | try-all is safe: the AEAD tag self-authenticates               |
 | Materialisation seam   | none — keys are handed in                   | `JwsVerifierPlatform`, keys arrive as a JWKS | none — keys are handed in                                      |
 | Extra layer            | by-thumbprint selection (`DPoP`'s `dpop_jkt`) | —                                          | sealing: self-contained bundles, external sealers              |
+
+## Refresh observability
+
+Several callers can share one factory reload, so refresh metrics distinguish
+completed loads from callers adopting their results or continuing with the
+current snapshot. This separates upstream fetch activity from request activity;
+policy skips also show when reads leave the source unchanged. See the
+[refresh metrics reference](crate::crypto#refresh-metrics) for configuration,
+labels, and outcome definitions.

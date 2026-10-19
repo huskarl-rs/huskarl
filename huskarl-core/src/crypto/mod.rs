@@ -13,6 +13,38 @@
 //! refreshable, scheduled-refresh, retrying) that decorate it without changing
 //! its interface. See [composing crypto
 //! strategies](crate::_docs::explanation::crypto_strategies) for how they stack.
+//!
+//! # Refresh metrics
+//!
+//! [`signer::ScheduledRefreshSigner`], [`verifier::ScheduledRefreshVerifier`],
+//! and [`cipher::ScheduledRefreshCipher`] accept an optional `metrics_name` on
+//! their builders. With the `metrics` feature enabled, named sources emit the
+//! `huskarl.crypto.refresh` counter. Without that feature the setting is inert;
+//! unnamed sources emit no refresh counters. Names must come from bounded
+//! application configuration, never request headers.
+//!
+//! Each counter has three labels:
+//!
+//! | Label | Values |
+//! | --- | --- |
+//! | `name` | The configured source name |
+//! | `trigger` | `read` (use of the source), `stale` (manual staleness poll), `miss` (key-miss or cold-start recovery), `forced` (explicit refresh) |
+//! | `outcome` | Defined below |
+//!
+//! | Outcome | Meaning |
+//! | --- | --- |
+//! | `success` | A factory reload completed successfully |
+//! | `failure` | A factory reload returned an error |
+//! | `skipped` | TTL, minimum interval, or backoff prevented an attempt |
+//! | `adopted` | A waiting caller adopted another caller's successful reload |
+//! | `in_flight` | A read passed the policy pre-check but found a reload running or already published |
+//!
+//! Initial construction and cancelled reloads do not count as `success` or
+//! `failure`. Ordinary reads of a fresh snapshot count as `skipped`. Reads during
+//! a reload can also count as `skipped` when its claimed attempt triggers the
+//! policy pre-check, so `in_flight` does not count every concurrent read.
+//! Forced refreshes bypass policy and report `success`, `failure`, or `adopted`.
+//! Only `success` and `failure` count completed factory reloads.
 
 pub mod cipher;
 pub(crate) mod refreshable;
