@@ -47,23 +47,38 @@ impl AsymmetricPublicKey {
     /// unsupported, the key material cannot be imported, or — for RSA — the
     /// modulus is outside the 2048–8192 bit range (RFC 7518 §3.3 sets the
     /// 2048-bit minimum), or if `WebCrypto` itself is unavailable.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.webcrypto.key.import", level = "trace", skip_all)
+    )]
     pub async fn from_jwk(key: jwk::PublicJwk) -> Result<Self, Error> {
         let kid = key.kid.clone();
 
         if let Some(key_use) = key.key_use
             && key_use != KeyUse::Sign
         {
+            crate::diagnostics::failure("invalid_key_use");
             return Err(KeyUseNotSigSnafu { key_use }.build().into());
         }
 
         if let Some(key_ops) = &key.key_operations
             && !key_ops.contains(&KeyOperation::Verify)
         {
+            crate::diagnostics::failure("missing_verify_permission");
             return Err(VerifierKeyError::KeyOpsMissingVerify.into());
         }
 
+        #[cfg(feature = "tracing")]
+        let key_type = match &key.key {
+            jwk::PublicKey::Rsa(_) => "RSA",
+            jwk::PublicKey::Ec(_) => "EC",
+            jwk::PublicKey::Okp(_) => "OKP",
+            _ => "unknown",
+        };
         let verifying_key = Key::new(key).await?;
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(key_type, outcome = "success", "Verification key imported");
         Ok(Self {
             inner: Arc::new(AsymmetricPublicKeyInner { verifying_key, kid }),
         })
@@ -120,6 +135,8 @@ fn rsa_modulus_bits(n: &[u8]) -> u32 {
 /// Context line for a key whose `kty`/`crv`/`alg` combination has no
 /// supported verification algorithm.
 fn unsupported_key(key: &jwk::PublicKey, alg: Option<&str>) -> VerifierKeyError {
+    crate::diagnostics::failure("unsupported_key");
+
     let key_type = match key {
         jwk::PublicKey::Rsa(_) => "kty RSA".to_string(),
         jwk::PublicKey::Ec(ec) => format!("kty EC, crv {}", ec.crv),
@@ -139,6 +156,7 @@ const MAX_RSA_BITS: u32 = 8192;
 fn check_rsa_modulus(rsa_key: &jwk::RsaPublicKey) -> Result<(), Error> {
     let bits = rsa_modulus_bits(&rsa_key.n);
     if !(MIN_RSA_BITS..=MAX_RSA_BITS).contains(&bits) {
+        crate::diagnostics::failure("rsa_modulus_out_of_range");
         return Err(RsaModulusOutOfRangeSnafu { bits }.build().into());
     }
     Ok(())
@@ -260,7 +278,9 @@ impl Key {
     }
 
     async fn new(jwk: jwk::PublicJwk) -> Result<Key, Error> {
-        let crypto = get_crypto().context(WebCryptoUnavailableSnafu)?;
+        let crypto = get_crypto()
+            .inspect_err(|_| crate::diagnostics::failure("crypto_unavailable"))
+            .context(WebCryptoUnavailableSnafu)?;
 
         match &jwk.key {
             jwk::PublicKey::Ec(ec_public_key)
@@ -440,6 +460,10 @@ impl JwsVerifier for AsymmetricPublicKey {
         )
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.webcrypto.jws.verify", level = "trace", skip_all)
+    )]
     fn verify<'a>(
         &'a self,
         input: &'a [u8],
@@ -451,14 +475,19 @@ impl JwsVerifier for AsymmetricPublicKey {
             // NoMatchingKey (letting RetryingVerifier refresh on rotation),
             // never an attempted verification.
             if self.key_match(key_match).is_none() {
+                crate::diagnostics::failure("no_matching_key");
                 return Err(VerifyError::NoMatchingKey);
             }
 
-            let crypto = get_crypto().context(NoCryptoSnafu).map_err(Error::from)?;
+            let crypto = get_crypto()
+                .inspect_err(|_| crate::diagnostics::failure("crypto_unavailable"))
+                .context(NoCryptoSnafu)
+                .map_err(Error::from)?;
 
             let Some((sign_alg, crypto_key)) =
                 self.inner.verifying_key.matching_key_and_alg(key_match.alg)
             else {
+                crate::diagnostics::failure("no_matching_key");
                 return Err(VerifyError::NoMatchingKey);
             };
 
@@ -469,6 +498,7 @@ impl JwsVerifier for AsymmetricPublicKey {
                     .map_err(Error::from)?;
 
             if !is_verified {
+                crate::diagnostics::failure("signature_mismatch");
                 return Err(VerifyError::SignatureMismatch);
             }
 

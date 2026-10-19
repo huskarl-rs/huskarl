@@ -31,6 +31,18 @@ To sign, generate a non-extractable
 [`AsymmetricPublicKey`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/asymmetric/verifier/struct.AsymmetricPublicKey.html) from a
 public JWK (or use [`WebCryptoVerifierPlatform`](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/factory/struct.WebCryptoVerifierPlatform.html) over a JWKS).
 
+# Diagnostic tracing
+
+Enable the optional `tracing` feature to record key import and generation,
+signing, verification, encryption, and decryption. It also enables
+`huskarl-core/tracing`; the application configures the subscriber.
+
+Filter with `huskarl_crypto_webcrypto=trace` for operation spans and validated
+algorithm metadata, or `huskarl_crypto_webcrypto=debug` for failures only.
+Failures report fixed categories, never backend error text. Key material,
+key IDs, JWK input, signatures, plaintext, ciphertext, and associated data
+are excluded. The feature is disabled by default.
+
 # Documentation
 
 - **Solve a task:** [sign a JWT in the browser](https://docs.rs/huskarl-crypto-webcrypto/latest/huskarl_crypto_webcrypto/_docs/guide/signing_a_jwt/)

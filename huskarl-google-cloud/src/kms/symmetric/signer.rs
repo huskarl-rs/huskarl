@@ -23,7 +23,7 @@ use super::{
     ResolveVersionSnafu, UnsupportedAlgorithmSnafu, setup,
 };
 pub use super::{KeyError, SetupError};
-use crate::kid::VersionKid;
+use crate::{kid::VersionKid, retry::RpcDiagnostics as _};
 
 /// An error returned while signing with a symmetric KMS key.
 #[derive(Debug, Snafu)]
@@ -188,6 +188,10 @@ impl JwsSigner for KeyVersion {
         self.key_id.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.kms.sign", level = "debug", skip_all)
+    )]
     fn sign<'a>(
         &'a self,
         input: &'a [u8],
@@ -200,9 +204,18 @@ impl JwsSigner for KeyVersion {
                 .set_data(input.to_vec())
                 .send()
                 .await
+                .observe_rpc("mac_sign")
                 .context(MacSignSnafu)?;
 
             if response.name != self.resource_name {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "error",
+                    reason = "mismatched_key",
+                    expected_version = crate::diagnostics::version_id(&self.resource_name),
+                    returned_version = crate::diagnostics::version_id(&response.name),
+                    "KMS response key did not match request"
+                );
                 return Err(SigningError::MismatchedKeyInfo.into());
             }
 
@@ -216,6 +229,10 @@ impl JwsVerifier for KeyVersion {
         key_match.strength_for(&[&self.jws_algorithm], self.key_id.as_deref())
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.kms.verify", level = "debug", skip_all)
+    )]
     fn verify<'a>(
         &'a self,
         input: &'a [u8],
@@ -231,12 +248,19 @@ impl JwsVerifier for KeyVersion {
                 .set_mac(signature.to_vec())
                 .send()
                 .await
+                .observe_rpc("mac_verify")
                 .context(MacVerifySnafu)
                 .map_err(huskarl_core::Error::from)?;
 
             if response.success {
                 Ok(())
             } else {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "error",
+                    reason = "signature_mismatch",
+                    "KMS MAC verification rejected signature"
+                );
                 Err(VerifyError::SignatureMismatch)
             }
         })
@@ -310,6 +334,8 @@ impl SigningKey {
             .set_name(&resource_name)
             .send()
             .await
+            .observe_rpc("get_crypto_key_version")
+            .inspect(crate::diagnostics::kms_version)
             .context(GetCryptoKeyVersionSnafu)?;
 
         // Use the canonical name from the response to resolve aliases.
@@ -489,6 +515,8 @@ async fn build_key_version(
         .set_name(&resource_name)
         .send()
         .await
+        .observe_rpc("get_crypto_key_version")
+        .inspect(crate::diagnostics::kms_version)
         .context(setup::GetCryptoKeyVersionSnafu)?;
 
     // Use the canonical name from the response to resolve aliases.

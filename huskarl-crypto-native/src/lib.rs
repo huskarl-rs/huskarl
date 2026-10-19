@@ -38,6 +38,18 @@
 //! public JWK (or use [`NativeVerifierPlatform`] over a JWKS) and hand it to the
 //! JWT validator. The guides below walk through both.
 //!
+//! # Diagnostic tracing
+//!
+//! Enable the optional `tracing` feature to record key import and generation,
+//! signing, verification, encryption, and decryption. It also enables
+//! `huskarl-core/tracing`; the application configures the subscriber.
+//!
+//! Filter with `huskarl_crypto_native=trace` for operation spans and validated
+//! algorithm metadata, or `huskarl_crypto_native=debug` for failures only.
+//! Failures report fixed categories, never backend error text. Key material,
+//! key IDs, JWK input, signatures, plaintext, ciphertext, and associated data
+//! are excluded. The feature is disabled by default.
+//!
 //! # Documentation
 //!
 //! - **Solve a task:** [load a signing key](crate::_docs::guide::loading_a_signing_key)
@@ -74,3 +86,5 @@ pub mod symmetric;
 pub mod _docs;
 
 pub use factory::NativeVerifierPlatform;
+
+mod diagnostics;

@@ -22,7 +22,7 @@ use p256::{
 use snafu::prelude::*;
 
 use super::super::version::VersionStrategy;
-use crate::kid::VersionKid;
+use crate::{kid::VersionKid, retry::RpcDiagnostics as _};
 
 /// An error returned while building an asymmetric signing key.
 #[derive(Debug, Snafu)]
@@ -303,6 +303,10 @@ impl JwsSigner for KeyVersion {
         self.key_id.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.kms.sign", level = "debug", skip_all)
+    )]
     fn sign<'a>(
         &'a self,
         input: &'a [u8],
@@ -315,10 +319,19 @@ impl JwsSigner for KeyVersion {
                 .set_data(input.to_vec())
                 .send()
                 .await
+                .observe_rpc("asymmetric_sign")
                 .context(AsymmetricSignSnafu)?;
 
             // Verify the response came from the expected key version.
             if response.name != self.resource_name {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "error",
+                    reason = "mismatched_key",
+                    expected_version = crate::diagnostics::version_id(&self.resource_name),
+                    returned_version = crate::diagnostics::version_id(&response.name),
+                    "KMS response key did not match request"
+                );
                 return Err(SigningError::MismatchedKeyInfo.into());
             }
 
@@ -508,6 +521,8 @@ impl SigningKey {
                         .set_name(name)
                         .send()
                         .await
+                        .observe_rpc("get_public_key")
+                        .inspect(crate::diagnostics::public_key)
                         .context(GetPublicKeySnafu)?;
 
                     let jws_algorithm = if !use_fully_specified_jws_algorithm && alg == "Ed25519" {
@@ -604,6 +619,8 @@ async fn build_key_version(
         .set_name(&resource_name)
         .send()
         .await
+        .observe_rpc("get_public_key")
+        .inspect(crate::diagnostics::public_key)
         .context(GetPublicKeySnafu)?;
 
     // Use the canonical name from the response to resolve aliases.

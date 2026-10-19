@@ -1867,6 +1867,8 @@ dependencies = [
  "strum",
  "subtle",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1882,6 +1884,8 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "snafu",
+ "tracing",
+ "tracing-subscriber",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
@@ -1921,6 +1925,8 @@ dependencies = [
  "snafu",
  "spki",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1972,6 +1978,8 @@ dependencies = [
  "sha2",
  "snafu",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1987,6 +1995,8 @@ dependencies = [
  "snafu",
  "strum",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

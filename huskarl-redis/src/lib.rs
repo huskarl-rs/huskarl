@@ -44,6 +44,16 @@
 //! The default `tokio-comp` feature enables redis's feature of the same
 //! name. If your application's redis dependency already enables a runtime,
 //! opt out with `default-features = false`.
+//!
+//! # Diagnostic tracing
+//!
+//! Enable the optional `tracing` feature to emit structured diagnostics. It also
+//! enables `huskarl-core/tracing`; no subscriber or exporter is installed.
+//!
+//! DEBUG spans follow replay checks. TRACE reports new markers and effective TTL;
+//! DEBUG reports seen markers and classified Redis failures. JTIs, their hashes,
+//! Redis keys and prefixes, connection details, and raw errors are not recorded.
+//! Use `RUST_LOG=huskarl_redis=trace` with an application-configured subscriber.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -74,6 +84,22 @@ pub(crate) struct RedisOperationError {
 #[track_caller]
 fn transport_error(source: RedisError, operation: &'static str) -> huskarl_core::Error {
     let retryable = !matches!(source.retry_method(), redis::RetryMethod::NoRetry);
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        operation,
+        retryable,
+        error_kind = match source.kind() {
+            redis::ErrorKind::Io => "io",
+            redis::ErrorKind::AuthenticationFailed => "authentication_failed",
+            redis::ErrorKind::UnexpectedReturnType => "unexpected_return_type",
+            redis::ErrorKind::InvalidClientConfig => "invalid_client_config",
+            redis::ErrorKind::Parse => "parse",
+            redis::ErrorKind::Client => "client",
+            redis::ErrorKind::Server(_) => "server",
+            _ => "other",
+        },
+        "Redis operation failed"
+    );
     huskarl_core::Error::new(
         huskarl_core::RetryAdvice::retry_if(retryable),
         RedisOperationError { operation, source },
@@ -102,3 +128,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "tracing"))]
+mod test_tracing;

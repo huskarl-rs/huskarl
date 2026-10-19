@@ -286,23 +286,39 @@ impl AsymmetricPublicKey {
     ///     .expect("a freshly generated public JWK is verifiable");
     /// # Ok::<(), huskarl_core::error::Error>(())
     /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.key.import", level = "trace", skip_all)
+    )]
     pub fn from_jwk(key: jwk::PublicJwk) -> Result<Self, Error> {
         let kid = key.kid;
 
         if let Some(key_use) = key.key_use
             && key_use != KeyUse::Sign
         {
+            crate::diagnostics::failure("invalid_key_use");
             return Err(KeyUseNotSigSnafu { key_use }.build().into());
         }
 
         if let Some(key_ops) = &key.key_operations
             && !key_ops.contains(&KeyOperation::Verify)
         {
+            crate::diagnostics::failure("missing_verify_permission");
             return Err(VerifierKeyError::KeyOpsMissingVerify.into());
         }
 
-        let verifying_key = Key::new(key.key, key.algorithm.as_deref())?;
+        #[cfg(feature = "tracing")]
+        let key_type = match &key.key {
+            jwk::PublicKey::Rsa(_) => "RSA",
+            jwk::PublicKey::Ec(_) => "EC",
+            jwk::PublicKey::Okp(_) => "OKP",
+            _ => "unknown",
+        };
+        let verifying_key = Key::new(key.key, key.algorithm.as_deref())
+            .inspect_err(|_| crate::diagnostics::failure("invalid_verification_key"))?;
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(key_type, outcome = "success", "Verification key imported");
         Ok(Self {
             inner: Arc::new(AsymmetricPublicKeyInner { verifying_key, kid }),
         })
@@ -317,6 +333,14 @@ impl JwsVerifier for AsymmetricPublicKey {
         )
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.jws.verify", level = "trace", skip_all)
+    )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep algorithm dispatch and its explicit signature-decoding diagnostics together"
+    )]
     fn verify<'a>(
         &'a self,
         input: &'a [u8],
@@ -328,6 +352,7 @@ impl JwsVerifier for AsymmetricPublicKey {
         // operator looking for a key rotation over a malformed token.
         Box::pin(async move {
             if self.key_match(key_match).is_none() {
+                crate::diagnostics::failure("no_matching_key");
                 return Err(VerifyError::NoMatchingKey);
             }
 
@@ -335,11 +360,13 @@ impl JwsVerifier for AsymmetricPublicKey {
                 Key::Es256(verifying_key) => verifying_key.verify(
                     input,
                     &p256::ecdsa::Signature::from_slice(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Es384(verifying_key) => verifying_key.verify(
                     input,
                     &p384::ecdsa::Signature::from_slice(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Rsa(public_key) => match key_match.alg {
@@ -347,36 +374,42 @@ impl JwsVerifier for AsymmetricPublicKey {
                         .verify(
                             input,
                             &rsa::pkcs1v15::Signature::try_from(signature)
+                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                                 .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "RS384" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(public_key.clone())
                         .verify(
                             input,
                             &rsa::pkcs1v15::Signature::try_from(signature)
+                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                                 .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "RS512" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(public_key.clone())
                         .verify(
                             input,
                             &rsa::pkcs1v15::Signature::try_from(signature)
+                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                                 .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "PS256" => rsa::pss::VerifyingKey::<sha2::Sha256>::new(public_key.clone())
                         .verify(
                             input,
                             &rsa::pss::Signature::try_from(signature)
+                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                                 .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "PS384" => rsa::pss::VerifyingKey::<sha2::Sha384>::new(public_key.clone())
                         .verify(
                             input,
                             &rsa::pss::Signature::try_from(signature)
+                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                                 .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     "PS512" => rsa::pss::VerifyingKey::<sha2::Sha512>::new(public_key.clone())
                         .verify(
                             input,
                             &rsa::pss::Signature::try_from(signature)
+                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                                 .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                         ),
                     // `key_match` above already rejected any alg outside
@@ -390,40 +423,50 @@ impl JwsVerifier for AsymmetricPublicKey {
                 Key::Rs256(verifying_key) => verifying_key.verify(
                     input,
                     &rsa::pkcs1v15::Signature::try_from(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Rs384(verifying_key) => verifying_key.verify(
                     input,
                     &rsa::pkcs1v15::Signature::try_from(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Rs512(verifying_key) => verifying_key.verify(
                     input,
                     &rsa::pkcs1v15::Signature::try_from(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ps256(verifying_key) => verifying_key.verify(
                     input,
                     &rsa::pss::Signature::try_from(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ps384(verifying_key) => verifying_key.verify(
                     input,
                     &rsa::pss::Signature::try_from(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ps512(verifying_key) => verifying_key.verify(
                     input,
                     &rsa::pss::Signature::try_from(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
                 Key::Ed25519(verifying_key) => verifying_key.verify_strict(
                     input,
                     &ed25519_dalek::Signature::from_slice(signature)
+                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
             }
-            .map_err(|_| VerifyError::SignatureMismatch)
+            .map_err(|_| {
+                crate::diagnostics::failure("signature_mismatch");
+                VerifyError::SignatureMismatch
+            })
         })
     }
 }

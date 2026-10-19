@@ -50,16 +50,21 @@ pub async fn generate_asymmetric_key(
     key_gen_params: AsymmetricKeyGenParams<'_>,
     key_usages: &[KeyUsage],
 ) -> Result<CryptoKeyPair, GenerateKeyError> {
-    let key_gen_params_js =
-        serde_wasm_bindgen::to_value(&key_gen_params).context(SerializeSnafu)?;
-    let key_usages_js = serde_wasm_bindgen::to_value(&key_usages).context(SerializeSnafu)?;
+    let key_gen_params_js = serde_wasm_bindgen::to_value(&key_gen_params)
+        .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
+        .context(SerializeSnafu)?;
+    let key_usages_js = serde_wasm_bindgen::to_value(&key_usages)
+        .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
+        .context(SerializeSnafu)?;
 
     Ok(JsFuture::from(
         crypto
             .generate_key_with_object(&key_gen_params_js.into(), false, &key_usages_js)
+            .inspect_err(|_| crate::diagnostics::failure("key_generation_failed"))
             .context(GenerateSnafu)?,
     )
     .await
+    .inspect_err(|_| crate::diagnostics::failure("key_generation_failed"))
     .context(AwaitSnafu)?
     .into())
 }

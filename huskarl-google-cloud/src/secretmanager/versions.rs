@@ -7,7 +7,7 @@ use huskarl_core::{
 use snafu::prelude::*;
 
 use super::SecretVersionBytes;
-use crate::kid::VersionKid;
+use crate::{kid::VersionKid, retry::RpcDiagnostics as _};
 
 /// An error returned while resolving or listing secret versions.
 #[derive(Debug, Snafu)]
@@ -202,6 +202,10 @@ impl SecretVersions {
     /// # Errors
     ///
     /// Returns an error if listing fails or no enabled versions are found.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.secret.list", level = "debug", skip_all)
+    )]
     pub async fn get_secrets(&self) -> Result<Vec<SecretVersionBytes>, SecretVersionsError> {
         let versions = self.list_enabled_versions().await?;
 
@@ -235,6 +239,14 @@ impl SecretVersions {
     /// Returns an error if resolving the primary alias fails, listing fails,
     /// no enabled versions are found, or the primary version is not among
     /// the enabled versions.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(
+            name = "huskarl.gcp.secret.resolve_versions",
+            level = "debug",
+            skip_all
+        )
+    )]
     pub async fn all(&self) -> Result<ActiveSecretVersions, SecretVersionsError> {
         let primary_alias_resource =
             format!("{}/versions/{}", self.secret_name, self.primary_alias);
@@ -247,6 +259,8 @@ impl SecretVersions {
                     .set_name(&primary_alias_resource)
                     .send()
                     .await
+                    .observe_rpc("get_secret_version")
+                    .inspect(crate::diagnostics::secret_version)
                     .context(GetSecretVersionSnafu)
             },
             self.list_enabled_versions(),
@@ -274,12 +288,25 @@ impl SecretVersions {
 
         let primary = primary_opt.ok_or_else(|| PrimaryVersionNotFoundSnafu.build())?;
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            resource = primary_name.as_str(),
+            version = crate::diagnostics::version_id(&primary_name),
+            count = all.len(),
+            "Selected primary and active secrets"
+        );
         Ok(ActiveSecretVersions { primary, all })
     }
 
     async fn list_enabled_versions(
         &self,
     ) -> Result<Vec<google_cloud_secretmanager_v1::model::SecretVersion>, SecretVersionsError> {
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            filter = "state=ENABLED",
+            max_versions = self.max_versions,
+            "Listing Secret Manager versions"
+        );
         let mut all_versions = Vec::new();
         let mut page_token = String::new();
 
@@ -305,7 +332,12 @@ impl SecretVersions {
                 request = request.set_page_token(&page_token);
             }
 
-            let response = request.send().await.context(ListSecretVersionsSnafu)?;
+            let response = request
+                .send()
+                .await
+                .observe_rpc("list_secret_versions")
+                .inspect(crate::diagnostics::secret_versions)
+                .context(ListSecretVersionsSnafu)?;
 
             all_versions.extend(response.versions);
 
@@ -559,5 +591,31 @@ mod crypto_composition {
         // overwrite them.
         assert_eq!(key.key_id().as_deref(), Some("jwk-sym-1"));
         assert_eq!(key.jws_algorithm().as_ref(), "HS256");
+    }
+    #[cfg(feature = "tracing")]
+    #[tokio::test]
+    async fn tracing_shows_api_versions_before_primary_selection_without_payloads() {
+        let mock = MockVersions {
+            primary_name: version_name("3"),
+            order: vec![version_name("3"), version_name("2")],
+            keys: BTreeMap::from([(version_name("3"), b"private-secret-payload".to_vec())]),
+        };
+        let ((), text) = crate::test_tracing::capture_with_api(
+            async {
+                let active = secret_versions(mock).all().await.unwrap();
+                active.primary.get_secret_value().await.unwrap();
+            },
+            tracing::Level::TRACE,
+            true,
+        )
+        .await;
+        assert!(text.contains("get_secret_version"), "{text}");
+        assert!(text.contains("version=\"2\""), "{text}");
+        assert!(text.contains(&version_name("3")), "{text}");
+        let api = text.find("Secret Manager API version page").unwrap();
+        let selected = text.find("Selected primary and active secrets").unwrap();
+        assert!(api < selected, "{text}");
+        assert!(text.contains("count=2"), "{text}");
+        assert!(!text.contains("private-secret-payload"), "{text}");
     }
 }

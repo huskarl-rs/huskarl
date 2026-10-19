@@ -56,4 +56,14 @@ The default `tokio-comp` feature enables redis’s feature of the same
 name. If your application’s redis dependency already enables a runtime,
 opt out with `default-features = false`.
 
+# Diagnostic tracing
+
+Enable the optional `tracing` feature to emit structured diagnostics. It also
+enables `huskarl-core/tracing`; no subscriber or exporter is installed.
+
+DEBUG spans follow replay checks. TRACE reports new markers and effective TTL;
+DEBUG reports seen markers and classified Redis failures. JTIs, their hashes,
+Redis keys and prefixes, connection details, and raw errors are not recorded.
+Use `RUST_LOG=huskarl_redis=trace` with an application-configured subscriber.
+
 <!-- cargo-reedme: end -->

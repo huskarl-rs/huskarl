@@ -8,7 +8,7 @@ use snafu::prelude::*;
 use super::signer::{
     PublicKeyParseError, get_jwe_algorithm, get_jws_algorithm, parse_public_key_pem,
 };
-use crate::kid::VersionKid;
+use crate::{kid::VersionKid, retry::RpcDiagnostics as _};
 
 /// Fetches the public keys for all enabled versions of a Cloud KMS
 /// `CryptoKey` as a [`PublicJwks`].
@@ -96,6 +96,10 @@ impl Jwks {
     ///
     /// Returns an error if listing versions fails, retrieving a public key
     /// fails, or no enabled versions are found.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.kms.jwks", level = "debug", skip_all)
+    )]
     pub async fn fetch(&self) -> Result<PublicJwks, JwksError> {
         let versions = self.list_enabled_versions().await?;
 
@@ -108,7 +112,16 @@ impl Jwks {
                 {
                     (alg, jwk::KeyUse::Sign)
                 } else {
-                    let alg = get_jwe_algorithm(&version.algorithm)?;
+                    let Some(alg) = get_jwe_algorithm(&version.algorithm) else {
+                        #[cfg(feature = "tracing")]
+                        tracing::trace!(
+                            version = crate::diagnostics::version_id(&version.name),
+                            decision = "skip_version",
+                            reason = "unsupported_algorithm",
+                            "Skipping KMS version for JWKS"
+                        );
+                        return None;
+                    };
                     (alg, jwk::KeyUse::Encrypt)
                 };
                 let version_id =
@@ -123,6 +136,8 @@ impl Jwks {
                         .set_name(name)
                         .send()
                         .await
+                        .observe_rpc("get_public_key")
+                        .inspect(crate::diagnostics::public_key)
                         .context(GetPublicKeySnafu)?;
 
                     parse_public_key_pem(
@@ -138,6 +153,12 @@ impl Jwks {
 
         let keys = futures_util::future::try_join_all(futures).await?;
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            api_versions = versions.len(),
+            keys = keys.len(),
+            "Converted KMS versions to JWKS"
+        );
         Ok(PublicJwks::new(keys))
     }
 
@@ -202,5 +223,99 @@ impl JwksError {
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         !matches!(self.retry_advice(), RetryAdvice::No)
+    }
+}
+
+#[cfg(all(test, feature = "tracing"))]
+#[allow(clippy::unwrap_used)]
+mod tracing_tests {
+    use google_cloud_gax::{options::RequestOptions, response::Response};
+    use google_cloud_kms_v1::{
+        model::{
+            CryptoKeyVersion, ListCryptoKeyVersionsRequest, ListCryptoKeyVersionsResponse,
+            crypto_key_version::{CryptoKeyVersionAlgorithm, CryptoKeyVersionState},
+        },
+        stub::KeyManagementService as KmsStub,
+    };
+
+    use super::*;
+
+    const KEY: &str = "projects/p/locations/l/keyRings/r/cryptoKeys/k";
+
+    #[derive(Debug, Clone)]
+    struct PagedKms;
+
+    impl KmsStub for PagedKms {
+        fn list_crypto_key_versions(
+            &self,
+            req: ListCryptoKeyVersionsRequest,
+            _: RequestOptions,
+        ) -> impl Future<Output = google_cloud_gax::Result<Response<ListCryptoKeyVersionsResponse>>> + Send
+        {
+            assert_eq!(req.parent, KEY);
+            assert_eq!(req.filter, "state=ENABLED");
+            let first = req.page_token.is_empty();
+            if !first {
+                assert_eq!(req.page_token, "private-page-token");
+            }
+            let version = CryptoKeyVersion::default()
+                .set_name(format!(
+                    "{KEY}/cryptoKeyVersions/{}",
+                    if first { 2 } else { 1 }
+                ))
+                .set_state(CryptoKeyVersionState::Enabled)
+                .set_algorithm(CryptoKeyVersionAlgorithm::HmacSha256);
+            let response = ListCryptoKeyVersionsResponse::default()
+                .set_crypto_key_versions([version])
+                .set_next_page_token(if first { "private-page-token" } else { "" });
+            async move { Ok(Response::from(response)) }
+        }
+    }
+
+    #[tokio::test]
+    async fn api_versions_are_visible_before_unsupported_keys_are_filtered() {
+        let source = Jwks::builder()
+            .key_name(KEY)
+            .kms_client(KeyManagementService::from_stub(PagedKms))
+            .build();
+        let (result, text) =
+            crate::test_tracing::capture_with_api(source.fetch(), tracing::Level::TRACE, true)
+                .await;
+        result.unwrap();
+        assert_eq!(text.matches("KMS API version page").count(), 2, "{text}");
+        for version in [1, 2] {
+            assert!(text.contains(&format!("version=\"{version}\"")), "{text}");
+        }
+        assert!(text.contains("HMAC_SHA256"), "{text}");
+        assert!(text.contains("ENABLED"), "{text}");
+        assert_eq!(
+            text.matches("decision=\"skip_version\"").count(),
+            2,
+            "{text}"
+        );
+        assert_eq!(
+            text.matches("reason=\"unsupported_algorithm\"").count(),
+            2,
+            "{text}"
+        );
+        assert!(
+            text.find("KMS API version").unwrap() < text.find("unsupported_algorithm").unwrap()
+        );
+        assert!(text.contains("api_versions=2 keys=0"), "{text}");
+        assert!(!text.contains("private-page-token"), "{text}");
+        assert!(!text.contains(KEY), "{text}");
+        let (result, ordinary) =
+            crate::test_tracing::capture(source.fetch(), tracing::Level::TRACE).await;
+        result.unwrap();
+        assert!(ordinary.contains("KMS API version page"), "{ordinary}");
+        assert!(
+            ordinary.contains("Converted KMS versions to JWKS"),
+            "{ordinary}"
+        );
+        assert!(
+            !ordinary.contains("huskarl_google_cloud::api"),
+            "{ordinary}"
+        );
+        assert!(!ordinary.contains("HMAC_SHA256"), "{ordinary}");
     }
 }

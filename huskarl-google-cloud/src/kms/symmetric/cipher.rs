@@ -25,7 +25,7 @@ use super::{
     ResolveVersionSnafu, UnsupportedAlgorithmSnafu, setup,
 };
 pub use super::{KeyError, SetupError};
-use crate::kid::VersionKid;
+use crate::{kid::VersionKid, retry::RpcDiagnostics as _};
 
 /// An error returned while encrypting with a symmetric KMS key.
 #[derive(Debug, Snafu)]
@@ -190,6 +190,10 @@ impl AeadEncryptor for KeyVersion {
         self.key_id.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.kms.encrypt", level = "debug", skip_all)
+    )]
     fn encrypt<'a>(
         &'a self,
         plaintext: &'a [u8],
@@ -205,9 +209,18 @@ impl AeadEncryptor for KeyVersion {
                 // Omit `initialization_vector`; KMS generates and returns it.
                 .send()
                 .await
+                .observe_rpc("raw_encrypt")
                 .context(RawEncryptSnafu)?;
 
             if response.name != self.resource_name {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "error",
+                    reason = "mismatched_key",
+                    expected_version = crate::diagnostics::version_id(&self.resource_name),
+                    returned_version = crate::diagnostics::version_id(&response.name),
+                    "KMS response key did not match request"
+                );
                 return Err(EncryptionError::MismatchedKeyInfo.into());
             }
 
@@ -234,6 +247,10 @@ impl AeadDecryptor for KeyVersion {
         m.strength_for(&self.enc_algorithm, self.key_id.as_deref())
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.kms.decrypt", level = "debug", skip_all)
+    )]
     fn decrypt<'a>(
         &'a self,
         _cipher_match: Option<&'a CipherMatch<'a>>,
@@ -258,6 +275,7 @@ impl AeadDecryptor for KeyVersion {
                 .set_tag_length(i32::try_from(tag.len()).unwrap_or(16))
                 .send()
                 .await
+                .observe_rpc("raw_decrypt")
                 .context(RawDecryptSnafu)
                 .map_err(huskarl_core::Error::from)?;
 
@@ -613,6 +631,8 @@ async fn resolve_encryption_key_version(
         .set_name(&resource_name)
         .send()
         .await
+        .observe_rpc("get_crypto_key_version")
+        .inspect(crate::diagnostics::kms_version)
         .context(GetCryptoKeyVersionSnafu)?;
 
     // Use the canonical name from the response to resolve aliases.
@@ -678,6 +698,8 @@ async fn build_key_version(
         .set_name(&resource_name)
         .send()
         .await
+        .observe_rpc("get_crypto_key_version")
+        .inspect(crate::diagnostics::kms_version)
         .context(setup::GetCryptoKeyVersionSnafu)?;
 
     // Use the canonical name from the response to resolve aliases.

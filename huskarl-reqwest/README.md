@@ -38,4 +38,14 @@ use huskarl_reqwest::ReqwestClient;
 let http_client = ReqwestClient::builder().build().await?;
 ```
 
+# Diagnostic tracing
+
+Enable the optional `tracing` feature to emit structured diagnostics. It also
+enables `huskarl-core/tracing`; no subscriber or exporter is installed.
+
+DEBUG spans follow HTTP execution. DEBUG events report transport retryability,
+response-size rejection, and client/request/identity setup failures. Request URLs,
+headers, bodies, identity material, and raw errors are not recorded.
+Use `RUST_LOG=huskarl_reqwest=trace` with an application-configured subscriber.
+
 <!-- cargo-reedme: end -->
