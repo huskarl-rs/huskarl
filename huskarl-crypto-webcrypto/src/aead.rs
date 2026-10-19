@@ -218,14 +218,20 @@ impl AesGcmKey {
     /// Returns an error if the key material is not 16, 24, or 32
     /// bytes, if the JWK's `alg` disagrees with the key length, or if
     /// `WebCrypto` rejects the import.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.webcrypto.key.import", level = "trace", skip_all)
+    )]
     pub async fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         let len = jwk.key.k.len();
         let Some(enc_algorithm) = enc_algorithm_for_len(len) else {
+            crate::diagnostics::failure("invalid_key_length");
             return Err(AeadKeyError::BadKeyLength { len }.into());
         };
         if let Some(alg) = jwk.algorithm.as_deref()
             && alg != enc_algorithm
         {
+            crate::diagnostics::failure("algorithm_length_mismatch");
             return Err(AeadKeyError::AlgorithmLengthMismatch {
                 alg: alg.to_owned(),
                 selected: enc_algorithm.to_owned(),
@@ -233,8 +239,11 @@ impl AesGcmKey {
             .into());
         }
 
-        let crypto = get_crypto().context(LoadCryptoSnafu)?;
+        let crypto = get_crypto()
+            .inspect_err(|_| crate::diagnostics::failure("crypto_unavailable"))
+            .context(LoadCryptoSnafu)?;
         let usages = serde_wasm_bindgen::to_value(&[KeyUsage::Encrypt, KeyUsage::Decrypt])
+            .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
             .context(UsagesSnafu)?;
 
         // Algorithm for a raw AES-GCM import is just `{ name: "AES-GCM" }`.
@@ -244,6 +253,7 @@ impl AesGcmKey {
             &JsValue::from_str("name"),
             &JsValue::from_str("AES-GCM"),
         )
+        .inspect_err(|_| crate::diagnostics::failure("import_failed"))
         .context(ImportSnafu)?;
 
         let key_data = to_uint8(&jwk.key.k);
@@ -252,12 +262,20 @@ impl AesGcmKey {
                 .subtle()
                 // Non-extractable: JS can never read the key back out.
                 .import_key_with_object("raw", &key_data, &algorithm, false, &usages)
+                .inspect_err(|_| crate::diagnostics::failure("import_failed"))
                 .context(ImportSnafu)?,
         )
         .await
+        .inspect_err(|_| crate::diagnostics::failure("import_failed"))
         .context(ImportAwaitSnafu)?
         .into();
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            algorithm = enc_algorithm,
+            outcome = "success",
+            "AEAD key imported"
+        );
         Ok(Self {
             inner: Arc::new(Inner {
                 crypto_key,
@@ -330,28 +348,39 @@ impl AeadEncryptor for Inner {
         self.kid.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.webcrypto.aead.encrypt", level = "trace", skip_all)
+    )]
     fn encrypt<'a>(
         &'a self,
         plaintext: &'a [u8],
         aad: &'a [u8],
     ) -> MaybeSendBoxFuture<'a, Result<AeadOutput, Error>> {
         Box::pin(async move {
-            let crypto = get_crypto().context(OpCryptoSnafu)?;
+            let crypto = get_crypto()
+                .inspect_err(|_| crate::diagnostics::failure("crypto_unavailable"))
+                .context(OpCryptoSnafu)?;
 
             // Fresh 96-bit nonce from the platform CSPRNG, per encryption.
             let mut nonce = [0u8; NONCE_LEN];
             crypto
                 .get_random_values_with_u8_array(&mut nonce)
+                .inspect_err(|_| crate::diagnostics::failure("random_generation_failed"))
                 .context(RandomSnafu)?;
 
-            let params = aes_gcm_params(&nonce, aad).context(ParamsSnafu)?;
+            let params = aes_gcm_params(&nonce, aad)
+                .inspect_err(|_| crate::diagnostics::failure("invalid_parameters"))
+                .context(ParamsSnafu)?;
             let result = JsFuture::from(
                 crypto
                     .subtle()
                     .encrypt_with_object_and_u8_array(&params, &self.crypto_key, plaintext)
+                    .inspect_err(|_| crate::diagnostics::failure("encryption_failed"))
                     .context(OpSnafu)?,
             )
             .await
+            .inspect_err(|_| crate::diagnostics::failure("encryption_failed"))
             .context(AwaitSnafu)?;
 
             // WebCrypto returns ciphertext || tag concatenated; split the
@@ -360,6 +389,7 @@ impl AeadEncryptor for Inner {
             // contract requires.
             let combined = Uint8Array::new(&result).to_vec();
             if combined.len() < TAG_LEN {
+                crate::diagnostics::failure("short_ciphertext");
                 return Err(OpError::ShortCiphertext.into());
             }
             let split = combined.len() - TAG_LEN;
@@ -377,6 +407,10 @@ impl AeadDecryptor for AesGcmKey {
         m.strength_for(self.inner.enc_algorithm, self.inner.kid.as_deref())
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.webcrypto.aead.decrypt", level = "trace", skip_all)
+    )]
     fn decrypt<'a>(
         &'a self,
         _cipher_match: Option<&'a CipherMatch<'a>>,
@@ -386,8 +420,12 @@ impl AeadDecryptor for AesGcmKey {
         aad: &'a [u8],
     ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         Box::pin(async move {
-            let crypto = get_crypto().context(OpCryptoSnafu)?;
-            let params = aes_gcm_params(nonce, aad).context(ParamsSnafu)?;
+            let crypto = get_crypto()
+                .inspect_err(|_| crate::diagnostics::failure("crypto_unavailable"))
+                .context(OpCryptoSnafu)?;
+            let params = aes_gcm_params(nonce, aad)
+                .inspect_err(|_| crate::diagnostics::failure("invalid_parameters"))
+                .context(ParamsSnafu)?;
 
             // WebCrypto's decrypt expects ciphertext || tag; re-join the detached tag.
             let mut combined = Vec::with_capacity(ciphertext.len() + tag.len());
@@ -398,9 +436,11 @@ impl AeadDecryptor for AesGcmKey {
                 crypto
                     .subtle()
                     .decrypt_with_object_and_u8_array(&params, &self.inner.crypto_key, &combined)
+                    .inspect_err(|_| crate::diagnostics::failure("decryption_failed"))
                     .context(OpSnafu)?,
             )
             .await
+            .inspect_err(|_| crate::diagnostics::failure("decryption_failed"))
             .context(AwaitSnafu)?;
 
             Ok(Uint8Array::new(&result).to_vec())

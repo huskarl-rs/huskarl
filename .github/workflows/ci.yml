@@ -25,6 +25,8 @@ jobs:
       - run: cargo test --workspace --exclude huskarl-crypto-webcrypto
       - name: Verify diagnostic output and secret exclusions
         run: cargo test -p huskarl --all-features --lib tracing_tests
+      - name: Verify adapter and crypto diagnostics and secret exclusions
+        run: cargo test -p huskarl-reqwest -p huskarl-redis -p huskarl-google-cloud -p huskarl-crypto-native --all-features --lib --tests
       - name: Compile all native examples, including feature-gated examples
         run: cargo check --workspace --exclude huskarl-crypto-webcrypto --examples --all-features
       - run: cargo test --manifest-path integration/huskarl-no-default-features/Cargo.toml --target-dir target
@@ -125,6 +127,15 @@ jobs:
       - run: rustup update stable --no-self-update && rustup target add wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: cargo check-wasm
+      - name: Install the WASM test runner matching Cargo.lock
+        run: |
+          version=$(python3 -c 'import tomllib; print(next(p["version"] for p in tomllib.load(open("Cargo.lock", "rb"))["package"] if p["name"] == "wasm-bindgen"))')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Verify WebCrypto operations, diagnostics, and secret exclusions
+        run: cargo test -p huskarl-crypto-webcrypto --target wasm32-unknown-unknown --all-features --lib --tests
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+          RUSTFLAGS: '--cfg getrandom_backend="wasm_js"'
 
   integration:
     name: Integration (local providers)

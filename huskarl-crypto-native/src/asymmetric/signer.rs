@@ -548,9 +548,15 @@ impl PrivateKey {
     /// let public_jwk = signer.as_private_jwk().public_jwk();
     /// # Ok::<(), huskarl_core::error::Error>(())
     /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.key.generate", level = "trace", skip_all)
+    )]
     pub fn generate(key_type: GenerateAlgorithm, kid: Option<String>) -> Result<Self, Error> {
         fn rsa_key(modulus_length: u32) -> Result<rsa::RsaPrivateKey, Error> {
             if modulus_length < RSA_MODULUS_2048 {
+                crate::diagnostics::failure("rsa_modulus_too_small");
+
                 return Err(Error::new(
                     RetryAdvice::No,
                     format!("RSA modulus length must be at least 2048 bits, got {modulus_length}"),
@@ -558,6 +564,7 @@ impl PrivateKey {
             }
             Ok(
                 rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
+                    .inspect_err(|_| crate::diagnostics::failure("key_generation_failed"))
                     .context(GeneratingRsaKeySnafu)?,
             )
         }
@@ -611,6 +618,12 @@ impl PrivateKey {
         // `kid` after computing it is immaterial — and taking `kid` by value
         // here (rather than borrowing) keeps the signature `Option<String>`.
         let mut jwk = signing_key.as_public_jwk(None);
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            algorithm = signing_key.jws_algorithm(),
+            outcome = "success",
+            "Signing key ready"
+        );
         let thumbprint = jwk.thumbprint();
         jwk.kid = kid;
 
@@ -647,14 +660,25 @@ impl PrivateKey {
     ///
     /// Returns an error if the JWK is missing its algorithm, uses an
     /// unsupported one, or contains invalid key material.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.key.import", level = "trace", skip_all)
+    )]
     pub fn from_jwk(private_jwk: jwk::AsymmetricPrivateJwk) -> Result<Self, Error> {
-        let alg = private_jwk
-            .algorithm
-            .as_deref()
-            .ok_or_else(|| Error::from(SignerError::MissingJwkAlgorithm))?;
+        let alg = private_jwk.algorithm.as_deref().ok_or_else(|| {
+            crate::diagnostics::failure("missing_algorithm");
+            Error::from(SignerError::MissingJwkAlgorithm)
+        })?;
         let kid = private_jwk.kid;
-        let signing_key = Key::from_jwk(private_jwk.key, alg)?;
+        let signing_key = Key::from_jwk(private_jwk.key, alg)
+            .inspect_err(|_| crate::diagnostics::failure("invalid_signing_key"))?;
         let jwk = signing_key.as_public_jwk(kid.as_deref());
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            algorithm = signing_key.jws_algorithm(),
+            outcome = "success",
+            "Signing key ready"
+        );
         let thumbprint = jwk.thumbprint();
 
         Ok(Self {
@@ -746,7 +770,9 @@ pub fn pkcs8_der(
     algorithm: AsymmetricAlgorithm,
     kid: Option<&str>,
 ) -> Result<jwk::AsymmetricPrivateJwk, Error> {
-    let signing_key = key_from_pkcs8_der(der, algorithm).context(DecodingPkcs8DerSnafu)?;
+    let signing_key = key_from_pkcs8_der(der, algorithm)
+        .inspect_err(|_| crate::diagnostics::failure("invalid_pkcs8_der"))
+        .context(DecodingPkcs8DerSnafu)?;
     Ok(signing_key.as_private_jwk(kid))
 }
 
@@ -805,7 +831,9 @@ pub fn pkcs8_pem(
     algorithm: AsymmetricAlgorithm,
     kid: Option<&str>,
 ) -> Result<jwk::AsymmetricPrivateJwk, Error> {
-    let (_label, document) = pkcs8::SecretDocument::from_pem(pem).context(DecodingPkcs8PemSnafu)?;
+    let (_label, document) = pkcs8::SecretDocument::from_pem(pem)
+        .inspect_err(|_| crate::diagnostics::failure("invalid_pkcs8_pem"))
+        .context(DecodingPkcs8PemSnafu)?;
     pkcs8_der(document.as_bytes(), algorithm, kid)
 }
 
@@ -886,6 +914,10 @@ impl JwsSigner for PrivateKeyInner {
         self.jwk.kid.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.jws.sign", level = "trace", skip_all)
+    )]
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
         // The panicking `Signer::sign` wrappers are off limits here: the load
         // paths accept keys that `generate` would refuse (e.g. an undersized
@@ -894,31 +926,39 @@ impl JwsSigner for PrivateKeyInner {
         Box::pin(async move {
             match &self.signing_key {
                 Key::Es256(signing_key) => {
-                    let signature: p256::ecdsa::Signature =
-                        signing_key.try_sign(input).context(SigningJwsInputSnafu)?;
+                    let signature: p256::ecdsa::Signature = signing_key
+                        .try_sign(input)
+                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
+                        .context(SigningJwsInputSnafu)?;
                     Ok(signature.to_vec())
                 }
                 Key::Es384(signing_key) => {
-                    let signature: p384::ecdsa::Signature =
-                        signing_key.try_sign(input).context(SigningJwsInputSnafu)?;
+                    let signature: p384::ecdsa::Signature = signing_key
+                        .try_sign(input)
+                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
+                        .context(SigningJwsInputSnafu)?;
                     Ok(signature.to_vec())
                 }
                 Key::Rs256(signing_key) => Ok(signing_key
                     .try_sign(input)
+                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                     .context(SigningJwsInputSnafu)?
                     .to_vec()),
                 Key::Rs384(signing_key) => Ok(signing_key
                     .try_sign(input)
+                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                     .context(SigningJwsInputSnafu)?
                     .to_vec()),
                 Key::Rs512(signing_key) => Ok(signing_key
                     .try_sign(input)
+                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                     .context(SigningJwsInputSnafu)?
                     .to_vec()),
                 Key::Ps256(signing_key) => {
                     use rsa::signature::RandomizedSigner;
                     Ok(signing_key
                         .try_sign_with_rng(&mut rand::rng(), input)
+                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                         .context(SigningJwsInputSnafu)?
                         .to_vec())
                 }
@@ -926,6 +966,7 @@ impl JwsSigner for PrivateKeyInner {
                     use rsa::signature::RandomizedSigner;
                     Ok(signing_key
                         .try_sign_with_rng(&mut rand::rng(), input)
+                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                         .context(SigningJwsInputSnafu)?
                         .to_vec())
                 }
@@ -933,12 +974,15 @@ impl JwsSigner for PrivateKeyInner {
                     use rsa::signature::RandomizedSigner;
                     Ok(signing_key
                         .try_sign_with_rng(&mut rand::rng(), input)
+                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                         .context(SigningJwsInputSnafu)?
                         .to_vec())
                 }
-                Key::Ed25519 { key, .. } => {
-                    Ok(key.try_sign(input).context(SigningJwsInputSnafu)?.to_vec())
-                }
+                Key::Ed25519 { key, .. } => Ok(key
+                    .try_sign(input)
+                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
+                    .context(SigningJwsInputSnafu)?
+                    .to_vec()),
             }
         })
     }

@@ -247,11 +247,17 @@ impl PrivateKey {
     ///
     /// Returns [`GenerateError`] if `WebCrypto` is unavailable, key generation
     /// fails, or the public JWK cannot be derived.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.webcrypto.key.generate", level = "trace", skip_all)
+    )]
     pub async fn generate(
         algorithm: GenerateAlgorithm,
         kid: Option<String>,
     ) -> Result<Self, GenerateError> {
-        let crypto = get_crypto().context(NoCryptoSnafu)?;
+        let crypto = get_crypto()
+            .inspect_err(|_| crate::diagnostics::failure("crypto_unavailable"))
+            .context(NoCryptoSnafu)?;
 
         // Request both usages: WebCrypto partitions them across the pair, giving
         // the private key `sign` and the public key `verify`. Without `verify`,
@@ -271,6 +277,12 @@ impl PrivateKey {
             .context(GetPublicJwkSnafu)?;
         public_jwk.kid = kid;
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            algorithm = algorithm.name(),
+            outcome = "success",
+            "Signing key generated"
+        );
         Ok(Self {
             inner: Arc::new(PrivateKeyInner {
                 crypto_key: key_pair.get_private_key(),
@@ -341,9 +353,15 @@ impl JwsSigner for PrivateKeyInner {
         self.public_jwk.kid.clone().map(Cow::Owned)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.webcrypto.jws.sign", level = "trace", skip_all)
+    )]
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
         Box::pin(async move {
-            let crypto = get_crypto().context(CryptoAbsentSnafu)?;
+            let crypto = get_crypto()
+                .inspect_err(|_| crate::diagnostics::failure("crypto_unavailable"))
+                .context(CryptoAbsentSnafu)?;
 
             Ok(sign_with_key(
                 &crypto.subtle(),

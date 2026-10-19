@@ -123,9 +123,14 @@ impl SymmetricKey {
     /// # Ok(())
     /// # }
     /// ```
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.key.import", level = "trace", skip_all)
+    )]
     pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         let alg = jwk.algorithm.as_deref();
         let Some(algorithm) = alg.and_then(|a| a.parse::<SymmetricAlgorithm>().ok()) else {
+            crate::diagnostics::failure("unsupported_algorithm");
             return Err(SymmetricKeyError::UnsupportedAlgorithm {
                 alg: alg.map(str::to_owned),
             }
@@ -135,6 +140,7 @@ impl SymmetricKey {
         let required_key_size = algorithm.min_key_size();
         let actual = jwk.key.k.len();
         if actual < required_key_size {
+            crate::diagnostics::failure("key_too_short");
             return Err(SymmetricKeyError::KeyTooShort {
                 algorithm: algorithm.as_ref().to_owned(),
                 actual,
@@ -143,6 +149,12 @@ impl SymmetricKey {
             .into());
         }
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            algorithm = algorithm.as_ref(),
+            outcome = "success",
+            "HMAC key imported"
+        );
         Ok(Self {
             inner: Arc::new(SymmetricKeyInner {
                 key: SecretBytes::new(jwk.key.k.clone()),
@@ -240,6 +252,10 @@ impl JwsSigner for SymmetricKeyInner {
         self.key_id.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.jws.sign", level = "trace", skip_all)
+    )]
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
         Box::pin(async move { Ok(self.hmac(input)) })
     }
@@ -250,6 +266,10 @@ impl JwsVerifier for SymmetricKeyInner {
         key_match.strength_for(&[self.algorithm.as_ref()], self.key_id.as_deref())
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.jws.verify", level = "trace", skip_all)
+    )]
     fn verify<'a>(
         &'a self,
         input: &'a [u8],
@@ -260,12 +280,14 @@ impl JwsVerifier for SymmetricKeyInner {
 
         Box::pin(async move {
             if self.key_match(key_match).is_none() {
+                crate::diagnostics::failure("no_matching_key");
                 return Err(VerifyError::NoMatchingKey);
             }
 
             let hashed_input = self.hmac(input);
 
             if hashed_input.ct_ne(signature).into() {
+                crate::diagnostics::failure("signature_mismatch");
                 return Err(VerifyError::SignatureMismatch);
             }
 

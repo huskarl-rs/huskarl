@@ -12,6 +12,42 @@ use google_cloud_gax::error::{
 };
 use huskarl_core::RetryAdvice;
 
+/// Observe RPC completion without formatting errors or payloads.
+pub(crate) trait RpcDiagnostics {
+    fn observe_rpc(self, rpc: &'static str) -> Self;
+}
+
+impl<T> RpcDiagnostics for Result<T, Error> {
+    #[inline]
+    fn observe_rpc(self, rpc: &'static str) -> Self {
+        #[cfg(feature = "tracing")]
+        match &self {
+            Ok(_) => tracing::trace!(rpc, outcome = "success", "Google Cloud RPC completed"),
+            Err(error) => {
+                let retry_advice = advice(error);
+                tracing::debug!(
+                    rpc,
+                    outcome = "error",
+                    code = error
+                        .status()
+                        .map_or("unknown", |status| status.code.name()),
+                    http_status = error.http_status_code(),
+                    retryable = matches!(retry_advice, RetryAdvice::Retry { .. }),
+                    retry_after_ms = match retry_advice {
+                        RetryAdvice::Retry { after } =>
+                            after.map(|delay| u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)),
+                        _ => None,
+                    },
+                    "Google Cloud RPC failed"
+                );
+            }
+        }
+        #[cfg(not(feature = "tracing"))]
+        let _ = rpc;
+        self
+    }
+}
+
 /// Returns retry advice for a failed Google Cloud API call.
 ///
 /// A failure is retryable when repeating the same request could succeed without
@@ -181,5 +217,26 @@ mod tests {
             RetryAdvice::RETRY
         );
         assert_eq!(advice(&Error::timeout("deadline")), RetryAdvice::RETRY);
+    }
+    #[cfg(feature = "tracing")]
+    #[tokio::test]
+    async fn tracing_classifies_rpc_errors_without_service_messages() {
+        let (result, text) = crate::test_tracing::capture(
+            async {
+                Err::<(), _>(Error::service(
+                    Status::default()
+                        .set_code(Code::PermissionDenied)
+                        .set_message("private-service-message"),
+                ))
+                .observe_rpc("get_public_key")
+            },
+            tracing::Level::DEBUG,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(text.contains("PERMISSION_DENIED"), "{text}");
+        assert!(text.contains("outcome=\"error\""), "{text}");
+        assert!(text.contains("get_public_key"), "{text}");
+        assert!(!text.contains("private-service-message"), "{text}");
     }
 }

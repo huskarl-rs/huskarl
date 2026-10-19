@@ -42,3 +42,28 @@ wrapper names, hostnames, and grant-type identifiers may appear verbatim. Choose
 identifiers without sensitive data: a metric wrapper name containing a URL will
 include its path and query string in traces. Arbitrary extra metric labels are
 not copied into traces. Configure application and dependency logging separately.
+
+The `huskarl-reqwest`, `huskarl-redis`, and `huskarl-google-cloud` adapters also
+have optional `tracing` features that forward to core. Enable each adapter's
+feature separately. Use targets `huskarl_reqwest`, `huskarl_redis`, and
+`huskarl_google_cloud` to filter their events.
+
+Google Cloud emits page summaries and selection decisions on its normal target.
+Its child target `huskarl_google_cloud::api` adds per-version API metadata before
+conversion. For decisions only, use
+`RUST_LOG=huskarl_google_cloud=trace,huskarl_google_cloud::api=off`; set the child
+target to `trace` for the API view. A parent TRACE filter alone enables both.
+Full resource names appear in selection and selection-failure events; other
+events use version IDs. State and algorithm names use the API's protocol names, with unknown values
+normalized to `unknown`. API filters and configured listing limits still apply;
+traces are not a complete resource inventory. Secret values, key bytes,
+cryptographic payloads, page tokens and raw service error messages are excluded.
+
+The `huskarl-crypto-native` and `huskarl-crypto-webcrypto` backends provide the
+same optional feature, enabled separately and forwarding to core. Filter with
+`huskarl_crypto_native` or `huskarl_crypto_webcrypto`, for example
+`RUST_LOG=info,huskarl_crypto_native=trace,huskarl_crypto_webcrypto=trace`.
+TRACE covers key setup and
+cryptographic operation spans; DEBUG reports fixed failure categories. These
+backends exclude key IDs, key material, signatures, cryptographic inputs and
+outputs, and raw backend errors (including JavaScript errors).

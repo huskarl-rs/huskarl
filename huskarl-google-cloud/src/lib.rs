@@ -37,6 +37,32 @@
 //! - [Configuring JWT verification](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/guide/configuring_jwt_verification/index.html)
 //! - [Composing crypto strategies](https://docs.rs/huskarl-core/latest/huskarl_core/_docs/explanation/crypto_strategies/index.html)
 //!   — how the multi-key, refreshable, and retrying wrappers stack on these keys.
+//!
+//! # Diagnostic tracing
+//!
+//! Enable the optional `tracing` feature to emit structured diagnostics. It also
+//! enables `huskarl-core/tracing`; no subscriber or exporter is installed.
+//!
+//! For decisions and page summaries, configure an application subscriber with
+//! `RUST_LOG=huskarl_google_cloud=trace,huskarl_google_cloud::api=off`.
+//! DEBUG spans describe boundary operations; DEBUG events report RPC status and
+//! retry advice, version-resolution failures, missing payloads and mismatched keys.
+//! RPC events use `rpc` for the API method, `outcome = "success"` or `"error"`,
+//! and numeric retry delays. Failures use `reason` for specific classifications.
+//!
+//! The child target `huskarl_google_cloud::api` retains the API view before Huskarl
+//! converts it: version IDs, protocol state and algorithm names, and KMS creation
+//! timestamps in Unix seconds. Unknown enum values are recorded as `unknown`.
+//! Set that target to `trace` to enable the detail. Parent filters apply to child
+//! targets, so `huskarl_google_cloud=trace` alone enables both views.
+//! These events describe the configured API requests, not a complete inventory:
+//! enabled-version filters, listing limits and caller permissions still apply.
+//!
+//! Full resource names appear in selection and selection-failure events. Other
+//! version identifiers use the last resource-name segment. Secret values, PEM/key
+//! bytes, plaintext, ciphertext, signatures, page tokens, arbitrary labels and raw service error
+//! messages are excluded. Configure Google Cloud SDK logging separately; this
+//! policy covers Huskarl events.
 
 #[cfg(any(doc, docsrs))]
 pub mod _docs;
@@ -49,3 +75,9 @@ pub mod secretmanager;
 
 #[cfg(any(feature = "kms", feature = "secretmanager"))]
 mod retry;
+
+#[cfg(all(test, feature = "tracing"))]
+mod test_tracing;
+
+#[cfg(any(feature = "kms", feature = "secretmanager"))]
+mod diagnostics;

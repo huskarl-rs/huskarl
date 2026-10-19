@@ -50,6 +50,10 @@ impl<C> std::fmt::Debug for RedisJtiUniquenessChecker<C> {
 impl<C: ConnectionLike + Clone + MaybeSendSync> JtiUniquenessChecker
     for RedisJtiUniquenessChecker<C>
 {
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.redis.replay_check", level = "debug", skip_all)
+    )]
     fn check_and_mark_seen(
         &self,
         jti: &str,
@@ -74,6 +78,12 @@ impl<C: ConnectionLike + Clone + MaybeSendSync> JtiUniquenessChecker
                 // a duplicate `SET NX` can only err toward "seen".
                 .map_err(|source| transport_error(source, "checking JTI uniqueness in Redis"))?;
 
+            #[cfg(feature = "tracing")]
+            if set {
+                tracing::trace!(ttl_ms = px, outcome = "new", "Replay check completed");
+            } else {
+                tracing::debug!(ttl_ms = px, outcome = "seen", "Replay detected");
+            }
             Ok(!set)
         })
     }
@@ -152,5 +162,33 @@ mod tests {
 
         let err = checker.check_and_mark_seen(JTI).await.unwrap_err();
         assert_eq!(err.retry_advice(), huskarl_core::RetryAdvice::RETRY);
+    }
+    #[cfg(feature = "tracing")]
+    #[tokio::test]
+    async fn tracing_reports_replay_without_identifiers() {
+        for (reply, outcome) in [(Value::Okay, "new"), (Value::Nil, "seen")] {
+            let mock = MockRedisConnection::new(vec![MockCmd::new(
+                expected_set(&format!("private-prefix:{JTI_HEX}"), 300_000),
+                Ok(reply),
+            )])
+            .assert_all_commands_consumed();
+            let checker = RedisJtiUniquenessChecker::builder()
+                .connection(mock)
+                .ttl(Duration::from_secs(300))
+                .key_prefix("private-prefix:")
+                .build();
+            let (result, text) = crate::test_tracing::capture(
+                checker.check_and_mark_seen(JTI),
+                tracing::Level::TRACE,
+            )
+            .await;
+            assert_eq!(result.unwrap(), outcome == "seen");
+            assert!(text.contains(&format!("outcome=\"{outcome}\"")), "{text}");
+            assert!(text.contains("ttl_ms=300000"), "{text}");
+            assert!(text.contains("huskarl.redis.replay_check"), "{text}");
+            for secret in [JTI, JTI_HEX, "private-prefix"] {
+                assert!(!text.contains(secret), "{text}");
+            }
+        }
     }
 }

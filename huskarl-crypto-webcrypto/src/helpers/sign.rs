@@ -30,16 +30,20 @@ pub async fn sign_with_key(
     data: &[u8],
 ) -> Result<Vec<u8>, JsSignError> {
     let sign_algorithm_js = Object::from(
-        serde_wasm_bindgen::to_value(&sign_algorithm).context(SerializeAlgorithmSnafu)?,
+        serde_wasm_bindgen::to_value(&sign_algorithm)
+            .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
+            .context(SerializeAlgorithmSnafu)?,
     );
 
     Ok(Uint8Array::new(
         &JsFuture::from(
             crypto
                 .sign_with_object_and_u8_array(&sign_algorithm_js, key, data)
+                .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                 .context(SignSnafu)?,
         )
         .await
+        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
         .context(AwaitSnafu)?,
     )
     .to_vec())

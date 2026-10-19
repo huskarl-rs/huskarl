@@ -17,7 +17,7 @@ use huskarl_core::{
 use snafu::prelude::*;
 pub use versions::{ActiveSecretVersions, SecretVersions, SecretVersionsError};
 
-use crate::kid::VersionKid;
+use crate::{kid::VersionKid, retry::RpcDiagnostics as _};
 
 mod versions;
 
@@ -119,6 +119,10 @@ impl SecretVersionBytes {
 impl Secret for SecretVersionBytes {
     type Output = SecretBytes;
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.gcp.secret.access", level = "debug", skip_all)
+    )]
     fn get_secret_value(
         &self,
     ) -> MaybeSendBoxFuture<'_, Result<SecretOutput<Self::Output>, huskarl_core::Error>> {
@@ -129,9 +133,19 @@ impl Secret for SecretVersionBytes {
                 .set_name(&self.resource_name)
                 .send()
                 .await
+                .observe_rpc("access_secret_version")
+                .inspect(crate::diagnostics::secret_access)
                 .context(AccessSecretSnafu)?;
 
-            let payload = response.payload.context(MissingPayloadSnafu)?;
+            let Some(payload) = response.payload else {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    outcome = "error",
+                    reason = "missing_payload",
+                    "Secret Manager returned no payload"
+                );
+                return Err(SecretError::MissingPayload.into());
+            };
 
             Ok(SecretOutput {
                 value: SecretBytes::new(payload.data.to_vec()),

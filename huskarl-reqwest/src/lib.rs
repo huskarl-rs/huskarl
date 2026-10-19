@@ -26,6 +26,16 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Diagnostic tracing
+//!
+//! Enable the optional `tracing` feature to emit structured diagnostics. It also
+//! enables `huskarl-core/tracing`; no subscriber or exporter is installed.
+//!
+//! DEBUG spans follow HTTP execution. DEBUG events report transport retryability,
+//! response-size rejection, and client/request/identity setup failures. Request URLs,
+//! headers, bodies, identity material, and raw errors are not recorded.
+//! Use `RUST_LOG=huskarl_reqwest=trace` with an application-configured subscriber.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -227,10 +237,30 @@ impl ReqwestClient {
         }
 
         let uses_mtls = mtls.uses_mtls();
-        let mtls_output = mtls.apply(reqwest_builder).await?;
+        let mtls_output = mtls.apply(reqwest_builder).await.inspect_err(|_| {
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                outcome = "error",
+                reason = "mtls_setup_failed",
+                "HTTP client identity setup failed"
+            );
+        })?;
+        #[cfg(feature = "tracing")]
+        tracing::trace!(uses_mtls, "HTTP client identity configured");
 
         Ok(Self {
-            client: mtls_output.builder.build().context(BuildingClientSnafu)?,
+            client: mtls_output
+                .builder
+                .build()
+                .inspect_err(|_| {
+                    #[cfg(feature = "tracing")]
+                    tracing::debug!(
+                        outcome = "error",
+                        reason = "client_build_failed",
+                        "HTTP setup failed"
+                    );
+                })
+                .context(BuildingClientSnafu)?,
             uses_mtls,
             max_response_bytes,
             #[cfg(all(
@@ -277,6 +307,13 @@ impl ReqwestClient {
 /// Builds a non-retryable error for an oversized response body.
 #[track_caller]
 fn oversize_error(max: usize) -> Error {
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        outcome = "error",
+        reason = "response_too_large",
+        max_response_bytes = max,
+        "Response body exceeded limit"
+    );
     Error::from(ReqwestSetupError::OversizeBody { max })
 }
 
@@ -360,6 +397,14 @@ fn transport_error(source: reqwest::Error, idempotency: Idempotency) -> Error {
         false
     };
 
+    #[cfg(feature = "tracing")]
+    tracing::debug!(
+        retryable,
+        idempotent = matches!(idempotency, Idempotency::Idempotent),
+        timeout = source.is_timeout(),
+        body_error = source.is_body(),
+        "HTTP transport failed"
+    );
     Error::new(RetryAdvice::retry_if(retryable), source)
 }
 
@@ -373,6 +418,10 @@ impl HttpClient for ReqwestClient {
     /// Converts the `http::Request<Bytes>` into a `reqwest::Request`, sends
     /// it, and reads the response body up to the configured
     /// `max_response_bytes` limit.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.reqwest.execute", level = "debug", skip_all)
+    )]
     fn execute(
         &self,
         request: Request<Bytes>,
@@ -386,6 +435,14 @@ impl HttpClient for ReqwestClient {
                 .headers(parts.headers)
                 .body(body)
                 .build()
+                .inspect_err(|_| {
+                    #[cfg(feature = "tracing")]
+                    tracing::debug!(
+                        outcome = "error",
+                        reason = "request_build_failed",
+                        "HTTP setup failed"
+                    );
+                })
                 .context(BuildingRequestSnafu)?;
 
             let response = self

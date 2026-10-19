@@ -61,10 +61,17 @@ pub async fn import_key(
     // causing the `kty` field to be dropped. Serialize via JSON as a workaround.
     let key_json = serde_json::to_string(key_data)
         .map_err(|e| serde_wasm_bindgen::Error::from(JsValue::from_str(&e.to_string())))
+        .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
         .context(SerializeSnafu)?;
-    let key_data_js = json_parse(&key_json).context(ImportSnafu)?;
-    let params_js = serde_wasm_bindgen::to_value(&params).context(SerializeSnafu)?;
-    let key_usages_js = serde_wasm_bindgen::to_value(&key_usages).context(SerializeSnafu)?;
+    let key_data_js = json_parse(&key_json)
+        .inspect_err(|_| crate::diagnostics::failure("import_failed"))
+        .context(ImportSnafu)?;
+    let params_js = serde_wasm_bindgen::to_value(&params)
+        .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
+        .context(SerializeSnafu)?;
+    let key_usages_js = serde_wasm_bindgen::to_value(&key_usages)
+        .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
+        .context(SerializeSnafu)?;
 
     Ok(JsFuture::from(
         crypto
@@ -75,9 +82,11 @@ pub async fn import_key(
                 true,
                 &key_usages_js,
             )
+            .inspect_err(|_| crate::diagnostics::failure("import_failed"))
             .context(ImportSnafu)?,
     )
     .await
+    .inspect_err(|_| crate::diagnostics::failure("import_failed"))
     .context(AwaitSnafu)?
     .into())
 }

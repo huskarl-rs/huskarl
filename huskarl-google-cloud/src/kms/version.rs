@@ -6,6 +6,8 @@ use google_cloud_kms_v1::{client::KeyManagementService, model::CryptoKeyVersion}
 use huskarl_core::RetryAdvice;
 use snafu::prelude::*;
 
+use crate::retry::RpcDiagnostics as _;
+
 /// Extract the trailing version ID segment from a resource name.
 ///
 /// For `"…/cryptoKeyVersions/42"` this returns `"42"`.
@@ -110,12 +112,26 @@ pub enum VersionStrategy {
 /// # Errors
 ///
 /// Returns an error if the version could not be resolved from KMS.
+#[cfg_attr(
+    feature = "tracing",
+    tracing::instrument(name = "huskarl.gcp.kms.resolve_version", level = "debug", skip_all)
+)]
 pub async fn resolve_version(
     key_name: &str,
     strategy: &VersionStrategy,
     kms_client: &KeyManagementService,
 ) -> Result<String, VersionResolutionError> {
-    match strategy {
+    #[cfg(feature = "tracing")]
+    tracing::trace!(
+        strategy = match strategy {
+            VersionStrategy::Specific(_) => "specific",
+            VersionStrategy::Latest => "latest",
+            VersionStrategy::ByLabel(_) => "label",
+            VersionStrategy::MinAge(_) => "min_age",
+        },
+        "Resolving KMS key version"
+    );
+    let result = match strategy {
         VersionStrategy::Specific(version) => Ok(version.clone()),
         VersionStrategy::Latest => resolve_latest_version(key_name, kms_client).await,
         VersionStrategy::ByLabel(label) => {
@@ -124,7 +140,19 @@ pub async fn resolve_version(
         VersionStrategy::MinAge(min_age) => {
             resolve_min_age_version(key_name, kms_client, min_age).await
         }
+    };
+    #[cfg(feature = "tracing")]
+    if let Ok(version) = &result {
+        tracing::trace!(resource = key_name, version, "Selected KMS version");
+    } else {
+        tracing::debug!(
+            resource = key_name,
+            outcome = "error",
+            reason = "version_resolution_failed",
+            "Could not select KMS version"
+        );
     }
+    result
 }
 
 async fn resolve_latest_version(
@@ -139,6 +167,8 @@ async fn resolve_latest_version(
         .set_order_by("name desc")
         .send()
         .await
+        .observe_rpc("list_crypto_key_versions")
+        .inspect(crate::diagnostics::kms_versions)
         .context(ListCryptoKeyVersionsSnafu)?
         .crypto_key_versions
         .into_iter()
@@ -175,6 +205,13 @@ pub(crate) async fn list_enabled_kms_versions(
     max_versions: Option<usize>,
     order_by: Option<&str>,
 ) -> Result<Vec<CryptoKeyVersion>, google_cloud_kms_v1::Error> {
+    #[cfg(feature = "tracing")]
+    tracing::trace!(
+        filter = "state=ENABLED",
+        order_by,
+        max_versions,
+        "Listing KMS versions"
+    );
     let mut all = Vec::new();
     let mut page_token = String::new();
 
@@ -201,7 +238,11 @@ pub(crate) async fn list_enabled_kms_versions(
             request = request.set_page_token(&page_token);
         }
 
-        let response = request.send().await?;
+        let response = request
+            .send()
+            .await
+            .observe_rpc("list_crypto_key_versions")
+            .inspect(crate::diagnostics::kms_versions)?;
         all.extend(response.crypto_key_versions);
 
         if response.next_page_token.is_empty() || max_versions.is_some_and(|m| all.len() >= m) {
@@ -252,6 +293,8 @@ async fn resolve_version_by_label(
         .set_name(key_name)
         .send()
         .await
+        .observe_rpc("get_crypto_key")
+        .inspect(crate::diagnostics::crypto_key)
         .context(GetCryptoKeySnafu)?;
 
     crypto_key

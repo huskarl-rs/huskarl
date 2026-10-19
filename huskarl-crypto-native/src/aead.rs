@@ -101,10 +101,13 @@ pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Arc<dyn AeadCipher>, Error> {
     match jwk.algorithm.as_deref() {
         Some("A128GCM" | "A192GCM" | "A256GCM") | None => Ok(Arc::new(AesGcmKey::from_jwk(jwk)?)),
         Some(XC20P) => Ok(Arc::new(XChaChaKey::from_jwk(jwk)?)),
-        Some(other) => Err(AeadKeyError::UnsupportedAlgorithm {
-            alg: other.to_owned(),
+        Some(other) => {
+            crate::diagnostics::failure("unsupported_algorithm");
+            Err(AeadKeyError::UnsupportedAlgorithm {
+                alg: other.to_owned(),
+            }
+            .into())
         }
-        .into()),
     }
 }
 
@@ -207,10 +210,17 @@ impl AesGcmKey {
     ///
     /// Returns an error if the key material is not 16, 24, or 32
     /// bytes, or if the JWK's `alg` disagrees with the key length.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.key.import", level = "trace", skip_all)
+    )]
     pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         // `new_from_slice` cannot fail inside the matched arms, but mapping the
         // error (rather than unwrapping) keeps this panic-free.
-        let bad_len = |len: usize| Error::from(AeadKeyError::BadAesGcmKeyLength { len });
+        let bad_len = |len: usize| {
+            crate::diagnostics::failure("invalid_key_length");
+            Error::from(AeadKeyError::BadAesGcmKeyLength { len })
+        };
         let len = jwk.key.k.len();
         let key = match len {
             16 => NativeKey::Aes128(Box::new(
@@ -228,6 +238,7 @@ impl AesGcmKey {
         if let Some(alg) = jwk.algorithm.as_deref()
             && alg != key.enc_algorithm()
         {
+            crate::diagnostics::failure("algorithm_length_mismatch");
             return Err(AeadKeyError::AlgorithmLengthMismatch {
                 alg: alg.to_owned(),
                 selected: key.enc_algorithm().to_owned(),
@@ -235,6 +246,12 @@ impl AesGcmKey {
             .into());
         }
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            algorithm = key.enc_algorithm(),
+            outcome = "success",
+            "AEAD key imported"
+        );
         Ok(AesGcmKey {
             inner: Arc::new(AesGcmKeyInner { key, kid: jwk.kid }),
         })
@@ -361,6 +378,10 @@ impl AeadEncryptor for AesGcmKeyInner {
         self.kid.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.aead.encrypt", level = "trace", skip_all)
+    )]
     fn encrypt<'a>(
         &'a self,
         plaintext: &'a [u8],
@@ -381,6 +402,7 @@ impl AeadEncryptor for AesGcmKeyInner {
                     aes_gcm.encrypt_inout_detached(&nonce, aad, ciphertext.as_mut_slice().into())
                 }
             }
+            .inspect_err(|_| crate::diagnostics::failure("encryption_failed"))
             .context(EncryptSnafu)?;
 
             Ok(AeadOutput {
@@ -397,6 +419,10 @@ impl AeadDecryptor for AesGcmKeyInner {
         m.strength_for(self.key.enc_algorithm(), self.kid.as_deref())
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.aead.decrypt", level = "trace", skip_all)
+    )]
     fn decrypt<'a>(
         &'a self,
         _cipher_match: Option<&'a CipherMatch<'a>>,
@@ -406,8 +432,14 @@ impl AeadDecryptor for AesGcmKeyInner {
         aad: &'a [u8],
     ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         Box::pin(async move {
-            let nonce = nonce.try_into().context(InvalidNonceSnafu)?;
-            let tag = tag.try_into().context(InvalidTagSnafu)?;
+            let nonce = nonce
+                .try_into()
+                .inspect_err(|_| crate::diagnostics::failure("invalid_nonce"))
+                .context(InvalidNonceSnafu)?;
+            let tag = tag
+                .try_into()
+                .inspect_err(|_| crate::diagnostics::failure("invalid_tag"))
+                .context(InvalidTagSnafu)?;
             let mut plaintext = ciphertext.to_vec();
 
             match &self.key {
@@ -430,6 +462,7 @@ impl AeadDecryptor for AesGcmKeyInner {
                     &tag,
                 ),
             }
+            .inspect_err(|_| crate::diagnostics::failure("decryption_failed"))
             .context(DecryptSnafu)?;
 
             Ok(plaintext)
@@ -490,10 +523,15 @@ impl XChaChaKey {
     ///
     /// Returns an error if the key material is not 32 bytes, or if
     /// the JWK's `alg` is present and is not `XC20P`.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.key.import", level = "trace", skip_all)
+    )]
     pub fn from_jwk(jwk: jwk::SymmetricJwk) -> Result<Self, Error> {
         if let Some(alg) = jwk.algorithm.as_deref()
             && alg != XC20P
         {
+            crate::diagnostics::failure("unsupported_algorithm");
             return Err(AeadKeyError::NotXChaCha {
                 alg: alg.to_owned(),
             }
@@ -501,11 +539,19 @@ impl XChaChaKey {
         }
 
         let key = XChaCha20Poly1305::new_from_slice(&jwk.key.k).map_err(|_| {
+            crate::diagnostics::failure("invalid_key_length");
+
             Error::from(AeadKeyError::BadXChaChaKeyLength {
                 len: jwk.key.k.len(),
             })
         })?;
 
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            algorithm = "XC20P",
+            outcome = "success",
+            "AEAD key imported"
+        );
         Ok(XChaChaKey {
             inner: Arc::new(XChaChaKeyInner { key, kid: jwk.kid }),
         })
@@ -566,6 +612,10 @@ impl AeadEncryptor for XChaChaKeyInner {
         self.kid.as_deref().map(Cow::Borrowed)
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.aead.encrypt", level = "trace", skip_all)
+    )]
     fn encrypt<'a>(
         &'a self,
         plaintext: &'a [u8],
@@ -579,6 +629,7 @@ impl AeadEncryptor for XChaChaKeyInner {
             let tag = self
                 .key
                 .encrypt_inout_detached(&nonce, aad, ciphertext.as_mut_slice().into())
+                .inspect_err(|_| crate::diagnostics::failure("encryption_failed"))
                 .context(EncryptSnafu)?;
 
             Ok(AeadOutput {
@@ -595,6 +646,10 @@ impl AeadDecryptor for XChaChaKeyInner {
         m.strength_for(XC20P, self.kid.as_deref())
     }
 
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.native.aead.decrypt", level = "trace", skip_all)
+    )]
     fn decrypt<'a>(
         &'a self,
         _cipher_match: Option<&'a CipherMatch<'a>>,
@@ -604,12 +659,19 @@ impl AeadDecryptor for XChaChaKeyInner {
         aad: &'a [u8],
     ) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, DecryptError>> {
         Box::pin(async move {
-            let nonce = nonce.try_into().context(InvalidNonceSnafu)?;
-            let tag = tag.try_into().context(InvalidTagSnafu)?;
+            let nonce = nonce
+                .try_into()
+                .inspect_err(|_| crate::diagnostics::failure("invalid_nonce"))
+                .context(InvalidNonceSnafu)?;
+            let tag = tag
+                .try_into()
+                .inspect_err(|_| crate::diagnostics::failure("invalid_tag"))
+                .context(InvalidTagSnafu)?;
             let mut plaintext = ciphertext.to_vec();
 
             self.key
                 .decrypt_inout_detached(&nonce, aad, plaintext.as_mut_slice().into(), &tag)
+                .inspect_err(|_| crate::diagnostics::failure("decryption_failed"))
                 .context(DecryptSnafu)?;
 
             Ok(plaintext)

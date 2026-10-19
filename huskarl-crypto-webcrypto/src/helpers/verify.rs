@@ -27,8 +27,9 @@ pub async fn verify_with_key(
     data: &[u8],
     signature: &[u8],
 ) -> Result<bool, JsVerifyError> {
-    let sign_algorithm_js =
-        serde_wasm_bindgen::to_value(&sign_algorithm).context(SerializeAlgorithmSnafu)?;
+    let sign_algorithm_js = serde_wasm_bindgen::to_value(&sign_algorithm)
+        .inspect_err(|_| crate::diagnostics::failure("serialization_failed"))
+        .context(SerializeAlgorithmSnafu)?;
 
     Ok(JsFuture::from(
         crypto
@@ -38,9 +39,11 @@ pub async fn verify_with_key(
                 signature,
                 data,
             )
+            .inspect_err(|_| crate::diagnostics::failure("verification_failed"))
             .context(VerifySnafu)?,
     )
     .await
+    .inspect_err(|_| crate::diagnostics::failure("verification_failed"))
     .context(AwaitSnafu)?
     .as_bool()
     .unwrap_or(false))

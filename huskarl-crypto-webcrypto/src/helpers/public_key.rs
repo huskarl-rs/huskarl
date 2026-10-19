@@ -28,10 +28,14 @@ pub async fn get_public_jwk(
     let jwk = JsFuture::from(
         crypto
             .export_key("jwk", public_key)
+            .inspect_err(|_| crate::diagnostics::failure("export_failed"))
             .context(ExportKeySnafu)?,
     )
     .await
+    .inspect_err(|_| crate::diagnostics::failure("export_failed"))
     .context(AwaitJwkSnafu)?;
 
-    serde_wasm_bindgen::from_value(jwk).context(SerializeJwkSnafu)
+    serde_wasm_bindgen::from_value(jwk)
+        .inspect_err(|_| crate::diagnostics::failure("invalid_exported_jwk"))
+        .context(SerializeJwkSnafu)
 }
