@@ -78,12 +78,17 @@ impl<C: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshCipher<C> {
         /// Minimum time between any two refresh attempts, regardless of outcome.
         #[builder(default = Duration::from_mins(1))]
         min_refresh_interval: Duration,
+        /// Optional stable source label for `huskarl.crypto.refresh` counters.
+        /// Emits counters only with the `metrics` feature enabled.
+        /// See [refresh metrics](crate::crypto#refresh-metrics) for labels and outcomes.
+        metrics_name: Option<String>,
     ) -> Result<Self, Error> {
         let inner = ScheduledRefreshable::builder()
             .factory(factory)
             .ttl(ttl)
             .failure_backoff(failure_backoff)
             .min_refresh_interval(min_refresh_interval)
+            .maybe_metrics_name(metrics_name)
             .build()
             .await?;
         Ok(Self {

@@ -100,6 +100,10 @@ impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
         /// Acts as a hard ceiling on refresh frequency for abuse prevention.
         #[builder(default = Duration::from_mins(1))]
         min_refresh_interval: Duration,
+        /// Optional stable source label for `huskarl.crypto.refresh` counters.
+        /// Emits counters only with the `metrics` feature enabled.
+        /// See [refresh metrics](crate::crypto#refresh-metrics) for labels and outcomes.
+        metrics_name: Option<String>,
         /// Backoff floor while cold (no keyset has loaded), escalating up to
         /// `failure_backoff`.
         #[builder(default = Duration::from_millis(250))]
@@ -114,6 +118,7 @@ impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
             .ttl(ttl)
             .failure_backoff(failure_backoff)
             .min_refresh_interval(min_refresh_interval)
+            .maybe_metrics_name(metrics_name)
             .cold_backoff(cold_backoff)
             .maybe_fallback(fallback)
             .build()
