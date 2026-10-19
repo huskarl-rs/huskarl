@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3](https://github.com/huskarl-rs/huskarl/compare/huskarl-redis-v0.3.2...huskarl-redis-v0.3.3) - 2026-10-19
+
+### Added
+
+- Add tracing to crypto/Google Cloud/reqwest/redis ([#362](https://github.com/huskarl-rs/huskarl/pull/362))
+
 ## [0.3.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-redis-v0.3.1...huskarl-redis-v0.3.2) - 2026-10-06
 
 ### Other
