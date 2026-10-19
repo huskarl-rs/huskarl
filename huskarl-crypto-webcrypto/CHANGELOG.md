@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-webcrypto-v0.11.0...huskarl-crypto-webcrypto-v0.11.1) - 2026-10-19
+
+### Added
+
+- Add tracing to crypto/Google Cloud/reqwest/redis ([#362](https://github.com/huskarl-rs/huskarl/pull/362))
+
 ## [0.11.0](https://github.com/huskarl-rs/huskarl/compare/huskarl-crypto-webcrypto-v0.10.1...huskarl-crypto-webcrypto-v0.11.0) - 2026-08-24
 
 ### Fixed

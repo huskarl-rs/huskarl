@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/huskarl-rs/huskarl/compare/huskarl-google-cloud-v0.8.3...huskarl-google-cloud-v0.8.4) - 2026-10-19
+
+### Added
+
+- Add tracing to crypto/Google Cloud/reqwest/redis ([#362](https://github.com/huskarl-rs/huskarl/pull/362))
+
+### Fixed
+
+- Fix flaky tracing test ([#364](https://github.com/huskarl-rs/huskarl/pull/364))
+
 ## [0.8.3](https://github.com/huskarl-rs/huskarl/compare/huskarl-google-cloud-v0.8.2...huskarl-google-cloud-v0.8.3) - 2026-10-06
 
 ### Other
