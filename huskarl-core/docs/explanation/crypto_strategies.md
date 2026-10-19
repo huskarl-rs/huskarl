@@ -162,9 +162,9 @@ relevant trait — the operation trait inbound, the selector trait outbound:
   once more. This is the fast path for key *additions*: a token signed by a
   freshly-rotated `kid` is accepted as soon as a miss drives a reload, instead of
   waiting for the next scheduled reload — though that reload is itself gated by the
-  scheduled layer's `min_refresh_interval`, so the first unknown-`kid` miss fetches
-  while any others arriving within that window still surface the miss until the
-  ceiling clears. The retrying verifier reacts *only* to a miss; a signature
+  scheduled layer's `min_refresh_interval`. Concurrent misses can share a
+  successful in-flight reload and retry with its keys; the interval limits new
+  fetches. The retrying verifier reacts *only* to a miss; a signature
   mismatch is almost always a forged token (a refresh would be wasted), and its
   one legitimate case — a same-algorithm, kid-less rotation — is handled after a
   successful scheduled reload instead. So the two layers split the work: **misses
