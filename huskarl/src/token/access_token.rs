@@ -3,26 +3,38 @@ use http::{HeaderValue, header::InvalidHeaderValue};
 use crate::core::{
     platform::{Duration, SystemTime},
     secrets::SecretString,
+    time::{Clock, PlatformClock},
 };
 
-/// Computes `received_at + expires_in - expires_margin` without panicking:
-/// `expires_in` comes from the token response, so a malicious or buggy server
-/// could supply a value that overflows `SystemTime`. Overflow clamps to a
-/// century past `received_at` (effectively never stale); underflow past the
-/// epoch clamps to the epoch (already stale).
+/// Compute the final deadline before saturating, so a large lifetime and margin
+/// can cancel without overflowing an intermediate timestamp.
+pub(crate) fn effective_expiry_at(
+    received_at: jiff::Timestamp,
+    expires_in: Duration,
+    expires_margin: Duration,
+) -> jiff::Timestamp {
+    if let Some(remaining) = expires_in.checked_sub(expires_margin) {
+        received_at
+            .checked_add(remaining)
+            .unwrap_or(jiff::Timestamp::MAX)
+    } else {
+        received_at
+            .checked_sub(expires_margin.saturating_sub(expires_in))
+            .unwrap_or(jiff::Timestamp::MIN)
+    }
+}
+
 fn effective_expiry(
     received_at: SystemTime,
     expires_in: Duration,
     expires_margin: Duration,
 ) -> SystemTime {
-    const CENTURY: Duration = Duration::from_hours(100 * 365 * 24);
-
-    received_at
-        .checked_add(expires_in)
-        .or_else(|| received_at.checked_add(CENTURY))
-        .unwrap_or(received_at)
-        .checked_sub(expires_margin)
-        .unwrap_or(SystemTime::UNIX_EPOCH)
+    let received_at = crate::core::time::timestamp_from_system_time_saturating(received_at);
+    crate::core::time::system_time_from_timestamp_saturating(effective_expiry_at(
+        received_at,
+        expires_in,
+        expires_margin,
+    ))
 }
 
 /// An access token returned by a token grant, used to authorize resource-server
@@ -109,12 +121,15 @@ impl AccessToken {
 
     /// The time after which this token should be treated as stale:
     /// `received_at + expires_in - expires_margin`. It is valid while
-    /// `SystemTime::now()` is earlier than this.
+    /// the current wall-clock time is earlier than this.
     ///
     /// `default_expires_in` applies only when the token response carried no
     /// `expires_in` of its own; `expires_margin` is subtracted to retire the
-    /// token slightly early. An out-of-range `expires_in` is clamped rather than
-    /// panicking.
+    /// token slightly early. Out-of-range receipts are clamped to Jiff's timestamp
+    /// range. The final deadline saturates at Jiff's and the platform's time
+    /// boundaries: oversized lifetimes remain far-future deadlines, while
+    /// oversized margins produce far-past deadlines. Lifetime and margin are
+    /// combined before timestamp arithmetic, avoiding intermediate overflow.
     #[must_use]
     pub fn effective_expiry(
         &self,
@@ -140,7 +155,24 @@ impl AccessToken {
     /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
-        SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
+        self.is_expired_at(
+            huskarl_core::time::system_time_from_timestamp_saturating(PlatformClock.now()),
+            default_expires_in,
+            expires_margin,
+        )
+    }
+
+    /// Returns whether the token is stale at the supplied wall-clock time.
+    ///
+    /// Uses [`Self::effective_expiry`]; equality with the deadline counts as expired.
+    #[must_use]
+    pub fn is_expired_at(
+        &self,
+        now: SystemTime,
+        default_expires_in: Duration,
+        expires_margin: Duration,
+    ) -> bool {
+        now >= self.effective_expiry(default_expires_in, expires_margin)
     }
 
     /// The token's effective lifetime: the `expires_in` from the token response,
@@ -210,7 +242,24 @@ impl NonAccessToken {
     /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
-        SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
+        self.is_expired_at(
+            huskarl_core::time::system_time_from_timestamp_saturating(PlatformClock.now()),
+            default_expires_in,
+            expires_margin,
+        )
+    }
+
+    /// Returns whether the token is stale at the supplied wall-clock time.
+    ///
+    /// Uses [`Self::effective_expiry`]; equality with the deadline counts as expired.
+    #[must_use]
+    pub fn is_expired_at(
+        &self,
+        now: SystemTime,
+        default_expires_in: Duration,
+        expires_margin: Duration,
+    ) -> bool {
+        now >= self.effective_expiry(default_expires_in, expires_margin)
     }
 
     /// The token's effective lifetime; see
@@ -290,7 +339,24 @@ impl DPoPAccessToken {
     /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
-        SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
+        self.is_expired_at(
+            huskarl_core::time::system_time_from_timestamp_saturating(PlatformClock.now()),
+            default_expires_in,
+            expires_margin,
+        )
+    }
+
+    /// Returns whether the token is stale at the supplied wall-clock time.
+    ///
+    /// Uses [`Self::effective_expiry`]; equality with the deadline counts as expired.
+    #[must_use]
+    pub fn is_expired_at(
+        &self,
+        now: SystemTime,
+        default_expires_in: Duration,
+        expires_margin: Duration,
+    ) -> bool {
+        now >= self.effective_expiry(default_expires_in, expires_margin)
     }
 
     /// The token's effective lifetime; see
@@ -356,7 +422,24 @@ impl BearerAccessToken {
     /// `expires_margin` semantics.
     #[must_use]
     pub fn is_expired(&self, default_expires_in: Duration, expires_margin: Duration) -> bool {
-        SystemTime::now() >= self.effective_expiry(default_expires_in, expires_margin)
+        self.is_expired_at(
+            huskarl_core::time::system_time_from_timestamp_saturating(PlatformClock.now()),
+            default_expires_in,
+            expires_margin,
+        )
+    }
+
+    /// Returns whether the token is stale at the supplied wall-clock time.
+    ///
+    /// Uses [`Self::effective_expiry`]; equality with the deadline counts as expired.
+    #[must_use]
+    pub fn is_expired_at(
+        &self,
+        now: SystemTime,
+        default_expires_in: Duration,
+        expires_margin: Duration,
+    ) -> bool {
+        now >= self.effective_expiry(default_expires_in, expires_margin)
     }
 
     /// The token's effective lifetime; see
@@ -371,31 +454,67 @@ impl BearerAccessToken {
 mod tests {
     use super::*;
 
+    fn tokens(received_at: SystemTime, expires_in: Option<Duration>) -> [AccessToken; 3] {
+        let secret = || SecretString::new("token");
+        [
+            AccessToken::Bearer(BearerAccessToken::new(secret(), received_at, expires_in)),
+            AccessToken::DPoP(DPoPAccessToken::new(
+                secret(),
+                "key".into(),
+                received_at,
+                expires_in,
+            )),
+            AccessToken::NotAccessToken(NonAccessToken::new(secret(), received_at, expires_in)),
+        ]
+    }
+
     #[test]
-    fn huge_expires_in_does_not_panic() {
-        // A malicious AS can return expires_in values that overflow SystemTime.
+    fn all_token_types_expire_at_the_exact_default_lifetime_boundary() {
+        let received = SystemTime::UNIX_EPOCH - Duration::from_secs(100);
+        let lifetime = Duration::from_secs(60);
+        let margin = Duration::from_secs(10);
+        let expiry = received + lifetime - margin;
+        for token in tokens(received, None) {
+            assert!(!token.is_expired_at(expiry - Duration::from_nanos(1), lifetime, margin));
+            assert!(token.is_expired_at(expiry, lifetime, margin));
+        }
+    }
+
+    #[test]
+    fn huge_expires_in_remains_valid_far_into_the_future() {
+        // A provider may use an oversized lifetime to mean "does not expire".
         let token = BearerAccessToken::new(
             SecretString::new("tok"),
-            SystemTime::now(),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
             Some(Duration::from_secs(u64::MAX)),
         );
-        assert!(!token.is_expired(Duration::from_hours(1), Duration::from_secs(30)));
+        assert!(!token.is_expired_at(
+            SystemTime::UNIX_EPOCH
+                + Duration::from_secs(1_000_000)
+                + Duration::from_hours(100 * 365 * 24),
+            Duration::from_hours(1),
+            Duration::from_secs(30)
+        ));
     }
 
     #[test]
     fn huge_margin_does_not_panic() {
         let token = BearerAccessToken::new(
             SecretString::new("tok"),
-            SystemTime::now(),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
             Some(Duration::from_hours(1)),
         );
-        // A margin larger than the expiry clamps to the epoch: already stale.
-        assert!(token.is_expired(Duration::from_hours(1), Duration::from_secs(u64::MAX)));
+        // An unrepresentable margin-adjusted expiry is stale.
+        assert!(token.is_expired_at(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
+            Duration::from_hours(1),
+            Duration::from_secs(u64::MAX)
+        ));
     }
 
     #[test]
     fn normal_expiry_unchanged() {
-        let received_at = SystemTime::now();
+        let received_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
         let token = BearerAccessToken::new(
             SecretString::new("tok"),
             received_at,
@@ -405,6 +524,75 @@ mod tests {
             token.effective_expiry(Duration::from_hours(1), Duration::from_secs(30)),
             received_at + Duration::from_secs(3600 - 30)
         );
-        assert!(!token.is_expired(Duration::from_hours(1), Duration::from_secs(30)));
+        assert!(!token.is_expired_at(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
+            Duration::from_hours(1),
+            Duration::from_secs(30)
+        ));
+    }
+    #[rstest::rstest]
+    #[case::explicit(Some(Duration::MAX))]
+    #[case::default(None)]
+    fn oversized_lifetimes_saturate_for_every_token_type(
+        #[case] expires_in: Option<Duration>,
+        #[values(Duration::ZERO, Duration::from_secs(30))] margin: Duration,
+    ) {
+        let received_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let maximum =
+            crate::core::time::system_time_from_timestamp_saturating(jiff::Timestamp::MAX);
+        for token in tokens(received_at, expires_in) {
+            assert_eq!(token.effective_expiry(Duration::MAX, margin), maximum);
+            for now in [
+                SystemTime::UNIX_EPOCH,
+                received_at,
+                received_at + Duration::from_secs(1),
+            ] {
+                assert!(!token.is_expired_at(now, Duration::MAX, margin));
+            }
+            assert!(token.is_expired_at(maximum, Duration::MAX, margin));
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::at_boundary(Duration::from_secs(1))]
+    #[case::overflow(Duration::from_secs(2))]
+    fn maximum_representable_expiry_and_overflow_share_the_saturated_boundary(
+        #[case] lifetime: Duration,
+    ) {
+        let maximum = crate::core::time::system_time_from_timestamp(jiff::Timestamp::MAX).unwrap();
+        let received_at = maximum - Duration::from_secs(1);
+        let token = BearerAccessToken::new(SecretString::new("token"), received_at, Some(lifetime));
+        assert_eq!(
+            token.effective_expiry(Duration::ZERO, Duration::ZERO),
+            maximum
+        );
+        assert!(!token.is_expired_at(received_at, Duration::ZERO, Duration::ZERO));
+        assert!(token.is_expired_at(maximum, Duration::ZERO, Duration::ZERO));
+    }
+
+    #[test]
+    fn large_lifetime_and_margin_cancel_before_timestamp_arithmetic() {
+        let received_at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let minute = Duration::from_secs(60);
+        for (lifetime, margin, expected) in [
+            (Duration::MAX, Duration::MAX, received_at),
+            (
+                Duration::MAX,
+                Duration::MAX.checked_sub(minute).unwrap(),
+                received_at + minute,
+            ),
+            (
+                Duration::MAX.checked_sub(minute).unwrap(),
+                Duration::MAX,
+                received_at - minute,
+            ),
+        ] {
+            let token =
+                BearerAccessToken::new(SecretString::new("tok"), received_at, Some(lifetime));
+            let expiry: SystemTime = token.effective_expiry(Duration::ZERO, margin);
+            assert_eq!(expiry, expected);
+            assert!(!token.is_expired_at(expiry - Duration::from_nanos(1), Duration::ZERO, margin));
+            assert!(token.is_expired_at(expiry, Duration::ZERO, margin));
+        }
     }
 }

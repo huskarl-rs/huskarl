@@ -16,6 +16,7 @@ use huskarl_core::{
         },
     },
     platform::MaybeSendBoxFuture,
+    time::{Clock, PlatformClock},
 };
 use snafu::prelude::*;
 
@@ -336,13 +337,17 @@ impl EncryptionKey {
         /// The version selection strategy. Defaults to [`VersionStrategy::Latest`].
         #[builder(default)]
         strategy: VersionStrategy,
+        /// Clock sampled after listing versions for minimum-age selection.
+        #[builder(default = Arc::<PlatformClock>::default(), with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>)]
+        clock: Arc<dyn Clock>,
         /// The policy for deriving a `kid` from the key version ID. Defaults to
         /// [`VersionKid::none()`] (no `kid`).
         #[builder(default = VersionKid::none())]
         kid: VersionKid,
     ) -> Result<Self, KeyError> {
         let key_version =
-            resolve_encryption_key_version(&key_name, &kms_client, &strategy, &kid).await?;
+            resolve_encryption_key_version(&key_name, &kms_client, &strategy, &kid, clock.as_ref())
+                .await?;
         Ok(Self { key_version })
     }
 }
@@ -532,6 +537,9 @@ impl CipherKey {
         /// The version selection strategy for encryption. Defaults to [`VersionStrategy::Latest`].
         #[builder(default)]
         strategy: VersionStrategy,
+        /// Clock sampled after listing versions for minimum-age selection.
+        #[builder(default = Arc::<PlatformClock>::default(), with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>)]
+        clock: Arc<dyn Clock>,
         /// The policy for deriving a `kid` from the key version ID. Defaults to
         /// [`VersionKid::none()`] (no `kid`).
         #[builder(default = VersionKid::none())]
@@ -548,7 +556,7 @@ impl CipherKey {
         max_versions: Option<usize>,
     ) -> Result<Self, KeyError> {
         let (enc_kv, dec_kvs) = futures_util::try_join!(
-            resolve_encryption_key_version(&key_name, &kms_client, &strategy, &kid),
+            resolve_encryption_key_version(&key_name, &kms_client, &strategy, &kid, clock.as_ref()),
             resolve_decryption_key_versions(&key_name, &kms_client, &kid, max_versions),
         )?;
         let encryption = EncryptionKey {
@@ -619,8 +627,9 @@ async fn resolve_encryption_key_version(
     kms_client: &KeyManagementService,
     strategy: &VersionStrategy,
     kid: &VersionKid,
+    clock: &dyn Clock,
 ) -> Result<KeyVersion, KeyError> {
-    let version_id = version::resolve_version(key_name, strategy, kms_client)
+    let version_id = version::resolve_version_with_clock(key_name, strategy, kms_client, clock)
         .await
         .context(ResolveVersionSnafu)?;
 

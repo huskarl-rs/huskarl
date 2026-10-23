@@ -36,12 +36,13 @@ default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypt
 
 # When enabled, adds support for a loopback HTTP server that can handle
 # the callback for the authorization code flow.
-authorization-flow-loopback = ["dep:url", "tokio/net", "tokio/io-util", "tokio/time"]
+authorization-flow-loopback = ["dep:url", "dep:futures-util", "tokio/net", "tokio/io-util"]
 
 # When enabled, an EndpointUrl can be constructed from a url::Url.
 url = ["huskarl-core/url"]
 
 [dependencies]
+jiff = { workspace = true }
 tracing = { workspace = true, optional = true }
 metrics = { workspace = true, optional = true }
 huskarl-core = { workspace = true }
@@ -52,6 +53,7 @@ base64 = { workspace = true }
 bon = { workspace = true }
 bytes = { version = "1", default-features = false }
 form_urlencoded = { workspace = true }
+futures-util = { version = "0.3", default-features = false, optional = true }
 http = { version = "1", default-features = false, features = ["std"] }
 rand = { workspace = true }
 serde = { workspace = true }
@@ -82,6 +84,7 @@ name = "basic_dpop"
 required-features = ["authorization-flow-loopback"]
 
 [dev-dependencies]
+futures-util = { version = "0.3", default-features = false }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
 huskarl = { path = ".", default-features = true }
 huskarl-core = { workspace = true, features = ["strict-propagation"] }

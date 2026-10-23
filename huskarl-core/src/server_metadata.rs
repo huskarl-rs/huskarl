@@ -301,6 +301,12 @@ impl AuthorizationServerMetadata {
     /// returned issuer does not exactly match `issuer`.
     #[builder(on(String, into))]
     pub async fn fetch<C: HttpClient>(
+        /// Clock used to interpret HTTP-date retry delays at response receipt.
+        #[builder(
+            default = std::sync::Arc::new(crate::time::PlatformClock),
+            with = |clock: impl crate::time::Clock + 'static| std::sync::Arc::new(clock) as std::sync::Arc<dyn crate::time::Clock>
+        )]
+        clock: std::sync::Arc<dyn crate::time::Clock>,
         /// HTTP transport used for the discovery request.
         http_client: &C,
         /// Expected issuer identifier and base for the well-known URL.
@@ -328,6 +334,7 @@ impl AuthorizationServerMetadata {
             configuration_endpoint.clone(),
             HeaderMap::new(),
             crate::http::DocumentKind::AuthorizationServerMetadata,
+            clock.as_ref(),
         )
         .await
         .context(FetchingSnafu {

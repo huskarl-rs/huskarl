@@ -7,6 +7,7 @@ pub mod id_token;
 pub mod id_token_presentation;
 mod refresh_token;
 
+pub(crate) use access_token::effective_expiry_at;
 pub use access_token::{AccessToken, BearerAccessToken, DPoPAccessToken, NonAccessToken};
 pub use id_token::IdToken;
 pub use refresh_token::RefreshToken;

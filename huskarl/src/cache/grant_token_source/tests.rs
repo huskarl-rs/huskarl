@@ -15,6 +15,7 @@ use crate::{
         http::{HttpClient, HttpResponse, Idempotency},
         platform::SystemTime,
         secrets::SecretString,
+        time::ManualTime,
     },
     grant::{
         authorization_code::{AuthorizationCodeGrant, AuthorizationCodeGrantParameters},
@@ -651,12 +652,14 @@ async fn can_restore_reflects_credentials() {
 
 #[tokio::test]
 async fn can_restore_trusts_cached_view_within_staleness() {
+    let time = ManualTime::default();
     let store = SharedRefreshStore::default();
     let http = MockHttpClient::default();
     let source = GrantTokenSource::builder()
         .grant(client_credentials_grant(http))
         .grant_parameters(NoSource)
         .refresh_store(store.clone())
+        .timer(time)
         .build();
 
     // Priming records "refresh token present" in the in-memory view; consume
@@ -671,6 +674,48 @@ async fn can_restore_trusts_cached_view_within_staleness() {
     assert!(source.can_restore(None).await.unwrap());
     // ...while a zero staleness bound forces a re-read and sees the truth.
     assert!(!source.can_restore(Some(Duration::ZERO)).await.unwrap());
+}
+
+#[tokio::test]
+async fn can_restore_reconciles_only_after_staleness_boundary() {
+    let time = ManualTime::default();
+    let store = SharedRefreshStore::default();
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(MockHttpClient::default()))
+        .grant_parameters(NoSource)
+        .refresh_store(store.clone())
+        .timer(time.clone())
+        .build();
+    let max_staleness = Duration::from_secs(10);
+
+    // An unpopulated view must read the store, even with unlimited staleness.
+    store.set(&refresh_token("rt")).await.unwrap();
+    assert!(source.can_restore(None).await.unwrap());
+    store.clear().await.unwrap();
+
+    for wall in [
+        jiff::Timestamp::MAX,
+        jiff::Timestamp::MIN,
+        jiff::Timestamp::UNIX_EPOCH,
+    ] {
+        time.set_wall_time(wall);
+        assert!(source.can_restore(Some(max_staleness)).await.unwrap());
+    }
+    time.advance(max_staleness.checked_sub(Duration::from_nanos(1)).unwrap())
+        .unwrap();
+    assert!(source.can_restore(Some(max_staleness)).await.unwrap());
+    time.advance(Duration::from_nanos(1)).unwrap();
+    assert!(source.can_restore(Some(max_staleness)).await.unwrap());
+    time.advance(Duration::from_nanos(1)).unwrap();
+    assert!(source.can_restore(None).await.unwrap());
+    assert!(!source.can_restore(Some(max_staleness)).await.unwrap());
+
+    // Reconciliation starts a new freshness window, including a cached absence.
+    store.set(&refresh_token("replacement")).await.unwrap();
+    time.advance(max_staleness).unwrap();
+    assert!(!source.can_restore(Some(max_staleness)).await.unwrap());
+    time.advance(Duration::from_nanos(1)).unwrap();
+    assert!(source.can_restore(Some(max_staleness)).await.unwrap());
 }
 
 #[tokio::test]
@@ -1524,14 +1569,46 @@ fn successful_acquisitions_record_success_outcomes() {
 #[tokio::test]
 async fn breaker_half_opens_after_cooldown() {
     let http = MockHttpClient::default();
-    let source = dynamic_source(http.clone(), 1, std::time::Duration::from_millis(10));
+    let time = ManualTime::default();
+    let cooldown = std::time::Duration::from_millis(10);
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http.clone()))
+        .grant_parameters(from_fn(|| async {
+            Ok::<_, Error>(ClientCredentialsGrantParameters::new())
+        }))
+        .refresh_store(SharedRefreshStore::default())
+        .breaker_threshold(1)
+        .breaker_cooldown(cooldown)
+        .timer(time.clone())
+        .build();
 
     http.push(StatusCode::BAD_REQUEST, r#"{"error":"invalid_grant"}"#);
     assert_invalid_grant(&source.token().await.unwrap_err());
 
-    // After the cooldown the breaker half-opens and the next call reaches the
-    // endpoint again — here it succeeds, resetting the breaker.
-    crate::core::platform::sleep(std::time::Duration::from_millis(25)).await;
+    for wall in [jiff::Timestamp::MAX, jiff::Timestamp::MIN] {
+        time.set_wall_time(wall);
+        assert_eq!(
+            source.token().await.unwrap_err().recovery(),
+            Recovery::Retry {
+                after: Some(cooldown)
+            }
+        );
+    }
+    time.advance_monotonic(
+        cooldown
+            .checked_sub(std::time::Duration::from_nanos(1))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        source.token().await.unwrap_err().recovery(),
+        Recovery::Retry {
+            after: Some(std::time::Duration::from_nanos(1))
+        }
+    );
+    // At the boundary, the next call reaches the endpoint and resets the breaker.
+    time.advance_monotonic(std::time::Duration::from_nanos(1))
+        .unwrap();
     http.push(
         StatusCode::OK,
         r#"{"access_token":"recovered","token_type":"bearer","expires_in":3600}"#,
@@ -1700,11 +1777,12 @@ async fn session_bound_grant_powers_source_dpop_and_refresh() {
     // and its proof thumbprint-matches the token's jkt.
     let proof = source
         .resource_server_dpop()
-        .proof(
+        .proof_at(
             &http::Method::GET,
             &"https://rs.example.com/resource".parse().unwrap(),
             at.token(),
             at.jkt(),
+            jiff::Timestamp::UNIX_EPOCH,
         )
         .await
         .unwrap();
@@ -1712,4 +1790,272 @@ async fn session_bound_grant_powers_source_dpop_and_refresh() {
         proof.is_some(),
         "session-bound RS DPoP must produce a proof"
     );
+}
+
+#[tokio::test]
+async fn injected_clock_survives_exchange_and_restored_refresh() {
+    use crate::{
+        cache::{CacheState, InMemoryTokenCache},
+        core::time::Clock,
+    };
+
+    let time = ManualTime::new(jiff::Timestamp::new(1_000, 123).unwrap());
+    let http = MockHttpClient::default();
+    let grant = ClientCredentialsGrant::builder()
+        .client_id("client")
+        .client_auth(NoAuth)
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .http_client(http.clone())
+        .clock(time.clone())
+        .timer(time.clone())
+        .build();
+    http.push(StatusCode::OK, r#"{"access_token":"initial","token_type":"bearer","expires_in":100,"refresh_token":"stored"}"#);
+    let response = grant
+        .exchange(ClientCredentialsGrantParameters::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        response
+            .access_token()
+            .effective_expiry(Duration::ZERO, Duration::ZERO),
+        huskarl_core::time::system_time_from_timestamp_saturating(Clock::now(&time))
+            + Duration::from_secs(100),
+    );
+    // Reconstruct a source with only persisted credentials, as after a restart.
+    let store = SharedRefreshStore::default();
+    store.set(response.refresh_token().unwrap()).await.unwrap();
+    let source = GrantTokenSource::builder()
+        .grant(grant)
+        .grant_parameters(NoSource)
+        .refresh_store(store)
+        .timer(time.clone())
+        .build();
+    let cache = InMemoryTokenCache::builder()
+        .source(source)
+        .expires_margin(Duration::ZERO)
+        .refresh_jitter(None)
+        .build();
+    assert_eq!(cache.state(None).await.unwrap(), CacheState::Restorable);
+    time.advance(Duration::from_secs(200)).unwrap();
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"restored","token_type":"bearer","expires_in":100}"#,
+    );
+    let restored = cache.token().await.unwrap();
+    assert_eq!(
+        restored
+            .access_token()
+            .effective_expiry(Duration::ZERO, Duration::ZERO),
+        huskarl_core::time::system_time_from_timestamp_saturating(Clock::now(&time))
+            + Duration::from_secs(100)
+    );
+    time.advance(Duration::from_secs(100) - Duration::from_nanos(1))
+        .unwrap();
+    assert_eq!(cache.state(None).await.unwrap(), CacheState::Active);
+    assert!(Arc::ptr_eq(&restored, &cache.token().await.unwrap()));
+    time.advance(Duration::from_nanos(1)).unwrap();
+    assert_eq!(cache.state(None).await.unwrap(), CacheState::Restorable);
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"renewed","token_type":"bearer","expires_in":100}"#,
+    );
+    let renewed = cache.token().await.unwrap();
+    assert_eq!(access_of(&renewed), "renewed");
+    assert_eq!(
+        renewed
+            .access_token()
+            .effective_expiry(Duration::ZERO, Duration::ZERO),
+        huskarl_core::time::system_time_from_timestamp_saturating(Clock::now(&time))
+            + Duration::from_secs(100)
+    );
+}
+
+#[cfg(not(target_family = "wasm"))]
+mod issuance_clock {
+    use base64::prelude::*;
+    use huskarl_crypto_native::asymmetric::signer::{GenerateAlgorithm, PrivateKey};
+
+    use super::*;
+    use crate::{
+        authorizer::HttpAuthorizer,
+        cache::InMemoryTokenCache,
+        core::{
+            client_auth::{Audience, JwtBearer},
+            dpop::DPoP,
+            time::Clock,
+        },
+    };
+
+    fn claims(jwt: &str) -> serde_json::Value {
+        serde_json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(jwt.split('.').nth(1).unwrap())
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    #[derive(Clone)]
+    struct AdvancingHttp {
+        time: ManualTime,
+        requests: Arc<Mutex<Vec<http::Request<Bytes>>>>,
+    }
+    impl HttpClient for AdvancingHttp {
+        fn execute(
+            &self,
+            request: http::Request<Bytes>,
+            _: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            Box::pin(async move {
+                let mut requests = self.requests.lock().unwrap();
+                requests.push(request);
+                self.time.advance(Duration::from_secs(10)).unwrap();
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    http::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                );
+                let (status, body) = if requests.len() == 1 {
+                    headers.insert("DPoP-Nonce", HeaderValue::from_static("retry-nonce"));
+                    (StatusCode::BAD_REQUEST, r#"{"error":"use_dpop_nonce"}"#)
+                } else {
+                    (
+                        StatusCode::OK,
+                        r#"{"access_token":"token","token_type":"DPoP","expires_in":100}"#,
+                    )
+                };
+                Ok(HttpResponse {
+                    status,
+                    headers,
+                    body: Bytes::from_static(body.as_bytes()),
+                })
+            })
+        }
+    }
+    #[tokio::test]
+    async fn grant_clock_drives_assertions_nonce_retries_cache_and_resource_proofs() {
+        let time = ManualTime::new(jiff::Timestamp::new(1_000, 0).unwrap());
+        let http = AdvancingHttp {
+            time: time.clone(),
+            requests: Arc::default(),
+        };
+        let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+        let grant = ClientCredentialsGrant::builder()
+            .client_id("client")
+            .client_auth(
+                JwtBearer::builder()
+                    .signer(key.clone())
+                    .audience(Audience::TargetEndpoint)
+                    .build(),
+            )
+            .dpop(DPoP::builder().signer(key).build())
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .http_client(http.clone())
+            .clock(time.clone())
+            .build();
+        let source = GrantTokenSource::builder()
+            .grant(grant)
+            .grant_parameters(ClientCredentialsGrantParameters::new())
+            .refresh_store(SharedRefreshStore::default())
+            .build();
+        let cache = Arc::new(
+            InMemoryTokenCache::builder()
+                .source(source)
+                .refresh_jitter(None)
+                .build(),
+        );
+        let authorizer = HttpAuthorizer::builder().cache(cache.clone()).build();
+        let headers = authorizer
+            .get_headers(
+                &http::Method::GET,
+                &"https://api.example.com/resource".parse().unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(claims(headers["DPoP"].to_str().unwrap())["iat"], 1_020);
+        assert_eq!(cache.clock().now(), Clock::now(&time));
+        let token = cache.token().await.unwrap();
+        assert_eq!(
+            token
+                .access_token()
+                .effective_expiry(Duration::ZERO, Duration::ZERO),
+            huskarl_core::time::system_time_from_timestamp_saturating(
+                jiff::Timestamp::new(1_120, 0).unwrap()
+            )
+        );
+        let requests = http.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        for (request, expected) in requests.iter().zip([1_000, 1_010]) {
+            let form: std::collections::HashMap<String, String> =
+                crate::core::oauth_form::from_str(std::str::from_utf8(request.body()).unwrap())
+                    .unwrap();
+            let assertion = claims(&form["client_assertion"]);
+            let proof = claims(request.headers()["DPoP"].to_str().unwrap());
+            assert_eq!(assertion["iat"], expected);
+            assert_eq!(assertion["exp"], expected + 60);
+            assert_eq!(proof["iat"], expected);
+            if expected == 1_010 {
+                assert_eq!(proof["nonce"], "retry-nonce");
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn priming_does_not_restart_local_or_imported_token_lifetimes() {
+    use crate::{
+        cache::InMemoryTokenCache,
+        core::time::{Clock, Timer},
+        grant::core::TokenReceipt,
+    };
+
+    for local in [true, false] {
+        let time = ManualTime::new(jiff::Timestamp::from_second(1_000).unwrap());
+        let grant = ClientCredentialsGrant::builder()
+            .client_id("client")
+            .client_auth(NoAuth)
+            .token_endpoint("https://as.example.com/token".parse().unwrap())
+            .http_client(MockHttpClient::default())
+            .clock(time.clone())
+            .timer(time.clone())
+            .build();
+        let source = GrantTokenSource::builder()
+            .grant(grant)
+            .grant_parameters(NoSource)
+            .refresh_store(SharedRefreshStore::default())
+            .build();
+        assert_eq!(source.timer().now().domain(), Timer::now(&time).domain());
+        let raw = RawTokenResponse::builder()
+            .access_token("primed")
+            .token_type("bearer")
+            .expires_in(100)
+            .build();
+        let response = if local {
+            raw.into_token_response_with_receipt(None, TokenReceipt::capture(&time))
+        } else {
+            raw.into_token_response(
+                None,
+                huskarl_core::time::system_time_from_timestamp(Clock::now(&time)).unwrap(),
+            )
+        }
+        .unwrap();
+        let clone = response.clone();
+        time.advance(Duration::from_secs(30)).unwrap();
+        source.prime(response).await.unwrap();
+        assert_eq!(
+            clone.elapsed_since_receipt_at(Clock::now(&time)),
+            Some(Duration::from_secs(30))
+        );
+        time.advance(Duration::from_secs(70)).unwrap();
+        let cache = InMemoryTokenCache::builder()
+            .source(source)
+            .expires_margin(Duration::ZERO)
+            .refresh_jitter(None)
+            .build();
+        let cached = cache.token().await.unwrap();
+        assert!(cached.is_expired_at(Clock::now(&time), Duration::from_secs(100), Duration::ZERO));
+        assert_eq!(
+            clone.elapsed_since_receipt_at(Clock::now(&time)),
+            Some(Duration::from_secs(100))
+        );
+    }
 }

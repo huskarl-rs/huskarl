@@ -37,6 +37,7 @@ each token request:
 ```rust
 # use huskarl::core::client_auth::NoAuth;
 # use huskarl::core::dpop::DPoP;
+# use huskarl::core::time::Clock;
 # use huskarl::core::http::HttpClient;
 # use huskarl::core::server_metadata::AuthorizationServerMetadata;
 # use huskarl::grant::client_credentials::ClientCredentialsGrant;
@@ -101,12 +102,13 @@ for the full flow:
 # use http::Method;
 # use huskarl::prelude::*; // brings the `AuthorizationServerDPoP` / `ResourceServerDPoP` methods into scope
 # use huskarl::core::dpop::DPoP;
+# use huskarl::core::time::Clock;
 # use huskarl::token::DPoPAccessToken;
-# async fn example(dpop: DPoP, token: DPoPAccessToken) -> Result<(), Box<dyn std::error::Error>> {
+# async fn example(dpop: DPoP, token: DPoPAccessToken, clock: &dyn Clock) -> Result<(), Box<dyn std::error::Error>> {
 let uri: http::Uri = "https://api.example.com/v1/widgets".parse()?;
 let resource_dpop = dpop.to_resource_server_dpop();
 let proof = resource_dpop
-    .proof(&Method::GET, &uri, token.token(), token.jkt())
+    .proof_at(&Method::GET, &uri, token.token(), token.jkt(), clock.now())
     .await?;
 # let _ = proof;
 # Ok(())

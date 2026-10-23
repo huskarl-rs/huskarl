@@ -18,6 +18,7 @@ use crate::core::{
         validator::{ClaimCheck, JwtValidationError, JwtValidator},
     },
     platform::{Duration, SystemTime},
+    time::{Clock, PlatformClock},
 };
 
 /// Claims extracted from a validated `DPoP` proof.
@@ -71,6 +72,12 @@ pub struct ValidatedDPoPProof {
 pub struct DPoPProofValidator {
     /// Crypto platform for creating signature verifiers from embedded JWKs.
     jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
+    /// Clock used for proof validation and nonce checks.
+    #[builder(
+        default = Arc::<PlatformClock>::default(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    pub(super) clock: Arc<dyn Clock>,
     /// Maximum allowed proof age based on `iat`. Default: 1 minute.
     #[builder(default = Duration::from_mins(1))]
     max_proof_age: Duration,
@@ -121,6 +128,20 @@ impl DPoPProofValidator {
     /// Returns a [`DPoPProofError`] if the proof is malformed, uses a disallowed
     /// algorithm, has an invalid signature, or fails temporal checks.
     pub async fn validate(&self, proof: &str) -> Result<ValidatedDPoPProof, DPoPProofError> {
+        self.validate_at(proof, self.clock.now()).await
+    }
+
+    /// Validates a proof using the supplied timestamp for temporal checks.
+    /// The configured clock is not read. Binding checks remain the caller's responsibility.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`DPoPProofError`] if the proof fails structural, signature, or temporal checks.
+    pub async fn validate_at(
+        &self,
+        proof: &str,
+        now: jiff::Timestamp,
+    ) -> Result<ValidatedDPoPProof, DPoPProofError> {
         let parsed = parse_compact_jws::<(), DPoPProofClaims>(proof).context(BadFormatSnafu)?;
 
         let jwk = parsed
@@ -143,6 +164,7 @@ impl DPoPProofValidator {
 
         let validator = JwtValidator::builder()
             .verifier(verifier)
+            .clock(self.clock.clone())
             .typ(ClaimCheck::required_value("dpop+jwt"))
             .maybe_allowed_algorithms(self.allowed_signing_algorithms.clone())
             .max_token_age(self.max_proof_age)
@@ -152,7 +174,7 @@ impl DPoPProofValidator {
             .build();
 
         let validated = validator
-            .validate_parsed_jws(parsed)
+            .validate_parsed_jws_at(parsed, now)
             .await
             .context(InvalidProofSnafu)?;
 

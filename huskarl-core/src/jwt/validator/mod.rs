@@ -10,6 +10,7 @@ use crate::{
     crypto::verifier::{JwsVerifier, KeyMatch, VerifyError},
     jwt::{JtiUniquenessChecker, JwsParseError, ParsedJws, parse_compact_jws},
     platform::{Duration, SystemTime},
+    time::{Clock, PlatformClock},
 };
 
 mod checks;
@@ -48,6 +49,12 @@ pub struct JwtValidator {
     /// JWS verifier to use for token validation.
     #[builder(with = |verifier: impl JwsVerifier + 'static| Arc::new(verifier) as Arc<dyn JwsVerifier>)]
     verifier: Arc<dyn JwsVerifier>,
+    /// Clock used for temporal claims; readings are clamped to `SystemTime`'s range.
+    #[builder(
+        default = Arc::<PlatformClock>::default(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    clock: Arc<dyn Clock>,
     /// Check on the `iss` claim. Defaults to [`ClaimCheck::NoCheck`] — see the
     /// [Warning](Self#warning). A plain string means "present and equal".
     #[builder(default, into)]
@@ -227,15 +234,30 @@ impl JwtValidator {
     /// # Errors
     ///
     /// Returns a [`JwtValidationError`] if the token is invalid.
-    #[cfg_attr(
-        feature = "tracing",
-        tracing::instrument(name = "huskarl.jwt.validate", level = "trace", skip_all)
-    )]
     pub async fn validate_parsed_jws<C: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         parsed_jwt: ParsedJws<(), C>,
     ) -> Result<ValidatedJwt<C>, JwtValidationError> {
-        let result = self.validate_parsed_inner(parsed_jwt).await;
+        self.validate_parsed_jws_at(parsed_jwt, self.clock.now())
+            .await
+    }
+
+    /// Validates a pre-parsed JWS using the supplied timestamp for every temporal check.
+    /// The timestamp is clamped to the platform's `SystemTime` range.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JwtValidationError`] if the token is invalid.
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "huskarl.jwt.validate", level = "trace", skip_all)
+    )]
+    pub async fn validate_parsed_jws_at<C: for<'de> Deserialize<'de> + Clone + 'static>(
+        &self,
+        parsed_jwt: ParsedJws<(), C>,
+        now: jiff::Timestamp,
+    ) -> Result<ValidatedJwt<C>, JwtValidationError> {
+        let result = self.validate_parsed_inner(parsed_jwt, now).await;
         #[cfg(feature = "tracing")]
         match &result {
             Ok(_) => tracing::trace!(
@@ -254,6 +276,7 @@ impl JwtValidator {
     async fn validate_parsed_inner<C: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         parsed_jwt: ParsedJws<(), C>,
+        now: jiff::Timestamp,
     ) -> Result<ValidatedJwt<C>, JwtValidationError> {
         #[cfg(feature = "tracing")]
         tracing::trace!(
@@ -264,7 +287,7 @@ impl JwtValidator {
             replay_check_enabled = self.jti_checker.is_some(),
             "JWT validation policy"
         );
-        let now = SystemTime::now();
+        let now = crate::time::system_time_from_timestamp_saturating(now);
 
         self.validate_header(&parsed_jwt.header.alg, &parsed_jwt.header.crit)?;
 
@@ -344,6 +367,20 @@ impl JwtValidator {
         &self,
         token: &str,
     ) -> Result<ValidatedJwt<C>, JwtValidationError> {
+        self.validate_at(token, self.clock.now()).await
+    }
+
+    /// Validates a JWT using the supplied timestamp for every temporal check.
+    /// The configured clock is not read.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JwtValidationError`] if the token is invalid.
+    pub async fn validate_at<C: Clone + for<'de> Deserialize<'de> + 'static>(
+        &self,
+        token: &str,
+        now: jiff::Timestamp,
+    ) -> Result<ValidatedJwt<C>, JwtValidationError> {
         let parsed_jwt = parse_compact_jws::<(), serde_json::Value>(token)
             .context(ParseSnafu)
             .inspect_err(|_| {
@@ -354,7 +391,7 @@ impl JwtValidator {
                     "JWT parsing failed"
                 );
             })?;
-        let validated = self.validate_parsed_jws(parsed_jwt).await?;
+        let validated = self.validate_parsed_jws_at(parsed_jwt, now).await?;
         validated
             .try_map_claims(|value| {
                 if std::any::TypeId::of::<C>() == std::any::TypeId::of::<()>() {

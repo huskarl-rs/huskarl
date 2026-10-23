@@ -16,6 +16,7 @@ use crate::core::{
         within_max_age_secs,
     },
     platform::{Duration, SystemTime},
+    time::{Clock, PlatformClock},
 };
 
 /// An `OpenID` Connect ID token: the compact-JWS string exactly as received.
@@ -211,6 +212,12 @@ pub struct IdTokenValidator {
     /// The JWS verifier to use for validating the ID token.
     #[builder(with = |verifier: impl JwsVerifier + 'static| Arc::new(verifier) as Arc<dyn JwsVerifier>)]
     verifier: Arc<dyn JwsVerifier>,
+    /// Clock used for JWT claims and authentication age.
+    #[builder(
+        default = Arc::<PlatformClock>::default(),
+        with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+    )]
+    clock: Arc<dyn Clock>,
     /// The issuer to validate against.
     issuer: String,
     /// The audience to validate against — the client ID this token must be
@@ -314,7 +321,9 @@ impl IdTokenValidator {
         id_token: &IdToken,
         original: &ValidatedJwt<IdTokenClaims>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
-        let refreshed = self.validate_inner(id_token, None).await?;
+        let refreshed = self
+            .validate_inner(id_token, None, self.clock.now())
+            .await?;
         let same_audiences = refreshed.aud.iter().collect::<HashSet<_>>()
             == original.aud.iter().collect::<HashSet<_>>();
         for (claim, matches) in [
@@ -344,7 +353,7 @@ impl IdTokenValidator {
     }
 
     /// Validates `id_token` against this validator's configuration and returns
-    /// its verified claims.
+    /// its verified claims. JWT claims and authentication age share one clock snapshot.
     ///
     /// Pass `expected_nonce` when the authorization request carried a `nonce` —
     /// it is then required to match; otherwise pass `None`.
@@ -363,7 +372,24 @@ impl IdTokenValidator {
         id_token: &IdToken,
         expected_nonce: Option<&str>,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
-        let result = self.validate_inner(id_token, expected_nonce).await;
+        self.validate_at(id_token, expected_nonce, self.clock.now())
+            .await
+    }
+
+    /// Validates an ID token using one timestamp for JWT claims and authentication age.
+    /// The configured clock is not read. Pass `expected_nonce` when the authorization
+    /// request carried a nonce, as for [`Self::validate`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`IdTokenValidationError`] if any configured check fails.
+    pub async fn validate_at(
+        &self,
+        id_token: &IdToken,
+        expected_nonce: Option<&str>,
+        now: jiff::Timestamp,
+    ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
+        let result = self.validate_inner(id_token, expected_nonce, now).await;
         #[cfg(any(feature = "metrics", feature = "tracing"))]
         Self::observe_validation(&result);
         result
@@ -373,6 +399,7 @@ impl IdTokenValidator {
         &self,
         id_token: &IdToken,
         expected_nonce: Option<&str>,
+        now: jiff::Timestamp,
     ) -> Result<ValidatedJwt<IdTokenClaims>, IdTokenValidationError> {
         #[cfg(feature = "tracing")]
         tracing::trace!(
@@ -400,7 +427,7 @@ impl IdTokenValidator {
             .build();
 
         let validated_jwt = jwt_validator
-            .validate::<IdTokenClaims>(id_token.token())
+            .validate_at::<IdTokenClaims>(id_token.token(), now)
             .await
             .context(JwtSnafu)?;
 
@@ -423,7 +450,12 @@ impl IdTokenValidator {
 
             if let Some(auth_time) = validated_jwt.claims.auth_time {
                 ensure!(
-                    within_max_age_secs(SystemTime::now(), auth_time, max_age, self.clock_leeway),
+                    within_max_age_secs(
+                        huskarl_core::time::system_time_from_timestamp_saturating(now),
+                        auth_time,
+                        max_age,
+                        self.clock_leeway
+                    ),
                     AuthTimeTooOldSnafu {
                         auth_time,
                         max_age_secs: max_age.as_secs(),
@@ -651,7 +683,14 @@ mod tests {
         crypto::{signer::JwsSignerSelector, verifier::JwsVerifierPlatform},
         jwt::Jwt,
         platform::Duration,
+        time::{ManualTime, Timer},
     };
+
+    const NOW: u64 = 2_000_000;
+
+    fn test_time() -> ManualTime {
+        ManualTime::new(jiff::Timestamp::new(2_000_000, 0).unwrap())
+    }
 
     const ISS: &str = "https://issuer.example.com";
     const AUD: &str = "client-123";
@@ -672,6 +711,7 @@ mod tests {
     ) {
         let (signer, verifier) = signer_and_verifier().await;
         let validator = IdTokenValidator::builder()
+            .clock(test_time())
             .verifier(verifier)
             .issuer(ISS)
             .audience(AUD)
@@ -767,6 +807,7 @@ mod tests {
     async fn refresh_accepts_reordered_audiences() {
         let (signer, verifier) = signer_and_verifier().await;
         let validator = IdTokenValidator::builder()
+            .clock(test_time())
             .verifier(verifier)
             .issuer(ISS)
             .audience(AUD)
@@ -865,12 +906,7 @@ mod tests {
     async fn refresh_applies_configured_authentication_max_age() {
         let (signer, verifier) = signer_and_verifier().await;
         let claims = IdTokenClaims {
-            auth_time: Some(
-                (SystemTime::now() - Duration::from_hours(1))
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-            ),
+            auth_time: Some(NOW - 3600),
             ..Default::default()
         };
         let original = mint_standard(&signer, claims.clone()).await;
@@ -918,7 +954,8 @@ mod tests {
             .iss(iss.to_string())
             .aud(audiences)
             .maybe_sub(sub.map(str::to_string))
-            .issued_now_expires_after(Duration::from_hours(1))
+            .iat(SystemTime::UNIX_EPOCH + Duration::from_secs(NOW))
+            .exp(SystemTime::UNIX_EPOCH + Duration::from_secs(NOW + 3600))
             .claims(claims)
             .build()
             .to_jws_compact(&*signer.select_signer().await)
@@ -941,6 +978,7 @@ mod tests {
     ) -> IdTokenValidator {
         IdTokenValidator::builder()
             .verifier(verifier)
+            .clock(test_time())
             .issuer(ISS)
             .audience(AUD)
             .maybe_max_age(max_age)
@@ -1009,7 +1047,10 @@ mod tests {
             .iss(ISS)
             .aud(vec![AUD.to_owned()])
             .sub(SUB)
-            .issued_now_expires_after(Duration::from_hours(1))
+            .issued_at_expires_after(
+                SystemTime::UNIX_EPOCH + Duration::from_secs(NOW),
+                Duration::from_hours(1),
+            )
             .claims(IdTokenClaims {
                 nonce: Some("actual".to_owned()),
                 ..IdTokenClaims::default()
@@ -1126,10 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn auth_time_slightly_in_future_is_accepted() {
         let (signer, verifier) = signer_and_verifier().await;
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = NOW;
         let token = mint_standard(
             &signer,
             IdTokenClaims {
@@ -1147,10 +1185,7 @@ mod tests {
     #[tokio::test]
     async fn auth_time_older_than_max_age_is_rejected() {
         let (signer, verifier) = signer_and_verifier().await;
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = NOW;
         let token = mint_standard(
             &signer,
             IdTokenClaims {
@@ -1172,10 +1207,7 @@ mod tests {
     #[tokio::test]
     async fn recent_auth_time_within_max_age_is_accepted() {
         let (signer, verifier) = signer_and_verifier().await;
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = NOW;
         let token = mint_standard(
             &signer,
             IdTokenClaims {
@@ -1205,6 +1237,215 @@ mod tests {
             .validate(&token, None)
             .await
             .expect("overflowing auth_time must not panic");
+    }
+
+    #[rstest]
+    #[case(Duration::ZERO)]
+    #[case(Duration::from_secs(10))]
+    #[tokio::test]
+    async fn authentication_age_boundary_uses_injected_clock(#[case] leeway: Duration) {
+        let (signer, verifier) = signer_and_verifier().await;
+        let time = test_time();
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(NOW),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let validator = IdTokenValidator::builder()
+            .verifier(verifier)
+            .issuer(ISS)
+            .audience(AUD)
+            .clock(Arc::new(time.clone()))
+            .max_age(Duration::from_secs(60))
+            .clock_leeway(leeway)
+            .build();
+        time.advance(
+            (Duration::from_secs(60) + leeway)
+                .checked_sub(Duration::from_nanos(1))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(validator.validate(&token, None).await.is_ok());
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(validator.validate(&token, None).await.is_ok());
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(matches!(
+            validator.validate(&token, None).await,
+            Err(IdTokenValidationError::AuthTimeTooOld {
+                auth_time: NOW,
+                max_age_secs: 60
+            })
+        ));
+    }
+
+    #[derive(Debug)]
+    struct AdvancingVerifier {
+        inner: Arc<dyn JwsVerifier>,
+        time: ManualTime,
+    }
+
+    impl JwsVerifier for AdvancingVerifier {
+        fn key_match(
+            &self,
+            key: &crate::core::crypto::verifier::KeyMatch<'_>,
+        ) -> Option<crate::core::crypto::KeyMatchStrength> {
+            self.inner.key_match(key)
+        }
+
+        fn verify<'a>(
+            &'a self,
+            input: &'a [u8],
+            signature: &'a [u8],
+            key: &'a crate::core::crypto::verifier::KeyMatch<'a>,
+        ) -> crate::core::platform::MaybeSendBoxFuture<
+            'a,
+            Result<(), crate::core::crypto::verifier::VerifyError>,
+        > {
+            Box::pin(async move {
+                self.inner.verify(input, signature, key).await?;
+                self.time.advance(Duration::from_secs(61)).unwrap();
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_age_uses_snapshot_before_signature_verification() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let time = test_time();
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(NOW),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let validator = IdTokenValidator::builder()
+            .verifier(AdvancingVerifier {
+                inner: verifier,
+                time: time.clone(),
+            })
+            .issuer(ISS)
+            .audience(AUD)
+            .clock(time.clone())
+            .max_age(Duration::from_secs(60))
+            .clock_leeway(Duration::ZERO)
+            .build();
+        validator.validate(&token, None).await.unwrap();
+        assert_eq!(
+            Clock::now(&time),
+            Clock::now(&test_time())
+                .checked_add(Duration::from_secs(61))
+                .unwrap()
+        );
+        assert!(matches!(
+            validator.validate(&token, None).await,
+            Err(IdTokenValidationError::AuthTimeTooOld { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn explicit_snapshot_does_not_read_clock() {
+        #[derive(Debug)]
+        struct UnreadClock;
+        impl Clock for UnreadClock {
+            fn now(&self) -> jiff::Timestamp {
+                panic!("explicit validation must not read the clock")
+            }
+        }
+        let (signer, verifier) = signer_and_verifier().await;
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(NOW),
+                nonce: Some("nonce".into()),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let validator = IdTokenValidator::builder()
+            .verifier(verifier)
+            .issuer(ISS)
+            .audience(AUD)
+            .clock(UnreadClock)
+            .max_age(Duration::from_secs(60))
+            .clock_leeway(Duration::ZERO)
+            .build();
+        let now = Clock::now(&test_time());
+        validator
+            .validate_at(&token, Some("nonce"), now)
+            .await
+            .unwrap();
+        assert!(matches!(
+            validator
+                .validate_at(
+                    &token,
+                    Some("nonce"),
+                    now.checked_add(Duration::from_secs(61)).unwrap()
+                )
+                .await,
+            Err(IdTokenValidationError::AuthTimeTooOld { .. })
+        ));
+        assert!(matches!(
+            validator.validate_at(&token, Some("wrong"), now).await,
+            Err(IdTokenValidationError::NonceMismatch)
+        ));
+    }
+
+    #[tokio::test]
+    async fn wall_clock_jumps_affect_jwt_and_authentication_age() {
+        let (signer, verifier) = signer_and_verifier().await;
+        let time = test_time();
+        let initial = Clock::now(&time);
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(NOW),
+                ..IdTokenClaims::default()
+            },
+        )
+        .await;
+        let validator = IdTokenValidator::builder()
+            .verifier(verifier)
+            .issuer(ISS)
+            .audience(AUD)
+            .clock(time.clone())
+            .max_age(Duration::from_secs(60))
+            .clock_leeway(Duration::ZERO)
+            .build();
+        assert!(validator.validate(&token, None).await.is_ok());
+        time.advance_monotonic(Duration::from_hours(24)).unwrap();
+        assert!(validator.validate(&token, None).await.is_ok());
+        let monotonic = Timer::now(&time);
+
+        time.set_wall_time(initial.checked_add(Duration::from_secs(61)).unwrap());
+        assert!(matches!(
+            validator.validate(&token, None).await,
+            Err(IdTokenValidationError::AuthTimeTooOld { .. })
+        ));
+        time.set_wall_time(initial.checked_add(Duration::from_secs(3601)).unwrap());
+        assert!(matches!(
+            validator.validate(&token, None).await,
+            Err(IdTokenValidationError::Jwt {
+                source: JwtValidationError::Expired { .. }
+            })
+        ));
+        time.set_wall_time(initial);
+        assert!(validator.validate(&token, None).await.is_ok());
+        time.set_wall_time(initial.checked_sub(Duration::from_secs(1)).unwrap());
+        assert!(matches!(
+            validator.validate(&token, None).await,
+            Err(IdTokenValidationError::Jwt {
+                source: JwtValidationError::IssuedInFuture { .. }
+            })
+        ));
+        time.set_wall_time(initial);
+        assert!(validator.validate(&token, None).await.is_ok());
+        assert_eq!(Timer::now(&time), monotonic);
     }
 
     /// A non-matching `azp` is surfaced on the claims but never validated, so
@@ -1265,6 +1506,7 @@ mod tests {
         .await;
         IdTokenValidator::builder()
             .verifier(verifier)
+            .clock(test_time())
             .issuer(ISS)
             .audience(AUD)
             .trusted_audiences(vec!["other-aud".to_string()])

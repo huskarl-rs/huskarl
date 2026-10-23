@@ -30,6 +30,7 @@ kms = ["dep:google-cloud-kms-v1", "dep:google-cloud-gax", "dep:p256", "dep:p384"
 secretmanager = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax", "dep:futures-util"]
 
 [dependencies]
+jiff = { workspace = true }
 tracing = { workspace = true, optional = true }
 huskarl-core = { workspace = true }
 

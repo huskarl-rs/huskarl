@@ -15,6 +15,7 @@ use crate::{
     },
     platform::{Duration, SystemTime, SystemTimeError},
     secrets::SecretString,
+    time::{Clock, PlatformClock},
 };
 
 /// The cause of a JWT construction failure.
@@ -47,6 +48,9 @@ where
     ExtraHeaders: Serialize + Clone,
     Claims: Serialize + Clone,
 {
+    // Retain failed expiry arithmetic until signing-input validation, like pre-epoch times.
+    #[builder(field)]
+    expiry_overflow: bool,
     /// The type (`typ`) of the JWT.
     #[builder(default = "JWT", into)]
     pub typ: Cow<'a, str>,
@@ -101,23 +105,19 @@ where
         self.aud(vec![audience.into()])
     }
 
-    /// Sets the issued value for the JWT to the current time.
-    ///
-    /// # Panics
-    ///
-    /// This call panics if the reported time is before the epoch.
+    /// Sets `iat` from the platform clock. Use [`Self::iat`] for an explicit time.
     pub fn issued_now(self) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetIat<S>>
     where
         S::Iat: jwt_builder::IsUnset,
     {
-        self.iat(crate::platform::SystemTime::now())
+        self.iat(crate::time::system_time_from_timestamp_saturating(
+            PlatformClock.now(),
+        ))
     }
 
     /// Sets the issued value for the JWT to the current time, and the expiry time to the current time plus a specified duration.
     ///
-    /// # Panics
-    ///
-    /// This call panics if the reported time is before the epoch.
+    /// An out-of-range expiry is reported as an error when serializing the JWT.
     pub fn issued_now_expires_after(
         self,
         after: Duration,
@@ -126,8 +126,10 @@ where
         S::Iat: jwt_builder::IsUnset,
         S::Exp: jwt_builder::IsUnset,
     {
-        let now = crate::platform::SystemTime::now();
-        self.iat(now).exp(now + after)
+        self.issued_at_expires_after(
+            crate::time::system_time_from_timestamp_saturating(PlatformClock.now()),
+            after,
+        )
     }
 
     /// Sets `iat`, `nbf`, and `exp` from a single captured timestamp.
@@ -135,9 +137,7 @@ where
     /// Equivalent to [`issued_now_expires_after`](Self::issued_now_expires_after) but also sets
     /// `nbf` to the same `now` value, ensuring `iat == nbf` without a race between calls.
     ///
-    /// # Panics
-    ///
-    /// This call panics if the reported time is before the epoch.
+    /// An out-of-range expiry is reported as an error when serializing the JWT.
     pub fn issued_now_not_before_now_expires_after(
         self,
         after: Duration,
@@ -152,8 +152,48 @@ where
         S::Exp: jwt_builder::IsUnset,
         S::Nbf: jwt_builder::IsUnset,
     {
-        let now = crate::platform::SystemTime::now();
-        self.iat(now).exp(now + after).nbf(now)
+        self.issued_at_not_before_expires_after(
+            crate::time::system_time_from_timestamp_saturating(PlatformClock.now()),
+            after,
+        )
+    }
+
+    /// Sets `iat` and `exp` from an explicit wall-clock timestamp.
+    ///
+    /// An out-of-range expiry is reported as an error when serializing the JWT.
+    pub fn issued_at_expires_after(
+        mut self,
+        now: SystemTime,
+        after: Duration,
+    ) -> JwtBuilder<'a, ExtraHeaders, Claims, jwt_builder::SetExp<jwt_builder::SetIat<S>>>
+    where
+        S::Iat: jwt_builder::IsUnset,
+        S::Exp: jwt_builder::IsUnset,
+    {
+        let expiry = now.checked_add(after);
+        self.expiry_overflow = expiry.is_none();
+        self.iat(now).maybe_exp(expiry)
+    }
+
+    /// Sets `iat` and `nbf` to the supplied timestamp and `exp` to that time plus `after`.
+    ///
+    /// An out-of-range expiry is reported as an error when serializing the JWT.
+    pub fn issued_at_not_before_expires_after(
+        self,
+        now: SystemTime,
+        after: Duration,
+    ) -> JwtBuilder<
+        'a,
+        ExtraHeaders,
+        Claims,
+        jwt_builder::SetNbf<jwt_builder::SetExp<jwt_builder::SetIat<S>>>,
+    >
+    where
+        S::Iat: jwt_builder::IsUnset,
+        S::Exp: jwt_builder::IsUnset,
+        S::Nbf: jwt_builder::IsUnset,
+    {
+        self.issued_at_expires_after(now, after).nbf(now)
     }
 
     /// Sets additional claims for the JWT, replacing the current claims type parameter.
@@ -210,8 +250,9 @@ where
     ///
     /// # Errors
     ///
-    /// Returns a non-retryable error if the JWT cannot be serialized to JSON,
-    /// or propagates the signer's error if signing fails.
+    /// Returns a non-retryable error if expiry arithmetic overflowed, a timestamp
+    /// is before the epoch, or the JWT cannot be serialized to JSON. Propagates
+    /// the signer's error if signing fails.
     pub async fn to_jws_compact(
         &self,
         signer: &(impl JwsSigner + ?Sized),
@@ -233,6 +274,15 @@ where
         alg: &str,
         kid: Option<&str>,
     ) -> Result<String, JwsSigningInputError> {
+        if self.expiry_overflow {
+            // TODO(next breaking release): add a dedicated ExpiryOverflow variant.
+            return Err(JwsSigningInputError::EncodeClaims {
+                source: <serde_json::Error as serde::ser::Error>::custom(
+                    "JWT expiry is outside the representable timestamp range",
+                ),
+            });
+        }
+
         let jwt_header = JwtHeader {
             alg: Cow::Borrowed(alg),
             typ: Some(Cow::Borrowed(&self.typ)),
@@ -300,6 +350,87 @@ mod tests {
     }
 
     use std::borrow::Cow;
+
+    #[test]
+    fn explicit_issuance_preserves_subsecond_timestamp_and_lifetime() {
+        use crate::platform::Duration;
+
+        let now = SystemTime::UNIX_EPOCH + Duration::new(1_000, 123);
+        let lifetime = Duration::new(60, 456);
+        let jwt = Jwt::builder()
+            .issued_at_expires_after(now, lifetime)
+            .claims(())
+            .build();
+        assert_eq!(jwt.iat, Some(now));
+        assert_eq!(jwt.exp, Some(now + lifetime));
+        assert_eq!(jwt.nbf, None);
+        let jwt = Jwt::builder()
+            .issued_at_not_before_expires_after(now, lifetime)
+            .claims(())
+            .build();
+        assert_eq!(jwt.iat, Some(now));
+        assert_eq!(jwt.nbf, jwt.iat);
+        assert_eq!(jwt.exp, Some(now + lifetime));
+    }
+
+    #[test]
+    fn pre_epoch_issuance_fails_when_serializing() {
+        let jwt = Jwt::builder()
+            .issued_at_not_before_expires_after(
+                SystemTime::UNIX_EPOCH - crate::platform::Duration::from_secs(1),
+                crate::platform::Duration::from_secs(60),
+            )
+            .claims(())
+            .build();
+        assert!(matches!(
+            jwt.generate_jwt_signing_input("ES256", None),
+            Err(super::JwsSigningInputError::Time { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn expiry_overflow_is_rejected_before_signing() {
+        use crate::platform::Duration;
+
+        #[derive(Debug)]
+        struct MustNotSign;
+        impl JwsSigner for MustNotSign {
+            fn jws_algorithm(&self) -> Cow<'_, str> {
+                "ES256".into()
+            }
+            fn key_id(&self) -> Option<Cow<'_, str>> {
+                None
+            }
+            fn sign<'a>(&'a self, _: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+                panic!("invalid expiry must be rejected before signing")
+            }
+        }
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let without_nbf = Jwt::builder()
+            .issued_at_expires_after(now, Duration::MAX)
+            .claims(())
+            .build();
+        let with_nbf = Jwt::builder()
+            .issued_at_not_before_expires_after(now, Duration::MAX)
+            .extra_headers(serde_json::json!({"custom": true}))
+            .claims(serde_json::json!({"scope": "test"}))
+            .build();
+        assert!(matches!(
+            without_nbf.generate_jwt_signing_input("ES256", None),
+            Err(super::JwsSigningInputError::EncodeClaims { .. })
+        ));
+        assert!(matches!(
+            with_nbf.clone().generate_jwt_signing_input("ES256", None),
+            Err(super::JwsSigningInputError::EncodeClaims { .. })
+        ));
+        for err in [
+            without_nbf.to_jws_compact(&MustNotSign).await.unwrap_err(),
+            with_nbf.to_jws_compact(&MustNotSign).await.unwrap_err(),
+        ] {
+            assert_eq!(err.retry_advice(), crate::RetryAdvice::No);
+            assert!(format!("{err:#}").contains("JWT expiry is outside"));
+        }
+    }
 
     #[tokio::test]
     async fn to_jws_compact_basic() {

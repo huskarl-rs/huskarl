@@ -69,11 +69,12 @@ pub async fn main() -> Result<(), snafu::Whatever> {
         .parse()
         .whatever_context("Invalid resource URI")?;
     let dpop_proof = resource_server_dpop
-        .proof(
+        .proof_at(
             &Method::GET,
             &resource_uri,
             dpop_token.token(),
             dpop_token.jkt(),
+            grant.clock().now(),
         )
         .await
         .whatever_context("Failed to create DPoP proof")?;

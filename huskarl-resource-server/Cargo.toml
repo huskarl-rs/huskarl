@@ -27,6 +27,7 @@ default = ["default-jws-verifier-platform"]
 default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypto-webcrypto"]
 
 [dependencies]
+jiff = { workspace = true }
 tracing = { workspace = true, optional = true }
 huskarl-core = { workspace = true }
 

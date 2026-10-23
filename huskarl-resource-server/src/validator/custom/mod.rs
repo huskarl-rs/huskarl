@@ -30,6 +30,7 @@ use crate::{
         },
         platform::MaybeSendSync,
         server_metadata::AuthorizationServerMetadata,
+        time::{Clock, PlatformClock},
     },
     validator::{
         ValidationResult,
@@ -47,6 +48,9 @@ use crate::{
 /// Use [`AccessTokenValidationRules`] to configure which claims are required and how
 /// they are validated. For RFC 9068-compliant authorization servers, prefer
 /// [`crate::validator::rfc9068::Rfc9068Validator`].
+///
+/// Each request uses one clock snapshot for access-token, `DPoP` proof, and nonce
+/// validation, including when signature verification awaits key retrieval.
 pub struct CustomValidator<Claims = ()> {
     inner: ValidatorInner,
     authorization_server: Option<String>,
@@ -58,20 +62,33 @@ pub struct CustomValidator<Claims = ()> {
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_builder::State>
     CustomValidatorBuilder<Claims, S>
 {
+    /// Factory for creating JWS verifiers. Its clock configuration is preserved.
+    pub fn jws_verifier_factory(
+        self,
+        factory: impl JwsVerifierFactory + 'static,
+    ) -> CustomValidatorBuilder<Claims, custom_validator_builder::SetJwsVerifierFactory<S>>
+    where
+        S::JwsVerifierFactory: custom_validator_builder::IsUnset,
+    {
+        self.jws_verifier_factory_internal(Some(Arc::new(factory)))
+    }
+
     /// Uses the authorization server's JWKS URI to verify signatures with a
     /// default [`JwksSource`] backed by this HTTP client.
     ///
+    /// The source inherits this builder's clock when `build()` is called.
     /// This sets the same field as `jws_verifier_factory`; choose one of the two.
     /// For custom refresh or startup settings, pass a configured [`JwksSource`]
     /// to `jws_verifier_factory` instead.
     pub fn jwks_source(
-        self,
+        mut self,
         http_client: impl HttpClient + 'static,
     ) -> CustomValidatorBuilder<Claims, custom_validator_builder::SetJwsVerifierFactory<S>>
     where
         S::JwsVerifierFactory: custom_validator_builder::IsUnset,
     {
-        self.jws_verifier_factory(JwksSource::builder().http_client(http_client).build())
+        self.jwks_http_client = Some(Arc::new(http_client));
+        self.jws_verifier_factory_internal(None)
     }
 
     /// _**Optional** ([Some](Self::token_jti_checker()) / [Option](Self::maybe_token_jti_checker()) setters)._
@@ -101,6 +118,57 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: custom_validator_bu
 
 #[bon::bon]
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims> {
+    /// Creates a validator using the platform clock.
+    ///
+    /// Use the builder to configure a custom clock.
+    ///
+    /// # Errors
+    /// Returns an error if the verifier factory cannot build a verifier.
+    #[allow(clippy::too_many_arguments)] // Preserve the published positional signature.
+    pub async fn new(
+        rules: AccessTokenValidationRules,
+        allowed_signing_algorithms: Option<Vec<String>>,
+        allowed_dpop_signing_algorithms: Option<Vec<String>>,
+        max_dpop_proof_age: Duration,
+        clock_leeway: Duration,
+        require_dpop: bool,
+        require_mtls: bool,
+        authorization_server: Option<String>,
+        jwks_uri: Option<EndpointUrl>,
+        jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
+        token_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
+        dpop_nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
+        dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
+        jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
+        token_header: HeaderName,
+        realm: Option<String>,
+        resource_metadata: Option<String>,
+    ) -> Result<Self, Error> {
+        // TODO(next breaking release): remove this positional compatibility constructor.
+        Self::new_with_clock(
+            None,
+            rules,
+            allowed_signing_algorithms,
+            allowed_dpop_signing_algorithms,
+            max_dpop_proof_age,
+            Arc::new(PlatformClock),
+            clock_leeway,
+            require_dpop,
+            require_mtls,
+            authorization_server,
+            jwks_uri,
+            Some(jws_verifier_factory),
+            token_jti_checker,
+            dpop_nonce_checker,
+            dpop_jti_checker,
+            jws_verifier_platform,
+            token_header,
+            realm,
+            resource_metadata,
+        )
+        .await
+    }
+
     /// Creates a new [`CustomValidator`].
     ///
     /// Construction calls the verifier factory. With `jwks_source`, this fetches
@@ -114,10 +182,14 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
     /// verifier — for example, when the JWKS cannot be fetched or parsed.
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
+        builder_type(name = CustomValidatorBuilder),
+        state_mod(name = custom_validator_builder),
+        finish_fn(name = "build"),
         generics(setters(vis = "", name = "with_{}_internal")),
         on(String, into)
     )]
-    pub async fn new(
+    pub async fn new_with_clock(
+        #[builder(field)] jwks_http_client: Option<Arc<dyn HttpClient>>,
         /// Validation rules for the access token.
         #[builder(field)]
         rules: AccessTokenValidationRules,
@@ -134,6 +206,12 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// Maximum accepted age of a `DPoP` proof. Defaults to 1 minute.
         #[builder(default = Duration::from_mins(1))]
         max_dpop_proof_age: Duration,
+        /// Clock used for access-token and `DPoP` proof validation.
+        #[builder(
+            default = Arc::<PlatformClock>::default(),
+            with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+        )]
+        clock: Arc<dyn Clock>,
         /// Clock-skew leeway for the temporal checks on access tokens and
         /// `DPoP` proofs (RFC 9449 §11.1). Defaults to
         /// [`DEFAULT_CLOCK_LEEWAY`](super::DEFAULT_CLOCK_LEEWAY).
@@ -158,8 +236,8 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// JWKS URI for fetching the authorization server's signing keys.
         jwks_uri: Option<EndpointUrl>,
         /// Factory for creating JWS verifiers for access token signature verification.
-        #[builder(with = |factory: impl JwsVerifierFactory + 'static| Arc::new(factory) as Arc<dyn JwsVerifierFactory>)]
-        jws_verifier_factory: Arc<dyn JwsVerifierFactory>,
+        #[builder(required, setters(name = "jws_verifier_factory_internal", vis = ""))]
+        jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
         /// Access token JTI uniqueness checker.
         #[builder(
             with = |checker: impl JtiUniquenessChecker + 'static| Arc::new(checker) as Arc<dyn JtiUniquenessChecker>,
@@ -199,12 +277,29 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
         /// document (RFC 9728 §5.1).
         resource_metadata: Option<String>,
     ) -> Result<Self, Error> {
+        let jws_verifier_factory = jwks_http_client
+            .map(|http_client| {
+                Arc::new(
+                    JwksSource::builder()
+                        .http_client(http_client)
+                        .clock(clock.clone())
+                        .build(),
+                ) as Arc<dyn JwsVerifierFactory>
+            })
+            .or(jws_verifier_factory);
+        let jws_verifier_factory = jws_verifier_factory.ok_or_else(|| {
+            Error::new(
+                crate::core::RetryAdvice::No,
+                "a JWS verifier factory or JWKS source is required",
+            )
+        })?;
         let jws_verifier = jws_verifier_factory
             .build(jwks_uri.as_ref(), jws_verifier_platform.clone())
             .await?;
 
         let jwt_validator = JwtValidator::builder()
             .verifier(jws_verifier)
+            .clock(clock.clone())
             .aud(rules.aud)
             .maybe_allowed_algorithms(allowed_signing_algorithms)
             .typ(rules.typ)
@@ -219,11 +314,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> CustomValidator<Claims
 
         Ok(Self {
             inner: ValidatorInner {
+                clock: clock.clone(),
                 jwt_validator,
                 dpop_binding_checker: DPoPBindingChecker {
                     dpop_nonce_checker,
                     proof_validator: DPoPProofValidator::builder()
                         .jws_verifier_platform(jws_verifier_platform)
+                        .clock(clock)
                         .max_proof_age(max_dpop_proof_age)
                         .clock_leeway(clock_leeway)
                         .maybe_allowed_signing_algorithms(allowed_dpop_signing_algorithms)

@@ -198,10 +198,10 @@ pub(super) fn check_temporal(
     iat: Option<SystemTime>,
 ) -> Result<(), JwtValidationError> {
     if let Some(expiration) = exp {
-        // Expired iff `now > expiration + leeway`.
+        // RFC 7519 §4.1.4: expired iff `now >= expiration + leeway`.
         ensure!(
             !now.duration_since(expiration)
-                .is_ok_and(|past| past > clock_leeway),
+                .is_ok_and(|past| past >= clock_leeway),
             ExpiredSnafu { expiration, now }
         );
     }

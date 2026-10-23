@@ -115,6 +115,10 @@ impl<T: ClientAuthentication + ?Sized> ClientAuthentication for Arc<T> {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Builder)]
 pub struct AuthenticationContext<'a> {
+    /// Request timestamp captured by the caller, used for assertion issuance.
+    // TODO(next breaking release): remove the default and require an explicit timestamp.
+    #[builder(default = crate::time::Clock::now(&crate::time::PlatformClock))]
+    pub now: jiff::Timestamp,
     /// The client being authenticated.
     pub client_id: &'a str,
     /// The exact endpoint the request is sent to — the token endpoint for
@@ -172,6 +176,7 @@ mod tests {
         let params = auth
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("my-client")
                     .target_endpoint(&uri)
                     .token_endpoint(&uri)

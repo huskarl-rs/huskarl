@@ -5,11 +5,14 @@
 //! parsing shared across grants.
 
 mod grant;
+mod receipt;
 pub(crate) mod token_response;
 
 pub(crate) mod form;
 
 pub use grant::OAuth2ExchangeGrant;
+pub(crate) use grant::authentication_params_at;
+pub use receipt::TokenReceipt;
 pub use token_response::{
     InvalidTokenResponse, RawTokenResponse, RawTokenResponseBuilder, TokenResponse,
     TokenResponseContext, TokenResponseContextBuilder,
@@ -68,3 +71,24 @@ pub(crate) fn openid_code_hash(code: &str) -> String {
 
 #[cfg(all(test, not(feature = "experimental-oidc-key-binding")))]
 mod key_binding_disabled_tests;
+
+/// Resolve a response lifetime using one receipt-time snapshot. Reject values
+/// outside either the clock's timestamp range or the platform's `SystemTime` range.
+pub(crate) fn response_expiry(
+    received_at: jiff::Timestamp,
+    expires_in: u64,
+) -> Result<crate::core::platform::SystemTime, crate::core::Error> {
+    use crate::core::{
+        Error, RetryAdvice,
+        time::{Duration, TimeOverflow},
+    };
+
+    received_at
+        .checked_add(Duration::from_secs(expires_in))
+        .map_err(|_| TimeOverflow)
+        .and_then(crate::core::time::system_time_from_timestamp)
+        .map_err(|source| Error::new(RetryAdvice::No, source))
+}
+
+#[cfg(test)]
+mod tests;

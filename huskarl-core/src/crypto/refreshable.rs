@@ -17,7 +17,8 @@ use arc_swap::ArcSwap;
 
 use crate::{
     error::Error,
-    platform::{Duration, Instant, MaybeSendFuture, MaybeSendSync},
+    platform::{Duration, MaybeSendFuture, MaybeSendSync},
+    time::{MonotonicInstant, PlatformTimer, Timer},
 };
 
 /// Object-safe wrapper for a `MaybeSendSync` factory closure.
@@ -226,9 +227,9 @@ pub(crate) enum GatedRefresh {
 struct RefreshTimestamps {
     /// When a value last loaded successfully. `None` = never (cold seed): reads as
     /// infinitely stale and selects the cold-backoff regime.
-    last_refreshed: Option<Instant>,
-    last_failed_refresh: Option<Instant>,
-    last_refresh_attempt: Option<Instant>,
+    last_refreshed: Option<MonotonicInstant>,
+    last_failed_refresh: Option<MonotonicInstant>,
+    last_refresh_attempt: Option<MonotonicInstant>,
     /// Consecutive failures while cold; escalates the cold backoff, reset on success.
     consecutive_cold_failures: u32,
 }
@@ -237,6 +238,7 @@ struct RefreshTimestamps {
 pub(crate) struct ScheduledRefreshable<V> {
     inner: Refreshable<V>,
     metrics_name: Option<String>,
+    timer: Arc<dyn Timer>,
     ttl: Duration,
     failure_backoff: Duration,
     min_refresh_interval: Duration,
@@ -296,8 +298,11 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         fallback: Option<V>,
         /// Stable source name for refresh metrics (requires the metrics feature).
         metrics_name: Option<String>,
+        /// Timer used for refresh scheduling.
+        #[builder(default = Arc::<PlatformTimer>::default())]
+        timer: Arc<dyn Timer>,
     ) -> Result<Self, Error> {
-        let now = Instant::now();
+        let now = timer.now();
         let (initial, timestamps) = match (factory().await, fallback) {
             (Ok(value), _) => (
                 value,
@@ -326,6 +331,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
         Ok(Self {
             inner: Refreshable::from_seed(initial, factory),
             metrics_name,
+            timer,
             ttl,
             failure_backoff,
             min_refresh_interval,
@@ -351,7 +357,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// Does **not** consider the TTL — that is a *staleness* bound, not an
     /// attempt-permission. See [`should_refresh_stale`](Self::should_refresh_stale)
     /// versus the miss path's under-lock [`claim_refresh_attempt`](Self::claim_refresh_attempt).
-    fn policy_permits_attempt(&self, now: Instant, ts: &RefreshTimestamps) -> bool {
+    fn policy_permits_attempt(&self, now: MonotonicInstant, ts: &RefreshTimestamps) -> bool {
         // Cold: no value has ever loaded, so every request is failing now — recover
         // far more urgently than the warm `failure_backoff`/`min_refresh_interval`,
         // which assume a good value is still being served. The first retry waits
@@ -396,7 +402,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     /// attempt. Drives [`poll_refresh_ahead`](Self::poll_refresh_ahead); stale
     /// values remain usable until a refresh succeeds.
     fn should_refresh_stale(&self) -> bool {
-        let now = Instant::now();
+        let now = self.timer.now();
         let ts = self
             .timestamps
             .lock()
@@ -431,7 +437,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
             outcome = if success { "success" } else { "error" },
             "Scheduled crypto refresh completed"
         );
-        let now = Instant::now();
+        let now = self.timer.now();
         let mut ts = self
             .timestamps
             .lock()
@@ -489,7 +495,7 @@ impl<V: std::fmt::Debug + MaybeSendSync + 'static> ScheduledRefreshable<V> {
     // Claiming the attempt before the factory runs means a cancelled warm fetch
     // still counts against `min_refresh_interval`.
     fn claim_refresh_attempt(&self, ttl_gated: bool) -> bool {
-        let now = Instant::now();
+        let now = self.timer.now();
         let mut ts = self
             .timestamps
             .lock()
@@ -619,6 +625,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::time::ManualTime;
 
     /// A factory that counts how many times it has been invoked and returns that
     /// count as the value, so a test can assert exactly how many reloads ran.
@@ -640,6 +647,7 @@ mod tests {
         failure_backoff: Duration,
     ) -> ScheduledRefreshable<usize> {
         ScheduledRefreshable::builder()
+            .timer(Arc::new(ManualTime::default()))
             .factory(counting_factory(calls))
             .ttl(ttl)
             .min_refresh_interval(min_refresh_interval)
@@ -809,6 +817,7 @@ mod tests {
     async fn queued_misses_do_not_hammer_failing_upstream() {
         let calls = Arc::new(AtomicUsize::new(0));
         let sr = ScheduledRefreshable::builder()
+            .timer(Arc::new(ManualTime::default()))
             .factory(failing_after_first(calls.clone()))
             .ttl(Duration::from_hours(1))
             .min_refresh_interval(Duration::from_hours(1))
@@ -848,6 +857,7 @@ mod tests {
     async fn queued_waiters_blocked_by_failure_backoff_under_lock() {
         let calls = Arc::new(AtomicUsize::new(0));
         let sr = ScheduledRefreshable::builder()
+            .timer(Arc::new(ManualTime::default()))
             .factory(failing_after_first(calls.clone()))
             .ttl(Duration::from_hours(1))
             .min_refresh_interval(Duration::ZERO)
@@ -1054,6 +1064,7 @@ mod tests {
     async fn cold_start_seeds_then_recovers() {
         let calls = Arc::new(AtomicUsize::new(0));
         let sr = ScheduledRefreshable::builder()
+            .timer(Arc::new(ManualTime::default()))
             .factory(ok_after_first_failure(calls))
             .cold_backoff(Duration::ZERO) // no wait between cold retries in the test
             .fallback(999_usize)
@@ -1080,6 +1091,7 @@ mod tests {
     async fn cold_backoff_gates_the_first_retry() {
         let calls = Arc::new(AtomicUsize::new(0));
         let sr = ScheduledRefreshable::builder()
+            .timer(Arc::new(ManualTime::default()))
             .factory(ok_after_first_failure(Arc::clone(&calls)))
             .cold_backoff(Duration::from_secs(10)) // long enough to block an immediate retry
             .fallback(999_usize)
@@ -1110,6 +1122,7 @@ mod tests {
     async fn no_fallback_keeps_initial_failure_fatal() {
         let calls = Arc::new(AtomicUsize::new(0));
         let result = ScheduledRefreshable::builder()
+            .timer(Arc::new(ManualTime::default()))
             .factory(ok_after_first_failure(calls))
             .build()
             .await;
@@ -1301,5 +1314,173 @@ mod tests {
             assert!(sr.try_refresh_on_miss().await);
             assert_eq!(capture.total(), 0);
         }
+    }
+
+    #[tokio::test]
+    async fn ttl_boundary_ignores_wall_clock_jumps() {
+        let time = ManualTime::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(counting_factory(calls.clone()))
+            .timer(Arc::new(time.clone()))
+            .ttl(Duration::from_secs(10))
+            .min_refresh_interval(Duration::ZERO)
+            .build()
+            .await
+            .unwrap();
+
+        crate::time::test_support::assert_wall_jumps_ignored(&time, async || {
+            assert!(!sr.refresh_if_stale().await);
+            sr.poll_refresh_ahead().await;
+        })
+        .await;
+        time.advance_monotonic(Duration::from_secs(10) - Duration::from_nanos(1))
+            .unwrap();
+        assert!(!sr.refresh_if_stale().await);
+        sr.poll_refresh_ahead().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        time.advance_monotonic(Duration::from_nanos(1)).unwrap();
+        assert!(sr.refresh_if_stale().await);
+        assert_eq!(*sr.load_full(), 1);
+
+        // The read path uses the new successful-refresh timestamp too.
+        time.advance_monotonic(Duration::from_secs(10) - Duration::from_nanos(1))
+            .unwrap();
+        sr.poll_refresh_ahead().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        time.advance_monotonic(Duration::from_nanos(1)).unwrap();
+        sr.poll_refresh_ahead().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn successful_and_forced_refreshes_reset_the_rate_limit() {
+        let time = ManualTime::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(counting_factory(calls.clone()))
+            .timer(Arc::new(time.clone()))
+            .min_refresh_interval(Duration::from_secs(10))
+            .build()
+            .await
+            .unwrap();
+
+        assert!(sr.try_refresh_on_miss().await);
+        time.advance(Duration::from_secs(10) - Duration::from_nanos(1))
+            .unwrap();
+        assert!(!sr.try_refresh_on_miss().await);
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(sr.try_refresh_on_miss().await);
+
+        time.advance(Duration::from_secs(5)).unwrap();
+        assert!(sr.refresh().await.unwrap());
+        time.advance(Duration::from_secs(10) - Duration::from_nanos(1))
+            .unwrap();
+        assert!(!sr.try_refresh_on_miss().await);
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(sr.try_refresh_on_miss().await);
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+    }
+
+    #[rstest::rstest]
+    #[case::backoff_is_longer(10, 30)]
+    #[case::rate_limit_is_longer(30, 10)]
+    #[tokio::test]
+    async fn failed_refresh_waits_for_both_policy_bounds(
+        #[case] min_interval_secs: u64,
+        #[case] backoff_secs: u64,
+    ) {
+        let time = ManualTime::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sr = ScheduledRefreshable::builder()
+            .factory(failing_after_first(calls.clone()))
+            .timer(Arc::new(time.clone()))
+            .ttl(Duration::ZERO)
+            .min_refresh_interval(Duration::from_secs(min_interval_secs))
+            .failure_backoff(Duration::from_secs(backoff_secs))
+            .build()
+            .await
+            .unwrap();
+
+        assert!(!sr.try_refresh_on_miss().await);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        crate::time::test_support::assert_wall_jumps_ignored(&time, async || {
+            assert!(!sr.try_refresh_on_miss().await);
+            sr.poll_refresh_ahead().await;
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+        })
+        .await;
+        let wait = Duration::from_secs(min_interval_secs.max(backoff_secs));
+        time.advance_monotonic(wait.checked_sub(Duration::from_nanos(1)).unwrap())
+            .unwrap();
+        assert!(!sr.refresh_if_stale().await);
+        sr.poll_refresh_ahead().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        time.advance_monotonic(Duration::from_nanos(1)).unwrap();
+        sr.poll_refresh_ahead().await;
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            *sr.load_full(),
+            0,
+            "failed reload retains the last good value"
+        );
+        assert!(!sr.try_refresh_on_miss().await);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "failure restarts the backoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn cold_backoff_doubles_caps_and_recovers() {
+        let time = ManualTime::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let sr = ScheduledRefreshable::builder()
+            .factory(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async move {
+                    if n < 3 {
+                        Err(Error::new(
+                            crate::error::RetryAdvice::RETRY,
+                            "upstream down",
+                        ))
+                    } else {
+                        Ok(n)
+                    }
+                })
+            })
+            .timer(Arc::new(time.clone()))
+            .cold_backoff(Duration::from_secs(2))
+            .failure_backoff(Duration::from_secs(5))
+            .min_refresh_interval(Duration::from_secs(20))
+            .fallback(999_usize)
+            .build()
+            .await
+            .unwrap();
+
+        for (index, seconds) in [2, 4, 5].into_iter().enumerate() {
+            assert!(sr.is_cold());
+            time.advance(
+                Duration::from_secs(seconds)
+                    .checked_sub(Duration::from_nanos(1))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(!sr.try_refresh_on_miss().await);
+            assert_eq!(calls.load(Ordering::SeqCst), index + 1);
+            time.advance(Duration::from_nanos(1)).unwrap();
+            assert_eq!(sr.try_refresh_on_miss().await, index == 2);
+            assert_eq!(calls.load(Ordering::SeqCst), index + 2);
+        }
+        assert!(!sr.is_cold());
+        assert_eq!(*sr.load_full(), 3);
+        // Recovery switches from the cold backoff to the warm rate limit.
+        time.advance(Duration::from_secs(20) - Duration::from_nanos(1))
+            .unwrap();
+        assert!(!sr.try_refresh_on_miss().await);
+        time.advance(Duration::from_nanos(1)).unwrap();
+        assert!(sr.try_refresh_on_miss().await);
     }
 }

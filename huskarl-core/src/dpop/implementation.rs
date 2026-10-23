@@ -46,6 +46,7 @@ impl DPoP {
         uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
         code_hash: Option<&'a str>,
+        now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async move {
             // See comment in `update_nonce` for why poison recovery is intentional here.
@@ -65,7 +66,7 @@ impl DPoP {
                 .await
                 .ok_or_else(|| Error::from(DPoPKeyError::NoMatchingKey))?;
 
-            sign_proof(&*signer, method, uri, None, nonce, code_hash).await
+            sign_proof(&*signer, now, method, uri, None, nonce, code_hash).await
         })
     }
 }
@@ -90,24 +91,26 @@ impl AuthorizationServerDPoP for DPoP {
         })
     }
 
-    fn proof<'a>(
+    fn proof_at<'a>(
         &'a self,
         method: &'a Method,
         uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
+        now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
-        self.create_proof(method, uri, dpop_jkt, None)
+        self.create_proof(method, uri, dpop_jkt, None, now)
     }
 
     #[cfg(feature = "experimental-oidc-key-binding")]
-    fn proof_with_code_hash<'a>(
+    fn proof_with_code_hash_at<'a>(
         &'a self,
         method: &'a Method,
         uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
         code_hash: Option<&'a str>,
+        now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
-        self.create_proof(method, uri, dpop_jkt, code_hash)
+        self.create_proof(method, uri, dpop_jkt, code_hash, now)
     }
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
@@ -163,23 +166,25 @@ impl AuthorizationServerDPoP for SessionKeyedDPoP {
         Box::pin(async { None })
     }
 
-    fn proof<'a>(
+    fn proof_at<'a>(
         &'a self,
         _method: &'a Method,
         _uri: &'a Uri,
         _dpop_jkt: Option<&'a str>,
+        _now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         // Reached only when no per-session key was bound.
         Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
     }
 
     #[cfg(feature = "experimental-oidc-key-binding")]
-    fn proof_with_code_hash<'a>(
+    fn proof_with_code_hash_at<'a>(
         &'a self,
         _method: &'a Method,
         _uri: &'a Uri,
         _dpop_jkt: Option<&'a str>,
         _code_hash: Option<&'a str>,
+        _now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         // Reached only when no per-session key was bound.
         Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
@@ -213,12 +218,13 @@ impl super::sealed::Sealed for SessionKeyedResourceDPoP {}
 impl ResourceServerDPoP for SessionKeyedResourceDPoP {
     fn update_nonce(&self, _uri: &Uri, _nonce: String) {}
 
-    fn proof<'a>(
+    fn proof_at<'a>(
         &'a self,
         _method: &'a Method,
         _uri: &'a Uri,
         _access_token: &'a SecretString,
         _dpop_jkt: &'a str,
+        _now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async { Err(Error::from(DPoPKeyError::NoSessionKey)) })
     }
@@ -254,12 +260,13 @@ impl ResourceServerDPoP for ResourceDPoP {
             .insert(origin, Arc::new(nonce));
     }
 
-    fn proof<'a>(
+    fn proof_at<'a>(
         &'a self,
         method: &'a Method,
         uri: &'a Uri,
         access_token: &'a SecretString,
         dpop_jkt: &'a str,
+        now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         Box::pin(async move {
             let origin = origin_from_uri(uri);
@@ -279,6 +286,7 @@ impl ResourceServerDPoP for ResourceDPoP {
 
             sign_proof(
                 &*signer,
+                now,
                 method,
                 uri,
                 Some(access_token.expose_secret()),
@@ -342,6 +350,7 @@ fn origin_from_uri(uri: &Uri) -> Origin {
 
 async fn sign_proof(
     signer: &dyn AsymmetricJwsSigner,
+    now: jiff::Timestamp,
     htm: &Method,
     htu: &Uri,
     token: Option<&str>,
@@ -374,7 +383,7 @@ async fn sign_proof(
     // server's judgment via its iat acceptance window, jti replay tracking, and nonce.
     let jwt = Jwt::builder()
         .typ("dpop+jwt")
-        .issued_now()
+        .iat(crate::time::system_time_from_timestamp_saturating(now))
         .jwk(signer.public_key_jwk().into_owned())
         .claims(extra_claims)
         .build();
@@ -481,6 +490,64 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn proof_timestamps_survive_session_binding_and_resource_conversion() {
+        use crate::time::{Clock, Duration, ManualTime};
+
+        fn claims(proof: &SecretString) -> serde_json::Value {
+            serde_json::from_slice(
+                &BASE64_URL_SAFE_NO_PAD
+                    .decode(proof.expose_secret().split('.').nth(1).unwrap())
+                    .unwrap(),
+            )
+            .unwrap()
+        }
+        let time = ManualTime::new(jiff::Timestamp::new(1_000, 0).unwrap());
+        let jwk = mock_public_jwk();
+        let thumbprint = jwk.thumbprint();
+        let signer = MockAsymmetricJwsSigner { jwk };
+        let fixed = DPoP::builder().signer(signer.clone()).build();
+        let session = SessionKeyedDPoP::new()
+            .with_session_key(Arc::new(signer.clone()))
+            .unwrap();
+        let direct_resource = ResourceDPoP::builder().signer(signer).build();
+        let uri: Uri = "https://example.com/resource".parse().unwrap();
+        let token = SecretString::new("token");
+        for expected in [1_000, 1_010] {
+            for dpop in [&fixed as &dyn AuthorizationServerDPoP, session.as_ref()] {
+                let proof = dpop
+                    .proof_at(&Method::POST, &uri, Some(&thumbprint), time.now())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let parsed = claims(&proof);
+                assert_eq!(parsed["iat"], expected);
+                assert!(parsed.get("exp").is_none());
+                let resource = dpop.to_resource_server_dpop();
+                let proof = resource
+                    .proof_at(&Method::GET, &uri, &token, &thumbprint, time.now())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(claims(&proof)["iat"], expected);
+            }
+            let proof = direct_resource
+                .proof_at(&Method::GET, &uri, &token, &thumbprint, time.now())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(claims(&proof)["iat"], expected);
+            time.advance(Duration::from_secs(10)).unwrap();
+        }
+        time.set_wall_time(jiff::Timestamp::new(-1, 0).unwrap());
+        assert!(
+            fixed
+                .proof_at(&Method::POST, &uri, Some(&thumbprint), time.now())
+                .await
+                .is_err()
+        );
+    }
+
     // --- normalize_uri_for_dpop ---
 
     #[test]
@@ -531,7 +598,12 @@ mod tests {
 
         let uri: Uri = "https://auth.example.com/token?foo=bar".parse().unwrap();
         let result = dpop
-            .proof(&Method::POST, &uri, Some(&thumbprint))
+            .proof_at(
+                &Method::POST,
+                &uri,
+                Some(&thumbprint),
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap();
 
@@ -566,7 +638,10 @@ mod tests {
         let dpop = DPoP::builder().signer(signer).build();
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
 
-        let err = dpop.proof(&Method::POST, &uri, None).await.unwrap_err();
+        let err = dpop
+            .proof_at(&Method::POST, &uri, None, jiff::Timestamp::UNIX_EPOCH)
+            .await
+            .unwrap_err();
         assert!(format!("{err:#}").contains("no JWK thumbprint"), "{err:#}");
     }
 
@@ -579,7 +654,12 @@ mod tests {
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
 
         let err = dpop
-            .proof(&Method::POST, &uri, Some("wrong-thumbprint"))
+            .proof_at(
+                &Method::POST,
+                &uri,
+                Some("wrong-thumbprint"),
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap_err();
         assert!(format!("{err:#}").contains("no matching key"), "{err:#}");
@@ -596,7 +676,12 @@ mod tests {
 
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
         let result = dpop
-            .proof(&Method::POST, &uri, Some(&thumbprint))
+            .proof_at(
+                &Method::POST,
+                &uri,
+                Some(&thumbprint),
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap();
         let token = result.unwrap();
@@ -620,7 +705,13 @@ mod tests {
         let access_token = SecretString::new("my-access-token");
 
         let result = resource_dpop
-            .proof(&Method::GET, &uri, &access_token, &thumbprint)
+            .proof_at(
+                &Method::GET,
+                &uri,
+                &access_token,
+                &thumbprint,
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap();
         let token = result.unwrap();
@@ -649,7 +740,13 @@ mod tests {
         let at = SecretString::new("token");
 
         let result1 = resource_dpop
-            .proof(&Method::GET, &uri1, &at, &thumbprint)
+            .proof_at(
+                &Method::GET,
+                &uri1,
+                &at,
+                &thumbprint,
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -659,7 +756,13 @@ mod tests {
         assert_eq!(claims1["nonce"], "nonce-1");
 
         let result2 = resource_dpop
-            .proof(&Method::GET, &uri2, &at, &thumbprint)
+            .proof_at(
+                &Method::GET,
+                &uri2,
+                &at,
+                &thumbprint,
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -692,7 +795,12 @@ mod tests {
 
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
         let proof = keyed
-            .proof(&Method::POST, &uri, Some(&thumbprint))
+            .proof_at(
+                &Method::POST,
+                &uri,
+                Some(&thumbprint),
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap();
         assert!(proof.is_some());
@@ -717,7 +825,12 @@ mod tests {
 
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
         let proof = b
-            .proof(&Method::POST, &uri, Some(&thumbprint))
+            .proof_at(
+                &Method::POST,
+                &uri,
+                Some(&thumbprint),
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap()
             .unwrap();
@@ -732,7 +845,12 @@ mod tests {
         let session = SessionKeyedDPoP::new();
         let uri: Uri = "https://auth.example.com/token".parse().unwrap();
         let _err = session
-            .proof(&Method::POST, &uri, Some("jkt"))
+            .proof_at(
+                &Method::POST,
+                &uri,
+                Some("jkt"),
+                jiff::Timestamp::UNIX_EPOCH,
+            )
             .await
             .unwrap_err();
     }

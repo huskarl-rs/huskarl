@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::{Engine as _, prelude::BASE64_URL_SAFE_NO_PAD};
 use bytes::Bytes;
+use futures_util::FutureExt as _;
 use http::{HeaderMap, Request, StatusCode};
 use huskarl_crypto_native::{
     NativeVerifierPlatform,
@@ -25,6 +26,7 @@ use crate::{
         jwt::Jwt,
         platform::MaybeSendBoxFuture,
         secrets::{ProvidedSecret, SecretString},
+        time::ManualTime,
     },
     grant::refresh::RefreshGrantParameters,
     token::id_token::IdTokenValidator,
@@ -90,7 +92,7 @@ impl HttpClient for DeviceHttp {
 #[case::bound_confidential(true, true, "dpop+id_token")]
 #[case::ignored_scope(true, true, "JWT")]
 #[case::ordinary_oidc(false, true, "JWT")]
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn device_binding_survives_polling_and_refresh(
     #[case] bound_key: bool,
     #[case] confidential: bool,
@@ -150,10 +152,12 @@ async fn device_binding_survives_polling_and_refresh(
     } else {
         Arc::new(NoAuth)
     };
+    let time = ManualTime::default();
     let grant = DeviceAuthorizationGrant::builder()
         .client_id("client")
         .client_auth(auth)
         .http_client(http.clone())
+        .timer(time.clone())
         .dpop(DPoP::builder().signer(signer.clone()).build())
         .token_endpoint("https://as.example/token".parse().unwrap())
         .device_authorization_endpoint("https://as.example/device".parse().unwrap())
@@ -173,7 +177,19 @@ async fn device_binding_survives_polling_and_refresh(
     );
     *keys.lock().unwrap() = MultiKeySigner::new(replacement, vec![original]);
     signer.refresh().await.unwrap();
-    let response = grant.poll_to_completion(&mut pending, None).await.unwrap();
+    let response = {
+        let mut polling = std::pin::pin!(grant.poll_to_completion(&mut pending, None));
+        // Advance the initial poll delay and the retry after authorization_pending.
+        for _ in 0..2 {
+            assert!(polling.as_mut().now_or_never().is_none());
+            time.advance(Duration::from_secs(5)).unwrap();
+        }
+        polling
+            .as_mut()
+            .now_or_never()
+            .expect("polling completes after two intervals")
+            .unwrap()
+    };
     let validator = IdTokenValidator::builder()
         .verifier(verifier)
         .issuer("https://as.example")

@@ -542,10 +542,13 @@ mod tests {
                 ),
                 "underlying",
             );
-            let from_response =
-                crate::http::FailedResponse::new(http::StatusCode::BAD_REQUEST, &headers)
-                    .expect("not a success")
-                    .into_error(Some(OAuthError::new(*spelling)), "underlying");
+            let from_response = crate::http::FailedResponse::new_at(
+                http::StatusCode::BAD_REQUEST,
+                &headers,
+                jiff::Timestamp::UNIX_EPOCH,
+            )
+            .expect("not a success")
+            .into_error(Some(OAuthError::new(*spelling)), "underlying");
 
             assert_eq!(
                 statusless.retry_advice(),

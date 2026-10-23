@@ -17,7 +17,7 @@ use crate::{
         client_auth::AuthenticationContext,
         dpop::AuthorizationServerDPoP,
         jwt::validator::{JwtValidator, ValidatedJwt},
-        platform::{Duration, SystemTime},
+        platform::SystemTime,
         secrets::SecretString,
     },
     grant::{
@@ -88,16 +88,18 @@ impl AuthorizationCodeGrant {
             all(target_arch = "wasm32", target_os = "wasi", target_env = "p2")
         )
     ))]
+    /// Uses the timer configured on this grant for callback read and result-page deadlines.
     pub async fn complete_on_loopback(
         &self,
         listener: &tokio::net::TcpListener,
         pending_state: &PendingState,
         renderer: Option<loopback::CallbackRenderer>,
     ) -> Result<CompleteOutput, LoopbackError> {
-        loopback::complete_on_loopback(
+        loopback::complete_on_loopback_with_timer(
             listener,
             &pending_state.redirect_uri,
             renderer,
+            self.timer.as_ref(),
             async |complete_input| self.complete(pending_state, complete_input).await,
         )
         .await
@@ -108,11 +110,12 @@ impl AuthorizationCodeGrant {
         payload: AuthorizationPayloadWithClientId<'_>,
     ) -> Result<Option<SecretString>, Error> {
         self.jar
-            .generate_request_object(
+            .generate_request_object_at(
                 self.issuer
                     .as_deref()
                     .unwrap_or(&self.authorization_endpoint.to_string()),
                 payload,
+                self.clock().now(),
             )
             .await
     }
@@ -127,7 +130,8 @@ impl AuthorizationCodeGrant {
     ///
     /// # Errors
     ///
-    /// May return an error if the configuration is invalid, or the PAR endpoint returns an error.
+    /// May return an error if the configuration is invalid, the PAR endpoint returns
+    /// an error, or the response expiry is outside the representable timestamp range.
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(name = "huskarl.grant.start", level = "info", skip_all)
@@ -297,11 +301,13 @@ impl AuthorizationCodeGrant {
 
         let dpop_jkt = payload.rest.dpop_jkt.as_deref();
 
-        let par_response = with_dpop_nonce_retry!({
+        let (par_response, received_at) = with_dpop_nonce_retry!({
+            let now = self.clock().now();
             let mut auth_params = self
                 .client_auth
                 .authentication_context(
                     AuthenticationContext::builder()
+                        .now(now)
                         .client_id(&self.client_id)
                         .target_endpoint(par_url)
                         .maybe_issuer(self.issuer.as_deref())
@@ -327,6 +333,8 @@ impl AuthorizationCodeGrant {
                 &par_body,
                 self.dpop.as_ref(),
                 dpop_jkt,
+                now,
+                self.clock().as_ref(),
             )
             .await
         })
@@ -339,9 +347,7 @@ impl AuthorizationCodeGrant {
 
         // Resolve the relative `expires_in` to an absolute instant here, at
         // receipt — the only moment the anchor is known.
-        let expires_at = SystemTime::now()
-            .checked_add(Duration::from_secs(par_response.expires_in))
-            .unwrap_or_else(SystemTime::now);
+        let expires_at = crate::grant::core::response_expiry(received_at, par_response.expires_in)?;
 
         Ok((
             add_payload_to_uri(&self.authorization_endpoint, push_payload)?,
@@ -506,7 +512,11 @@ impl AuthorizationCodeGrant {
                 .build();
 
             let verified_token = validator
-                .validate(id_token, pending_state.nonce.as_deref())
+                .validate_at(
+                    id_token,
+                    pending_state.nonce.as_deref(),
+                    token.received_at(),
+                )
                 .await
                 .context(ValidatingIdTokenSnafu)?;
 
@@ -587,6 +597,7 @@ impl AuthorizationCodeGrant {
             .ok_or_else(|| Error::from(JarmIssuerNotConfiguredSnafu.build()))?;
 
         let validator = JwtValidator::builder()
+            .clock(self.clock())
             .verifier(verifier)
             .iss(issuer.to_owned())
             .aud(self.client_id.clone())

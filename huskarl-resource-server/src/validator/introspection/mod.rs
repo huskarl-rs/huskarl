@@ -33,6 +33,7 @@ use crate::{
         jwt::{JtiUniquenessChecker, validator::ClaimCheck},
         platform::{Duration, MaybeSendSync},
         server_metadata::{AuthorizationServerMetadata, missing_field},
+        time::{Clock, PlatformClock},
     },
     introspection::TokenIntrospection,
     validator::{
@@ -58,6 +59,10 @@ use crate::{
 /// `jws_verifier_factory`. A URI enables the default JWKS source.
 ///
 /// Supports `DPoP` token binding validation when configured with a `jws_verifier_platform`.
+///
+/// Response JWT, `DPoP` proof, and nonce validation share the response receipt
+/// timestamp, including when signature verification awaits key retrieval.
+/// Client authentication uses a separate snapshot taken before the HTTP call.
 ///
 /// Use [`IntrospectionValidator::builder`] to construct an instance.
 pub struct IntrospectionValidator<Claims = ()> {
@@ -117,6 +122,64 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static, S: introspection_valid
 
 #[bon::bon]
 impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator<Claims> {
+    /// Creates a validator using the platform clock.
+    ///
+    /// Use the builder to configure a custom clock.
+    ///
+    /// # Errors
+    /// Returns an error if the verifier factory cannot build a verifier.
+    #[allow(clippy::too_many_arguments)] // Preserve the published positional signature.
+    pub async fn new(
+        client_id: String,
+        issuer: Option<String>,
+        introspection_endpoint: EndpointUrl,
+        token_endpoint: Option<EndpointUrl>,
+        aud: ClaimCheck,
+        client_auth: Arc<dyn ClientAuthentication>,
+        request_jwt_response: bool,
+        http_client: Arc<dyn HttpClient>,
+        allowed_dpop_signing_algorithms: Option<Vec<String>>,
+        max_dpop_proof_age: Duration,
+        clock_leeway: Duration,
+        require_dpop: bool,
+        require_mtls: bool,
+        jwks_uri: Option<EndpointUrl>,
+        jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
+        dpop_nonce_checker: Option<Arc<dyn DPoPNonceChecker>>,
+        dpop_jti_checker: Option<Arc<dyn JtiUniquenessChecker>>,
+        jws_verifier_factory: Option<Arc<dyn JwsVerifierFactory>>,
+        token_header: HeaderName,
+        realm: Option<String>,
+        resource_metadata: Option<String>,
+    ) -> Result<Self, Error> {
+        // TODO(next breaking release): remove this positional compatibility constructor.
+        Self::new_with_clock(
+            client_id,
+            issuer,
+            introspection_endpoint,
+            token_endpoint,
+            aud,
+            client_auth,
+            request_jwt_response,
+            http_client,
+            allowed_dpop_signing_algorithms,
+            max_dpop_proof_age,
+            Arc::new(PlatformClock),
+            clock_leeway,
+            require_dpop,
+            require_mtls,
+            jwks_uri,
+            jws_verifier_platform,
+            dpop_nonce_checker,
+            dpop_jti_checker,
+            jws_verifier_factory,
+            token_header,
+            realm,
+            resource_metadata,
+        )
+        .await
+    }
+
     /// Creates a new [`IntrospectionValidator`].
     ///
     /// Construction does not introspect a token. If configured, the verifier
@@ -131,10 +194,13 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
     /// verifier.
     #[builder(
         start_fn(vis = "", name = "builder_internal"),
+        builder_type(name = IntrospectionValidatorBuilder),
+        state_mod(name = introspection_validator_builder),
+        finish_fn(name = "build"),
         generics(setters(vis = "", name = "with_{}_internal")),
         on(String, into)
     )]
-    pub async fn new(
+    pub async fn new_with_clock(
         /// The client ID of this resource server, used for authenticating to the introspection
         /// endpoint.
         client_id: String,
@@ -187,6 +253,12 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
         /// Maximum accepted age of a `DPoP` proof. Defaults to 1 minute.
         #[builder(default = Duration::from_mins(1))]
         max_dpop_proof_age: Duration,
+        /// Clock used for introspection response and `DPoP` proof validation.
+        #[builder(
+            default = Arc::<PlatformClock>::default(),
+            with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+        )]
+        clock: Arc<dyn Clock>,
         /// Clock-skew leeway for the temporal checks on `DPoP` proofs and the
         /// RFC 9701 introspection-response JWT (RFC 9449 §11.1). Defaults to
         /// [`DEFAULT_CLOCK_LEEWAY`](super::DEFAULT_CLOCK_LEEWAY).
@@ -264,6 +336,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             jwks_uri.as_ref().map(|_| {
                 Arc::new(
                     JwksSource::builder()
+                        .clock(clock.clone())
                         .http_client(http_client.clone())
                         .build(),
                 ) as Arc<dyn JwsVerifierFactory>
@@ -280,6 +353,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             .maybe_jws_verifier_factory(jws_verifier_factory)
             .jws_verifier_platform(jws_verifier_platform.clone())
             .clock_leeway(clock_leeway)
+            .clock(clock.clone())
             .build()
             .await?;
 
@@ -290,6 +364,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
                 dpop_nonce_checker,
                 proof_validator: DPoPProofValidator::builder()
                     .jws_verifier_platform(jws_verifier_platform)
+                    .clock(clock)
                     .max_proof_age(max_dpop_proof_age)
                     .clock_leeway(clock_leeway)
                     .maybe_allowed_signing_algorithms(allowed_dpop_signing_algorithms)
@@ -446,9 +521,9 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             };
 
         // 2. Introspect (checks active internally)
-        let validated = match self
+        let (validated, received_at) = match self
             .token_introspection
-            .introspect::<_, Claims>(&self.http_client, &access_token)
+            .introspect_with_receipt::<_, Claims>(&self.http_client, &access_token)
             .await
             .context(CallSnafu { token_type })
         {
@@ -470,7 +545,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             );
         }
 
-        // 4. Binding check
+        // 4. Proof and nonce use the same receipt snapshot as the response JWT.
         let (dpop_nonce, binding_result) = check_token_binding(
             token_type,
             validated.cnf.as_ref(),
@@ -481,6 +556,7 @@ impl<Claims: for<'de> Deserialize<'de> + Clone + 'static> IntrospectionValidator
             http_method,
             http_uri,
             client_cert_der,
+            received_at,
         )
         .await;
 

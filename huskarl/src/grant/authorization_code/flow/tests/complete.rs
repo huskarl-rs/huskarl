@@ -196,7 +196,7 @@ async fn rotated_key_at_complete_uses_original(#[case] retain_original: bool) {
 
 /// Serves one canned token-endpoint response.
 struct TokenHttp {
-    body: &'static str,
+    body: String,
 }
 
 impl HttpClient for TokenHttp {
@@ -205,7 +205,7 @@ impl HttpClient for TokenHttp {
         _request: http::Request<Bytes>,
         _idempotency: Idempotency,
     ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
-        let body = Bytes::from_static(self.body.as_bytes());
+        let body = Bytes::copy_from_slice(self.body.as_bytes());
         Box::pin(async move {
             Ok(HttpResponse {
                 status: http::StatusCode::OK,
@@ -219,7 +219,7 @@ impl HttpClient for TokenHttp {
 async fn completing_grant(oidc: Option<bool>, body: &'static str) -> Grant {
     AuthorizationCodeGrant::builder()
         .client_id("client")
-        .http_client(TokenHttp { body })
+        .http_client(TokenHttp { body: body.into() })
         .client_auth(NoAuth)
         .token_endpoint("https://as.example.com/token".parse().unwrap())
         .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
@@ -372,6 +372,13 @@ async fn unsolicited_error_payload_is_rejected_as_state_mismatch(#[case] callbac
 async fn jarm_grant(
     body: &'static str,
 ) -> (Grant, huskarl_crypto_native::asymmetric::signer::PrivateKey) {
+    jarm_grant_with_clock(body, crate::core::time::PlatformClock).await
+}
+
+async fn jarm_grant_with_clock(
+    body: &'static str,
+    clock: impl crate::core::time::Clock + 'static,
+) -> (Grant, huskarl_crypto_native::asymmetric::signer::PrivateKey) {
     use huskarl_crypto_native::{
         NativeVerifierPlatform,
         asymmetric::signer::{GenerateAlgorithm, PrivateKey},
@@ -386,8 +393,9 @@ async fn jarm_grant(
         .unwrap();
 
     let mut grant = AuthorizationCodeGrant::builder()
+        .clock(clock)
         .client_id("client")
-        .http_client(TokenHttp { body })
+        .http_client(TokenHttp { body: body.into() })
         .client_auth(NoAuth)
         .token_endpoint("https://as.example.com/token".parse().unwrap())
         .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
@@ -697,7 +705,8 @@ async fn bound_key_exchange_proofs_and_id_token_type(
         AsymmetricJwsSignerSelector as _, JwsSignerSelector as _, MultiKeySigner,
     };
 
-    let (mut grant, issuer_key) = jarm_grant("").await;
+    let time = crate::core::time::ManualTime::new(jiff::Timestamp::new(2_000_000, 0).unwrap());
+    let (mut grant, issuer_key) = jarm_grant_with_clock("", time.clone()).await;
     let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
     let original_jkt = key.as_private_jwk().public_jwk().thumbprint();
     let original = key.select_asymmetric_signer().await;
@@ -711,7 +720,11 @@ async fn bound_key_exchange_proofs_and_id_token_type(
         .iss("https://as.example.com".to_owned())
         .aud(vec!["client".to_owned()])
         .sub("user".to_owned())
-        .issued_now_expires_after(Duration::from_mins(5))
+        .issued_at_expires_after(
+            crate::core::time::system_time_from_timestamp(crate::core::time::Clock::now(&time))
+                .unwrap(),
+            Duration::from_mins(5),
+        )
         .claims(claims)
         .build()
         .to_jws_compact(&*issuer_key.select_signer().await)
@@ -785,6 +798,7 @@ async fn bound_key_exchange_proofs_and_id_token_type(
     let compact_proofs = std::mem::take(&mut *http.compact_proofs.lock().unwrap());
     let proof_validator =
         huskarl_resource_server::validator::dpop_proof::DPoPProofValidator::builder()
+            .clock(time.clone())
             .jws_verifier_platform(Arc::new(huskarl_crypto_native::NativeVerifierPlatform))
             .build();
     for compact in compact_proofs {
@@ -803,6 +817,7 @@ async fn bound_key_exchange_proofs_and_id_token_type(
         } else {
             assert!(proof.get("c_s256").is_none());
         }
+        assert_eq!(proof["iat"], 2_000_000);
         assert_eq!(proof["htm"], "POST");
         assert_eq!(proof["htu"], "https://as.example.com/token");
         assert!(proof.get("ath").is_none());
@@ -811,4 +826,147 @@ async fn bound_key_exchange_proofs_and_id_token_type(
     assert_eq!(proofs[1]["nonce"], "exchange-nonce");
     assert!(proofs[0]["jti"].is_string());
     assert_ne!(proofs[0]["jti"], proofs[1]["jti"]);
+}
+
+#[tokio::test]
+async fn completion_validates_id_token_at_response_receipt() {
+    use huskarl_crypto_native::{
+        NativeVerifierPlatform,
+        asymmetric::signer::{GenerateAlgorithm, PrivateKey},
+    };
+
+    use crate::{
+        core::{
+            crypto::{
+                signer::JwsSignerSelector,
+                verifier::{JwsVerifier, JwsVerifierPlatform},
+            },
+            jwt::{Jwt, validator::JwtValidationError},
+            time::{Clock, ManualTime},
+        },
+        token::id_token::IdTokenValidationError,
+    };
+
+    let time = ManualTime::new(jiff::Timestamp::new(2_000_000, 0).unwrap());
+    let key = PrivateKey::generate(GenerateAlgorithm::Es256, None).unwrap();
+    let verifier = NativeVerifierPlatform
+        .create_verifier_from_jwk(key.as_private_jwk().public_jwk())
+        .await
+        .unwrap();
+    let id_token = Jwt::builder()
+        .typ("JWT")
+        .iss("https://as.example.com")
+        .audience("client")
+        .sub("user")
+        .iat(huskarl_core::time::system_time_from_timestamp_saturating(
+            time.now(),
+        ))
+        .exp(huskarl_core::time::system_time_from_timestamp_saturating(
+            time.now().checked_add(Duration::from_secs(60)).unwrap(),
+        ))
+        .claims(serde_json::json!({"nonce": "nonce"}))
+        .build()
+        .to_jws_compact(&*key.select_signer().await)
+        .await
+        .unwrap();
+    let factory = move |_: Option<&EndpointUrl>,
+                        _: Arc<dyn JwsVerifierPlatform>|
+          -> MaybeSendBoxFuture<'static, Result<Arc<dyn JwsVerifier>, Error>> {
+        let verifier = verifier.clone();
+        Box::pin(async move { Ok(verifier) })
+    };
+    let grant = AuthorizationCodeGrant::builder().client_id("client").client_auth(NoAuth)
+        .clock(time.clone()).issuer("https://as.example.com")
+        .token_endpoint("https://as.example.com/token".parse().unwrap())
+        .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
+        .redirect_uri("http://127.0.0.1/cb").jws_verifier_factory(factory)
+        .http_client(TokenHttp { body: serde_json::json!({"access_token": "token", "token_type": "bearer", "id_token": id_token.expose_secret()}).to_string() })
+        .build().await.unwrap();
+    let mut pending = pending(true);
+    pending.nonce = Some("nonce".into());
+    let completed = grant.complete(&pending, complete_input()).await.unwrap();
+    assert_eq!(completed.id_token.unwrap().sub.as_deref(), Some("user"));
+
+    let response = grant
+        .exchange(AuthorizationCodeGrantParameters {
+            #[cfg(feature = "experimental-oidc-key-binding")]
+            openid_bound_key_requested: false,
+            dpop_jkt: None,
+            code: "code".into(),
+            pkce_verifier: pending.pkce_verifier.clone(),
+            resource: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(response.received_at(), time.now());
+    time.advance(Duration::from_secs(71)).unwrap();
+    // Time spent after receipt must not change this response's validity.
+    let completed = grant.finalize_id_token(&pending, response).await.unwrap();
+    assert_eq!(completed.id_token.unwrap().sub.as_deref(), Some("user"));
+    // The same token received after expiry must still be rejected.
+    let error = grant
+        .complete(&pending, complete_input())
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error.cause().downcast_ref::<FlowError>(),
+        Some(FlowError::ValidatingIdToken {
+            source: IdTokenValidationError::Jwt {
+                source: JwtValidationError::Expired { .. }
+            }
+        })
+    ));
+}
+
+#[tokio::test]
+async fn jarm_completion_uses_grant_clock_at_expiry_boundary() {
+    use crate::core::{
+        crypto::signer::JwsSignerSelector as _,
+        jwt::{Jwt, validator::JwtValidationError},
+        time::ManualTime,
+    };
+    let issued_at = jiff::Timestamp::new(2_000_000, 0).unwrap();
+    let expiry = issued_at.checked_add(Duration::from_secs(60)).unwrap();
+    let time = ManualTime::new(issued_at);
+    let (grant, signer) = jarm_grant_with_clock(
+        r#"{"access_token":"t","token_type":"bearer"}"#,
+        time.clone(),
+    )
+    .await;
+    let jarm = Jwt::builder()
+        .iss("https://as.example.com")
+        .audience("client")
+        .iat(huskarl_core::time::system_time_from_timestamp_saturating(
+            issued_at,
+        ))
+        .exp(huskarl_core::time::system_time_from_timestamp_saturating(
+            expiry,
+        ))
+        .claims(serde_json::json!({"code": "code", "state": "st"}))
+        .build()
+        .to_jws_compact(&*signer.select_signer().await)
+        .await
+        .unwrap();
+    let input = || {
+        format!("response={}", jarm.expose_secret())
+            .parse::<CompleteInput>()
+            .unwrap()
+    };
+    for reading in [
+        issued_at,
+        expiry.checked_sub(Duration::from_nanos(1)).unwrap(),
+    ] {
+        time.set_wall_time(reading);
+        grant.complete(&pending_jarm(), input()).await.unwrap();
+    }
+    for reading in [expiry, expiry.checked_add(Duration::from_nanos(1)).unwrap()] {
+        time.set_wall_time(reading);
+        let error = grant.complete(&pending_jarm(), input()).await.unwrap_err();
+        assert!(matches!(
+            complete_cause(&error),
+            CompleteError::JarmValidation {
+                source: JwtValidationError::Expired { .. }
+            }
+        ));
+    }
 }

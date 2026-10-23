@@ -616,9 +616,10 @@ mod classification {
     // An OAuth code echoed in a 5xx response is not a server verdict.
     #[test]
     fn an_echoed_code_is_not_counted_as_a_rejection() {
-        let echoed = crate::core::http::FailedResponse::new(
+        let echoed = crate::core::http::FailedResponse::new_at(
             http::StatusCode::SERVICE_UNAVAILABLE,
             &http::HeaderMap::new(),
+            jiff::Timestamp::UNIX_EPOCH,
         )
         .expect("not a success")
         .into_error(

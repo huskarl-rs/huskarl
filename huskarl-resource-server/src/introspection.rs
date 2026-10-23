@@ -21,6 +21,7 @@ use crate::{
         oauth_form,
         platform::{Duration, SystemTime},
         secrets::SecretString,
+        time::{Clock, PlatformClock},
     },
     error::{Challenge, ServerStatus, ToRfc6750Error},
     validator::ValidatedRequest,
@@ -34,6 +35,7 @@ use crate::{
 ///
 /// Use [`TokenIntrospection::builder`] to construct an instance.
 pub struct TokenIntrospection {
+    clock: Arc<dyn Clock>,
     client_id: String,
     issuer: Option<String>,
     introspection_endpoint: EndpointUrl,
@@ -143,6 +145,12 @@ impl TokenIntrospection {
         #[cfg(feature = "default-jws-verifier-platform")]
         #[cfg_attr(feature = "default-jws-verifier-platform", builder(default = crate::DefaultJwsVerifierPlatform::default().into()))]
         jws_verifier_platform: Arc<dyn JwsVerifierPlatform>,
+        /// Clock used for client assertions and introspection response validation.
+        #[builder(
+            default = Arc::<PlatformClock>::default(),
+            with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>
+        )]
+        clock: Arc<dyn Clock>,
         /// Clock-skew leeway for the RFC 9701 response JWT's temporal checks.
         /// Defaults to
         /// [`DEFAULT_CLOCK_LEEWAY`](crate::validator::DEFAULT_CLOCK_LEEWAY).
@@ -169,6 +177,7 @@ impl TokenIntrospection {
             Some(
                 JwtValidator::builder()
                     .verifier(verifier)
+                    .clock(clock.clone())
                     .typ(ClaimCheck::required_value("token-introspection+jwt"))
                     .require_exp(true)
                     .aud(aud_check)
@@ -181,6 +190,7 @@ impl TokenIntrospection {
         };
 
         Ok(Self {
+            clock,
             client_id,
             issuer,
             introspection_endpoint,
@@ -218,10 +228,25 @@ impl TokenIntrospection {
         http_client: &C,
         access_token: &SecretString,
     ) -> Result<ValidatedRequest<Claims>, IntrospectionCallError> {
+        self.introspect_with_receipt(http_client, access_token)
+            .await
+            .map(|(validated, _)| validated)
+    }
+
+    /// Retains the response receipt snapshot for subsequent binding checks.
+    pub(crate) async fn introspect_with_receipt<
+        C: HttpClient,
+        Claims: for<'de> Deserialize<'de> + Clone + 'static,
+    >(
+        &self,
+        http_client: &C,
+        access_token: &SecretString,
+    ) -> Result<(ValidatedRequest<Claims>, jiff::Timestamp), IntrospectionCallError> {
         let auth_params = self
             .client_auth
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(self.clock.now())
                     .client_id(&self.client_id)
                     .target_endpoint(&self.introspection_endpoint)
                     .maybe_issuer(self.issuer.as_deref())
@@ -290,21 +315,26 @@ impl TokenIntrospection {
             );
         }
 
-        let (introspection, introspection_jwt) = self.parse_response::<Claims>(response).await?;
+        let received_at = self.clock.now();
+        let (introspection, introspection_jwt) =
+            self.parse_response::<Claims>(response, received_at).await?;
 
         ensure!(introspection.active, TokenInactiveSnafu);
 
-        Ok(ValidatedRequest {
-            exp: parse_optional_timestamp("exp", introspection.exp)?,
-            iat: parse_optional_timestamp("iat", introspection.iat)?,
-            iss: introspection.iss,
-            sub: introspection.sub,
-            aud: introspection.aud,
-            jti: introspection.jti,
-            cnf: introspection.cnf,
-            claims: introspection.claims,
-            introspection_jwt,
-        })
+        Ok((
+            ValidatedRequest {
+                exp: parse_optional_timestamp("exp", introspection.exp)?,
+                iat: parse_optional_timestamp("iat", introspection.iat)?,
+                iss: introspection.iss,
+                sub: introspection.sub,
+                aud: introspection.aud,
+                jti: introspection.jti,
+                cnf: introspection.cnf,
+                claims: introspection.claims,
+                introspection_jwt,
+            },
+            received_at,
+        ))
     }
 
     /// Parses an introspection endpoint response into the structured response,
@@ -313,6 +343,7 @@ impl TokenIntrospection {
     async fn parse_response<Claims: for<'de> Deserialize<'de> + Clone + 'static>(
         &self,
         response: HttpResponse,
+        received_at: jiff::Timestamp,
     ) -> Result<(IntrospectionResponse<Claims>, Option<String>), IntrospectionCallError> {
         let status = response.status;
         let is_jwt_response = response
@@ -331,7 +362,7 @@ impl TokenIntrospection {
         );
         let body = response.body;
 
-        if let Some(failed) = FailedResponse::new(status, &response.headers) {
+        if let Some(failed) = FailedResponse::new_at(status, &response.headers, received_at) {
             // RFC 7662 §2.3: an introspection error response follows RFC 6749
             // §5.2, so the shared classifier reads it the same way the token
             // endpoint does — 5xx/429 as retryable, honouring `Retry-After`, and
@@ -364,7 +395,7 @@ impl TokenIntrospection {
                 .trim();
 
             let validated = jwt_validator
-                .validate::<TokenIntrospectionJwtClaims<Claims>>(jwt_str)
+                .validate_at::<TokenIntrospectionJwtClaims<Claims>>(jwt_str, received_at)
                 .await
                 .context(JwtResponseSnafu)?;
 
@@ -724,7 +755,8 @@ mod call_classification {
         headers: &HeaderMap,
         body: &str,
     ) -> IntrospectionCallError {
-        let failed = FailedResponse::new(status, headers).expect("not a success");
+        let failed = FailedResponse::new_at(status, headers, jiff::Timestamp::UNIX_EPOCH)
+            .expect("not a success");
         let verdict = serde_json::from_slice::<IntrospectionErrorBody>(body.as_bytes())
             .ok()
             .map(|e| OAuthError::new(e.error).with_description(e.error_description));

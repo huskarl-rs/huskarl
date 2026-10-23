@@ -10,6 +10,7 @@ use crate::{
         dpop::AuthorizationServerDPoP,
         http::HttpClient,
         platform::{MaybeSend, MaybeSendSync},
+        time::{Clock, PlatformClock},
     },
     grant::{
         core::{
@@ -142,6 +143,17 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
         None
     }
 
+    /// Clock used for outgoing JWTs and received tokens. Defaults to the platform clock.
+    /// Readings are clamped to the platform's `SystemTime` range.
+    fn clock(&self) -> Arc<dyn Clock> {
+        Arc::new(PlatformClock)
+    }
+
+    /// Timer inherited by token sources for cooldowns and credential-view staleness.
+    fn timer(&self) -> Arc<dyn crate::core::time::Timer> {
+        Arc::new(crate::core::time::PlatformTimer)
+    }
+
     /// Returns the HTTP client used for token requests.
     fn http_client(&self) -> &dyn HttpClient;
 
@@ -151,41 +163,20 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
     /// Returns allowed authentication methods (formatted as in authorization server metadata).
     fn allowed_auth_methods(&self) -> Option<&[String]>;
 
-    /// Returns the authentication parameters for this grant.
+    /// Returns the authentication parameters using this grant's clock.
     fn authentication_params(
         &self,
     ) -> impl Future<Output = Result<AuthenticationParams<'_>, Error>> + MaybeSend {
-        async {
-            // No client authentication: present nothing (no credentials, and no
-            // `client_id`). The grant's own authorization stands on its own.
-            let Some(client_auth) = self.client_auth() else {
-                #[cfg(feature = "tracing")]
-                tracing::trace!(
-                    client_auth = "none",
-                    "Grant carries no separate client authentication"
-                );
-                return Ok(AuthenticationParams::builder().build());
-            };
-            // Every authentication method identifies the client, so it needs a
-            // client ID (e.g. the basic-auth username, or the assertion subject).
-            let client_id = self.client_id().ok_or_else(|| {
-                Error::new(
-                    RetryAdvice::No,
-                    "client authentication requires a client ID",
-                )
-            })?;
-            client_auth
-                .authentication_context(
-                    AuthenticationContext::builder()
-                        .client_id(client_id)
-                        .target_endpoint(self.effective_token_endpoint())
-                        .maybe_issuer(self.issuer())
-                        .token_endpoint(self.token_endpoint())
-                        .maybe_allowed_methods(self.allowed_auth_methods())
-                        .build(),
-                )
-                .await
-        }
+        authentication_params_at(self, self.clock().now())
+    }
+
+    /// Uses the captured timestamp when supported, preserving legacy overrides otherwise.
+    fn authentication_params_at(
+        &self,
+        _now: jiff::Timestamp,
+    ) -> impl Future<Output = Result<AuthenticationParams<'_>, Error>> + MaybeSend {
+        // TODO(next breaking release): require timestamp-aware authentication.
+        self.authentication_params()
     }
 
     /// Exchange the parameters for an access token.
@@ -227,21 +218,27 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 );
                 let form = self.build_form(params);
 
-                let raw_token_response: RawTokenResponse = with_dpop_nonce_retry!({
-                    let auth_params = self.authentication_params().await?;
+                let (raw_token_response, received_at): (RawTokenResponse, _) =
+                    with_dpop_nonce_retry!({
+                        let now = self.clock().now();
+                        let auth_params = self.authentication_params_at(now).await?;
 
-                    let request = OAuth2FormRequest::builder()
-                        .auth_params(auth_params)
-                        .dpop(self.dpop())
-                        .maybe_dpop_jkt(dpop_jkt.as_deref())
-                        .form(&form)
-                        .uri(endpoint.as_uri());
-                    #[cfg(feature = "tracing")]
-                    let request = request.exchange_span(&exchange_span);
-                    #[cfg(feature = "experimental-oidc-key-binding")]
-                    let request = request.maybe_dpop_code_hash(dpop_code_hash.as_deref());
-                    request.build().execute(http_client).await
-                })?;
+                        let request = OAuth2FormRequest::builder()
+                            .now(now)
+                            .auth_params(auth_params)
+                            .dpop(self.dpop())
+                            .maybe_dpop_jkt(dpop_jkt.as_deref())
+                            .form(&form)
+                            .uri(endpoint.as_uri());
+                        #[cfg(feature = "tracing")]
+                        let request = request.exchange_span(&exchange_span);
+                        #[cfg(feature = "experimental-oidc-key-binding")]
+                        let request = request.maybe_dpop_code_hash(dpop_code_hash.as_deref());
+                        request
+                            .build()
+                            .execute_with_receipt(http_client, self.clock().as_ref())
+                            .await
+                    })?;
 
                 let context = TokenResponseContext::builder()
                     .maybe_dpop_jkt(dpop_jkt)
@@ -249,10 +246,8 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
                 #[cfg(feature = "experimental-oidc-key-binding")]
                 let context = context.openid_bound_key_requested(openid_bound_key_requested);
                 let context = context.build();
-                let response = raw_token_response.into_token_response_with_context(
-                    context,
-                    crate::core::platform::SystemTime::now(),
-                )?;
+                let response = raw_token_response
+                    .into_token_response_with_context_and_receipt(context, received_at)?;
                 #[cfg(feature = "tracing")]
                 tracing::debug!(
                     outcome = "success",
@@ -272,4 +267,41 @@ pub trait OAuth2ExchangeGrant: MaybeSendSync {
 
     /// Creates a refresh grant from this grant's configuration.
     fn to_refresh_grant(&self) -> RefreshGrant;
+}
+
+// Shared by built-in grants; the trait default must preserve downstream overrides.
+pub(crate) async fn authentication_params_at<G: OAuth2ExchangeGrant + ?Sized>(
+    grant: &G,
+    now: jiff::Timestamp,
+) -> Result<AuthenticationParams<'_>, Error> {
+    // No client authentication: present nothing (no credentials, and no
+    // `client_id`). The grant's own authorization stands on its own.
+    let Some(client_auth) = grant.client_auth() else {
+        #[cfg(feature = "tracing")]
+        tracing::trace!(
+            client_auth = "none",
+            "Grant carries no separate client authentication"
+        );
+        return Ok(AuthenticationParams::builder().build());
+    };
+    // Every authentication method identifies the client, so it needs a
+    // client ID (e.g. the basic-auth username, or the assertion subject).
+    let client_id = grant.client_id().ok_or_else(|| {
+        Error::new(
+            RetryAdvice::No,
+            "client authentication requires a client ID",
+        )
+    })?;
+    client_auth
+        .authentication_context(
+            AuthenticationContext::builder()
+                .now(now)
+                .client_id(client_id)
+                .target_endpoint(grant.effective_token_endpoint())
+                .maybe_issuer(grant.issuer())
+                .token_endpoint(grant.token_endpoint())
+                .maybe_allowed_methods(grant.allowed_auth_methods())
+                .build(),
+        )
+        .await
 }

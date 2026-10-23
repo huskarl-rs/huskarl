@@ -165,7 +165,10 @@ impl ClientAuthentication for JwtBearer {
                 .audience(audience)
                 .iss(ctx.client_id)
                 .sub(self.subject.as_deref().unwrap_or(ctx.client_id))
-                .issued_now_expires_after(self.expires_after)
+                .issued_at_expires_after(
+                    crate::time::system_time_from_timestamp_saturating(ctx.now),
+                    self.expires_after,
+                )
                 .claims(())
                 .build();
 
@@ -325,6 +328,7 @@ mod tests {
     /// A context with every audience source available.
     fn full_ctx(client_id: &'static str) -> AuthenticationContext<'static> {
         AuthenticationContext::builder()
+            .now(jiff::Timestamp::UNIX_EPOCH)
             .client_id(client_id)
             .target_endpoint(target_endpoint())
             .issuer("https://issuer.example.com")
@@ -335,9 +339,51 @@ mod tests {
     /// A context with only the always-available target endpoint.
     fn target_only_ctx(client_id: &'static str) -> AuthenticationContext<'static> {
         AuthenticationContext::builder()
+            .now(jiff::Timestamp::UNIX_EPOCH)
             .client_id(client_id)
             .target_endpoint(target_endpoint())
             .build()
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[tokio::test]
+    async fn oversized_lifetime_returns_expiry_error() {
+        use crate::time::{Clock, ManualTime};
+
+        let time = ManualTime::new(jiff::Timestamp::MAX);
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::TargetEndpoint)
+            .expires_after(crate::time::Duration::MAX)
+            .build();
+        let mut ctx = full_ctx("cid");
+        ctx.now = time.now();
+        let err = bearer.authentication_context(ctx).await.unwrap_err();
+        assert_eq!(err.retry_advice(), crate::RetryAdvice::No);
+        assert!(format!("{err:#}").contains("JWT expiry is outside"));
+    }
+
+    #[tokio::test]
+    async fn assertion_uses_context_timestamp() {
+        let bearer = JwtBearer::builder()
+            .signer(MockJwsSigner { alg: "ES256" })
+            .audience(Audience::TargetEndpoint)
+            .expires_after(Duration::from_secs(45))
+            .build();
+        for expected in [1_000, 1_010] {
+            let mut ctx = full_ctx("cid");
+            ctx.now = jiff::Timestamp::new(expected, 0).unwrap();
+            let params = bearer.authentication_context(ctx).await.unwrap();
+            let claims = decode_claims(&extract_form_str(
+                &params.form_params.unwrap(),
+                "client_assertion",
+            ));
+            assert_eq!(claims["iat"], expected);
+            assert_eq!(claims["exp"], expected + 45);
+        }
+        let mut ctx = full_ctx("cid");
+        ctx.now = jiff::Timestamp::new(-1, 0).unwrap();
+        assert!(bearer.authentication_context(ctx).await.is_err());
     }
 
     #[tokio::test]
@@ -364,6 +410,7 @@ mod tests {
         let err = bearer
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("cid")
                     .target_endpoint(target_endpoint())
                     .token_endpoint(token_endpoint())
@@ -448,6 +495,7 @@ mod tests {
         let err = bearer
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("cid")
                     .target_endpoint(target_endpoint())
                     .issuer("https://issuer.example.com")

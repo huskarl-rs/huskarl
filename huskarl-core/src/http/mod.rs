@@ -26,39 +26,48 @@ use crate::{
 // Cap unreasonable server values at one day.
 const MAX_RETRY_AFTER: Duration = Duration::from_hours(24);
 
+/// Parses `Retry-After` using the platform clock.
+#[must_use]
+pub fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+    // TODO(next breaking release): use the explicit timestamp API exclusively.
+    retry_after_at(
+        headers,
+        crate::time::Clock::now(&crate::time::PlatformClock),
+    )
+}
+
 /// Parses the `Retry-After` header as a delay.
 ///
 /// Supports both forms defined by RFC 9110 §10.2.3: delta-seconds and HTTP
-/// dates. Dates are resolved against the current clock. Past dates produce a
-/// zero delay, and delays longer than 24 hours are capped at 24 hours.
+/// dates. Dates are resolved against the supplied response receipt timestamp.
+/// Past dates produce a zero delay, and delays longer than 24 hours are capped
+/// at 24 hours.
 ///
 /// Returns `None` when the header is absent, is not valid text, or contains
 /// neither supported form.
 #[must_use]
-pub fn retry_after(headers: &HeaderMap) -> Option<Duration> {
+pub fn retry_after_at(headers: &HeaderMap, received_at: jiff::Timestamp) -> Option<Duration> {
     let value = headers.get(http::header::RETRY_AFTER)?.to_str().ok()?;
     // Servers occasionally pad the value; RFC 9110 §5.5 lets us ignore that.
     let value = value.trim();
     let delay = match value.parse::<u64>() {
         Ok(seconds) => Duration::from_secs(seconds),
-        Err(_) => http_date_delay(value)?,
+        Err(_) => http_date_delay(value, received_at)?,
     };
     Some(delay.min(MAX_RETRY_AFTER))
 }
 
 // Convert any RFC 9110 HTTP-date spelling to a delay. Past dates mean retry now.
-fn http_date_delay(value: &str) -> Option<Duration> {
-    // Compare durations because browser wasm uses `web_time::SystemTime`, while
-    // `httpdate` returns `std::time::SystemTime`.
-    let deadline = httpdate::parse_http_date(value)
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    let now = crate::platform::SystemTime::now()
-        .duration_since(crate::platform::SystemTime::UNIX_EPOCH)
-        .ok()?;
+fn http_date_delay(value: &str, received_at: jiff::Timestamp) -> Option<Duration> {
+    let deadline =
+        crate::time::timestamp_from_std_system_time(httpdate::parse_http_date(value).ok()?).ok()?;
     // A date already past is "retry now", not a failure to parse.
-    Some(deadline.saturating_sub(now))
+    Some(
+        deadline
+            .duration_since(received_at)
+            .try_into()
+            .unwrap_or_default(),
+    )
 }
 
 /// What a non-success status establishes before the body is inspected.
@@ -76,7 +85,11 @@ enum StatusVerdict {
 // an OAuth verdict; `501` and `505` are separated because waiting cannot fix
 // those capability failures.
 #[must_use]
-fn status_verdict(status: StatusCode, headers: &HeaderMap) -> StatusVerdict {
+fn status_verdict(
+    status: StatusCode,
+    headers: &HeaderMap,
+    received_at: jiff::Timestamp,
+) -> StatusVerdict {
     if matches!(
         status,
         StatusCode::NOT_IMPLEMENTED | StatusCode::HTTP_VERSION_NOT_SUPPORTED
@@ -87,7 +100,7 @@ fn status_verdict(status: StatusCode, headers: &HeaderMap) -> StatusVerdict {
         return StatusVerdict::Undecided;
     }
     StatusVerdict::Transient(
-        retry_after(headers).map_or(RetryAdvice::RETRY, RetryAdvice::retry_after),
+        retry_after_at(headers, received_at).map_or(RetryAdvice::RETRY, RetryAdvice::retry_after),
     )
 }
 
@@ -109,14 +122,15 @@ fn status_verdict(status: StatusCode, headers: &HeaderMap) -> StatusVerdict {
 /// # }
 /// # impl std::error::Error for Cause {}
 /// # let headers = HeaderMap::new();
-/// assert!(FailedResponse::new(StatusCode::OK, &headers).is_none());
+/// # let received_at = jiff::Timestamp::UNIX_EPOCH;
+/// assert!(FailedResponse::new_at(StatusCode::OK, &headers, received_at).is_none());
 ///
-/// let failed = FailedResponse::new(StatusCode::BAD_REQUEST, &headers).unwrap();
+/// let failed = FailedResponse::new_at(StatusCode::BAD_REQUEST, &headers, received_at).unwrap();
 /// let err = failed.into_error(Some(OAuthError::new("invalid_scope")), Cause);
 /// assert_eq!(err.verdict().map(OAuthError::code), Some(&OAuthErrorCode::InvalidScope));
 ///
 /// // OAuth codes in 5xx bodies are not treated as verdicts on the request.
-/// let gateway = FailedResponse::new(StatusCode::BAD_GATEWAY, &headers).unwrap();
+/// let gateway = FailedResponse::new_at(StatusCode::BAD_GATEWAY, &headers, received_at).unwrap();
 /// let err = gateway.into_error(Some(OAuthError::new("invalid_scope")), Cause);
 /// assert!(err.verdict().is_none());
 /// ```
@@ -124,13 +138,34 @@ fn status_verdict(status: StatusCode, headers: &HeaderMap) -> StatusVerdict {
 pub struct FailedResponse<'a> {
     status: StatusCode,
     headers: &'a HeaderMap,
+    received_at: jiff::Timestamp,
 }
 
 impl<'a> FailedResponse<'a> {
-    /// Creates a failed response, or returns `None` for a successful status.
+    /// Creates a failed response using the platform clock.
     #[must_use]
     pub fn new(status: StatusCode, headers: &'a HeaderMap) -> Option<Self> {
-        (!status.is_success()).then_some(Self { status, headers })
+        // TODO(next breaking release): replace this constructor with `new_at`.
+        Self::new_at(
+            status,
+            headers,
+            crate::time::Clock::now(&crate::time::PlatformClock),
+        )
+    }
+
+    /// Creates a failed response, or returns `None` for a successful status.
+    /// `received_at` anchors HTTP-date delays for all subsequent classification.
+    #[must_use]
+    pub fn new_at(
+        status: StatusCode,
+        headers: &'a HeaderMap,
+        received_at: jiff::Timestamp,
+    ) -> Option<Self> {
+        (!status.is_success()).then_some(Self {
+            status,
+            headers,
+            received_at,
+        })
     }
 
     /// The response's status.
@@ -146,7 +181,7 @@ impl<'a> FailedResponse<'a> {
     #[must_use]
     pub fn is_transient(&self) -> bool {
         matches!(
-            status_verdict(self.status, self.headers),
+            status_verdict(self.status, self.headers, self.received_at),
             StatusVerdict::Transient(_)
         )
     }
@@ -186,7 +221,7 @@ impl<'a> FailedResponse<'a> {
         self,
         verdict: Option<crate::oauth_error::OAuthError>,
     ) -> crate::error::propagation::Classification {
-        let (advice, judged) = match status_verdict(self.status, self.headers) {
+        let (advice, judged) = match status_verdict(self.status, self.headers, self.received_at) {
             StatusVerdict::Transient(advice) => (advice, false),
             // `temporarily_unavailable` and `server_error` represent retryable
             // server failures when delivered as OAuth verdicts (RFC 6749
@@ -194,7 +229,7 @@ impl<'a> FailedResponse<'a> {
             StatusVerdict::Undecided => match &verdict {
                 Some(verdict) => {
                     let advice = match verdict.code().implied_retry_advice() {
-                        RetryAdvice::Retry { .. } => retry_after(self.headers)
+                        RetryAdvice::Retry { .. } => retry_after_at(self.headers, self.received_at)
                             .map_or(RetryAdvice::RETRY, RetryAdvice::retry_after),
                         advice => advice,
                     };
@@ -493,7 +528,14 @@ mod tests {
         StatusVerdict::Transient(RetryAdvice::RETRY)
     )]
     fn only_5xx_and_429_are_transient(#[case] status: StatusCode, #[case] expected: StatusVerdict) {
-        assert_eq!(status_verdict(status, &HeaderMap::new()), expected);
+        assert_eq!(
+            status_verdict(
+                status,
+                &HeaderMap::new(),
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
+            expected
+        );
     }
 
     // RFC 9110 defines 501 and 505 as capability failures, not outages.
@@ -502,18 +544,29 @@ mod tests {
     #[case::version_not_supported(StatusCode::HTTP_VERSION_NOT_SUPPORTED)]
     fn an_unimplemented_endpoint_is_not_a_transient_outage(#[case] status: StatusCode) {
         let none = HeaderMap::new();
-        assert_eq!(status_verdict(status, &none), StatusVerdict::Unsupported);
+        assert_eq!(
+            status_verdict(
+                status,
+                &none,
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
+            StatusVerdict::Unsupported
+        );
 
-        let err = FailedResponse::new(status, &none)
+        let err = FailedResponse::new_at(status, &none, jiff::Timestamp::UNIX_EPOCH)
             .expect("not a success")
             .into_error(None, "cause");
         assert_eq!(err.retry_advice(), RetryAdvice::No);
         assert!(err.verdict().is_none());
 
         // `Retry-After` cannot make an unsupported capability retryable.
-        let err = FailedResponse::new(StatusCode::NOT_IMPLEMENTED, &headers_with_retry_after("30"))
-            .expect("not a success")
-            .into_error(None, "cause");
+        let err = FailedResponse::new_at(
+            StatusCode::NOT_IMPLEMENTED,
+            &headers_with_retry_after("30"),
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("not a success")
+        .into_error(None, "cause");
         assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
 
@@ -521,12 +574,16 @@ mod tests {
     #[test]
     fn a_code_on_an_unimplemented_status_is_still_not_a_verdict() {
         let none = HeaderMap::new();
-        let err = FailedResponse::new(StatusCode::NOT_IMPLEMENTED, &none)
-            .expect("not a success")
-            .into_error(
-                Some(crate::oauth_error::OAuthError::new("invalid_grant")),
-                "cause",
-            );
+        let err = FailedResponse::new_at(
+            StatusCode::NOT_IMPLEMENTED,
+            &none,
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("not a success")
+        .into_error(
+            Some(crate::oauth_error::OAuthError::new("invalid_grant")),
+            "cause",
+        );
 
         assert!(
             err.verdict().is_none(),
@@ -543,16 +600,29 @@ mod tests {
     #[case::malformed_date("Wed, 99 Xxx 2015 07:28:00 GMT")]
     fn unparseable_retry_after_leaves_the_delay_unknown(#[case] value: &str) {
         let headers = headers_with_retry_after(value);
-        assert_eq!(retry_after(&headers), None);
         assert_eq!(
-            status_verdict(StatusCode::SERVICE_UNAVAILABLE, &headers),
+            retry_after_at(&headers, jiff::Timestamp::new(2_000_000_000, 0).unwrap()),
+            None
+        );
+        assert_eq!(
+            status_verdict(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &headers,
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
             StatusVerdict::Transient(RetryAdvice::RETRY)
         );
     }
 
     #[test]
     fn an_absent_retry_after_is_no_delay() {
-        assert_eq!(retry_after(&HeaderMap::new()), None);
+        assert_eq!(
+            retry_after_at(
+                &HeaderMap::new(),
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
+            None
+        );
     }
 
     // Clamp excessive delays instead of discarding the server's constraint.
@@ -564,28 +634,103 @@ mod tests {
     #[case::the_ceiling("86400")]
     fn an_oversized_delay_is_clamped_rather_than_discarded(#[case] value: &str) {
         assert_eq!(
-            retry_after(&headers_with_retry_after(value)),
+            retry_after_at(
+                &headers_with_retry_after(value),
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
             Some(MAX_RETRY_AFTER)
         );
     }
 
     // RFC 9110 allows an HTTP-date as well as delta-seconds.
     #[test]
-    fn the_http_date_form_is_read_as_a_delay() {
-        let in_a_minute = crate::platform::SystemTime::now() + Duration::from_mins(1);
-        // `httpdate` renders the preferred IMF-fixdate form.
-        let rendered = httpdate::fmt_http_date(
-            std::time::UNIX_EPOCH
-                + in_a_minute
-                    .duration_since(crate::platform::SystemTime::UNIX_EPOCH)
-                    .expect("after the epoch"),
-        );
+    fn http_date_delay_uses_exact_receipt_time() {
+        let headers = headers_with_retry_after("Sun, 06 Nov 1994 08:49:37 GMT");
+        let deadline = jiff::Timestamp::new(784_111_777, 0).unwrap();
+        for (received_at, expected) in [
+            (
+                deadline.checked_sub(Duration::from_nanos(1)).unwrap(),
+                Duration::from_nanos(1),
+            ),
+            (deadline, Duration::ZERO),
+            (
+                deadline.checked_add(Duration::from_nanos(1)).unwrap(),
+                Duration::ZERO,
+            ),
+            (
+                deadline.checked_sub(MAX_RETRY_AFTER).unwrap(),
+                MAX_RETRY_AFTER,
+            ),
+            (
+                deadline
+                    .checked_sub(MAX_RETRY_AFTER + Duration::from_secs(1))
+                    .unwrap(),
+                MAX_RETRY_AFTER,
+            ),
+            (jiff::Timestamp::MIN, MAX_RETRY_AFTER),
+            (jiff::Timestamp::MAX, Duration::ZERO),
+        ] {
+            assert_eq!(retry_after_at(&headers, received_at), Some(expected));
+        }
+    }
 
-        let delay = retry_after(&headers_with_retry_after(&rendered)).expect("a date is a delay");
-        // Allow for whole-second precision and time elapsed during the test.
-        assert!(
-            delay <= Duration::from_mins(1) && delay >= Duration::from_secs(55),
-            "got {delay:?}"
+    #[rstest]
+    #[case::throttled(StatusCode::TOO_MANY_REQUESTS)]
+    #[case::unavailable(StatusCode::SERVICE_UNAVAILABLE)]
+    #[case::oauth(StatusCode::BAD_REQUEST)]
+    fn classification_retains_receipt_time(#[case] status: StatusCode) {
+        use crate::time::{Clock, ManualTime};
+        let time = ManualTime::new(jiff::Timestamp::new(784_111_770, 250_000_000).unwrap());
+        let headers = headers_with_retry_after("Sun, 06 Nov 1994 08:49:37 GMT");
+        let failed = FailedResponse::new_at(status, &headers, time.now()).unwrap();
+        time.advance(Duration::from_secs(100)).unwrap();
+        assert_eq!(failed.is_transient(), status != StatusCode::BAD_REQUEST);
+        let error = failed.into_error(Some(OAuthError::new("temporarily_unavailable")), "cause");
+        assert_eq!(
+            error.retry_advice(),
+            RetryAdvice::retry_after(Duration::from_millis(6_750))
+        );
+    }
+
+    #[tokio::test]
+    async fn document_retry_after_uses_receipt_clock() {
+        use crate::time::{Clock, ManualTime};
+        struct DelayedClient(ManualTime);
+        impl HttpClient for DelayedClient {
+            fn execute(
+                &self,
+                request: Request<Bytes>,
+                idempotency: Idempotency,
+            ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+                Box::pin(async move {
+                    self.0.advance(Duration::from_secs(7)).unwrap();
+                    FakeClient {
+                        status: StatusCode::SERVICE_UNAVAILABLE,
+                        body: "unavailable",
+                        retry_after: Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                    }
+                    .execute(request, idempotency)
+                    .await
+                })
+            }
+        }
+        let time = ManualTime::new(jiff::Timestamp::new(784_111_760, 250_000_000).unwrap());
+        let error = get::<serde_json::Value>(
+            &DelayedClient(time.clone()),
+            uri(),
+            HeaderMap::new(),
+            DocumentKind::AuthorizationServerMetadata,
+            &time,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            time.now(),
+            jiff::Timestamp::new(784_111_767, 250_000_000).unwrap()
+        );
+        assert_eq!(
+            error.retry_advice(),
+            RetryAdvice::retry_after(Duration::from_millis(9_750))
         );
     }
 
@@ -597,7 +742,10 @@ mod tests {
     #[case::asctime("Sun Nov  6 08:49:37 1994")]
     fn every_http_date_spelling_is_accepted(#[case] value: &str) {
         assert_eq!(
-            retry_after(&headers_with_retry_after(value)),
+            retry_after_at(
+                &headers_with_retry_after(value),
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
             Some(Duration::ZERO)
         );
     }
@@ -608,7 +756,15 @@ mod tests {
         let headers = headers_with_retry_after("30");
         assert_eq!(retry_after(&headers), Some(Duration::from_secs(30)));
         assert_eq!(
-            status_verdict(StatusCode::TOO_MANY_REQUESTS, &headers),
+            retry_after_at(&headers, jiff::Timestamp::new(2_000_000_000, 0).unwrap()),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            status_verdict(
+                StatusCode::TOO_MANY_REQUESTS,
+                &headers,
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
             StatusVerdict::Transient(RetryAdvice::retry_after(Duration::from_secs(30)))
         );
     }
@@ -644,9 +800,13 @@ mod tests {
     #[should_panic(expected = "`Error::new` was handed a cause wrapping an already-classified")]
     fn into_error_rejects_an_already_classified_cause() {
         let cause = ClassifiedCause(Error::new(RetryAdvice::RETRY, "backend failure"));
-        let _ = FailedResponse::new(StatusCode::BAD_REQUEST, &HeaderMap::new())
-            .expect("non-success")
-            .into_error(None, cause);
+        let _ = FailedResponse::new_at(
+            StatusCode::BAD_REQUEST,
+            &HeaderMap::new(),
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("non-success")
+        .into_error(None, cause);
     }
 
     // Only non-success statuses can construct `FailedResponse`.
@@ -661,6 +821,11 @@ mod tests {
     fn a_success_is_not_a_failed_response(#[case] status: StatusCode, #[case] is_failure: bool) {
         assert_eq!(
             FailedResponse::new(status, &HeaderMap::new()).is_some(),
+            is_failure
+        );
+        assert_eq!(
+            FailedResponse::new_at(status, &HeaderMap::new(), jiff::Timestamp::UNIX_EPOCH)
+                .is_some(),
             is_failure
         );
     }
@@ -684,7 +849,7 @@ mod tests {
             ),
         ];
         for (status, verdict, is_oauth) in cases {
-            let err = FailedResponse::new(status, &none)
+            let err = FailedResponse::new_at(status, &none, jiff::Timestamp::UNIX_EPOCH)
                 .expect("non-success")
                 .into_error(verdict, Cause);
             assert_eq!(
@@ -698,9 +863,13 @@ mod tests {
     // A gateway's OAuth-shaped body must not override a transient status.
     #[test]
     fn a_transient_status_outranks_the_body() {
-        let err = FailedResponse::new(StatusCode::SERVICE_UNAVAILABLE, &HeaderMap::new())
-            .expect("non-success")
-            .into_error(Some(OAuthError::new("invalid_grant")), Cause);
+        let err = FailedResponse::new_at(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &HeaderMap::new(),
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("non-success")
+        .into_error(Some(OAuthError::new("invalid_grant")), Cause);
 
         assert_eq!(err.retry_advice(), RetryAdvice::RETRY);
     }
@@ -710,9 +879,13 @@ mod tests {
     #[case::temporarily_unavailable("temporarily_unavailable")]
     #[case::server_error("server_error")]
     fn a_rejection_naming_a_server_condition_is_retryable(#[case] code: &str) {
-        let err = FailedResponse::new(StatusCode::BAD_REQUEST, &HeaderMap::new())
-            .expect("non-success")
-            .into_error(Some(OAuthError::new(code)), Cause);
+        let err = FailedResponse::new_at(
+            StatusCode::BAD_REQUEST,
+            &HeaderMap::new(),
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("non-success")
+        .into_error(Some(OAuthError::new(code)), Cause);
 
         assert_eq!(err.retry_advice(), RetryAdvice::RETRY);
         // Preserve the verdict as well as its retry advice.
@@ -723,9 +896,13 @@ mod tests {
     #[test]
     fn a_retryable_rejection_honours_retry_after() {
         let headers = headers_with_retry_after("30");
-        let err = FailedResponse::new(StatusCode::BAD_REQUEST, &headers)
-            .expect("non-success")
-            .into_error(Some(OAuthError::new("temporarily_unavailable")), Cause);
+        let err = FailedResponse::new_at(
+            StatusCode::BAD_REQUEST,
+            &headers,
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("non-success")
+        .into_error(Some(OAuthError::new("temporarily_unavailable")), Cause);
 
         assert_eq!(
             err.retry_advice(),
@@ -739,9 +916,13 @@ mod tests {
     #[case::invalid_grant("invalid_grant")]
     #[case::invalid_scope("invalid_scope")]
     fn an_ordinary_rejection_stays_terminal(#[case] code: &str) {
-        let err = FailedResponse::new(StatusCode::BAD_REQUEST, &HeaderMap::new())
-            .expect("non-success")
-            .into_error(Some(OAuthError::new(code)), Cause);
+        let err = FailedResponse::new_at(
+            StatusCode::BAD_REQUEST,
+            &HeaderMap::new(),
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("non-success")
+        .into_error(Some(OAuthError::new(code)), Cause);
 
         assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
@@ -750,9 +931,13 @@ mod tests {
     #[test]
     fn a_retry_after_does_not_make_a_terminal_rejection_retryable() {
         let headers = headers_with_retry_after("30");
-        let err = FailedResponse::new(StatusCode::BAD_REQUEST, &headers)
-            .expect("non-success")
-            .into_error(Some(OAuthError::new("invalid_grant")), Cause);
+        let err = FailedResponse::new_at(
+            StatusCode::BAD_REQUEST,
+            &headers,
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("non-success")
+        .into_error(Some(OAuthError::new("invalid_grant")), Cause);
 
         assert_eq!(err.retry_advice(), RetryAdvice::No);
     }
@@ -761,9 +946,13 @@ mod tests {
     #[test]
     fn into_error_honours_retry_after() {
         let headers = headers_with_retry_after("42");
-        let err = FailedResponse::new(StatusCode::TOO_MANY_REQUESTS, &headers)
-            .expect("non-success")
-            .into_error(None, Cause);
+        let err = FailedResponse::new_at(
+            StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            jiff::Timestamp::UNIX_EPOCH,
+        )
+        .expect("non-success")
+        .into_error(None, Cause);
 
         assert_eq!(
             err.retry_advice(),
@@ -775,7 +964,10 @@ mod tests {
     #[test]
     fn a_verdict_is_what_makes_a_4xx_a_rejection() {
         let none = HeaderMap::new();
-        let failed = || FailedResponse::new(StatusCode::FORBIDDEN, &none).expect("non-success");
+        let failed = || {
+            FailedResponse::new_at(StatusCode::FORBIDDEN, &none, jiff::Timestamp::UNIX_EPOCH)
+                .expect("non-success")
+        };
 
         let judged = failed().into_error(Some(OAuthError::new("invalid_scope")), Cause);
         assert_eq!(
@@ -793,7 +985,10 @@ mod tests {
     #[test]
     fn retry_after_tolerates_surrounding_whitespace() {
         assert_eq!(
-            retry_after(&headers_with_retry_after(" 12 ")),
+            retry_after_at(
+                &headers_with_retry_after(" 12 "),
+                jiff::Timestamp::new(2_000_000_000, 0).unwrap()
+            ),
             Some(Duration::from_secs(12))
         );
     }
@@ -816,6 +1011,7 @@ mod tests {
             uri(),
             HeaderMap::new(),
             DocumentKind::AuthorizationServerMetadata,
+            &crate::time::PlatformClock,
         )
         .await
         .expect("get succeeds");
@@ -831,6 +1027,7 @@ mod tests {
             uri(),
             HeaderMap::new(),
             DocumentKind::AuthorizationServerMetadata,
+            &crate::time::PlatformClock,
         )
         .await
         .expect_err("non-2xx fails");
@@ -851,6 +1048,7 @@ mod tests {
             uri(),
             HeaderMap::new(),
             DocumentKind::AuthorizationServerMetadata,
+            &crate::time::PlatformClock,
         )
         .await
         .expect_err("429 fails");
@@ -869,6 +1067,7 @@ mod tests {
             uri(),
             HeaderMap::new(),
             DocumentKind::AuthorizationServerMetadata,
+            &crate::time::PlatformClock,
         )
         .await
         .expect_err("non-2xx fails");
@@ -890,6 +1089,7 @@ mod tests {
             uri(),
             HeaderMap::new(),
             DocumentKind::AuthorizationServerMetadata,
+            &crate::time::PlatformClock,
         )
         .await
         .expect("get");

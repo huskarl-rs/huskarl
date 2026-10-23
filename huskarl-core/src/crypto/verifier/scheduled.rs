@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{pin::Pin, sync::Arc};
 
 use crate::{
     crypto::{
@@ -8,6 +8,7 @@ use crate::{
     },
     error::Error,
     platform::{Duration, MaybeSendBoxFuture, MaybeSendFuture, MaybeSendSync},
+    time::{PlatformTimer, Timer},
 };
 
 /// A [`JwsVerifier`] that attempts to reload its keyset on use after a TTL.
@@ -30,7 +31,7 @@ use crate::{
 /// reload and for warm-starting from a persisted cache.
 ///
 /// ```rust,no_run
-/// # use std::pin::Pin;
+/// # use std::{pin::Pin, sync::Arc};
 /// # use huskarl_core::{
 /// #     crypto::verifier::{MultiKeyVerifier, ScheduledRefreshVerifier},
 /// #     error::Error,
@@ -112,8 +113,15 @@ impl<V: JwsVerifier + 'static> ScheduledRefreshVerifier<V> {
         /// stack comes up cold and self-heals instead of failing construction.
         /// `None` (the default) keeps a failed initial fetch fatal.
         fallback: Option<V>,
+        /// Timer used for refresh scheduling.
+        #[builder(
+            default = Arc::<PlatformTimer>::default(),
+            with = |timer: impl Timer + 'static| Arc::new(timer) as Arc<dyn Timer>
+        )]
+        timer: Arc<dyn Timer>,
     ) -> Result<Self, Error> {
         let inner = ScheduledRefreshable::builder()
+            .timer(timer)
             .factory(factory)
             .ttl(ttl)
             .failure_backoff(failure_backoff)
@@ -257,18 +265,22 @@ mod tests {
 
     #[tokio::test]
     async fn stale_keyset_reloads_before_verify_and_retires_the_key() {
-        // gen-0 would accept, but the keyset is past its TTL, so the read-path
-        // reload swaps in gen-1 (key retired) *before* verifying — no verification
-        // failure was ever needed to trigger it.
+        let time = crate::time::ManualTime::default();
         let (builds, factory) = retiring_factory();
         let verifier = ScheduledRefreshVerifier::builder()
             .factory(factory)
-            .ttl(Duration::ZERO)
+            .ttl(Duration::from_secs(10))
             .min_refresh_interval(Duration::ZERO)
+            .timer(time.clone())
             .build()
             .await
             .unwrap();
 
+        time.advance(Duration::from_secs(10) - Duration::from_nanos(1))
+            .unwrap();
+        verifier.verify(b"input", b"sig", &km()).await.unwrap();
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        time.advance(Duration::from_nanos(1)).unwrap();
         verifier
             .verify(b"input", b"sig", &km())
             .await

@@ -56,6 +56,13 @@ choice is the [`VersionStrategy`](crate::kms::VersionStrategy):
 - [`Specific`](crate::kms::VersionStrategy::Specific) pins a version ID
   outright — no automatic movement at all.
 
+KMS signing and encryption key builders accept `.clock(...)`, defaulting to the
+platform clock. `MinAge` samples it once after all version-list pages arrive and
+compares full timestamps, including nanoseconds. If no version qualifies, it
+retains the newest-version fallback, including when the minimum age puts the
+cutoff outside the representable range. Direct `resolve_version` calls supply a
+clock explicitly.
+
 ## The safe rotation order
 
 When rotating encryption keys, perform these steps in order:

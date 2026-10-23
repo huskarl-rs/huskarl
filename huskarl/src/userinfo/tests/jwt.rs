@@ -67,6 +67,7 @@ fn jwt_client() -> UserInfoClient {
         .aud(ClaimCheck::required_value("my-client"))
         .build();
     UserInfoClient {
+        clock: Arc::new(PlatformClock),
         userinfo_endpoint: "https://op.example.com/userinfo"
             .parse::<EndpointUrl>()
             .unwrap(),
@@ -508,5 +509,108 @@ async fn jwt_response_sub_mismatch() {
     assert!(matches!(
         userinfo_source(&err),
         UserInfoError::SubMismatch { .. }
+    ));
+}
+
+#[tokio::test]
+async fn signed_userinfo_uses_receipt_snapshot() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::core::{platform::Duration, time::ManualTime};
+
+    #[derive(Debug, Clone)]
+    struct CountingClock {
+        time: ManualTime,
+        reads: Arc<AtomicUsize>,
+    }
+    impl Clock for CountingClock {
+        fn now(&self) -> jiff::Timestamp {
+            self.reads.fetch_add(1, Ordering::Relaxed);
+            self.time.now()
+        }
+    }
+    struct DelayedHttp {
+        time: ManualTime,
+        response: MockHttpClient,
+    }
+    impl HttpClient for DelayedHttp {
+        fn execute(
+            &self,
+            request: http::Request<Bytes>,
+            idempotency: Idempotency,
+        ) -> MaybeSendBoxFuture<'_, Result<HttpResponse, Error>> {
+            Box::pin(async move {
+                self.time.advance(Duration::from_secs(7)).unwrap();
+                self.response.execute(request, idempotency).await
+            })
+        }
+    }
+    #[derive(Debug)]
+    struct AdvancingVerifier(ManualTime);
+    impl JwsVerifier for AdvancingVerifier {
+        fn key_match(&self, key: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
+            AcceptAllVerifier.key_match(key)
+        }
+        fn verify<'a>(
+            &'a self,
+            _: &'a [u8],
+            _: &'a [u8],
+            _: &'a KeyMatch<'a>,
+        ) -> MaybeSendBoxFuture<'a, Result<(), VerifyError>> {
+            Box::pin(async move {
+                self.0.advance(Duration::from_secs(300)).unwrap();
+                Ok(())
+            })
+        }
+    }
+    let time = ManualTime::new(jiff::Timestamp::new(1_000, 0).unwrap());
+    let clock = CountingClock {
+        time: time.clone(),
+        reads: Arc::new(AtomicUsize::new(0)),
+    };
+    let client = UserInfoClient::builder()
+        .userinfo_endpoint("https://op.example.com/userinfo".parse().unwrap())
+        .issuer("https://op.example.com")
+        .client_id("my-client")
+        .jws_verifier(AdvancingVerifier(time.clone()))
+        .clock(clock.clone())
+        .build()
+        .await
+        .unwrap();
+    // Valid at receipt, but not before the network call or after verification.
+    let jwt = build_test_jwt(
+        &serde_json::json!({"alg": "RS256"}),
+        &serde_json::json!({
+            "sub": "user1", "iss": "https://op.example.com", "aud": "my-client",
+            "nbf": 1007, "exp": 1010
+        }),
+    );
+    let http = DelayedHttp {
+        time: time.clone(),
+        response: MockHttpClient::sequence(vec![jwt_response(&jwt), jwt_response(&jwt)]),
+    };
+    assert_eq!(
+        client
+            .get(&http, &bearer_token("token"), "user1")
+            .await
+            .unwrap()
+            .sub,
+        "user1"
+    );
+    assert_eq!(
+        clock.reads.load(Ordering::Relaxed),
+        1,
+        "only response receipt reads the clock for a bearer request"
+    );
+    assert_eq!(time.now(), jiff::Timestamp::new(1307, 0).unwrap());
+    let error = client
+        .get(&http, &bearer_token("token"), "user1")
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        userinfo_source(&error),
+        UserInfoError::JwtValidation {
+            source: JwtValidationError::Expired { .. }
+        }
     ));
 }

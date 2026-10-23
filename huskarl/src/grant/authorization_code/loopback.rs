@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use futures_util::future::{Either, select};
 use snafu::{ResultExt as _, Snafu};
 use tokio::{
     io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader},
@@ -16,7 +17,7 @@ use tokio::{
 use url::Url;
 
 use crate::{
-    core::{Error, RetryAdvice},
+    core::{Error, RetryAdvice, time::Timer},
     grant::authorization_code::{CompleteInput, CompleteOutput, ParseCallbackError},
 };
 
@@ -237,10 +238,30 @@ const RESULT_PAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 
 /// Waits for the authorization callback on `listener`, completes the flow
 /// via `complete`, and serves a result page to the browser.
-pub async fn complete_on_loopback(
+#[cfg(test)]
+async fn complete_on_loopback(
     listener: &TcpListener,
     redirect_uri: &str,
     renderer: Option<CallbackRenderer>,
+    complete: impl AsyncFnOnce(CompleteInput) -> Result<CompleteOutput, Error>,
+) -> Result<CompleteOutput, LoopbackError> {
+    complete_on_loopback_with_timer(
+        listener,
+        redirect_uri,
+        renderer,
+        &crate::core::time::PlatformTimer,
+        complete,
+    )
+    .await
+}
+
+/// Handles a loopback callback using `timer` for request-read and result-page deadlines.
+/// The timer controls elapsed waits independently of the grant's wall clock.
+pub(super) async fn complete_on_loopback_with_timer(
+    listener: &TcpListener,
+    redirect_uri: &str,
+    renderer: Option<CallbackRenderer>,
+    timer: &dyn Timer,
     complete: impl AsyncFnOnce(CompleteInput) -> Result<CompleteOutput, Error>,
 ) -> Result<CompleteOutput, LoopbackError> {
     complete_on_loopback_with_timeouts(
@@ -249,6 +270,7 @@ pub async fn complete_on_loopback(
         renderer,
         READ_TIMEOUT,
         RESULT_PAGE_TIMEOUT,
+        timer,
         complete,
     )
     .await
@@ -264,6 +286,7 @@ async fn complete_on_loopback_with_timeouts(
     renderer: Option<CallbackRenderer>,
     read_timeout: std::time::Duration,
     result_page_timeout: std::time::Duration,
+    timer: &dyn Timer,
     complete: impl AsyncFnOnce(CompleteInput) -> Result<CompleteOutput, Error>,
 ) -> Result<CompleteOutput, LoopbackError> {
     let port = listener.local_addr().map_or(0, |a| a.port());
@@ -286,7 +309,7 @@ async fn complete_on_loopback_with_timeouts(
         // preconnect torn down with RST, a port scanner, a mid-read timeout —
         // must not abort the whole login: the real callback may still arrive
         // on the next accept.
-        let Ok(path) = read_request_path(&mut stream, read_timeout).await else {
+        let Ok(path) = read_request_path(&mut stream, read_timeout, timer).await else {
             continue;
         };
 
@@ -334,7 +357,7 @@ async fn complete_on_loopback_with_timeouts(
             let Ok((mut stream, _)) = listener.accept().await else {
                 break;
             };
-            let Ok(path) = read_request_path(&mut stream, read_timeout).await else {
+            let Ok(path) = read_request_path(&mut stream, read_timeout, timer).await else {
                 continue;
             };
 
@@ -359,7 +382,7 @@ async fn complete_on_loopback_with_timeouts(
             }
         }
     };
-    let _ = tokio::time::timeout(result_page_timeout, serve_result_page).await;
+    let _ = with_timeout(timer, result_page_timeout, serve_result_page).await;
 
     result
 }
@@ -374,10 +397,34 @@ async fn complete_on_loopback_with_timeouts(
 async fn read_request_path(
     stream: &mut TcpStream,
     read_timeout: std::time::Duration,
+    timer: &dyn Timer,
 ) -> Result<Option<String>, std::io::Error> {
-    match tokio::time::timeout(read_timeout, read_request_path_inner(stream)).await {
-        Ok(result) => result,
-        Err(_elapsed) => Ok(None),
+    match with_timeout(timer, read_timeout, read_request_path_inner(stream)).await {
+        Some(result) => result,
+        None => Ok(None),
+    }
+}
+
+// Poll ready I/O first, matching the previous timeout behavior. Dropping the
+// losing future cancels either the timer registration or the pending I/O.
+async fn with_timeout<T>(
+    timer: &dyn Timer,
+    duration: std::time::Duration,
+    operation: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    let deadline = timer.now().checked_add(duration);
+    let elapsed = async {
+        match deadline {
+            Some(deadline) => timer.sleep_until(deadline).await,
+            // An unrepresentable deadline cannot be reached by this timer.
+            None => std::future::pending::<()>().await,
+        }
+    };
+    let operation = std::pin::pin!(operation);
+    let elapsed = std::pin::pin!(elapsed);
+    match select(operation, elapsed).await {
+        Either::Left((result, _)) => Some(result),
+        Either::Right(((), _)) => None,
     }
 }
 
@@ -635,7 +682,12 @@ mod tests {
     /// [`complete`](AuthorizationCodeGrant::complete), so the error
     /// mapping is tested against what completion actually produces.
     async fn error_path_grant() -> AuthorizationCodeGrant {
+        error_path_grant_with_timer(crate::core::time::PlatformTimer).await
+    }
+
+    async fn error_path_grant_with_timer(timer: impl Timer + 'static) -> AuthorizationCodeGrant {
         AuthorizationCodeGrant::builder()
+            .timer(timer)
             .client_id("client")
             .http_client(UnusedHttp)
             .client_auth(NoAuth)
@@ -984,64 +1036,155 @@ mod tests {
         );
     }
 
+    async fn wait_for_sleep(time: &crate::core::time::ManualTime) {
+        for _ in 0..10_000 {
+            if time.pending_sleeps() > 0 {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("loopback server did not register its deadline");
+    }
+
     #[tokio::test]
     async fn test_silent_connection_does_not_block_flow() {
+        use crate::core::time::{Duration, ManualTime};
+        let time = ManualTime::new(jiff::Timestamp::UNIX_EPOCH);
+        let timer = time.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-
         let handle = tokio::spawn(async move {
-            complete_on_loopback_with_timeouts(
+            complete_on_loopback_with_timer(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
-                std::time::Duration::from_millis(100),
-                RESULT_PAGE_TIMEOUT,
+                &timer,
                 async |_input| Ok(ok_token_response()),
             )
             .await
         });
-
-        // A connection that opens but never sends a request (port scanner,
-        // browser preconnect) must time out instead of hanging the flow.
         let silent = TcpStream::connect(addr).await.unwrap();
-
+        wait_for_sleep(&time).await;
+        time.set_wall_time(jiff::Timestamp::MAX);
+        assert_eq!(time.pending_sleeps(), 1);
+        time.advance_monotonic(READ_TIMEOUT.checked_sub(Duration::from_nanos(1)).unwrap())
+            .unwrap();
+        assert_eq!(time.pending_sleeps(), 1);
+        assert!(!handle.is_finished());
+        time.advance_monotonic(Duration::from_nanos(1)).unwrap();
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
         send_http_request(addr, "GET /success HTTP/1.1").await;
-
         let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
         );
+        assert_eq!(time.pending_sleeps(), 0);
         drop(silent);
     }
 
     #[tokio::test]
     async fn test_result_returned_when_browser_never_follows_redirect() {
+        use crate::core::time::{Duration, ManualTime};
+        let time = ManualTime::new(jiff::Timestamp::UNIX_EPOCH);
+        let timer = time.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-
         let handle = tokio::spawn(async move {
-            complete_on_loopback_with_timeouts(
+            complete_on_loopback_with_timer(
                 &listener,
                 "http://127.0.0.1/callback",
                 None,
-                READ_TIMEOUT,
-                std::time::Duration::from_millis(100),
+                &timer,
                 async |_input| Ok(ok_token_response()),
             )
             .await
         });
-
-        // The callback arrives and the exchange succeeds, but the browser
-        // never follows the /success redirect (tab closed mid-flow). The
-        // completed result must still be returned after the bounded wait.
         send_http_request(addr, "GET /callback?code=abc&state=xyz HTTP/1.1").await;
-
+        wait_for_sleep(&time).await;
+        time.set_wall_time(jiff::Timestamp::MIN);
+        assert_eq!(time.pending_sleeps(), 1);
+        time.advance_monotonic(
+            RESULT_PAGE_TIMEOUT
+                .checked_sub(Duration::from_nanos(1))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(time.pending_sleeps(), 1);
+        assert!(!handle.is_finished());
+        time.advance_monotonic(Duration::from_nanos(1)).unwrap();
         let token_response = handle.await.unwrap().unwrap().token_response;
         assert_eq!(
             token_response.access_token().token().expose_secret(),
             "test-token"
+        );
+        assert_eq!(time.pending_sleeps(), 0);
+    }
+
+    #[tokio::test]
+    async fn grant_clone_uses_configured_timer_for_both_deadlines() {
+        use crate::core::time::ManualTime;
+        let time = ManualTime::new(jiff::Timestamp::UNIX_EPOCH);
+        let grant = error_path_grant_with_timer(time.clone()).await.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            grant
+                .complete_on_loopback(&listener, &error_path_pending_state(), None)
+                .await
+        });
+        let silent = TcpStream::connect(addr).await.unwrap();
+        wait_for_sleep(&time).await;
+        time.advance_monotonic(READ_TIMEOUT).unwrap();
+        send_http_request(addr, "GET /callback?error=access_denied&state=xyz HTTP/1.1").await;
+        wait_for_sleep(&time).await;
+        assert!(!handle.is_finished());
+        time.advance_monotonic(RESULT_PAGE_TIMEOUT).unwrap();
+        assert!(matches!(
+            handle.await.unwrap(),
+            Err(LoopbackError::OAuthError { .. })
+        ));
+        assert_eq!(time.pending_sleeps(), 0);
+        drop(silent);
+    }
+
+    #[tokio::test]
+    async fn timeout_cancellation_releases_manual_sleep() {
+        use crate::core::time::{Duration, ManualTime};
+        let time = ManualTime::new(jiff::Timestamp::UNIX_EPOCH);
+        let mut waiting = Box::pin(with_timeout(
+            &time,
+            Duration::from_secs(10),
+            std::future::pending::<()>(),
+        ));
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(time.pending_sleeps(), 1);
+        drop(waiting);
+        assert_eq!(time.pending_sleeps(), 0);
+    }
+
+    #[tokio::test]
+    async fn timeout_handles_unrepresentable_deadline() {
+        use crate::core::time::{Duration, ManualTime};
+        let time = ManualTime::new(jiff::Timestamp::UNIX_EPOCH);
+        time.advance_monotonic(Duration::from_secs(1)).unwrap();
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut waiting = Box::pin(with_timeout(&time, Duration::MAX, receive));
+        std::future::poll_fn(|cx| {
+            assert!(std::future::Future::poll(waiting.as_mut(), cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(time.pending_sleeps(), 0);
+        send.send(42).unwrap();
+        assert_eq!(waiting.await, Some(Ok(42)));
+        assert_eq!(
+            with_timeout(&time, Duration::ZERO, std::future::ready(7)).await,
+            Some(7)
         );
     }
 

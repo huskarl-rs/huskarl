@@ -277,6 +277,7 @@ mod tests {
         let params = secret
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("my-client")
                     .target_endpoint(&uri)
                     .token_endpoint(&uri)
@@ -313,6 +314,7 @@ mod tests {
         let params = secret
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("cid")
                     .target_endpoint(&uri)
                     .token_endpoint(&uri)
@@ -338,6 +340,7 @@ mod tests {
         let params = secret
             .authentication_context(
                 AuthenticationContext::builder()
+                    .now(jiff::Timestamp::UNIX_EPOCH)
                     .client_id("cl&ent")
                     .target_endpoint(&uri)
                     .token_endpoint(&uri)

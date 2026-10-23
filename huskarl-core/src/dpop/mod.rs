@@ -44,12 +44,30 @@ pub trait AuthorizationServerDPoP: sealed::Sealed + MaybeSendSync {
     /// will later sign proofs.
     fn get_current_thumbprint(&self) -> MaybeSendBoxFuture<'_, Option<String>>;
 
-    /// Create a `DPoP` proof for the token endpoint.
+    /// Creates a token-endpoint proof using the platform clock.
     fn proof<'a>(
         &'a self,
         method: &'a Method,
         uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        // TODO(next breaking release): require `proof_at`.
+        self.proof_at(
+            method,
+            uri,
+            dpop_jkt,
+            crate::time::Clock::now(&crate::time::PlatformClock),
+        )
+    }
+
+    /// Creates a proof using the caller's timestamp.
+    /// Capture a fresh timestamp for each request attempt, including nonce retries.
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
 
     /// Creates a token-endpoint proof with an optional OIDC Key Binding
@@ -63,6 +81,25 @@ pub trait AuthorizationServerDPoP: sealed::Sealed + MaybeSendSync {
         uri: &'a Uri,
         dpop_jkt: Option<&'a str>,
         code_hash: Option<&'a str>,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        self.proof_with_code_hash_at(
+            method,
+            uri,
+            dpop_jkt,
+            code_hash,
+            crate::time::Clock::now(&crate::time::PlatformClock),
+        )
+    }
+
+    /// Creates a key-binding proof using the caller's timestamp.
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+        now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
 
     /// Returns the corresponding resource server variant.
@@ -90,13 +127,33 @@ pub trait ResourceServerDPoP: sealed::Sealed + MaybeSendSync {
     /// Set the current `DPoP` nonce value.
     fn update_nonce(&self, uri: &Uri, nonce: String);
 
-    /// Create a `DPoP` proof with access token binding.
+    /// Creates an access-token-bound proof using the platform clock.
     fn proof<'a>(
         &'a self,
         method: &'a Method,
         uri: &'a Uri,
         access_token: &'a SecretString,
         dpop_jkt: &'a str,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        // TODO(next breaking release): require `proof_at`.
+        self.proof_at(
+            method,
+            uri,
+            access_token,
+            dpop_jkt,
+            crate::time::Clock::now(&crate::time::PlatformClock),
+        )
+    }
+
+    /// Creates a proof using the caller's timestamp.
+    /// Capture a fresh timestamp for each request attempt, including nonce retries.
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+        now: jiff::Timestamp,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>>;
 }
 
@@ -127,6 +184,28 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for &T {
         code_hash: Option<&'a str>,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         (**self).proof_with_code_hash(method, uri, dpop_jkt, code_hash)
+    }
+
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_with_code_hash_at(method, uri, dpop_jkt, code_hash, now)
+    }
+
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_at(method, uri, dpop_jkt, now)
     }
 
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
@@ -170,6 +249,28 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Box<T> {
         (**self).proof_with_code_hash(method, uri, dpop_jkt, code_hash)
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_with_code_hash_at(method, uri, dpop_jkt, code_hash, now)
+    }
+
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_at(method, uri, dpop_jkt, now)
+    }
+
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         (**self).to_resource_server_dpop()
     }
@@ -211,6 +312,28 @@ impl<T: AuthorizationServerDPoP + ?Sized> AuthorizationServerDPoP for Arc<T> {
         (**self).proof_with_code_hash(method, uri, dpop_jkt, code_hash)
     }
 
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn proof_with_code_hash_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        code_hash: Option<&'a str>,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_with_code_hash_at(method, uri, dpop_jkt, code_hash, now)
+    }
+
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        dpop_jkt: Option<&'a str>,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_at(method, uri, dpop_jkt, now)
+    }
+
     fn to_resource_server_dpop(&self) -> Arc<dyn ResourceServerDPoP> {
         (**self).to_resource_server_dpop()
     }
@@ -237,6 +360,17 @@ impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for &T {
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         (**self).proof(method, uri, access_token, dpop_jkt)
     }
+
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_at(method, uri, access_token, dpop_jkt, now)
+    }
 }
 
 impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for Box<T> {
@@ -253,6 +387,17 @@ impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for Box<T> {
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         (**self).proof(method, uri, access_token, dpop_jkt)
     }
+
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_at(method, uri, access_token, dpop_jkt, now)
+    }
 }
 
 impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for Arc<T> {
@@ -268,5 +413,16 @@ impl<T: ResourceServerDPoP + ?Sized> ResourceServerDPoP for Arc<T> {
         dpop_jkt: &'a str,
     ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
         (**self).proof(method, uri, access_token, dpop_jkt)
+    }
+
+    fn proof_at<'a>(
+        &'a self,
+        method: &'a Method,
+        uri: &'a Uri,
+        access_token: &'a SecretString,
+        dpop_jkt: &'a str,
+        now: jiff::Timestamp,
+    ) -> MaybeSendBoxFuture<'a, Result<Option<SecretString>, Error>> {
+        (**self).proof_at(method, uri, access_token, dpop_jkt, now)
     }
 }

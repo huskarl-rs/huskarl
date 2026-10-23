@@ -14,6 +14,7 @@ use huskarl_core::{
     },
     jwk::{self, PublicJwk},
     platform::MaybeSendBoxFuture,
+    time::{Clock, PlatformClock},
 };
 use p256::{
     ecdsa::signature,
@@ -454,6 +455,9 @@ impl SigningKey {
         /// The version selection strategy. Defaults to [`VersionStrategy::Latest`].
         #[builder(default)]
         strategy: VersionStrategy,
+        /// Clock sampled after listing versions for minimum-age selection.
+        #[builder(default = Arc::<PlatformClock>::default(), with = |clock: impl Clock + 'static| Arc::new(clock) as Arc<dyn Clock>)]
+        clock: Arc<dyn Clock>,
         /// Use the fully-specified JWS algorithm identifier for `EdDSA` keys.
         ///
         /// When `true` (the default), Ed25519 keys advertise `"Ed25519"` as
@@ -483,9 +487,14 @@ impl SigningKey {
         // Resolve the primary version and list all enabled versions concurrently.
         let (primary_version_id, all_versions) = futures_util::try_join!(
             async {
-                super::super::version::resolve_version(&key_name, &strategy, &kms_client)
-                    .await
-                    .context(VersionResolutionSnafu)
+                super::super::version::resolve_version_with_clock(
+                    &key_name,
+                    &strategy,
+                    &kms_client,
+                    clock.as_ref(),
+                )
+                .await
+                .context(VersionResolutionSnafu)
             },
             async {
                 super::super::version::list_enabled_kms_versions(

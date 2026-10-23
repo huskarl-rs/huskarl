@@ -14,7 +14,8 @@ use crate::{
         Error, OAuthErrorCode, RetryAdvice,
         dpop::ResourceServerDPoP,
         error::propagation::Classification,
-        platform::{Duration, Instant, MaybeSendBoxFuture},
+        platform::{Duration, MaybeSendBoxFuture},
+        time::{MonotonicInstant, Timer},
     },
     grant::{
         core::{OAuth2ExchangeGrant, TokenResponse},
@@ -136,6 +137,13 @@ pub struct GrantTokenSource<G: OAuth2ExchangeGrant, S: RefreshTokenStore> {
     /// allowing a trial again. Defaults to 1 minute.
     #[builder(default = Duration::from_mins(1))]
     breaker_cooldown: Duration,
+    /// Timer used for breaker cooldowns and credential-view staleness.
+    /// Defaults to the grant's timer.
+    #[builder(
+        default = grant.timer(),
+        with = |timer: impl Timer + 'static| Arc::new(timer) as Arc<dyn Timer>
+    )]
+    timer: Arc<dyn Timer>,
     #[builder(skip)]
     breaker: Breaker,
 }
@@ -177,6 +185,14 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> TokenSource for GrantTokenSou
             }
             result
         })
+    }
+
+    fn timer(&self) -> Arc<dyn Timer> {
+        self.timer.clone()
+    }
+
+    fn clock(&self) -> Arc<dyn crate::core::time::Clock> {
+        self.grant.clock()
     }
 
     fn resource_server_dpop(&self) -> &dyn ResourceServerDPoP {
@@ -266,10 +282,11 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
         }
 
         // Gate only fresh exchanges; a retained refresh token remains usable.
-        if let Err(remaining) = self
-            .breaker
-            .try_acquire(self.breaker_threshold, self.breaker_cooldown)
-        {
+        if let Err(remaining) = self.breaker.try_acquire(
+            self.breaker_threshold,
+            self.breaker_cooldown,
+            self.timer.as_ref(),
+        ) {
             #[cfg(feature = "tracing")]
             tracing::debug!(
                 decision = "backoff",
@@ -305,8 +322,11 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
                 // a fresh-exchange failure, combined with any refresh error.
                 Err(exchange_source) => {
                     if Self::counts_toward_breaker(&exchange_source, false) {
-                        self.breaker
-                            .record_failure(self.breaker_threshold, self.breaker_cooldown);
+                        self.breaker.record_failure(
+                            self.breaker_threshold,
+                            self.breaker_cooldown,
+                            self.timer.as_ref(),
+                        );
                     }
                     return Err(self.combine_exchange_error(
                         refresh_error,
@@ -359,8 +379,11 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
                 // already permanently handled; transient and request-shape
                 // failures have their own recovery (retry / adjust).
                 if Self::counts_toward_breaker(&exchange_source, spent) {
-                    self.breaker
-                        .record_failure(self.breaker_threshold, self.breaker_cooldown);
+                    self.breaker.record_failure(
+                        self.breaker_threshold,
+                        self.breaker_cooldown,
+                        self.timer.as_ref(),
+                    );
                 }
                 Err(self.combine_exchange_error(
                     refresh_error,
@@ -598,7 +621,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(CredentialView {
             has_refresh_token,
-            reconciled_at: Instant::now(),
+            reconciled_at: self.timer.now(),
         });
     }
 
@@ -613,7 +636,13 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
             .unwrap_or_else(PoisonError::into_inner))?;
         match max_staleness {
             None => Some(view.has_refresh_token),
-            Some(max) => (view.reconciled_at.elapsed() <= max).then_some(view.has_refresh_token),
+            Some(max) if max.is_zero() => None,
+            Some(max) => self
+                .timer
+                .now()
+                .checked_duration_since(view.reconciled_at)
+                .filter(|age| *age <= max)
+                .map(|_| view.has_refresh_token),
         }
     }
 
@@ -732,7 +761,7 @@ impl<G: OAuth2ExchangeGrant, S: RefreshTokenStore> GrantTokenSource<G, S> {
 #[derive(Clone, Copy)]
 struct CredentialView {
     has_refresh_token: bool,
-    reconciled_at: Instant,
+    reconciled_at: MonotonicInstant,
 }
 
 #[cfg(test)]
