@@ -1,3 +1,4 @@
+use bon::Builder;
 use serde::{Deserialize, Serialize};
 
 use crate::core::secrets::SecretString;
@@ -13,13 +14,14 @@ use crate::core::secrets::SecretString;
 /// Binding (with `experimental-oidc-key-binding`) records the original proof key
 /// for both client types. A stored thumbprint is always honored and preserved
 /// in replacement refresh tokens.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 pub struct RefreshToken {
     token: SecretString,
     #[serde(skip_serializing_if = "Option::is_none")]
     dpop_jkt: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[cfg(feature = "experimental-oidc-key-binding")]
+    #[builder(default)]
     pub(crate) openid_bound_key_requested: bool,
 }
 
@@ -27,8 +29,8 @@ impl RefreshToken {
     /// Creates a new `RefreshToken` with the given token and `DPoP` JWT thumbprint.
     ///
     /// A supplied thumbprint is always honored. To preserve an
-    /// OIDC Key Binding request flag, retain the token returned by the grant
-    /// or deserialize its complete saved representation instead.
+    /// OIDC Key Binding request flag, use [`Self::builder`], retain the token
+    /// returned by the grant, or deserialize its complete saved representation.
     #[must_use]
     pub fn new(token: SecretString, dpop_jkt: Option<String>) -> Self {
         Self {
@@ -86,6 +88,29 @@ impl RefreshToken {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builder_defaults_match_constructor() {
+        let token = RefreshToken::builder().token("refresh".into()).build();
+        assert_eq!(token, RefreshToken::new("refresh".into(), None));
+    }
+
+    #[test]
+    #[cfg(feature = "experimental-oidc-key-binding")]
+    fn builder_restores_oidc_request_context() {
+        let token = RefreshToken::builder()
+            .token("refresh".into())
+            .dpop_jkt("original-key".into())
+            .openid_bound_key_requested(true)
+            .build();
+        let restored: RefreshToken = serde_json::from_str(
+            r#"{"token":"refresh","dpop_jkt":"original-key","openid_bound_key_requested":true}"#,
+        )
+        .unwrap();
+        assert_eq!(token, restored);
+        assert!(token.openid_bound_key_requested());
+        assert_eq!(token.dpop_jkt(), Some("original-key"));
+    }
 
     #[test]
     fn legacy_state_keeps_ordinary_refresh_semantics() {

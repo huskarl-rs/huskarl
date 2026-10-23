@@ -103,6 +103,8 @@ ID tokens stay within the RP; use access tokens for protected resources.
 - **After authorization:** retain the returned `RefreshToken`. To save and
   restore it, serialize and deserialize the complete object. `RefreshToken::new`
   does not restore `openid_bound_key_requested`, even if given the thumbprint.
+  To restore separately stored fields, use `RefreshToken::builder()` and set
+  `openid_bound_key_requested` explicitly alongside the token and thumbprint.
 - **Throughout both:** keep the original private key available to the signer.
   The saved objects identify the key by thumbprint; neither contains it.
 

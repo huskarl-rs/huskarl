@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use core::prelude::v1::test;
 use core::task::{Context, Poll};
 use std::{
     sync::{
@@ -9,8 +11,6 @@ use std::{
     task::{Wake, Waker},
 };
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-use core::prelude::v1::test;
 use huskarl_core::time::*;
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use wasm_bindgen_test::wasm_bindgen_test as test;
