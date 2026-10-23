@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5](https://github.com/huskarl-rs/huskarl/compare/huskarl-google-cloud-v0.8.4...huskarl-google-cloud-v0.8.5) - 2026-10-23
+
+### Added
+
+- Adds clock/timer abstraction, plumbs it through the codebase ([#371](https://github.com/huskarl-rs/huskarl/pull/371))
+
 ## [0.8.4](https://github.com/huskarl-rs/huskarl/compare/huskarl-google-cloud-v0.8.3...huskarl-google-cloud-v0.8.4) - 2026-10-19
 
 ### Added

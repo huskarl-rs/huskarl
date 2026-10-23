@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.8](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.7...huskarl-v0.11.8) - 2026-10-23
+
+### Added
+
+- Add RefreshToken builder ([#373](https://github.com/huskarl-rs/huskarl/pull/373))
+- Adds clock/timer abstraction, plumbs it through the codebase ([#371](https://github.com/huskarl-rs/huskarl/pull/371))
+
+### Other
+
+- *(client)* Cover grant-specific token source lifecycles ([#368](https://github.com/huskarl-rs/huskarl/pull/368))
+
 ## [0.11.7](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.6...huskarl-v0.11.7) - 2026-10-18
 
 ### Added

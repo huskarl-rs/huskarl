@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl"
-version = "0.11.7"
+version = "0.11.8"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-core"
-version = "0.10.9"
+version = "0.10.10"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -1910,7 +1910,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-google-cloud"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "bon",
  "der",
@@ -2006,7 +2006,7 @@ dependencies = [
 
 [[package]]
 name = "huskarl-resource-server"
-version = "0.11.10"
+version = "0.11.11"
 dependencies = [
  "base64 0.23.1",
  "bon",
