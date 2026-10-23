@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.10](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.9...huskarl-core-v0.10.10) - 2026-10-23
+
+### Added
+
+- Add RefreshToken builder ([#373](https://github.com/huskarl-rs/huskarl/pull/373))
+- Adds clock/timer abstraction, plumbs it through the codebase ([#371](https://github.com/huskarl-rs/huskarl/pull/371))
+- *(core)* Add refresh metrics for scheduled crypto sources ([#367](https://github.com/huskarl-rs/huskarl/pull/367))
+
+### Fixed
+
+- *(core)* Enforce refresh policy while preserving concurrent adoption ([#365](https://github.com/huskarl-rs/huskarl/pull/365))
+
 ## [0.10.9](https://github.com/huskarl-rs/huskarl/compare/huskarl-core-v0.10.8...huskarl-core-v0.10.9) - 2026-10-19
 
 ### Added
