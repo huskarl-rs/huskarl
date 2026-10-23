@@ -113,12 +113,13 @@ pub(crate) fn unix_seconds_from_timestamp(value: jiff::Timestamp) -> Result<u64,
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::*;
-
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     use core::prelude::v1::test;
+
     #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     use wasm_bindgen_test::wasm_bindgen_test as test;
+
+    use super::*;
 
     fn timestamp(seconds: i64, nanos: i32) -> jiff::Timestamp {
         jiff::Timestamp::new(seconds, nanos).unwrap()
