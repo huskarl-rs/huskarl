@@ -47,6 +47,7 @@ fn expected(name: &str) -> Result<Expected, String> {
             "discovery-issuer-mismatch" => DiscoveryRejection,
             "happy-path"
             | "happy-path-no-dpop-nonce"
+            | "happy-path-no-mtls-endpoint-aliases"
             | "valid-aud-as-array"
             | "rs-dpop-auth-scheme-case-insensitivity"
             | "token-type-case-insensitivity"
