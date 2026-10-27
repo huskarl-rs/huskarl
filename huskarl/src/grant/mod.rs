@@ -16,12 +16,15 @@
 //! how-to guides in [`crate::_docs::guide`].
 
 pub mod authorization_code;
+mod client_configuration;
 pub mod client_credentials;
 pub mod core;
 pub mod device_authorization;
 pub mod jwt_bearer;
 pub mod refresh;
 pub mod token_exchange;
+
+pub use client_configuration::{ClientConfiguration, ClientConfigurationBuilder};
 
 /// Outcome of authorization-code completion, suitable for a low-cardinality
 /// metrics label.

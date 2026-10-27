@@ -257,6 +257,33 @@ pub struct ClientCredentialsGrantForm {
     authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
+impl<S: client_credentials_grant_builder::State> ClientCredentialsGrantBuilder<S> {
+    /// Sets client identity, authentication, and DPoP from shared configuration.
+    ///
+    /// Call this before `client_id`, `client_auth`, or `dpop`. These setters
+    /// are unavailable afterward, even when the configuration uses
+    /// [`NoDPoP`].
+    pub fn client(
+        self,
+        client: &crate::grant::ClientConfiguration,
+    ) -> ClientCredentialsGrantBuilder<
+        client_credentials_grant_builder::SetDpop<
+            client_credentials_grant_builder::SetClientAuth<
+                client_credentials_grant_builder::SetClientId<S>,
+            >,
+        >,
+    >
+    where
+        S::ClientId: client_credentials_grant_builder::IsUnset,
+        S::ClientAuth: client_credentials_grant_builder::IsUnset,
+        S::Dpop: client_credentials_grant_builder::IsUnset,
+    {
+        self.client_id(client.client_id.clone())
+            .client_auth(client.client_auth.clone())
+            .dpop(client.dpop.clone())
+    }
+}
+
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
 mod tests {

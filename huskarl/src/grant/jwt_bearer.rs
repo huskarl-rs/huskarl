@@ -285,6 +285,31 @@ pub struct JwtBearerGrantForm {
     authorization_details: Option<Vec<crate::core::AuthorizationDetail>>,
 }
 
+impl<S: jwt_bearer_grant_builder::State> JwtBearerGrantBuilder<S> {
+    /// Sets client identity, authentication, and DPoP from shared configuration.
+    ///
+    /// Call this before `client_id`, `client_auth`, or `dpop`. These setters
+    /// are unavailable afterward, even when the configuration uses
+    /// [`NoDPoP`].
+    pub fn client(
+        self,
+        client: &crate::grant::ClientConfiguration,
+    ) -> JwtBearerGrantBuilder<
+        jwt_bearer_grant_builder::SetDpop<
+            jwt_bearer_grant_builder::SetClientAuth<jwt_bearer_grant_builder::SetClientId<S>>,
+        >,
+    >
+    where
+        S::ClientId: jwt_bearer_grant_builder::IsUnset,
+        S::ClientAuth: jwt_bearer_grant_builder::IsUnset,
+        S::Dpop: jwt_bearer_grant_builder::IsUnset,
+    {
+        self.client_id(client.client_id.clone())
+            .client_auth(client.client_auth.clone())
+            .dpop(client.dpop.clone())
+    }
+}
+
 #[cfg(test)]
 #[cfg(not(target_family = "wasm"))]
 mod tests {

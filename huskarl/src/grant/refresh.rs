@@ -405,3 +405,28 @@ mod session_keyed_dpop_tests {
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod binding_tests;
+
+impl<S: refresh_grant_builder::State> RefreshGrantBuilder<S> {
+    /// Sets client identity, authentication, and DPoP from shared configuration.
+    ///
+    /// Call this before `client_id`, `client_auth`, or `dpop`. These setters
+    /// are unavailable afterward, even when the configuration uses
+    /// [`NoDPoP`].
+    pub fn client(
+        self,
+        client: &crate::grant::ClientConfiguration,
+    ) -> RefreshGrantBuilder<
+        refresh_grant_builder::SetDpop<
+            refresh_grant_builder::SetClientAuth<refresh_grant_builder::SetClientId<S>>,
+        >,
+    >
+    where
+        S::ClientId: refresh_grant_builder::IsUnset,
+        S::ClientAuth: refresh_grant_builder::IsUnset,
+        S::Dpop: refresh_grant_builder::IsUnset,
+    {
+        self.client_id(client.client_id.clone())
+            .client_auth(client.client_auth.clone())
+            .dpop(client.dpop.clone())
+    }
+}
