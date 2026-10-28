@@ -644,3 +644,30 @@ mod session_dpop_tests {
         ));
     }
 }
+
+impl<S: token_exchange_grant_builder::State> TokenExchangeGrantBuilder<S> {
+    /// Sets client identity, authentication, and DPoP from shared configuration.
+    ///
+    /// Call this before `client_id`, `client_auth`, or `dpop`. These setters
+    /// are unavailable afterward, even when the configuration uses
+    /// [`NoDPoP`].
+    pub fn client(
+        self,
+        client: &crate::grant::ClientConfiguration,
+    ) -> TokenExchangeGrantBuilder<
+        token_exchange_grant_builder::SetDpop<
+            token_exchange_grant_builder::SetClientAuth<
+                token_exchange_grant_builder::SetClientId<S>,
+            >,
+        >,
+    >
+    where
+        S::ClientId: token_exchange_grant_builder::IsUnset,
+        S::ClientAuth: token_exchange_grant_builder::IsUnset,
+        S::Dpop: token_exchange_grant_builder::IsUnset,
+    {
+        self.client_id(client.client_id.clone())
+            .client_auth(client.client_auth.clone())
+            .dpop(client.dpop.clone())
+    }
+}

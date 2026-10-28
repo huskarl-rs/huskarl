@@ -64,6 +64,53 @@ use huskarl::core::client_auth::NoAuth;
 let client_auth = NoAuth;
 ```
 
+## Reuse client configuration across grants
+
+To share a client ID, authentication method, and DPoP implementation across
+grants, build a [`ClientConfiguration`](crate::grant::ClientConfiguration) and
+pass it to each grant builder's `client` method:
+
+```rust
+use huskarl::{
+    core::client_auth::NoAuth,
+    grant::{
+        ClientConfiguration, device_authorization::DeviceAuthorizationGrant,
+        refresh::RefreshGrant,
+    },
+};
+# async fn setup_grants() -> Result<(), Box<dyn std::error::Error>> {
+# let http_client = huskarl_reqwest::ReqwestClient::builder().build().await?;
+
+let client = ClientConfiguration::builder()
+    .client_id("my-client")
+    .client_auth(NoAuth)
+    .build();
+
+let device = DeviceAuthorizationGrant::builder()
+    .client(&client)
+    .http_client(http_client.clone())
+    .device_authorization_endpoint("https://my-server/device".parse()?)
+    .token_endpoint("https://my-server/token".parse()?)
+    .build();
+
+let refresh = RefreshGrant::builder()
+    .client(&client)
+    .http_client(http_client)
+    .token_endpoint("https://my-server/token".parse()?)
+    .build();
+# Ok(())
+# }
+```
+
+For a confidential client, replace `NoAuth` with your authentication
+implementation. To enable DPoP, set `dpop` on the shared configuration; it
+defaults to [`NoDPoP`](crate::core::dpop::NoDPoP). Grants share the authentication
+and DPoP implementations, including their state.
+
+Call `client` before `client_id`, `client_auth`, or `dpop`; those setters are
+unavailable afterward. Configure HTTP clients, endpoints, and other grant
+settings on each grant builder.
+
 ## Choose the discovery method
 
 Use [`AuthorizationServerMetadata::fetch`](crate::core::server_metadata::AuthorizationServerMetadata::fetch)

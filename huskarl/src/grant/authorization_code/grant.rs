@@ -721,3 +721,30 @@ impl OAuth2ExchangeGrant for AuthorizationCodeGrant {
         }
     }
 }
+
+impl<S: authorization_code_grant_builder::State> AuthorizationCodeGrantBuilder<S> {
+    /// Sets client identity, authentication, and DPoP from shared configuration.
+    ///
+    /// Call this before `client_id`, `client_auth`, or `dpop`. These setters
+    /// are unavailable afterward, even when the configuration uses
+    /// [`NoDPoP`].
+    pub fn client(
+        self,
+        client: &crate::grant::ClientConfiguration,
+    ) -> AuthorizationCodeGrantBuilder<
+        authorization_code_grant_builder::SetDpop<
+            authorization_code_grant_builder::SetClientAuth<
+                authorization_code_grant_builder::SetClientId<S>,
+            >,
+        >,
+    >
+    where
+        S::ClientId: authorization_code_grant_builder::IsUnset,
+        S::ClientAuth: authorization_code_grant_builder::IsUnset,
+        S::Dpop: authorization_code_grant_builder::IsUnset,
+    {
+        self.client_id(client.client_id.clone())
+            .client_auth(client.client_auth.clone())
+            .dpop(client.dpop.clone())
+    }
+}

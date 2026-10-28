@@ -658,6 +658,33 @@ impl StartInput {
     }
 }
 
+impl<S: device_authorization_grant_builder::State> DeviceAuthorizationGrantBuilder<S> {
+    /// Sets client identity, authentication, and DPoP from shared configuration.
+    ///
+    /// Call this before `client_id`, `client_auth`, or `dpop`. These setters
+    /// are unavailable afterward, even when the configuration uses
+    /// [`NoDPoP`].
+    pub fn client(
+        self,
+        client: &crate::grant::ClientConfiguration,
+    ) -> DeviceAuthorizationGrantBuilder<
+        device_authorization_grant_builder::SetDpop<
+            device_authorization_grant_builder::SetClientAuth<
+                device_authorization_grant_builder::SetClientId<S>,
+            >,
+        >,
+    >
+    where
+        S::ClientId: device_authorization_grant_builder::IsUnset,
+        S::ClientAuth: device_authorization_grant_builder::IsUnset,
+        S::Dpop: device_authorization_grant_builder::IsUnset,
+    {
+        self.client_id(client.client_id.clone())
+            .client_auth(client.client_auth.clone())
+            .dpop(client.dpop.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
