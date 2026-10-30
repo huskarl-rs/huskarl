@@ -190,7 +190,7 @@ pub struct StandardOidcAddressClaims {
 
 /// Validates an `OpenID` Connect ID token: signature (via the configured
 /// [`JwsVerifier`]), `iss`, and `aud`, plus — when configured — `nonce`,
-/// `max_age`, `acr`, and the set of permitted signature algorithms.
+/// `max_age`, `max_token_age`, `acr`, and the set of permitted signature algorithms.
 ///
 /// With the `metrics` feature, each completed [`validate`](Self::validate) or
 /// [`validate_refresh`](Self::validate_refresh) call increments
@@ -228,8 +228,10 @@ pub struct IdTokenValidator {
     /// §3.1.3.7 step 3). Empty by default.
     #[builder(default)]
     trusted_audiences: Vec<String>,
-    /// The maximum age of the token.
+    /// Maximum time since the user authenticated, checked against `auth_time`.
     max_age: Option<Duration>,
+    /// Maximum time since the ID token was issued, checked against `iat`.
+    max_token_age: Option<Duration>,
     /// The clock leeway to use when validating the token.
     #[builder(default = Duration::from_secs(10))]
     clock_leeway: Duration,
@@ -280,8 +282,8 @@ impl IdTokenValidator {
     /// the refreshed token must still be valid.
     ///
     /// All configured validation checks still apply, including `required_acr`
-    /// (the required authentication context) and `max_age` (how long ago the user
-    /// signed in).
+    /// (the required authentication context), `max_age` (how long ago the user
+    /// signed in), and `max_token_age` (how recently this token was issued).
     ///
     /// The provider, user identifier, and intended recipients must match the
     /// original token. If the refreshed token includes a nonce (the value used
@@ -353,7 +355,8 @@ impl IdTokenValidator {
     }
 
     /// Validates `id_token` against this validator's configuration and returns
-    /// its verified claims. JWT claims and authentication age share one clock snapshot.
+    /// its verified claims. JWT claims, token age, and authentication age share one
+    /// clock snapshot.
     ///
     /// Pass `expected_nonce` when the authorization request carried a `nonce` —
     /// it is then required to match; otherwise pass `None`.
@@ -361,7 +364,7 @@ impl IdTokenValidator {
     /// # Errors
     ///
     /// Returns an [`IdTokenValidationError`] if any configured check fails —
-    /// signature, `iss`, `aud`, `nonce`, `max_age`, `acr`, or signature
+    /// signature, `iss`, `aud`, `nonce`, `max_age`, `max_token_age`, `acr`, or signature
     /// algorithm.
     #[cfg_attr(
         feature = "tracing",
@@ -376,9 +379,9 @@ impl IdTokenValidator {
             .await
     }
 
-    /// Validates an ID token using one timestamp for JWT claims and authentication age.
-    /// The configured clock is not read. Pass `expected_nonce` when the authorization
-    /// request carried a nonce, as for [`Self::validate`].
+    /// Validates an ID token using one timestamp for JWT claims, token age, and
+    /// authentication age. The configured clock is not read. Pass `expected_nonce`
+    /// when the authorization request carried a nonce, as for [`Self::validate`].
     ///
     /// # Errors
     ///
@@ -405,6 +408,7 @@ impl IdTokenValidator {
         tracing::trace!(
             nonce_check_enabled = expected_nonce.is_some(),
             authentication_age_check_enabled = self.max_age.is_some(),
+            token_age_check_enabled = self.max_token_age.is_some(),
             acr_check_enabled = self.required_acr.is_some(),
             "ID-token validation policy"
         );
@@ -422,6 +426,7 @@ impl IdTokenValidator {
             .typ(typ)
             .require_exp(true)
             .require_iat(true)
+            .maybe_max_token_age(self.max_token_age)
             .clock_leeway(self.clock_leeway)
             .maybe_allowed_algorithms(self.allowed_algorithms.clone())
             .build();
@@ -984,6 +989,54 @@ mod tests {
             .maybe_max_age(max_age)
             .maybe_required_acr(required_acr.map(str::to_string))
             .build()
+    }
+
+    #[rstest]
+    #[case::unset(None, 71, true)]
+    #[case::within_limit(Some(60), 60, true)]
+    #[case::leeway_boundary(Some(60), 70, true)]
+    #[case::too_old(Some(60), 71, false)]
+    #[tokio::test]
+    async fn token_age_policy_applies_to_initial_and_refreshed_tokens(
+        #[case] limit_secs: Option<u64>,
+        #[case] age_secs: u64,
+        #[case] accepted: bool,
+    ) {
+        let (signer, verifier) = signer_and_verifier().await;
+        // Old authentication does not make a freshly issued token old.
+        let token = mint_standard(
+            &signer,
+            IdTokenClaims {
+                auth_time: Some(NOW - 86_400),
+                ..Default::default()
+            },
+        )
+        .await;
+        let time = test_time();
+        let validator = IdTokenValidator::builder()
+            .verifier(verifier)
+            .issuer(ISS)
+            .audience(AUD)
+            .clock(time.clone())
+            .maybe_max_token_age(limit_secs.map(Duration::from_secs))
+            .build();
+        let original = validator.validate(&token, None).await.unwrap();
+        time.advance(Duration::from_secs(age_secs)).unwrap();
+        for result in [
+            validator.validate(&token, None).await,
+            validator.validate_refresh(&token, &original).await,
+        ] {
+            if accepted {
+                result.unwrap();
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(IdTokenValidationError::Jwt {
+                        source: crate::core::jwt::validator::JwtValidationError::TokenTooOld { .. }
+                    })
+                ));
+            }
+        }
     }
 
     #[tokio::test]
