@@ -139,11 +139,11 @@ impl TokenResponse {
 
     /// Returns the ID token from the token response, as received.
     ///
-    /// The library validates it only on the authorization-code callback path
-    /// — use the validated form returned by
+    /// This accessor returns untrusted wire data. Authorization-code
     /// [`complete`](crate::grant::authorization_code::AuthorizationCodeGrant::complete)
-    /// there. On every other grant (refresh, device, token exchange) this is
-    /// untrusted wire data: validate it before use.
+    /// and CIBA [`poll`](crate::grant::ciba::CibaPollGrant::poll) return a
+    /// separate validated ID token in their completion outputs. For low-level
+    /// exchanges and other grants, validate this token before using its claims.
     #[must_use]
     pub fn id_token(&self) -> Option<&IdToken> {
         self.raw.id_token.as_ref()

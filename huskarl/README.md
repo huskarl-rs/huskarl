@@ -87,13 +87,19 @@ setup and a worked example.
 
 - [`ClientCredentialsGrant`](https://docs.rs/huskarl/latest/huskarl/grant/client_credentials/struct.ClientCredentialsGrant.html) — RFC 6749 §4.4
 - [`RefreshGrant`](https://docs.rs/huskarl/latest/huskarl/grant/refresh/struct.RefreshGrant.html) — RFC 6749 §6
-- [`AuthorizationCodeGrant`](https://docs.rs/huskarl/latest/huskarl/grant/authorization_code/grant/struct.AuthorizationCodeGrant.html) — RFC 6749 §4.1
-- [`DeviceAuthorizationGrant`](https://docs.rs/huskarl/latest/huskarl/grant/device_authorization/grant/struct.DeviceAuthorizationGrant.html) — RFC 8628
+- [`AuthorizationCodeGrant`](https://docs.rs/huskarl/latest/huskarl/grant/authorization_code/struct.AuthorizationCodeGrant.html) — RFC 6749 §4.1
+- [`DeviceAuthorizationGrant`](https://docs.rs/huskarl/latest/huskarl/grant/device_authorization/struct.DeviceAuthorizationGrant.html) — RFC 8628
+- [`CibaPollGrant`](https://docs.rs/huskarl/latest/huskarl/grant/ciba/struct.CibaPollGrant.html) — OpenID Connect CIBA Core 1.0, poll mode
 - [`TokenExchangeGrant`](https://docs.rs/huskarl/latest/huskarl/grant/token_exchange/struct.TokenExchangeGrant.html) — RFC 8693
 - [`JwtBearerGrant`](https://docs.rs/huskarl/latest/huskarl/grant/jwt_bearer/struct.JwtBearerGrant.html) — RFC 7523
 
-Further grants — CIBA, provider-specific flows — can be implemented in this
+Further grants — including provider-specific flows — can be implemented in this
 crate or by external crates. The [`registration`](https://docs.rs/huskarl/latest/huskarl/registration/) module implements OAuth 2.0
 Dynamic Client Registration (RFC 7591).
+
+The opt-in `experimental-oidc-key-binding` Cargo feature targets OpenID Connect
+Key Binding draft 03 and is disabled by default. Its API, behavior, and
+experimental persisted state may change or be removed in a minor release;
+it is excluded from the stable API compatibility guarantee.
 
 <!-- cargo-reedme: end -->

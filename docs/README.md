@@ -41,6 +41,7 @@ guides to adapt that path to your application.
 - Use a grant:
   [authorization code](../huskarl/docs/guide/authorization_code.md),
   [client credentials](../huskarl/docs/guide/client_credentials.md),
+  [CIBA](../huskarl/docs/guide/ciba.md),
   [device authorization](../huskarl/docs/guide/device_authorization.md),
   [refresh token](../huskarl/docs/guide/refresh.md),
   [token exchange](../huskarl/docs/guide/token_exchange.md), or
@@ -142,3 +143,11 @@ library API:
 - [Provider interoperability matrix](../integration/README.md)
 - [OpenID conformance setup](../integration/huskarl-conformance/README.md)
 - [Workspace status and support policy](../README.md#status)
+
+Regenerate READMEs with `mise run docs:readme` from the repository root, and
+verify them with `mise run docs:readme:check`. These tasks use
+`scripts/generate-readme.py` for the workspace's default members and separately
+handle the WASM-only crate. The wrapper corrects cargo-reedme's paths through
+private implementation modules while preserving rustdoc-checked intra-doc links
+in the Rust source. Plain `cargo reedme --check` does not apply these corrections;
+use the mise check task instead.
