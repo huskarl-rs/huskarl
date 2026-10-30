@@ -72,9 +72,17 @@ backend = "cargo:cargo-docs-rs"
 version = "0.13.2"
 backend = "cargo:cargo-fuzz"
 
+[[tools."cargo:cargo-hack"]]
+version = "0.6.45"
+backend = "cargo:cargo-hack"
+
 [[tools."cargo:cargo-llvm-cov"]]
 version = "0.8.7"
 backend = "cargo:cargo-llvm-cov"
+
+[[tools."cargo:cargo-minimal-versions"]]
+version = "0.1.37"
+backend = "cargo:cargo-minimal-versions"
 
 [[tools."cargo:cargo-msrv"]]
 version = "0.19.3"
