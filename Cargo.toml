@@ -27,22 +27,11 @@ default-members = [
   "huskarl-redis",
   "huskarl-reqwest",
   "huskarl-resource-server",
-  "integration/huskarl-conformance",
-  "integration/huskarl-downstream",
-  "integration/huskarl-integration",
-  "integration/huskarl-testkit",
 ]
 exclude = ["huskarl-core/fuzz"]
 
 [workspace.dependencies]
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
-huskarl = { version = "0.11", path = "./huskarl" }
-huskarl-core = { version = "0.10.10", path = "./huskarl-core" }
-huskarl-macros = { version = "0.4", path = "./huskarl-macros" }
-huskarl-reqwest = { version = "0.9", path = "./huskarl-reqwest" }
-huskarl-crypto-native = { version = "0.11", path = "./huskarl-crypto-native" }
-huskarl-crypto-webcrypto = { version = "0.11", path = "./huskarl-crypto-webcrypto" }
-huskarl-resource-server = { version = "0.11", path = "./huskarl-resource-server" }
 
 base64 = { version = "0.23", default-features = false, features = ["std"] }
 bon = { version = "3.9", default-features = false, features = [
@@ -50,15 +39,15 @@ bon = { version = "3.9", default-features = false, features = [
   "experimental-generics-setters",
   "implied-bounds",
 ] }
-form_urlencoded = { version = "1", default-features = false, features = ["std"] }
+form_urlencoded = { version = "1.2", default-features = false, features = ["std"] }
 hex = { version = "0.4", default-features = false, features = ["std"] }
 httpdate = { version = "1.0.3", default-features = false }
 rand = { version = "0.10", default-features = false, features = ["std", "sys_rng", "thread_rng"] }
-serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
-serde_json = { version = "1", default-features = false, features = ["std"] }
+serde = { version = "1.0.203", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "1.0.50", default-features = false, features = ["std"] }
 sha2 = { version = "0.11", default-features = false }
 snafu = { version = "0.9", default-features = false, features = ["rust_1_81", "std"] }
 strum = { version = "0.27", default-features = false, features = ["derive"] }
-metrics = { version = "0.24", default-features = false }
-tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
+metrics = { version = "0.24.2", default-features = false }
+tracing = { version = "0.1.21", default-features = false, features = ["std", "attributes"] }
 url = { version = "2", default-features = false }

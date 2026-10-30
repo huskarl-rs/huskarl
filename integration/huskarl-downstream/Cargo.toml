@@ -7,12 +7,12 @@ publish = false
 description = "Scratch downstream consumer — verifies ergonomics from outside the library"
 
 [dependencies]
-huskarl = { workspace = true }
+huskarl = { path = "../../huskarl" }
 
-bytes = { version = "1", default-features = false }
-http = { version = "1", default-features = false, features = ["std"] }
-thiserror = "2"
+bytes = { version = "1.10", default-features = false }
+http = { version = "1.1", default-features = false, features = ["std"] }
+thiserror = "2.0.12"
 
 [dev-dependencies]
-huskarl-resource-server = { workspace = true }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+huskarl-resource-server = { path = "../../huskarl-resource-server" }
+tokio = { version = "1.51", features = ["macros", "rt-multi-thread"] }

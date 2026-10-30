@@ -30,6 +30,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
+  published-bounds:
+    name: Published bounds
+    needs: release-plz-release
+    # Required by the workflow's PR comment job, which doesn't run here.
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/published-bounds.yml
+
   release-plz-pr:
     name: Release-plz PR
     runs-on: ubuntu-latest

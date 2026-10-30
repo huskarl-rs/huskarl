@@ -21,17 +21,17 @@ tracing = ["dep:tracing", "huskarl-core/tracing"]
 
 [dependencies]
 tracing = { workspace = true, optional = true }
-huskarl-macros = { workspace = true }
-huskarl-core = { workspace = true }
+huskarl-macros = { version = "0.4", path = "../huskarl-macros" }
+huskarl-core = { version = "0.10.8", path = "../huskarl-core" }
 
 serde-wasm-bindgen = { version = "0.6", default-features = false }
-serde_json = { version = "1", default-features = false, features = ["alloc"] }
-wasm-bindgen = { version = "0.2", default-features = false }
-wasm-bindgen-futures = { version = "0.4", default-features = false }
-serde = { version = "1.0", default-features = false }
+serde_json = { version = "1.0.50", default-features = false, features = ["alloc"] }
+wasm-bindgen = { version = "0.2.114", default-features = false }
+wasm-bindgen-futures = { version = "0.4.1", default-features = false }
+serde = { version = "1.0.103", default-features = false }
 serde_bytes = { version = "0.11", default-features = false }
 snafu = { version = "0.9", default-features = false }
-web-sys = { version = "0.3", features = [
+web-sys = { version = "0.3.91", features = [
   "Crypto",
   "CryptoKey",
   "CryptoKeyPair",
@@ -40,11 +40,11 @@ web-sys = { version = "0.3", features = [
 ] }
 
 [dev-dependencies]
-tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "fmt", "registry"] }
+tracing-subscriber = { version = "0.3.19", default-features = false, features = ["std", "fmt", "registry"] }
 # Turns a dropped classification into a panic during this workspace's tests;
 # off for dependents, whose own causes may legitimately wrap one. See
 # `huskarl_core::Error::propagate`.
-huskarl-core = { workspace = true, features = ["strict-propagation"] }
+huskarl-core = { path = "../huskarl-core", features = ["strict-propagation"] }
 base64 = { workspace = true }
 wasm-bindgen-test = "0.3"
 # Interop tests: confirm the WebCrypto cipher and the pure-Rust `aes-gcm` cipher
