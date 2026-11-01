@@ -284,3 +284,19 @@ Completion accepts both bound and ordinary ID tokens; the OP may ignore
 for confidential clients. See [key-binding behavior](crate::_docs::explanation::dpop_bindings#id-token-key-binding)
 for validation limits and draft compatibility, and the
 [refresh guide](crate::_docs::guide::refresh) for saving the returned refresh token.
+
+## Limit ID-token issuance age
+
+To limit how long ago a returned ID token can have been issued, set
+`max_id_token_age` on the grant builder. The grant compares `iat` with the time
+it received the token response, and clock leeway extends the limit. By default,
+there is no limit.
+
+This limit is local and separate from the `max_age` field of `StartInput`, which
+asks the provider to authenticate the user recently. Token issuance time (`iat`)
+and user authentication time (`auth_time`) can differ.
+
+The grant does not check `auth_time` against `max_age`. A one-time check at
+sign-in is not enough, because the limit applies for the life of the session.
+For more information, see [ID tokens and sign-in state across
+refreshes](crate::_docs::explanation::oidc_refresh#token-expiry-and-authentication-age).

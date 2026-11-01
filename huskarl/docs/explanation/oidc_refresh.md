@@ -20,11 +20,25 @@ Reusing a validator with this setting therefore applies the limit to ongoing
 refreshes as well as initial validation. Applications should choose whether they
 want that ongoing requirement when configuring their refresh validator.
 
+The `max_age` parameter in an authorization request asks the provider to enforce
+the limit. The authorization-code grant does not check `auth_time` against it.
+
+Authentication age also matters after sign-in. Refreshes might be infrequent or
+return no ID token, so if your application needs this limit, compare the
+retained `auth_time` with it for as long as the session continues.
+
 Providers do not always include the sign-in timestamp. When `max_age` is
 configured, validation requires it so the age can be checked. Without that
 setting, a token may be accepted without a timestamp. If both the original and
 refreshed tokens contain it, `validate_refresh` requires them to agree. If only
 the refreshed token contains it, there is no original timestamp to compare.
+
+`IdTokenValidator` also accepts an optional `max_token_age` limit, which checks
+how recently the token was issued (`iat`) on both initial validation and
+refresh. Clock leeway extends this limit. A refresh response can contain an ID
+token with a recent `iat` and an old `auth_time`. Setting `max_token_age` does
+not require recent user authentication or an `auth_time` claim. By default,
+there is no limit.
 
 ## Why retain the original claims?
 

@@ -14,6 +14,7 @@ use crate::{
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
         jwk::{JwksSource, JwksStartup},
+        platform::Duration,
         time::{Clock, PlatformClock},
     },
     grant::{
@@ -134,6 +135,9 @@ pub struct AuthorizationCodeGrant {
     /// If set, restricts accepted ID token signature algorithms; see the `new`
     /// builder.
     pub(super) allowed_id_token_signed_response_algs: Option<HashSet<String>>,
+    /// If set, limits the time since a returned ID token was issued; see the
+    /// `new` builder.
+    pub(super) max_id_token_age: Option<Duration>,
 
     /// If set, restricts accepted JARM response signature algorithms; see the
     /// `new` builder.
@@ -440,6 +444,9 @@ impl AuthorizationCodeGrant {
             maybe
         )]
         allowed_id_token_signed_response_algs: Option<HashSet<String>>,
+        /// Maximum time since a returned ID token was issued (`iat`). Separate
+        /// from `StartInput::max_age`; not applied to refreshed tokens.
+        max_id_token_age: Option<Duration>,
         /// Restricts accepted JARM response signature algorithms to this set
         /// (see `response_mode`); any `alg` outside it is rejected.
         ///
@@ -590,6 +597,7 @@ impl AuthorizationCodeGrant {
             response_mode,
             prefer_pushed_authorization_requests,
             allowed_id_token_signed_response_algs,
+            max_id_token_age,
             allowed_authorization_signed_response_algs,
         })
     }

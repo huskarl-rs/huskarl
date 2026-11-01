@@ -828,8 +828,14 @@ async fn bound_key_exchange_proofs_and_id_token_type(
     assert_ne!(proofs[0]["jti"], proofs[1]["jti"]);
 }
 
+#[rstest::rstest]
+#[case::expiry(None, 611)]
+#[case::issuance_age(Some(Duration::from_secs(60)), 71)]
 #[tokio::test]
-async fn completion_validates_id_token_at_response_receipt() {
+async fn completion_validates_id_token_at_response_receipt(
+    #[case] max_age: Option<Duration>,
+    #[case] elapsed: u64,
+) {
     use huskarl_crypto_native::{
         NativeVerifierPlatform,
         asymmetric::signer::{GenerateAlgorithm, PrivateKey},
@@ -862,7 +868,7 @@ async fn completion_validates_id_token_at_response_receipt() {
             time.now(),
         ))
         .exp(huskarl_core::time::system_time_from_timestamp_saturating(
-            time.now().checked_add(Duration::from_secs(60)).unwrap(),
+            time.now().checked_add(Duration::from_secs(600)).unwrap(),
         ))
         .claims(serde_json::json!({"nonce": "nonce"}))
         .build()
@@ -876,7 +882,7 @@ async fn completion_validates_id_token_at_response_receipt() {
         Box::pin(async move { Ok(verifier) })
     };
     let grant = AuthorizationCodeGrant::builder().client_id("client").client_auth(NoAuth)
-        .clock(time.clone()).issuer("https://as.example.com")
+        .maybe_max_id_token_age(max_age).clock(time.clone()).issuer("https://as.example.com")
         .token_endpoint("https://as.example.com/token".parse().unwrap())
         .authorization_endpoint("https://as.example.com/authorize".parse().unwrap())
         .redirect_uri("http://127.0.0.1/cb").jws_verifier_factory(factory)
@@ -899,23 +905,26 @@ async fn completion_validates_id_token_at_response_receipt() {
         .await
         .unwrap();
     assert_eq!(response.received_at(), time.now());
-    time.advance(Duration::from_secs(71)).unwrap();
+    time.advance(Duration::from_secs(elapsed)).unwrap();
     // Time spent after receipt must not change this response's validity.
     let completed = grant.finalize_id_token(&pending, response).await.unwrap();
     assert_eq!(completed.id_token.unwrap().sub.as_deref(), Some("user"));
-    // The same token received after expiry must still be rejected.
+    // Receiving the token after expiry or the issuance-age limit must be rejected.
     let error = grant
         .complete(&pending, complete_input())
         .await
         .unwrap_err();
-    assert!(matches!(
-        error.cause().downcast_ref::<FlowError>(),
-        Some(FlowError::ValidatingIdToken {
-            source: IdTokenValidationError::Jwt {
-                source: JwtValidationError::Expired { .. }
-            }
-        })
-    ));
+    let Some(FlowError::ValidatingIdToken {
+        source: IdTokenValidationError::Jwt { source },
+    }) = error.cause().downcast_ref::<FlowError>()
+    else {
+        panic!("unexpected validation error: {error}");
+    };
+    if max_age.is_some() {
+        assert!(matches!(source, JwtValidationError::TokenTooOld { .. }));
+    } else {
+        assert!(matches!(source, JwtValidationError::Expired { .. }));
+    }
 }
 
 #[tokio::test]

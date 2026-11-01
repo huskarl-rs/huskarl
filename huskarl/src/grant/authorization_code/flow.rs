@@ -508,6 +508,7 @@ impl AuthorizationCodeGrant {
                 .verifier(verifier)
                 .issuer(issuer)
                 .audience(self.client_id.clone())
+                .maybe_max_token_age(self.max_id_token_age)
                 .maybe_allowed_algorithms(self.allowed_id_token_signed_response_algs.clone())
                 .build();
 
