@@ -39,6 +39,9 @@ pub mod guide {
     #[doc = include_str!("../docs/guide/device_authorization.md")]
     pub mod device_authorization {}
 
+    #[doc = include_str!("../docs/guide/ciba.md")]
+    pub mod ciba {}
+
     #[doc = include_str!("../docs/guide/client_credentials.md")]
     pub mod client_credentials {}
 
@@ -76,6 +79,9 @@ pub mod guide {
 
 /// Understanding-oriented background on how the crate works and why.
 pub mod explanation {
+    #[doc = include_str!("../docs/explanation/ciba.md")]
+    pub mod ciba {}
+
     #[doc = include_str!("../docs/explanation/oidc_refresh.md")]
     pub mod oidc_refresh {}
 

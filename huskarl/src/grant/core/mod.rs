@@ -5,6 +5,7 @@
 //! parsing shared across grants.
 
 mod grant;
+pub(crate) mod polling;
 mod receipt;
 pub(crate) mod token_response;
 

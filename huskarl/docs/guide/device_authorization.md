@@ -108,6 +108,16 @@ let token: &AccessToken = response.access_token();
 # }
 ```
 
+Automatic polling persists the expiry in `pending_state`, caps each wait at
+that deadline, and stops before sending another request once it passes.
+Configure transport timeouts to bound requests already in flight.
+
+When constructing `PendingState` with its builder, set `.expires_at(...)` to the
+expiry returned by `start`. Omitting it remains supported for source compatibility,
+but defaults to the Unix epoch: `poll_to_completion` immediately returns
+`TokenExpired` without waiting or sending a request. Restored state without an
+expiry behaves the same way.
+
 ## 5. Validate an ID token if the provider returns one
 
 Neither [OpenID Connect Core](https://openid.net/specs/openid-connect-core-1_0.html#Authentication)

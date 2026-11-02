@@ -7,6 +7,7 @@
 //! | [`authorization_code`] | User-facing apps — the user logs in via a browser |
 //! | [`client_credentials`] | Machine-to-machine — the client acts on its own behalf |
 //! | [`device_authorization`] | Devices with limited input (TVs, CLIs) |
+//! | [`ciba`] | Authenticate a known user on a separate device, without a callback |
 //! | [`jwt_bearer`] | Present a signed JWT assertion vouching for a principal |
 //! | [`token_exchange`] | Exchange an existing token for a new one (impersonation, delegation) |
 //! | [`refresh`] | Renew an access token using a refresh token |
@@ -16,6 +17,7 @@
 //! how-to guides in [`crate::_docs::guide`].
 
 pub mod authorization_code;
+pub mod ciba;
 mod client_configuration;
 pub mod client_credentials;
 pub mod core;

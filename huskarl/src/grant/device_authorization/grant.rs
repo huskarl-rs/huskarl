@@ -4,13 +4,14 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt as _, Snafu};
 
+#[cfg(test)]
+use crate::core::platform::Duration;
 use crate::{
     core::{
         EndpointUrl, Error, OAuthError, OAuthErrorCode, RetryAdvice,
         client_auth::{AuthenticationContext, ClientAuthentication},
         dpop::{AuthorizationServerDPoP, NoDPoP},
         http::HttpClient,
-        platform::Duration,
         time::{Clock, PlatformClock, PlatformTimer, Timer},
     },
     grant::{
@@ -220,16 +221,16 @@ impl DeviceAuthorizationGrant {
                 .await
         })?;
 
+        let expires_at =
+            crate::grant::core::response_expiry(received_at, response.expires_in.into())?;
         Ok(StartOutput::builder()
-            .expires_at(crate::grant::core::response_expiry(
-                received_at,
-                response.expires_in.into(),
-            )?)
+            .expires_at(expires_at)
             .verification_uri(response.verification_uri)
             .maybe_verification_uri_complete(response.verification_uri_complete)
             .user_code(response.user_code)
             .pending_state(PendingState {
                 device_code: response.device_code,
+                expires_at,
                 interval_secs: response.interval,
                 #[cfg(feature = "experimental-oidc-key-binding")]
                 dpop_jkt: dpop_jkt.filter(|_| openid_bound_key_requested),
@@ -244,7 +245,9 @@ impl DeviceAuthorizationGrant {
     ///
     /// Retryable failures are absorbed up to the configured limit. A
     /// `Retry-After` delay is honored, and any server response resets the
-    /// consecutive-failure count.
+    /// consecutive-failure count. Waits are capped at the persisted expiry and
+    /// no new request is sent once it passes. Transport timeouts bound requests
+    /// already in flight.
     ///
     /// # Errors
     ///
@@ -257,42 +260,14 @@ impl DeviceAuthorizationGrant {
         pending_state: &mut PendingState,
         resource: Option<Vec<String>>,
     ) -> Result<TokenResponse, PollError> {
-        let mut consecutive_failures: u32 = 0;
-        let mut retry_after = None;
-        loop {
-            // Clamp to the configured floor: a server (or a deserialized
-            // pending state) can carry `interval: 0`, which would otherwise
-            // spin a zero-delay hot loop hammering the token endpoint.
-            let interval_secs = pending_state.interval_secs.max(self.min_poll_interval_secs);
-            let interval = Duration::from_secs(interval_secs.into());
-            let delay = interval.max(retry_after.take().unwrap_or_default());
-            match self.timer.now().checked_add(delay) {
-                Some(deadline) => self.timer.sleep_until(deadline).await,
-                // A deadline beyond this timeline's range cannot be reached.
-                None => core::future::pending::<()>().await,
-            }
-
-            let err = match self.poll(pending_state, resource.clone()).await {
-                Ok(PollResult::Complete(token_response)) => return Ok(*token_response),
-                // The server answered, so whatever was wrong is over.
-                Ok(PollResult::Pending) => {
-                    consecutive_failures = 0;
-                    continue;
-                }
-                Err(err) => err,
-            };
-
-            // Preserve the retry classification established by the request.
-            let RetryAdvice::Retry { after } = err.retry_advice() else {
-                return Err(err);
-            };
-            consecutive_failures += 1;
-            if consecutive_failures > self.max_transient_poll_failures {
-                return Err(err);
-            }
-            // Honor both the polling cadence and Retry-After with one wait.
-            retry_after = after;
+        crate::grant::core::polling::PollingDriver {
+            timer: self.timer.as_ref(),
+            clock: self.clock.as_ref(),
+            min_interval_secs: self.min_poll_interval_secs,
+            max_transient_failures: self.max_transient_poll_failures,
         }
+        .run(self, pending_state, resource)
+        .await
     }
 
     /// Polls the token endpoint once for the pending device authorization.
@@ -327,7 +302,10 @@ impl DeviceAuthorizationGrant {
                 // 429 and 5xx bodies remain exchange failures.
                 match err.verdict().map(OAuthError::code) {
                     Some(OAuthErrorCode::SlowDown) => {
-                        pending_state.interval_secs = pending_state.interval_secs.saturating_add(5);
+                        crate::grant::core::polling::slow_down(
+                            &mut pending_state.interval_secs,
+                            self.min_poll_interval_secs,
+                        );
                         Ok(PollResult::Pending)
                     }
                     Some(OAuthErrorCode::AuthorizationPending) => Ok(PollResult::Pending),
@@ -492,13 +470,8 @@ struct DeviceAuthorizationResponse {
 /// authorization response omits `interval`.
 #[inline]
 const fn default_interval() -> u32 {
-    5
+    DEFAULT_MIN_POLL_INTERVAL_SECS
 }
-
-/// Default minimum delay between token-endpoint polls, in seconds (RFC 8628
-/// §3.2 baseline cadence). Configurable per grant via
-/// [`DeviceAuthorizationGrant`]'s `min_poll_interval_secs` builder setter.
-pub const DEFAULT_MIN_POLL_INTERVAL_SECS: u32 = 5;
 
 /// Default number of consecutive retryable failures
 /// [`poll_to_completion`](DeviceAuthorizationGrant::poll_to_completion)
@@ -506,7 +479,11 @@ pub const DEFAULT_MIN_POLL_INTERVAL_SECS: u32 = 5;
 ///
 /// At the default poll interval, this tolerates roughly half a minute of
 /// transient failures. RFC 8628 does not prescribe a limit.
-pub const DEFAULT_MAX_TRANSIENT_POLL_FAILURES: u32 = 5;
+pub use crate::grant::core::polling::DEFAULT_MAX_TRANSIENT_POLL_FAILURES;
+/// Default minimum delay between token-endpoint polls, in seconds (RFC 8628
+/// §3.2 baseline cadence). Configurable per grant via
+/// [`DeviceAuthorizationGrant`]'s `min_poll_interval_secs` builder setter.
+pub use crate::grant::core::polling::DEFAULT_MIN_POLL_INTERVAL_SECS;
 
 #[derive(Debug, Serialize)]
 struct DeviceAuthorizationRequest<'a> {
@@ -553,8 +530,20 @@ pub struct PendingState {
     pub openid_bound_key_requested: bool,
     /// The device verification code.
     pub device_code: String,
+    /// Local expiry estimate, persisted so automatic polling can bound its waits.
+    /// Defaults to the Unix epoch for builder and serialization compatibility.
+    /// If omitted when building or restoring state, `poll_to_completion` returns
+    /// `TokenExpired` immediately without waiting or making a request. Use the
+    /// expiry returned by `start` when constructing state for automatic polling.
+    #[serde(default = "expired_pending_state")]
+    #[builder(default = expired_pending_state())]
+    pub expires_at: crate::core::platform::SystemTime,
     /// The minimum amount of time in seconds the client should wait between polling requests.
     pub interval_secs: u32,
+}
+
+fn expired_pending_state() -> crate::core::platform::SystemTime {
+    crate::core::platform::SystemTime::UNIX_EPOCH
 }
 
 // `PendingState` is designed to be persisted between polls and is therefore
@@ -565,7 +554,8 @@ impl core::fmt::Debug for PendingState {
         let mut debug = f.debug_struct("PendingState");
         debug
             .field("device_code", &"[REDACTED]")
-            .field("interval_secs", &self.interval_secs);
+            .field("interval_secs", &self.interval_secs)
+            .field("expires_at", &self.expires_at);
         #[cfg(feature = "experimental-oidc-key-binding")]
         debug
             .field(
@@ -685,6 +675,40 @@ impl<S: device_authorization_grant_builder::State> DeviceAuthorizationGrantBuild
     }
 }
 
+impl crate::grant::core::polling::PollingState for PendingState {
+    fn interval_secs(&self) -> u32 {
+        self.interval_secs
+    }
+    fn expires_at(&self) -> crate::core::platform::SystemTime {
+        self.expires_at
+    }
+}
+
+impl crate::grant::core::polling::PollingGrant for DeviceAuthorizationGrant {
+    type State = PendingState;
+    type Output = TokenResponse;
+    type Error = PollError;
+
+    async fn poll_once(
+        &self,
+        state: &mut PendingState,
+        resource: Option<Vec<String>>,
+    ) -> Result<Option<Self::Output>, PollError> {
+        match self.poll(state, resource).await? {
+            PollResult::Pending => Ok(None),
+            PollResult::Complete(output) => Ok(Some(*output)),
+        }
+    }
+
+    fn retry_advice(error: &PollError) -> crate::core::RetryAdvice {
+        error.retry_advice()
+    }
+
+    fn expired() -> PollError {
+        PollError::TokenExpired
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
@@ -744,6 +768,8 @@ mod tests {
             #[cfg(feature = "experimental-oidc-key-binding")]
             openid_bound_key_requested: false,
             device_code: "dev-code".to_string(),
+            expires_at: crate::core::platform::SystemTime::UNIX_EPOCH
+                + Duration::from_secs(4_000_000_000),
             interval_secs: 5,
         }
     }
@@ -828,13 +854,27 @@ mod tests {
         assert!(input.authorization_details.is_some());
     }
 
+    #[rstest::rstest]
+    #[case(1, 5, 10)]
+    #[case(5, 5, 10)]
+    #[case(1, 20, 25)]
+    #[case(30, 5, 35)]
     #[tokio::test]
-    async fn slow_down_bumps_interval_and_stays_pending() {
-        let g = grant(StatusCode::BAD_REQUEST, r#"{"error":"slow_down"}"#);
+    async fn slow_down_bumps_interval_and_stays_pending(
+        #[case] initial: u32,
+        #[case] floor: u32,
+        #[case] expected: u32,
+    ) {
+        let mut g = grant(StatusCode::BAD_REQUEST, r#"{"error":"slow_down"}"#);
+        g.min_poll_interval_secs = floor;
         let mut state = pending();
+        state.interval_secs = initial;
         let result = g.poll(&mut state, None).await.unwrap();
         assert!(matches!(result, PollResult::Pending));
-        assert_eq!(state.interval_secs, 10, "slow_down adds 5s to the interval");
+        assert_eq!(
+            state.interval_secs, expected,
+            "slow_down adds 5s to the effective interval"
+        );
     }
 
     #[tokio::test]
@@ -1099,6 +1139,7 @@ mod tests {
             )
             .max_transient_poll_failures(max_transient_poll_failures)
             .timer(time.clone())
+            .clock(time.clone())
             .build();
         (grant, calls, time)
     }
@@ -1345,8 +1386,58 @@ mod tests {
         time.advance_monotonic(Duration::MAX).unwrap();
         let mut state = pending();
         let mut polling = std::pin::pin!(g.poll_to_completion(&mut state, None));
-        assert!(polling.as_mut().now_or_never().is_none());
+        assert!(matches!(
+            polling.as_mut().now_or_never(),
+            Some(Err(PollError::TokenExpired))
+        ));
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn restored_expiry_caps_device_polling_waits() {
+        let (grant, calls, time) = scripted_grant(
+            vec![(
+                StatusCode::OK,
+                r#"{"device_code":"dc","user_code":"uc","verification_uri":"https://as.example/verify","expires_in":120,"interval":4294967295}"#,
+            )],
+            0,
+        );
+        let started = grant
+            .start(StartInput::scope(bon::vec!["read"]))
+            .await
+            .unwrap();
+        let mut state: PendingState =
+            serde_json::from_value(serde_json::to_value(started.pending_state).unwrap()).unwrap();
+        assert_eq!(state.expires_at, started.expires_at);
+        let mut polling = std::pin::pin!(grant.poll_to_completion(&mut state, None));
+        assert!(polling.as_mut().now_or_never().is_none());
+        time.advance(Duration::from_secs(119)).unwrap();
+        assert!(polling.as_mut().now_or_never().is_none());
+        time.advance(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            polling.as_mut().now_or_never(),
+            Some(Err(PollError::TokenExpired))
+        ));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn device_state_without_expiry_is_immediately_expired() {
+        let (grant, calls, time) = scripted_grant(vec![(StatusCode::OK, TOKEN)], 0);
+        let restored: PendingState =
+            serde_json::from_str(r#"{"device_code":"old","interval_secs":5}"#).unwrap();
+        let built = PendingState::builder()
+            .device_code("x")
+            .interval_secs(5)
+            .build();
+        for mut state in [restored, built] {
+            assert!(matches!(
+                grant.poll_to_completion(&mut state, None).now_or_never(),
+                Some(Err(PollError::TokenExpired))
+            ));
+        }
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(time.pending_sleeps(), 0);
     }
 
     // Poll errors expose terminal and wrapped retry advice consistently.

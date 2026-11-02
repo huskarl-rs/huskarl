@@ -73,6 +73,8 @@ pub struct MtlsEndpointAliases {
     pub introspection_endpoint: Option<EndpointUrl>,
     /// The mTLS alias for the device authorization endpoint.
     pub device_authorization_endpoint: Option<EndpointUrl>,
+    /// The mTLS alias for the CIBA backchannel authentication endpoint.
+    pub backchannel_authentication_endpoint: Option<EndpointUrl>,
     /// The mTLS alias for the pushed authorization request endpoint.
     pub pushed_authorization_request_endpoint: Option<EndpointUrl>,
     /// The mTLS alias for the registration endpoint.
@@ -208,6 +210,17 @@ pub struct AuthorizationServerMetadata {
     pub code_challenge_methods_supported: Vec<String>,
     /// The RFC 8628 device authorization endpoint.
     pub device_authorization_endpoint: Option<EndpointUrl>,
+    /// The CIBA Core 1.0 backchannel authentication endpoint.
+    pub backchannel_authentication_endpoint: Option<EndpointUrl>,
+    /// CIBA token delivery modes supported by the provider: `poll`, `ping`, or `push`.
+    pub backchannel_token_delivery_modes_supported: Option<Vec<String>>,
+    /// Algorithms supported for signed CIBA authentication requests.
+    /// Absence means signed authentication requests are not supported.
+    pub backchannel_authentication_request_signing_alg_values_supported: Option<Vec<String>>,
+    /// Whether the provider supports the CIBA `user_code` request parameter.
+    #[serde(default)]
+    #[builder(default)]
+    pub backchannel_user_code_parameter_supported: bool,
     /// Whether the server supports RFC 8705 certificate-bound access tokens.
     ///
     /// Defaults to `false` when absent.

@@ -75,10 +75,11 @@ setup and a worked example.
 - [`RefreshGrant`](grant::refresh::RefreshGrant) — RFC 6749 §6
 - [`AuthorizationCodeGrant`](grant::authorization_code::AuthorizationCodeGrant) — RFC 6749 §4.1
 - [`DeviceAuthorizationGrant`](grant::device_authorization::DeviceAuthorizationGrant) — RFC 8628
+- [`CibaPollGrant`](grant::ciba::CibaPollGrant) — OpenID Connect CIBA Core 1.0, poll mode
 - [`TokenExchangeGrant`](grant::token_exchange::TokenExchangeGrant) — RFC 8693
 - [`JwtBearerGrant`](grant::jwt_bearer::JwtBearerGrant) — RFC 7523
 
-Further grants — CIBA, provider-specific flows — can be implemented in this
+Further grants — including provider-specific flows — can be implemented in this
 crate or by external crates. The [`registration`] module implements OAuth 2.0
 Dynamic Client Registration (RFC 7591).
 

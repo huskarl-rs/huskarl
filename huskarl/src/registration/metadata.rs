@@ -17,7 +17,7 @@ use crate::core::{jwk::PublicJwks, secrets::SecretString};
 /// substitute or reject requested values, so always consult the response.
 ///
 /// Beyond the RFC 7591 §2 base parameters, the `OpenID` Connect Dynamic Client
-/// Registration 1.0 §2 extension parameters are also typed. Any other extension
+/// Registration 1.0 §2 and CIBA Core 1.0 §4 extension parameters are also typed. Any other extension
 /// parameter round-trips through [`extra`](Self::extra).
 ///
 /// [`ClientInformationResponse`]: super::ClientInformationResponse
@@ -263,6 +263,30 @@ pub struct ClientMetadata {
     #[builder(default)]
     pub request_uris: Vec<String>,
 
+    /// CIBA token delivery mode: `poll`, `ping`, or `push` (CIBA Core 1.0 §4).
+    /// Required when registering a CIBA client. Poll and ping clients must also
+    /// include `urn:openid:params:grant-type:ciba` in [`grant_types`](Self::grant_types).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backchannel_token_delivery_mode: Option<String>,
+
+    /// HTTPS notification endpoint for CIBA ping or push delivery (CIBA Core 1.0 §4).
+    /// Required for those modes. Registering this field does not enable runtime
+    /// ping or push support in [`CibaPollGrant`](crate::grant::ciba::CibaPollGrant).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backchannel_client_notification_endpoint: Option<String>,
+
+    /// JWS `alg` used to sign CIBA authentication requests (CIBA Core 1.0 §4).
+    /// Clients sending signed requests must register their algorithm. Omission
+    /// indicates that the client will not send signed authentication requests.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backchannel_authentication_request_signing_alg: Option<String>,
+
+    /// Whether the client supports CIBA user codes (CIBA Core 1.0 §4).
+    /// The server defaults this to false when omitted. Applies only when the
+    /// provider advertises `backchannel_user_code_parameter_supported`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backchannel_user_code_parameter: Option<bool>,
+
     /// Extension metadata parameters beyond those typed above.
     #[serde(flatten)]
     #[builder(default)]
@@ -333,6 +357,49 @@ mod tests {
         assert!(!object.contains_key("token_endpoint_auth_method"));
         assert!(!object.contains_key("grant_types"));
         assert!(!object.contains_key("jwks"));
+        assert!(!object.contains_key("backchannel_token_delivery_mode"));
+        assert!(!object.contains_key("backchannel_client_notification_endpoint"));
+        assert!(!object.contains_key("backchannel_authentication_request_signing_alg"));
+        assert!(!object.contains_key("backchannel_user_code_parameter"));
+    }
+
+    #[rstest::rstest]
+    #[case(true)]
+    #[case(false)]
+    fn ciba_registration_fields_round_trip_without_entering_extra(#[case] user_code: bool) {
+        let metadata = ClientMetadata::builder()
+            .backchannel_token_delivery_mode("ping")
+            .backchannel_client_notification_endpoint("https://app.example/ciba")
+            .backchannel_authentication_request_signing_alg("ES256")
+            .backchannel_user_code_parameter(user_code)
+            .build();
+        let value = serde_json::to_value(&metadata).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "backchannel_token_delivery_mode": "ping",
+                "backchannel_client_notification_endpoint": "https://app.example/ciba",
+                "backchannel_authentication_request_signing_alg": "ES256",
+                "backchannel_user_code_parameter": user_code,
+            })
+        );
+        let parsed: ClientMetadata = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            parsed.backchannel_token_delivery_mode.as_deref(),
+            Some("ping")
+        );
+        assert_eq!(
+            parsed.backchannel_client_notification_endpoint.as_deref(),
+            Some("https://app.example/ciba")
+        );
+        assert_eq!(
+            parsed
+                .backchannel_authentication_request_signing_alg
+                .as_deref(),
+            Some("ES256")
+        );
+        assert_eq!(parsed.backchannel_user_code_parameter, Some(user_code));
+        assert!(parsed.extra.is_empty());
     }
 
     #[test]
