@@ -20,9 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       report: ${{ steps.result.outputs.report }}
-    env:
-      BOUNDS_RESULTS: ${{ runner.temp }}/bounds-results.md
     steps:
+      # The runner context is unavailable in job-level env.
+      - name: Set results path
+        run: echo "BOUNDS_RESULTS=$RUNNER_TEMP/bounds-results.md" >> "$GITHUB_ENV"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
