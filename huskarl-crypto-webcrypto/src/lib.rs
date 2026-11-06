@@ -66,7 +66,7 @@ pub mod aead;
 pub mod asymmetric;
 pub(crate) mod helpers;
 
-#[cfg(any(doc, docsrs))]
+#[cfg(doc)]
 pub mod _docs;
 
 pub use error::JsError;

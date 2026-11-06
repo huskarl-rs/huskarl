@@ -64,7 +64,7 @@
 //! messages are excluded. Configure Google Cloud SDK logging separately; this
 //! policy covers Huskarl events.
 
-#[cfg(any(doc, docsrs))]
+#[cfg(doc)]
 pub mod _docs;
 
 pub mod kid;

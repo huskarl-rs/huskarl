@@ -105,7 +105,7 @@ it is excluded from the stable API compatibility guarantee.
 
 mod serde_utils;
 
-#[cfg(any(doc, docsrs))]
+#[cfg(doc)]
 pub mod _docs;
 
 pub mod authorizer;

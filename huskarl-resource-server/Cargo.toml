@@ -12,10 +12,11 @@ categories = ["authentication"]
 readme = "README.md"
 
 [package.metadata.docs.rs]
-# Render the `_docs` module (gated on `cfg(docsrs)`) and enable `doc_cfg`.
-# `cargo docs-rs` reads this block too.
+# Enable nightly documentation features such as `doc_cfg` on docs.rs.
 rustdoc-args = ["--cfg", "docsrs"]
 all-features = true
+# Include browser WASM alongside the default native documentation targets.
+additional-targets = ["wasm32-unknown-unknown"]
 
 [features]
 # Structured diagnostics; the application configures the subscriber.

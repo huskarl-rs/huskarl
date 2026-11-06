@@ -75,7 +75,7 @@
 //! # Ok(())
 //! # }
 //! ```
-#[cfg(any(doc, docsrs))]
+#[cfg(doc)]
 pub mod _docs;
 
 pub mod error;

@@ -10,6 +10,11 @@ keywords = ["oauth2", "security", "authentication"]
 categories = ["authentication"]
 readme = "README.md"
 
+[package.metadata.docs.rs]
+# Enable nightly documentation features such as `doc_cfg` on docs.rs.
+rustdoc-args = ["--cfg", "docsrs"]
+all-features = true
+
 [features]
 # Structured diagnostics; the application configures the subscriber.
 tracing = ["dep:tracing", "huskarl-core/tracing"]

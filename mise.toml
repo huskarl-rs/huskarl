@@ -1,7 +1,6 @@
 [tools]
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2"
 "aqua:wasm-bindgen/wasm-pack" = "0.15.0"
-"cargo:cargo-docs-rs" = "1.0.4"
 "cargo:cargo-fuzz" = "0.13.2"
 "cargo:cargo-hack" = "0.6.45"
 "cargo:cargo-llvm-cov" = "0.8.7"
@@ -82,19 +81,9 @@ arg "[baseline]" help="Baseline git ref to compare against" default="origin/main
 '''
 run = 'scripts/semver-report.sh "${usage_baseline}"'
 
-[tasks."docs:rs"]
-run = '''
-for crate in huskarl-core huskarl huskarl-macros huskarl-crypto-native \
-             huskarl-crypto-webcrypto huskarl-reqwest huskarl-redis \
-             huskarl-resource-server huskarl-google-cloud; do
-  cargo +nightly docs-rs -p "$crate"
-done
-'''
-
 [tasks."docs:test"]
-env = { RUSTDOCFLAGS = "--cfg docsrs" }
 run = """
-cargo +nightly test --doc --all-features \
+cargo +stable test --doc --all-features \
   -p huskarl-core -p huskarl -p huskarl-macros -p huskarl-crypto-native \
   -p huskarl-reqwest -p huskarl-redis -p huskarl-resource-server \
   -p huskarl-google-cloud

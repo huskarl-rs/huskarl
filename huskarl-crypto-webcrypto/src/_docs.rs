@@ -8,7 +8,10 @@
 //! - **Reference** — the crate's API modules describe its key types, algorithms,
 //!   parameters, and return values.
 //!
-//! This module is documentation only; it contains no runnable API.
+//! This module is documentation only; it contains no runnable API. It is gated
+//! on `cfg(doc)`, which rustdoc sets for both rendering and doctest collection.
+//! This crate requires a WASM target; its doctests are excluded from the native
+//! stable doctest job.
 
 /// Task-oriented recipes.
 pub mod guide {

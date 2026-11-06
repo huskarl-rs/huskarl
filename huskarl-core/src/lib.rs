@@ -90,7 +90,7 @@ mod endpoint_url;
 mod uuid;
 mod well_known;
 
-#[cfg(any(doc, docsrs))]
+#[cfg(doc)]
 pub mod _docs;
 
 pub mod authorization_details;
