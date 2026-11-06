@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.11](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.10...huskarl-v0.11.11) - 2026-11-06
+
+### Added
+
+- *(ciba)* Add the CIBA poll grant ([#384](https://github.com/huskarl-rs/huskarl/pull/384))
+- *(oidc)* Add configurable ID-token issuance age validation ([#383](https://github.com/huskarl-rs/huskarl/pull/383))
+
+### Other
+
+- *(docs)* Build docs against normal #[cfg(doc)] instead of docsrs. ([#388](https://github.com/huskarl-rs/huskarl/pull/388))
+- Add minimal direct bounds checks, improve current minimal bounds ([#382](https://github.com/huskarl-rs/huskarl/pull/382))
+
 ## [0.11.10](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.9...huskarl-v0.11.10) - 2026-10-28
 
 ### Added
