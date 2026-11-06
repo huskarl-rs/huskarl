@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.4.2](https://github.com/huskarl-rs/huskarl/compare/huskarl-macros-v0.4.1...huskarl-macros-v0.4.2) - 2026-11-06
+
+### Other
+
+- Add minimal direct bounds checks, improve current minimal bounds ([#382](https://github.com/huskarl-rs/huskarl/pull/382))
+
 ## [0.4.1](https://github.com/huskarl-rs/huskarl/compare/huskarl-macros-v0.4.0...huskarl-macros-v0.4.1) - 2026-10-06
 
 ### Other
