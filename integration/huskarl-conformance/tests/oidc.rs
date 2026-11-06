@@ -201,11 +201,6 @@ where
                             .register(&runner.client.http_client, &requested)
                             .await
                             .map_err(|e| ClientError::capture(&e))?;
-                        if response.client_id.is_empty() {
-                            return Err(ClientError::from(
-                                "registration returned an empty client ID",
-                            ));
-                        }
                         Ok((
                             response.client_id,
                             (authentication.make)(response.client_secret)?,

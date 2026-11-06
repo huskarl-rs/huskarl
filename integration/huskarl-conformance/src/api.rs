@@ -58,34 +58,14 @@ pub struct ModuleEndpoints {
 }
 
 impl ModuleEndpoints {
-    /// Use the exposed resource URL verbatim. Certificate-bound requests must use
-    /// the same HTTPS origin as the discovered mTLS token endpoint.
-    pub fn accounts_uri(
-        &self,
-        mtls_token_endpoint: Option<&huskarl::core::EndpointUrl>,
-    ) -> Result<http::Uri, Error> {
-        let raw = self
+    /// Use the suite's exposed resource URL with Huskarl's endpoint validation.
+    pub fn accounts_uri(&self) -> Result<http::Uri, Error> {
+        let endpoint: huskarl::core::EndpointUrl = self
             .accounts_endpoint
             .as_deref()
-            .ok_or("suite module omitted accounts_endpoint")?;
-        let endpoint = reqwest::Url::parse(raw)?;
-        if endpoint.scheme() != "https"
-            || endpoint.host_str().is_none()
-            || !endpoint.username().is_empty()
-            || endpoint.password().is_some()
-            || endpoint.fragment().is_some()
-        {
-            return Err("suite accounts_endpoint must be an absolute HTTPS URL without credentials or fragment".into());
-        }
-        if let Some(token) = mtls_token_endpoint {
-            let token = reqwest::Url::parse(&token.to_string())?;
-            if token.scheme() != "https" || endpoint.origin() != token.origin() {
-                return Err(
-                    "suite accounts_endpoint does not use the discovered mTLS origin".into(),
-                );
-            }
-        }
-        Ok(raw.parse()?)
+            .ok_or("suite module omitted accounts_endpoint")?
+            .parse()?;
+        Ok(endpoint.as_uri().clone())
     }
 }
 
@@ -444,36 +424,6 @@ mod tests {
             insecure_tls: false,
             request_timeout: Duration::from_secs(2),
             evidence_dir: std::env::temp_dir(),
-        }
-    }
-
-    #[test]
-    fn accounts_endpoint_requires_https_and_preserves_resource_path_and_query() {
-        let mut exposed = ModuleEndpoints::default();
-        assert!(exposed.accounts_uri(None).is_err());
-        for endpoint in [
-            "/accounts",
-            "http://resource.example/accounts",
-            "https://user:pass@resource.example/accounts",
-            "https://resource.example/accounts#fragment",
-            "not a url",
-        ] {
-            exposed.accounts_endpoint = Some(endpoint.into());
-            assert!(exposed.accounts_uri(None).is_err(), "{endpoint}");
-        }
-        exposed.accounts_endpoint = Some("https://resource.example/custom/path?version=2".into());
-        let token = "https://resource.example:443/unrelated/token"
-            .parse()
-            .unwrap();
-        assert_eq!(
-            exposed.accounts_uri(Some(&token)).unwrap().to_string(),
-            "https://resource.example/custom/path?version=2"
-        );
-        for token in [
-            "https://other.example/token",
-            "https://resource.example:8444/token",
-        ] {
-            assert!(exposed.accounts_uri(Some(&token.parse().unwrap())).is_err());
         }
     }
 

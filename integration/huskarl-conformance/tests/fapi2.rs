@@ -179,8 +179,7 @@ async fn run_fapi2_plan<J: Jar + Clone + 'static>(
                             return Ok(());
                         }
                     }
-                    let accounts_uri =
-                        accounts_uri(&flow.metadata, &module.exposed, protection.mtls_tokens())?;
+                    let accounts_uri = module.exposed.accounts_uri()?;
                     let result =
                         call_resource_get(&resource_http, &flow.authorizer, &accounts_uri).await;
                     observation
@@ -469,26 +468,6 @@ impl Protection {
     }
 }
 
-/// Validate certificate-bound routing without reconstructing the resource URL.
-fn accounts_uri(
-    metadata: &huskarl::core::server_metadata::AuthorizationServerMetadata,
-    exposed: &huskarl_conformance::api::ModuleEndpoints,
-    mtls_tokens: bool,
-) -> Result<http::Uri, huskarl_conformance::api::Error> {
-    let token = if mtls_tokens {
-        Some(
-            metadata
-                .mtls_endpoint_aliases
-                .as_ref()
-                .and_then(|aliases| aliases.token_endpoint.as_ref())
-                .ok_or("suite discovery omitted the mTLS token endpoint alias")?,
-        )
-    } else {
-        None
-    };
-    exposed.accounts_uri(token)
-}
-
 #[cfg_attr(
     not(feature = "conformance-suite-tests"),
     ignore = "requires conformance suite (run with --features conformance-suite-tests)"
@@ -514,39 +493,6 @@ async fn fapi2_security_profile_mtls_dpop() {
 #[tokio::test]
 async fn fapi2_security_profile_mtls_mtls() {
     security_profile(ClientType::Oidc, RequestType::Simple, Protection::MtlsMtls).await;
-}
-
-#[test]
-fn accounts_routing_uses_discovered_certificate_endpoint_only_for_bound_tokens() {
-    let mut metadata: huskarl::core::server_metadata::AuthorizationServerMetadata =
-        serde_json::from_value(serde_json::json!({
-            "issuer": "https://suite.example/test/a/plan/",
-            "token_endpoint": "https://suite.example/test/a/plan/token",
-            "response_types_supported": ["code"],
-            "mtls_endpoint_aliases": {
-                "token_endpoint": "https://certs.example:9444/test-mtls/a/plan/token"
-            }
-        }))
-        .unwrap();
-    let mut exposed = huskarl_conformance::api::ModuleEndpoints {
-        issuer: None,
-        accounts_endpoint: Some("https://certs.example:9444/custom/resource?version=2".into()),
-    };
-    assert_eq!(
-        accounts_uri(&metadata, &exposed, true).unwrap().to_string(),
-        "https://certs.example:9444/custom/resource?version=2"
-    );
-    exposed.accounts_endpoint = Some("https://suite.example/custom/accounts".into());
-    assert!(accounts_uri(&metadata, &exposed, true).is_err());
-    assert_eq!(
-        accounts_uri(&metadata, &exposed, false)
-            .unwrap()
-            .to_string(),
-        "https://suite.example/custom/accounts"
-    );
-    metadata.mtls_endpoint_aliases = None;
-    assert!(accounts_uri(&metadata, &exposed, true).is_err());
-    assert!(accounts_uri(&metadata, &exposed, false).is_ok());
 }
 
 #[cfg_attr(

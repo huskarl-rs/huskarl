@@ -406,7 +406,7 @@ mod tests {
                     Some("https://issuer.example/")
                 );
                 assert_eq!(
-                    module.exposed.accounts_uri(None).unwrap().to_string(),
+                    module.exposed.accounts_uri().unwrap().to_string(),
                     "https://resource.example/custom/accounts?version=2"
                 );
                 evidence.authorization = Some(Err("invalid signature".into()));

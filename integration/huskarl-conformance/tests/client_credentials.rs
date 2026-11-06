@@ -35,10 +35,8 @@ impl ClientCredentialsMetadata {
         let metadata: Self = serde_json::from_slice(body)
             .map_err(|_| ClientError::from("invalid client-credentials discovery document"))?;
         if metadata.issuer != issuer {
-            return Err(ClientError {
-                message: "client-credentials discovery issuer mismatch".into(),
-                rejection: Some(huskarl_conformance::client_error::Rejection::DiscoveryIssuer),
-            });
+            // This adapter is setup code, not Huskarl discovery validation.
+            return Err("client-credentials discovery issuer mismatch".into());
         }
         Ok(metadata)
     }
@@ -81,13 +79,10 @@ fn token_only_discovery_requires_exact_issuer_and_valid_token_endpoint() {
         ClientCredentialsMetadata::decode(&serde_json::to_vec(&metadata).unwrap(), issuer).is_ok()
     );
     metadata["issuer"] = "https://suite.example/plan".into();
-    assert_eq!(
-        ClientCredentialsMetadata::decode(&serde_json::to_vec(&metadata).unwrap(), issuer)
-            .err()
-            .unwrap()
-            .rejection,
-        Some(huskarl_conformance::client_error::Rejection::DiscoveryIssuer)
-    );
+    let error = ClientCredentialsMetadata::decode(&serde_json::to_vec(&metadata).unwrap(), issuer)
+        .err()
+        .unwrap();
+    assert_eq!(error.rejection, None);
     metadata["issuer"] = issuer.into();
     metadata["token_endpoint"] = "/token".into();
     assert!(
@@ -191,7 +186,7 @@ async fn fapi2_client_credentials_private_key_jwt_dpop() {
                 let authorizer = HttpAuthorizer::builder()
                     .cache(InMemoryTokenCache::builder().source(source).build())
                     .build();
-                let uri = module.exposed.accounts_uri(None)?;
+                let uri = module.exposed.accounts_uri()?;
                 observation.resources.insert(
                     "accounts".into(),
                     call_resource_get(&runner.client.http_client, &authorizer, &uri)
