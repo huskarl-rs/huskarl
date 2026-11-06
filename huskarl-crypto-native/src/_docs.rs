@@ -8,7 +8,9 @@
 //! - **Reference** — the crate's API modules describe its key types, algorithms,
 //!   parameters, and return values.
 //!
-//! This module is documentation only; it contains no runnable API.
+//! This module is documentation only; it contains no runnable API. It is gated
+//! on `cfg(doc)`, which rustdoc sets for both rendering and doctest collection.
+//! Its code blocks are tested by `cargo test --doc` on stable Rust.
 
 /// Task-oriented recipes for getting a key into the crate.
 pub mod guide {

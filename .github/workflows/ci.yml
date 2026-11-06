@@ -69,28 +69,23 @@ jobs:
       - run: cargo doc --workspace --exclude huskarl-crypto-webcrypto --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
-      - run: cargo doc -p huskarl-crypto-webcrypto --target wasm32-unknown-unknown --no-deps --all-features --document-private-items
+      - run: cargo doc -p huskarl-resource-server -p huskarl-crypto-webcrypto --target wasm32-unknown-unknown --no-deps --all-features --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
   doc-tests:
-    name: Doc tests (docsrs)
+    name: Doc tests (stable)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      # huskarl-resource-server's `_docs` explanation/guide module is gated on
-      # `cfg(docsrs)` (see its lib.rs), so those how-to doctests only run when
-      # rustdoc parses with `--cfg docsrs`. That cfg activates `feature(doc_cfg)`,
-      # which requires nightly — this mirrors the docs.rs build environment. The
-      # stable `test` job above still runs the inline (non-`_docs`) doctests.
-      - run: rustup toolchain install nightly --no-self-update --profile minimal
+      # `cfg(doc)` includes guide modules during doctest collection on stable.
+      - run: rustup update stable --no-self-update
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # huskarl-crypto-webcrypto is wasm32-only; excluded like the test job.
-      - run: cargo +nightly test --workspace --exclude huskarl-crypto-webcrypto --doc --all-features
-        env:
-          RUSTDOCFLAGS: --cfg docsrs
+      # The test job covers default features; this also exercises feature-gated docs.
+      - run: cargo +stable test --workspace --exclude huskarl-crypto-webcrypto --doc --all-features
 
   msrv:
     name: MSRV (1.92)

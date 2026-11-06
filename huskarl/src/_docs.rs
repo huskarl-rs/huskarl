@@ -13,9 +13,8 @@
 //!   parameters, and return values.
 //!
 //! This module is documentation only; it contains no runnable API. It is gated
-//! on `cfg(docsrs)`, so its code blocks are real doctests that run only under
-//! `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly test --doc` (mirroring the
-//! docs.rs build environment); a plain `cargo test --doc` skips them.
+//! on `cfg(doc)`, which rustdoc sets for both rendering and doctest collection.
+//! Its code blocks are tested by `cargo test --doc` on stable Rust.
 
 /// A start-to-finish lesson: obtain your first access token against a local
 /// authorization server.

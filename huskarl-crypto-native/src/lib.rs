@@ -82,7 +82,7 @@ mod factory;
 pub mod asymmetric;
 pub mod symmetric;
 
-#[cfg(any(doc, docsrs))]
+#[cfg(doc)]
 pub mod _docs;
 
 pub use factory::NativeVerifierPlatform;

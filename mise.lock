@@ -64,10 +64,6 @@ url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-
 checksum = "sha256:518dc51180c7bc864699c9279b3bc99025bc109123e0249a34ba34d130a509bf"
 url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.0/wasm-pack-v0.15.0-x86_64-pc-windows-msvc.tar.gz"
 
-[[tools."cargo:cargo-docs-rs"]]
-version = "1.0.4"
-backend = "cargo:cargo-docs-rs"
-
 [[tools."cargo:cargo-fuzz"]]
 version = "0.13.2"
 backend = "cargo:cargo-fuzz"
