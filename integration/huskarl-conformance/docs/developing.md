@@ -49,6 +49,25 @@ its result with `authorize_prepared`. This preserves JWKS state across flows whi
 generating fresh authorization state/nonce values. `discover` supports modules
 that require metadata retrieval without authorization.
 
+## Keep protocol behavior in Huskarl
+
+Scenarios configure and call Huskarl's public APIs. Do not pre-validate protocol
+responses, resolve endpoint aliases, or synthesize protocol rejection reasons in
+the harness. Record Huskarl's results and apply expectations afterward. Harness
+unit tests check orchestration and evidence handling; only suite runs demonstrate
+conformance behavior.
+
+Use the module's exposed accounts URL through Huskarl's `EndpointUrl` type;
+resource routing is independent of authorization-server endpoint aliases.
+`call_resource_get` supplies the HTTP request loop because `HttpAuthorizer`
+provides headers and response processing, not a request executor. Its nonce and
+retry decisions come from Huskarl.
+
+The client-credentials discovery adapter is a remaining compatibility limitation:
+the suite omits `response_types_supported`, required by Huskarl's general metadata
+type. It decodes grant configuration only; its errors must never count as Huskarl
+protocol rejections or evidence of Huskarl discovery conformance.
+
 ## Run harness tests
 
 Run these commands from the repository root:

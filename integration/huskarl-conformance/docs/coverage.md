@@ -86,13 +86,14 @@ the identity through `MtlsPem`. No certificate files or external certificate
 generation commands are required. TLS server verification still follows
 `CONFORMANCE_INSECURE_TLS`.
 
-These variants declare `client.use_mtls_endpoint_aliases=true` and use discovery's
-aliases for PAR and token requests. mTLS client authentication sends the client ID
+These variants declare `client.use_mtls_endpoint_aliases=true`; Huskarl resolves
+discovery's aliases for PAR and token requests, including fallback when absent.
+mTLS client authentication sends the client ID
 with `NoAuth`, relying on the transport certificate for authentication. For
 certificate-bound tokens, UserInfo and accounts requests use the same certificate;
 the accounts URL comes from the running module's exposed `accounts_endpoint`.
-For certificate-bound tokens, its HTTPS origin must match discovery's mTLS token
-endpoint alias; a missing alias or mismatched origin fails the scenario. With
+The harness does not infer resource routing from token endpoint aliases or require
+the resource and authorization server to share an origin. With
 mTLS authentication plus DPoP tokens, resource requests use a separate HTTP client
 without a certificate and retain the grant's DPoP state. Management API and browser
 clients do not receive the identity.
