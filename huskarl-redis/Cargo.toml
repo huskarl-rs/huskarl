@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-redis"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 rust-version = "1.92"
 description = "Redis-backed replay prevention for the huskarl OAuth2 ecosystem."
@@ -23,7 +23,7 @@ tokio-comp = ["redis/tokio-comp"]
 tracing = { workspace = true, optional = true }
 bon.workspace = true
 hex.workspace = true
-huskarl-core = { version = "0.10.8", path = "../huskarl-core" }
+huskarl-core = { version = "0.10.11", path = "../huskarl-core" }
 redis = { version = "1", default-features = false, features = ["aio"] }
 sha2 = { workspace = true, default-features = false }
 snafu = { workspace = true }

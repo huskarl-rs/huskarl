@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-google-cloud"
-version = "0.8.5"
+version = "0.8.6"
 edition = "2024"
 rust-version = "1.92"
 description = "Google Cloud cryptographic integrations for the huskarl OAuth2 ecosystem."
@@ -31,7 +31,7 @@ secretmanager = ["dep:google-cloud-secretmanager-v1", "dep:google-cloud-gax", "d
 [dependencies]
 jiff = { workspace = true }
 tracing = { version = "0.1.44", default-features = false, features = ["std", "attributes"], optional = true }
-huskarl-core = { version = "0.10.10", path = "../huskarl-core" }
+huskarl-core = { version = "0.10.11", path = "../huskarl-core" }
 
 bon = { workspace = true }
 der = { version = "0.8.2", optional = true, default-features = false, features = ["derive"] }
