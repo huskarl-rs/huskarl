@@ -1,6 +1,6 @@
 [package]
 name = "huskarl"
-version = "0.11.10"
+version = "0.11.11"
 edition = "2024"
 rust-version = "1.92"
 description = '''
@@ -44,7 +44,7 @@ url = ["huskarl-core/url"]
 jiff = { workspace = true }
 tracing = { version = "0.1.36", default-features = false, features = ["std", "attributes"], optional = true }
 metrics = { workspace = true, optional = true }
-huskarl-core = { version = "0.10.10", path = "../huskarl-core" }
+huskarl-core = { version = "0.10.11", path = "../huskarl-core" }
 huskarl-macros = { version = "0.4", path = "../huskarl-macros" }
 
 arc-swap = "1"
@@ -65,7 +65,7 @@ url = { workspace = true, optional = true }
 
 ### Dependencies available on all platforms except WASM-not-WASI
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
-huskarl-crypto-native = { version = "0.11.2", path = "../huskarl-crypto-native", optional = true }
+huskarl-crypto-native = { version = "0.11.4", path = "../huskarl-crypto-native", optional = true }
 
 ### Dependencies available on WASM-not-WASI
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]

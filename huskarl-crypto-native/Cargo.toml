@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-crypto-native"
-version = "0.11.3"
+version = "0.11.4"
 edition = "2024"
 rust-version = "1.92"
 description = "Native crypto for the huskarl OAuth2 ecosystem."
@@ -22,7 +22,7 @@ tracing = ["dep:tracing", "huskarl-core/tracing"]
 [dependencies]
 tracing = { version = "0.1.23", default-features = false, features = ["std", "attributes"], optional = true }
 huskarl-macros = { version = "0.4", path = "../huskarl-macros" }
-huskarl-core = { version = "0.10.8", path = "../huskarl-core" }
+huskarl-core = { version = "0.10.11", path = "../huskarl-core" }
 
 ed25519-dalek = { version = "3.0", default-features = false, features = ["pem", "zeroize"] }
 hmac = { version = "0.13", default-features = true }
