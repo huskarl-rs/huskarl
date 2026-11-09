@@ -719,6 +719,34 @@ async fn can_restore_reconciles_only_after_staleness_boundary() {
 }
 
 #[tokio::test]
+async fn rejected_primed_token_does_not_restore_superseded_cached_token() {
+    use crate::cache::{CacheState, InMemoryTokenCache};
+
+    let http = MockHttpClient::default();
+    http.push(
+        StatusCode::OK,
+        r#"{"access_token":"replacement","token_type":"Bearer","expires_in":3600}"#,
+    );
+    let source = GrantTokenSource::builder()
+        .grant(client_credentials_grant(http))
+        .grant_parameters(NoSource)
+        .refresh_store(SharedRefreshStore::default())
+        .build();
+    source.prime(valid_response("old-rt")).await.unwrap();
+    let cache = InMemoryTokenCache::builder().source(source).build();
+    cache.token().await.unwrap();
+
+    cache
+        .source()
+        .prime(expired_response_with_refresh("new-rt"))
+        .await
+        .unwrap();
+    assert!(cache.token().await.is_err());
+    assert_eq!(cache.state(None).await.unwrap(), CacheState::Restorable);
+    assert_eq!(access_of(&cache.token().await.unwrap()), "replacement");
+}
+
+#[tokio::test]
 async fn cache_state_reports_active_restorable_unauthenticated() {
     use crate::cache::{CacheState, InMemoryTokenCache};
 
@@ -744,7 +772,7 @@ async fn cache_state_reports_active_restorable_unauthenticated() {
         .await
         .unwrap();
     let restorable = InMemoryTokenCache::builder().source(source).build();
-    restorable.token().await.unwrap(); // consume the expired pending token
+    assert!(restorable.token().await.is_err()); // discard the expired pending token
     assert_eq!(
         restorable.state(None).await.unwrap(),
         CacheState::Restorable
@@ -2051,8 +2079,7 @@ async fn priming_does_not_restart_local_or_imported_token_lifetimes() {
             .expires_margin(Duration::ZERO)
             .refresh_jitter(None)
             .build();
-        let cached = cache.token().await.unwrap();
-        assert!(cached.is_expired_at(Clock::now(&time), Duration::from_secs(100), Duration::ZERO));
+        assert!(cache.token().await.is_err());
         assert_eq!(
             clone.elapsed_since_receipt_at(Clock::now(&time)),
             Some(Duration::from_secs(100))
