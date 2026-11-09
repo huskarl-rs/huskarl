@@ -15,10 +15,10 @@ use huskarl_core::{
     jwk::{self, KeyOperation, KeyUse},
     platform::MaybeSendBoxFuture,
 };
-use rsa::{BoxedUint, RsaPublicKey, signature::Verifier};
+use rsa::{BoxedUint, signature::Verifier};
 use snafu::{ResultExt as _, Snafu};
 
-// RFC 7518 §3.3 minimum RSA modulus. `RsaPublicKey::new` enforces the
+// RFC 7518 §3.3 minimum RSA modulus. `rsa::PublicKey::new` enforces the
 // 8192-bit maximum.
 const MIN_RSA_BITS: u32 = 2048;
 
@@ -112,7 +112,7 @@ impl From<MalformedSignatureError> for VerifyError {
 enum Key {
     Es256(p256::ecdsa::VerifyingKey),
     Es384(p384::ecdsa::VerifyingKey),
-    Rsa(rsa::RsaPublicKey),
+    Rsa(rsa::PublicKey),
     Rs256(rsa::pkcs1v15::VerifyingKey<sha2::Sha256>),
     Rs384(rsa::pkcs1v15::VerifyingKey<sha2::Sha384>),
     Rs512(rsa::pkcs1v15::VerifyingKey<sha2::Sha512>),
@@ -146,14 +146,14 @@ impl Key {
     pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Result<Key, VerifierKeyError> {
         fn rsa_key_from_jwk(
             rsa_jwk: jwk::RsaPublicKey,
-        ) -> Result<rsa::RsaPublicKey, VerifierKeyError> {
+        ) -> Result<rsa::PublicKey, VerifierKeyError> {
             let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
-            let bits = n_boxed.bits_vartime();
+            let bits = n_boxed.bit_width_vartime();
             if bits < MIN_RSA_BITS {
                 return RsaModulusTooSmallSnafu { bits }.fail();
             }
             let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e.into_boxed_slice());
-            RsaPublicKey::new(n_boxed, e_boxed).context(InvalidRsaPublicKeySnafu)
+            rsa::PublicKey::new(n_boxed, e_boxed).context(InvalidRsaPublicKeySnafu)
         }
 
         match jwk_key {
@@ -818,7 +818,7 @@ mod tests {
     async fn roundtrip_pkcs8_der_rs256() {
         use pkcs8::EncodePrivateKey as _;
 
-        let rsa_key = rsa::RsaPrivateKey::new(&mut rand::rng(), 2048).unwrap();
+        let rsa_key = rsa::PrivateKey::new(&mut rand::rng(), 2048).unwrap();
         let der = rsa_key.to_pkcs8_der().unwrap();
 
         let secret = ByteSecret {

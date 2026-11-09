@@ -331,7 +331,7 @@ impl Key {
                 if let Some(ref q) = rsa_private.q {
                     primes.push(rsa::BoxedUint::from_be_slice_vartime(q));
                 }
-                let rsa_key = rsa::RsaPrivateKey::from_components(n, e, d, primes)
+                let rsa_key = rsa::PrivateKey::from_components(n, e, d, primes)
                     .context(InvalidRsaPrivateKeySnafu)?;
                 match alg {
                     "RS256" => Ok(Key::Rs256(rsa::pkcs1v15::SigningKey::new(rsa_key))),
@@ -387,7 +387,7 @@ fn build_private_jwk(
 // `private_key()` is infallible here: `d` is set on a real RSA private key.
 #[allow(clippy::expect_used)]
 fn convert_rsa_to_private_jwk(
-    private_key: impl AsRef<rsa::RsaPrivateKey>,
+    private_key: impl AsRef<rsa::PrivateKey>,
     kid: Option<&str>,
     alg: &str,
 ) -> jwk::AsymmetricPrivateJwk {
@@ -404,8 +404,8 @@ fn convert_rsa_to_private_jwk(
                 .build(),
         )
         .d(key.d().to_be_bytes())
-        .maybe_p(primes.first().map(rsa::BoxedUint::to_be_bytes))
-        .maybe_q(primes.get(1).map(rsa::BoxedUint::to_be_bytes))
+        .maybe_p(primes.first().map(|p| p.to_be_bytes()))
+        .maybe_q(primes.get(1).map(|q| q.to_be_bytes()))
         .maybe_dp(key.dp().map(rsa::BoxedUint::to_be_bytes))
         .maybe_dq(key.dq().map(rsa::BoxedUint::to_be_bytes))
         .maybe_qi(key.qinv().map(|qi| qi.retrieve().to_be_bytes()))
@@ -415,7 +415,7 @@ fn convert_rsa_to_private_jwk(
 }
 
 fn convert_rsa_public_key_to_jwk(
-    private_key: impl AsRef<rsa::RsaPrivateKey>,
+    private_key: impl AsRef<rsa::PrivateKey>,
     kid: Option<&str>,
     alg: &str,
 ) -> jwk::PublicJwk {
@@ -553,7 +553,7 @@ impl PrivateKey {
         tracing::instrument(name = "huskarl.native.key.generate", level = "trace", skip_all)
     )]
     pub fn generate(key_type: GenerateAlgorithm, kid: Option<String>) -> Result<Self, Error> {
-        fn rsa_key(modulus_length: u32) -> Result<rsa::RsaPrivateKey, Error> {
+        fn rsa_key(modulus_length: u32) -> Result<rsa::PrivateKey, Error> {
             if modulus_length < RSA_MODULUS_2048 {
                 crate::diagnostics::failure("rsa_modulus_too_small");
 
@@ -563,7 +563,7 @@ impl PrivateKey {
                 ));
             }
             Ok(
-                rsa::RsaPrivateKey::new(&mut rand::rng(), modulus_length as usize)
+                rsa::PrivateKey::new(&mut rand::rng(), modulus_length as usize)
                     .inspect_err(|_| crate::diagnostics::failure("key_generation_failed"))
                     .context(GeneratingRsaKeySnafu)?,
             )
@@ -919,6 +919,8 @@ impl JwsSigner for PrivateKeyInner {
         tracing::instrument(name = "huskarl.native.jws.sign", level = "trace", skip_all)
     )]
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
+        use rsa::signature::RandomizedSigner as _;
+
         // The panicking `Signer::sign` wrappers are off limits here: the load
         // paths accept keys that `generate` would refuse (e.g. an undersized
         // legacy RSA modulus the PSS/PKCS#1 encoding doesn't fit), so signing
@@ -940,44 +942,35 @@ impl JwsSigner for PrivateKeyInner {
                     Ok(signature.to_vec())
                 }
                 Key::Rs256(signing_key) => Ok(signing_key
-                    .try_sign(input)
+                    .try_sign_with_rng(&mut rand::rng(), input)
                     .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                     .context(SigningJwsInputSnafu)?
                     .to_vec()),
                 Key::Rs384(signing_key) => Ok(signing_key
-                    .try_sign(input)
+                    .try_sign_with_rng(&mut rand::rng(), input)
                     .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                     .context(SigningJwsInputSnafu)?
                     .to_vec()),
                 Key::Rs512(signing_key) => Ok(signing_key
-                    .try_sign(input)
+                    .try_sign_with_rng(&mut rand::rng(), input)
                     .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
                     .context(SigningJwsInputSnafu)?
                     .to_vec()),
-                Key::Ps256(signing_key) => {
-                    use rsa::signature::RandomizedSigner;
-                    Ok(signing_key
-                        .try_sign_with_rng(&mut rand::rng(), input)
-                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                        .context(SigningJwsInputSnafu)?
-                        .to_vec())
-                }
-                Key::Ps384(signing_key) => {
-                    use rsa::signature::RandomizedSigner;
-                    Ok(signing_key
-                        .try_sign_with_rng(&mut rand::rng(), input)
-                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                        .context(SigningJwsInputSnafu)?
-                        .to_vec())
-                }
-                Key::Ps512(signing_key) => {
-                    use rsa::signature::RandomizedSigner;
-                    Ok(signing_key
-                        .try_sign_with_rng(&mut rand::rng(), input)
-                        .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                        .context(SigningJwsInputSnafu)?
-                        .to_vec())
-                }
+                Key::Ps256(signing_key) => Ok(signing_key
+                    .try_sign_with_rng(&mut rand::rng(), input)
+                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
+                    .context(SigningJwsInputSnafu)?
+                    .to_vec()),
+                Key::Ps384(signing_key) => Ok(signing_key
+                    .try_sign_with_rng(&mut rand::rng(), input)
+                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
+                    .context(SigningJwsInputSnafu)?
+                    .to_vec()),
+                Key::Ps512(signing_key) => Ok(signing_key
+                    .try_sign_with_rng(&mut rand::rng(), input)
+                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
+                    .context(SigningJwsInputSnafu)?
+                    .to_vec()),
                 Key::Ed25519 { key, .. } => Ok(key
                     .try_sign(input)
                     .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
@@ -1139,7 +1132,7 @@ mod tests {
         // The load paths (unlike `generate`) accept legacy RSA keys below
         // 2048 bits, and PS512's PSS encoding (two 64-byte digests + 2) does
         // not fit a 1024-bit modulus — signing must fail as an error.
-        let rsa_key = rsa::RsaPrivateKey::new(&mut rand::rng(), 1024).unwrap();
+        let rsa_key = rsa::PrivateKey::new(&mut rand::rng(), 1024).unwrap();
         let signing_key = Key::Ps512(rsa::pss::SigningKey::new(rsa_key));
         let jwk = signing_key.as_public_jwk(None);
         let thumbprint = jwk.thumbprint();
