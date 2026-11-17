@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-reqwest"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 rust-version = "1.92"
 description = "reqwest support for the huskarl OAuth2 ecosystem."
@@ -23,7 +23,7 @@ huskarl-macros = { version = "0.4", path = "../huskarl-macros" }
 bon = { version = "3.9", default-features = false }
 bytes = { version = "1.7.1", default-features = false }
 http = { version = "1.1", default-features = false }
-huskarl-core = { version = "0.10.8", path = "../huskarl-core" }
+huskarl-core = { version = "0.10.11", path = "../huskarl-core" }
 reqwest = { version = "0.13", default-features = false }
 snafu = { workspace = true }
 

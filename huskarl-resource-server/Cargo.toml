@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-resource-server"
-version = "0.11.12"
+version = "0.11.13"
 edition = "2024"
 rust-version = "1.92"
 description = "Resource server (JWT validation) support for the huskarl OAuth2 ecosystem."
@@ -30,7 +30,7 @@ default-jws-verifier-platform = ["dep:huskarl-crypto-native", "dep:huskarl-crypt
 [dependencies]
 jiff = { workspace = true }
 tracing = { workspace = true, optional = true }
-huskarl-core = { version = "0.10.10", path = "../huskarl-core" }
+huskarl-core = { version = "0.10.11", path = "../huskarl-core" }
 
 bon = { workspace = true }
 bytes = { version = "1", default-features = false }
@@ -47,7 +47,7 @@ base64 = { workspace = true }
 ### Dependencies available on all platforms except WASM-not-WASI
 [target.'cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))'.dependencies]
 tokio = { version = "1", default-features = false, features = ["time"] }
-huskarl-crypto-native = { version = "0.11.2", path = "../huskarl-crypto-native", optional = true }
+huskarl-crypto-native = { version = "0.11.4", path = "../huskarl-crypto-native", optional = true }
 
 ### Dependencies available on WASM-not-WASI
 [target.'cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))'.dependencies]

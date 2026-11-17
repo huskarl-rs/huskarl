@@ -1,6 +1,6 @@
 [package]
 name = "huskarl-crypto-webcrypto"
-version = "0.11.1"
+version = "0.11.2"
 edition = "2024"
 rust-version = "1.92"
 description = "WebCrypto support for the huskarl OAuth2 ecosystem."
@@ -26,7 +26,7 @@ tracing = ["dep:tracing", "huskarl-core/tracing"]
 [dependencies]
 tracing = { workspace = true, optional = true }
 huskarl-macros = { version = "0.4", path = "../huskarl-macros" }
-huskarl-core = { version = "0.10.8", path = "../huskarl-core" }
+huskarl-core = { version = "0.10.11", path = "../huskarl-core" }
 
 serde-wasm-bindgen = { version = "0.6", default-features = false }
 serde_json = { version = "1.0.50", default-features = false, features = ["alloc"] }
