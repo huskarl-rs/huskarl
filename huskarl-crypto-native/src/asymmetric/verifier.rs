@@ -16,7 +16,10 @@ use huskarl_core::{
     platform::MaybeSendBoxFuture,
 };
 use rsa::{BoxedUint, signature::Verifier};
-use snafu::{ResultExt as _, Snafu};
+use snafu::{IntoError as _, ResultExt as _, Snafu};
+use strum::VariantNames as _;
+
+use super::RsaAlgorithm;
 
 // RFC 7518 §3.3 minimum RSA modulus. `rsa::PublicKey::new` enforces the
 // 8192-bit maximum.
@@ -112,77 +115,42 @@ impl From<MalformedSignatureError> for VerifyError {
 enum Key {
     Es256(p256::ecdsa::VerifyingKey),
     Es384(p384::ecdsa::VerifyingKey),
-    Rsa(rsa::PublicKey),
-    Rs256(rsa::pkcs1v15::VerifyingKey<sha2::Sha256>),
-    Rs384(rsa::pkcs1v15::VerifyingKey<sha2::Sha384>),
-    Rs512(rsa::pkcs1v15::VerifyingKey<sha2::Sha512>),
-    Ps256(rsa::pss::VerifyingKey<sha2::Sha256>),
-    Ps384(rsa::pss::VerifyingKey<sha2::Sha384>),
-    Ps512(rsa::pss::VerifyingKey<sha2::Sha512>),
+    Rsa {
+        key: rsa::PublicKey,
+        allowed_algorithm: Option<RsaAlgorithm>,
+    },
     Ed25519(ed25519_dalek::VerifyingKey),
 }
 
-/// Union of [`Key::supported_algorithms`] across all variants.
+/// All supported signature algorithms.
 pub(crate) const SUPPORTED_SIGNATURE_ALGORITHMS: &[&str] = &[
     "ES256", "ES384", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "Ed25519", "EdDSA",
 ];
 
 impl Key {
-    pub fn supported_algorithms(&self) -> &[&str] {
-        match self {
-            Key::Es256(_) => &["ES256"],
-            Key::Es384(_) => &["ES384"],
-            Key::Rsa(_) => &["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"],
-            Key::Rs256(_) => &["RS256"],
-            Key::Rs384(_) => &["RS384"],
-            Key::Rs512(_) => &["RS512"],
-            Key::Ps256(_) => &["PS256"],
-            Key::Ps384(_) => &["PS384"],
-            Key::Ps512(_) => &["PS512"],
-            Key::Ed25519(_) => &["Ed25519", "EdDSA"],
-        }
-    }
-
     pub fn new(jwk_key: jwk::PublicKey, alg: Option<&str>) -> Result<Key, VerifierKeyError> {
         fn rsa_key_from_jwk(
-            rsa_jwk: jwk::RsaPublicKey,
+            rsa_jwk: &jwk::RsaPublicKey,
         ) -> Result<rsa::PublicKey, VerifierKeyError> {
-            let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n.into_boxed_slice());
+            let n_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.n);
             let bits = n_boxed.bit_width_vartime();
             if bits < MIN_RSA_BITS {
                 return RsaModulusTooSmallSnafu { bits }.fail();
             }
-            let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e.into_boxed_slice());
+            let e_boxed = BoxedUint::from_be_slice_vartime(&rsa_jwk.e);
             rsa::PublicKey::new(n_boxed, e_boxed).context(InvalidRsaPublicKeySnafu)
         }
 
         match jwk_key {
-            jwk::PublicKey::Rsa(rsa_public_key) if alg.is_none() => {
-                rsa_key_from_jwk(rsa_public_key).map(Self::Rsa)
-            }
-            jwk::PublicKey::Rsa(rsa_public_key) if alg == Some("RS256") => {
-                rsa_key_from_jwk(rsa_public_key)
-                    .map(|k| Self::Rs256(rsa::pkcs1v15::VerifyingKey::new(k)))
-            }
-            jwk::PublicKey::Rsa(rsa_public_key) if alg == Some("RS384") => {
-                rsa_key_from_jwk(rsa_public_key)
-                    .map(|k| Self::Rs384(rsa::pkcs1v15::VerifyingKey::new(k)))
-            }
-            jwk::PublicKey::Rsa(rsa_public_key) if alg == Some("RS512") => {
-                rsa_key_from_jwk(rsa_public_key)
-                    .map(|k| Self::Rs512(rsa::pkcs1v15::VerifyingKey::new(k)))
-            }
-            jwk::PublicKey::Rsa(rsa_public_key) if alg == Some("PS256") => {
-                rsa_key_from_jwk(rsa_public_key)
-                    .map(|k| Self::Ps256(rsa::pss::VerifyingKey::new(k)))
-            }
-            jwk::PublicKey::Rsa(rsa_public_key) if alg == Some("PS384") => {
-                rsa_key_from_jwk(rsa_public_key)
-                    .map(|k| Self::Ps384(rsa::pss::VerifyingKey::new(k)))
-            }
-            jwk::PublicKey::Rsa(rsa_public_key) if alg == Some("PS512") => {
-                rsa_key_from_jwk(rsa_public_key)
-                    .map(|k| Self::Ps512(rsa::pss::VerifyingKey::new(k)))
+            jwk::PublicKey::Rsa(ref rsa_public_key) => {
+                let allowed_algorithm = alg
+                    .map(str::parse)
+                    .transpose()
+                    .map_err(|_| unsupported_key(&jwk_key, alg))?;
+                Ok(Self::Rsa {
+                    key: rsa_key_from_jwk(rsa_public_key)?,
+                    allowed_algorithm,
+                })
             }
             jwk::PublicKey::Ec(ec_public_key)
                 if alg.is_none_or(|a| a == "ES256") && ec_public_key.crv == "P-256" =>
@@ -327,19 +295,25 @@ impl AsymmetricPublicKey {
 
 impl JwsVerifier for AsymmetricPublicKey {
     fn key_match(&self, key_match: &KeyMatch<'_>) -> Option<KeyMatchStrength> {
-        key_match.strength_for(
-            self.inner.verifying_key.supported_algorithms(),
-            self.inner.kid.as_deref(),
-        )
+        let kid = self.inner.kid.as_deref();
+        match &self.inner.verifying_key {
+            Key::Es256(_) => key_match.strength_for(&["ES256"], kid),
+            Key::Es384(_) => key_match.strength_for(&["ES384"], kid),
+            Key::Rsa {
+                allowed_algorithm: Some(algorithm),
+                ..
+            } => key_match.strength_for(&[(*algorithm).into()], kid),
+            Key::Rsa {
+                allowed_algorithm: None,
+                ..
+            } => key_match.strength_for(RsaAlgorithm::VARIANTS, kid),
+            Key::Ed25519(_) => key_match.strength_for(&["Ed25519", "EdDSA"], kid),
+        }
     }
 
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(name = "huskarl.native.jws.verify", level = "trace", skip_all)
-    )]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "Keep algorithm dispatch and its explicit signature-decoding diagnostics together"
     )]
     fn verify<'a>(
         &'a self,
@@ -369,93 +343,28 @@ impl JwsVerifier for AsymmetricPublicKey {
                         .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
                         .context(MalformedSignatureSnafu { alg: key_match.alg })?,
                 ),
-                Key::Rsa(public_key) => match key_match.alg {
-                    "RS256" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha256>::new(public_key.clone())
-                        .verify(
-                            input,
-                            &rsa::pkcs1v15::Signature::try_from(signature)
-                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                        ),
-                    "RS384" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha384>::new(public_key.clone())
-                        .verify(
-                            input,
-                            &rsa::pkcs1v15::Signature::try_from(signature)
-                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                        ),
-                    "RS512" => rsa::pkcs1v15::VerifyingKey::<sha2::Sha512>::new(public_key.clone())
-                        .verify(
-                            input,
-                            &rsa::pkcs1v15::Signature::try_from(signature)
-                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                        ),
-                    "PS256" => rsa::pss::VerifyingKey::<sha2::Sha256>::new(public_key.clone())
-                        .verify(
-                            input,
-                            &rsa::pss::Signature::try_from(signature)
-                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                        ),
-                    "PS384" => rsa::pss::VerifyingKey::<sha2::Sha384>::new(public_key.clone())
-                        .verify(
-                            input,
-                            &rsa::pss::Signature::try_from(signature)
-                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                        ),
-                    "PS512" => rsa::pss::VerifyingKey::<sha2::Sha512>::new(public_key.clone())
-                        .verify(
-                            input,
-                            &rsa::pss::Signature::try_from(signature)
-                                .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                                .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                        ),
-                    // `key_match` above already rejected any alg outside
-                    // `supported_algorithms()`, so this is unreachable today.
-                    // It stays an error rather than a panic because the two
-                    // lists are kept in sync by hand, and `alg` comes from the
-                    // JWS header: a future alg added to one and not the other
-                    // would otherwise be a remotely triggered panic here.
-                    _ => return Err(VerifyError::NoMatchingKey),
-                },
-                Key::Rs256(verifying_key) => verifying_key.verify(
-                    input,
-                    &rsa::pkcs1v15::Signature::try_from(signature)
-                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                ),
-                Key::Rs384(verifying_key) => verifying_key.verify(
-                    input,
-                    &rsa::pkcs1v15::Signature::try_from(signature)
-                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                ),
-                Key::Rs512(verifying_key) => verifying_key.verify(
-                    input,
-                    &rsa::pkcs1v15::Signature::try_from(signature)
-                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                ),
-                Key::Ps256(verifying_key) => verifying_key.verify(
-                    input,
-                    &rsa::pss::Signature::try_from(signature)
-                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                ),
-                Key::Ps384(verifying_key) => verifying_key.verify(
-                    input,
-                    &rsa::pss::Signature::try_from(signature)
-                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                ),
-                Key::Ps512(verifying_key) => verifying_key.verify(
-                    input,
-                    &rsa::pss::Signature::try_from(signature)
-                        .inspect_err(|_| crate::diagnostics::failure("malformed_signature"))
-                        .context(MalformedSignatureSnafu { alg: key_match.alg })?,
-                ),
+                Key::Rsa { key, .. } => {
+                    let algorithm = key_match
+                        .alg
+                        .parse::<RsaAlgorithm>()
+                        .map_err(|_| VerifyError::NoMatchingKey)?;
+                    let signature = checked_rsa_signature(signature, key_match.alg)?;
+                    match algorithm {
+                        RsaAlgorithm::Rs256 => {
+                            key.pkcs1v15_verify::<sha2::Sha256>(input, signature)
+                        }
+                        RsaAlgorithm::Rs384 => {
+                            key.pkcs1v15_verify::<sha2::Sha384>(input, signature)
+                        }
+                        RsaAlgorithm::Rs512 => {
+                            key.pkcs1v15_verify::<sha2::Sha512>(input, signature)
+                        }
+                        RsaAlgorithm::Ps256 => key.pss_verify::<sha2::Sha256>(input, signature),
+                        RsaAlgorithm::Ps384 => key.pss_verify::<sha2::Sha384>(input, signature),
+                        RsaAlgorithm::Ps512 => key.pss_verify::<sha2::Sha512>(input, signature),
+                    }
+                    .map_err(signature::Error::from)
+                }
                 Key::Ed25519(verifying_key) => verifying_key.verify_strict(
                     input,
                     &ed25519_dalek::Signature::from_slice(signature)
@@ -469,6 +378,18 @@ impl JwsVerifier for AsymmetricPublicKey {
             })
         })
     }
+}
+
+// Preserve the RSA signature wrappers' decoding limit without allocating a
+// temporary signature. Other invalid encodings are checked against the key.
+fn checked_rsa_signature<'a>(signature: &'a [u8], alg: &str) -> Result<&'a [u8], VerifyError> {
+    if signature.len() > rsa::PublicKey::MAX_SIZE.div_ceil(8) {
+        crate::diagnostics::failure("malformed_signature");
+        return Err(MalformedSignatureSnafu { alg }
+            .into_error(signature::Error::new())
+            .into());
+    }
+    Ok(signature)
 }
 
 #[cfg(test)]
@@ -1016,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn rsa_verifier_does_not_match_hmac_algorithms() {
+    fn rsa_keys_preserve_algorithm_restrictions() {
         use huskarl_core::crypto::verifier::{JwsVerifier as _, KeyMatch};
 
         let rsa = PrivateKey::generate(
@@ -1026,7 +947,19 @@ mod tests {
             None,
         )
         .unwrap();
-        let verifier = AsymmetricPublicKey::from_jwk(rsa.as_private_jwk().public_jwk()).unwrap();
+        let private_jwk = rsa.as_private_jwk();
+        for alg in ["HS256", "ES256", "none", "unknown", "rs256", ""] {
+            let mut jwk = private_jwk.clone();
+            jwk.algorithm = Some(alg.into());
+            assert!(AsymmetricPublicKey::from_jwk(jwk.public_jwk()).is_err());
+            assert!(PrivateKey::from_jwk(jwk).is_err());
+        }
+        let mut unrestricted = private_jwk.clone();
+        unrestricted.algorithm = None;
+        assert!(AsymmetricPublicKey::from_jwk(unrestricted.public_jwk()).is_ok());
+        assert!(PrivateKey::from_jwk(unrestricted).is_err());
+
+        let verifier = AsymmetricPublicKey::from_jwk(private_jwk.public_jwk()).unwrap();
 
         // RS256→HS256 confusion is prevented at key selection: an RSA key
         // advertises only RSA algorithms, so a token claiming `alg: HS256` finds
@@ -1042,6 +975,143 @@ mod tests {
                 .key_match(&KeyMatch::builder().alg("RS256").build())
                 .is_some()
         );
+    }
+
+    #[tokio::test]
+    async fn rsa_byte_operations_preserve_algorithm_and_signature_checks() {
+        use huskarl_core::crypto::verifier::{JwsVerifier as _, KeyMatch, VerifyError};
+
+        let key = PrivateKey::generate(
+            GenerateAlgorithm::Rs256 {
+                modulus_length: 2048,
+            },
+            None,
+        )
+        .unwrap();
+        let private_jwk = key.as_private_jwk();
+        let oversized = vec![0; rsa::PublicKey::MAX_SIZE.div_ceil(8) + 1];
+
+        for alg in ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"] {
+            let mut jwk = private_jwk.clone();
+            jwk.algorithm = Some(alg.into());
+            let signer = PrivateKey::from_jwk(jwk).unwrap();
+            assert_eq!(signer.as_private_jwk().algorithm.as_deref(), Some(alg));
+            let signer = signer.select_asymmetric_signer().await;
+            assert_eq!(signer.jws_algorithm().as_ref(), alg);
+            assert_eq!(signer.public_key_jwk().algorithm.as_deref(), Some(alg));
+            let signature = signer.sign(b"message").await.unwrap();
+            let public_jwk = signer.public_key_jwk().into_owned();
+
+            for restricted in [true, false] {
+                let mut jwk = public_jwk.clone();
+                if !restricted {
+                    jwk.algorithm = None;
+                }
+                let verifier = AsymmetricPublicKey::from_jwk(jwk).unwrap();
+                let key_match = KeyMatch::builder().alg(alg).build();
+                verifier
+                    .verify(b"message", &signature, &key_match)
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    verifier.verify(b"tampered", &signature, &key_match).await,
+                    Err(VerifyError::SignatureMismatch)
+                ));
+                assert!(matches!(
+                    verifier
+                        .verify(b"message", &signature[..signature.len() - 1], &key_match)
+                        .await,
+                    Err(VerifyError::SignatureMismatch)
+                ));
+                assert!(matches!(
+                    verifier.verify(b"message", &oversized, &key_match).await,
+                    Err(VerifyError::MalformedSignature { .. })
+                ));
+                for other_alg in [
+                    "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "HS256", "none",
+                    "unknown",
+                ] {
+                    let other_match = KeyMatch::builder().alg(other_alg).build();
+                    let allowed = if restricted {
+                        other_alg == alg
+                    } else {
+                        ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512"].contains(&other_alg)
+                    };
+                    assert_eq!(
+                        verifier.key_match(&other_match).is_some(),
+                        allowed,
+                        "alg={alg}, restricted={restricted}, requested={other_alg}"
+                    );
+                    if !allowed {
+                        assert!(matches!(
+                            verifier.verify(b"message", &signature, &other_match).await,
+                            Err(VerifyError::NoMatchingKey)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ps256_interoperates_with_wrappers_with_jose_salt_length() {
+        use huskarl_core::crypto::verifier::{JwsVerifier as _, KeyMatch};
+        use pkcs8::EncodePrivateKey as _;
+        use rsa::{
+            signature::{RandomizedSigner as _, SignatureEncoding as _, Verifier as _},
+            traits::PublicKeyParts as _,
+        };
+
+        let key = rsa::PrivateKey::new(&mut rand::rng(), 2048).unwrap();
+        let der = key.to_pkcs8_der().unwrap();
+        let wrapper_verifier =
+            rsa::pss::VerifyingKey::<sha2::Sha256>::new_with_salt_len(key.to_public_key(), 32);
+        let public = huskarl_core::jwk::RsaPublicKey::builder()
+            .n(key.n_bytes())
+            .e(key.e_bytes())
+            .build();
+        let wrapper = rsa::pss::SigningKey::<sha2::Sha256>::new_with_salt_len(key, 32);
+        let signature = wrapper
+            .try_sign_with_rng(&mut rand::rng(), b"message")
+            .unwrap()
+            .to_vec();
+
+        let secret = ByteSecret {
+            bytes: der.as_bytes().to_vec(),
+            identity: None,
+        };
+        let native =
+            PrivateKey::from_secret(secret.mapped(Pkcs8Der::new(AsymmetricAlgorithm::Ps256)))
+                .await
+                .unwrap();
+        let native_signature = native
+            .select_asymmetric_signer()
+            .await
+            .sign(b"message")
+            .await
+            .unwrap();
+        wrapper_verifier
+            .verify(
+                b"message",
+                &rsa::pss::Signature::try_from(native_signature.as_slice()).unwrap(),
+            )
+            .unwrap();
+
+        for alg in [Some("PS256".to_owned()), None] {
+            let jwk = huskarl_core::jwk::PublicJwk::builder()
+                .key(public.clone())
+                .maybe_algorithm(alg)
+                .build();
+            let verifier = AsymmetricPublicKey::from_jwk(jwk).unwrap();
+            verifier
+                .verify(
+                    b"message",
+                    &signature,
+                    &KeyMatch::builder().alg("PS256").build(),
+                )
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]

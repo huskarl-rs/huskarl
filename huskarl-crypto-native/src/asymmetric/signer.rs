@@ -21,8 +21,10 @@ use huskarl_core::{
 use pkcs8::DecodePrivateKey;
 use rand::Rng;
 use rsa::traits::PublicKeyParts as _;
-use signature::{SignatureEncoding, Signer as _};
+use signature::Signer as _;
 use snafu::{ResultExt as _, Snafu};
+
+use super::RsaAlgorithm;
 
 /// The cause of an asymmetric signing-key failure.
 #[derive(Debug, Snafu, huskarl_macros::Classify)]
@@ -123,12 +125,10 @@ pub struct PrivateKey {
 enum Key {
     Es256(p256::ecdsa::SigningKey),
     Es384(p384::ecdsa::SigningKey),
-    Rs256(rsa::pkcs1v15::SigningKey<sha2::Sha256>),
-    Rs384(rsa::pkcs1v15::SigningKey<sha2::Sha384>),
-    Rs512(rsa::pkcs1v15::SigningKey<sha2::Sha512>),
-    Ps256(rsa::pss::SigningKey<sha2::Sha256>),
-    Ps384(rsa::pss::SigningKey<sha2::Sha384>),
-    Ps512(rsa::pss::SigningKey<sha2::Sha512>),
+    Rsa {
+        key: rsa::PrivateKey,
+        algorithm: RsaAlgorithm,
+    },
     Ed25519 {
         key: ed25519_dalek::SigningKey,
         use_fully_specified_jws_algorithm: bool,
@@ -136,16 +136,11 @@ enum Key {
 }
 
 impl Key {
-    pub const fn jws_algorithm(&self) -> &'static str {
+    pub fn jws_algorithm(&self) -> &'static str {
         match self {
             Key::Es256(_) => "ES256",
             Key::Es384(_) => "ES384",
-            Key::Rs256(_) => "RS256",
-            Key::Rs384(_) => "RS384",
-            Key::Rs512(_) => "RS512",
-            Key::Ps256(_) => "PS256",
-            Key::Ps384(_) => "PS384",
-            Key::Ps512(_) => "PS512",
+            Key::Rsa { algorithm, .. } => (*algorithm).into(),
             Key::Ed25519 {
                 use_fully_specified_jws_algorithm: true,
                 ..
@@ -198,24 +193,7 @@ impl Key {
                     .key(jwk::EcPublicKey::builder().crv("P-384").x(x).y(y).build())
                     .build()
             }
-            Key::Rs256(signing_key) => {
-                convert_rsa_public_key_to_jwk(signing_key, kid, self.jws_algorithm())
-            }
-            Key::Rs384(signing_key) => {
-                convert_rsa_public_key_to_jwk(signing_key, kid, self.jws_algorithm())
-            }
-            Key::Rs512(signing_key) => {
-                convert_rsa_public_key_to_jwk(signing_key, kid, self.jws_algorithm())
-            }
-            Key::Ps256(signing_key) => {
-                convert_rsa_public_key_to_jwk(signing_key, kid, self.jws_algorithm())
-            }
-            Key::Ps384(signing_key) => {
-                convert_rsa_public_key_to_jwk(signing_key, kid, self.jws_algorithm())
-            }
-            Key::Ps512(signing_key) => {
-                convert_rsa_public_key_to_jwk(signing_key, kid, self.jws_algorithm())
-            }
+            Key::Rsa { key, .. } => convert_rsa_public_key_to_jwk(key, kid, self.jws_algorithm()),
             Key::Ed25519 { key, .. } => jwk::PublicJwk::builder()
                 .algorithm(self.jws_algorithm())
                 .maybe_kid(kid)
@@ -284,12 +262,7 @@ impl Key {
                     kid,
                 )
             }
-            Key::Rs256(k) => convert_rsa_to_private_jwk(k, kid, self.jws_algorithm()),
-            Key::Rs384(k) => convert_rsa_to_private_jwk(k, kid, self.jws_algorithm()),
-            Key::Rs512(k) => convert_rsa_to_private_jwk(k, kid, self.jws_algorithm()),
-            Key::Ps256(k) => convert_rsa_to_private_jwk(k, kid, self.jws_algorithm()),
-            Key::Ps384(k) => convert_rsa_to_private_jwk(k, kid, self.jws_algorithm()),
-            Key::Ps512(k) => convert_rsa_to_private_jwk(k, kid, self.jws_algorithm()),
+            Key::Rsa { key, .. } => convert_rsa_to_private_jwk(key, kid, self.jws_algorithm()),
             Key::Ed25519 { key, .. } => {
                 let jwk::PublicKey::Okp(public) = self.as_public_jwk(kid).key else {
                     unreachable!("as_public_jwk builds an Okp key for this arm")
@@ -333,15 +306,13 @@ impl Key {
                 }
                 let rsa_key = rsa::PrivateKey::from_components(n, e, d, primes)
                     .context(InvalidRsaPrivateKeySnafu)?;
-                match alg {
-                    "RS256" => Ok(Key::Rs256(rsa::pkcs1v15::SigningKey::new(rsa_key))),
-                    "RS384" => Ok(Key::Rs384(rsa::pkcs1v15::SigningKey::new(rsa_key))),
-                    "RS512" => Ok(Key::Rs512(rsa::pkcs1v15::SigningKey::new(rsa_key))),
-                    "PS256" => Ok(Key::Ps256(rsa::pss::SigningKey::new(rsa_key))),
-                    "PS384" => Ok(Key::Ps384(rsa::pss::SigningKey::new(rsa_key))),
-                    "PS512" => Ok(Key::Ps512(rsa::pss::SigningKey::new(rsa_key))),
-                    _ => JwkAlgorithmMismatchSnafu { alg }.fail(),
-                }
+                let algorithm = alg
+                    .parse()
+                    .map_err(|_| JwkAlgorithmMismatchSnafu { alg }.build())?;
+                Ok(Key::Rsa {
+                    key: rsa_key,
+                    algorithm,
+                })
             }
             jwk::PrivateKey::Okp(okp) => match (okp.public.crv.as_str(), alg) {
                 ("Ed25519", "EdDSA") => {
@@ -387,20 +358,18 @@ fn build_private_jwk(
 // `private_key()` is infallible here: `d` is set on a real RSA private key.
 #[allow(clippy::expect_used)]
 fn convert_rsa_to_private_jwk(
-    private_key: impl AsRef<rsa::PrivateKey>,
+    key: &rsa::PrivateKey,
     kid: Option<&str>,
     alg: &str,
 ) -> jwk::AsymmetricPrivateJwk {
-    use rsa::traits::{PrivateKeyParts as _, PublicKeyParts as _};
-    let key = private_key.as_ref();
-    let public_key = key.to_public_key();
+    use rsa::traits::PrivateKeyParts as _;
     let primes = key.primes();
 
     let rsa_key = jwk::RsaKey::builder()
         .public(
             jwk::RsaPublicKey::builder()
-                .e(public_key.e().to_be_bytes())
-                .n(public_key.n().to_be_bytes())
+                .e(key.e_bytes())
+                .n(key.n_bytes())
                 .build(),
         )
         .d(key.d().to_be_bytes())
@@ -415,20 +384,18 @@ fn convert_rsa_to_private_jwk(
 }
 
 fn convert_rsa_public_key_to_jwk(
-    private_key: impl AsRef<rsa::PrivateKey>,
+    key: &rsa::PrivateKey,
     kid: Option<&str>,
     alg: &str,
 ) -> jwk::PublicJwk {
-    let public_key = private_key.as_ref().to_public_key();
-
     jwk::PublicJwk::builder()
         .algorithm(alg)
         .maybe_kid(kid)
         .key_use(jwk::KeyUse::Sign)
         .key(
             jwk::RsaPublicKey::builder()
-                .e(public_key.e().to_be_bytes())
-                .n(public_key.n().to_be_bytes())
+                .e(key.e_bytes())
+                .n(key.n_bytes())
                 .build(),
         )
         .build()
@@ -527,6 +494,71 @@ pub enum AsymmetricAlgorithm {
     Ed25519,
 }
 
+/// Internal algorithm families; generation also carries the RSA modulus length.
+#[derive(Debug, Clone, Copy)]
+enum KeyAlgorithm<RsaOptions = RsaAlgorithm> {
+    Es256,
+    Es384,
+    Rsa(RsaOptions),
+    Ed25519 {
+        use_fully_specified_jws_algorithm: bool,
+    },
+}
+
+impl From<GenerateAlgorithm> for KeyAlgorithm<(RsaAlgorithm, u32)> {
+    fn from(algorithm: GenerateAlgorithm) -> Self {
+        match algorithm {
+            GenerateAlgorithm::Es256 => Self::Es256,
+            GenerateAlgorithm::Es384 => Self::Es384,
+            GenerateAlgorithm::Rs256 { modulus_length } => {
+                Self::Rsa((RsaAlgorithm::Rs256, modulus_length))
+            }
+            GenerateAlgorithm::Rs384 { modulus_length } => {
+                Self::Rsa((RsaAlgorithm::Rs384, modulus_length))
+            }
+            GenerateAlgorithm::Rs512 { modulus_length } => {
+                Self::Rsa((RsaAlgorithm::Rs512, modulus_length))
+            }
+            GenerateAlgorithm::Ps256 { modulus_length } => {
+                Self::Rsa((RsaAlgorithm::Ps256, modulus_length))
+            }
+            GenerateAlgorithm::Ps384 { modulus_length } => {
+                Self::Rsa((RsaAlgorithm::Ps384, modulus_length))
+            }
+            GenerateAlgorithm::Ps512 { modulus_length } => {
+                Self::Rsa((RsaAlgorithm::Ps512, modulus_length))
+            }
+            GenerateAlgorithm::EdDsa => Self::Ed25519 {
+                use_fully_specified_jws_algorithm: false,
+            },
+            GenerateAlgorithm::Ed25519 => Self::Ed25519 {
+                use_fully_specified_jws_algorithm: true,
+            },
+        }
+    }
+}
+
+impl From<AsymmetricAlgorithm> for KeyAlgorithm {
+    fn from(algorithm: AsymmetricAlgorithm) -> Self {
+        match algorithm {
+            AsymmetricAlgorithm::Es256 => Self::Es256,
+            AsymmetricAlgorithm::Es384 => Self::Es384,
+            AsymmetricAlgorithm::Rs256 => Self::Rsa(RsaAlgorithm::Rs256),
+            AsymmetricAlgorithm::Rs384 => Self::Rsa(RsaAlgorithm::Rs384),
+            AsymmetricAlgorithm::Rs512 => Self::Rsa(RsaAlgorithm::Rs512),
+            AsymmetricAlgorithm::Ps256 => Self::Rsa(RsaAlgorithm::Ps256),
+            AsymmetricAlgorithm::Ps384 => Self::Rsa(RsaAlgorithm::Ps384),
+            AsymmetricAlgorithm::Ps512 => Self::Rsa(RsaAlgorithm::Ps512),
+            AsymmetricAlgorithm::EdDsa => Self::Ed25519 {
+                use_fully_specified_jws_algorithm: false,
+            },
+            AsymmetricAlgorithm::Ed25519 => Self::Ed25519 {
+                use_fully_specified_jws_algorithm: true,
+            },
+        }
+    }
+}
+
 impl PrivateKey {
     /// Generates an asymmetric key in memory.
     ///
@@ -569,47 +601,27 @@ impl PrivateKey {
             )
         }
 
-        let signing_key = match key_type {
-            GenerateAlgorithm::Es256 => {
+        let signing_key = match KeyAlgorithm::from(key_type) {
+            KeyAlgorithm::Es256 => {
                 use p256::elliptic_curve::Generate as _;
                 Key::Es256(p256::ecdsa::SigningKey::generate())
             }
-            GenerateAlgorithm::Es384 => {
+            KeyAlgorithm::Es384 => {
                 use p384::elliptic_curve::Generate as _;
                 Key::Es384(p384::ecdsa::SigningKey::generate())
             }
-            GenerateAlgorithm::Rs256 { modulus_length } => {
-                Key::Rs256(rsa::pkcs1v15::SigningKey::new(rsa_key(modulus_length)?))
-            }
-            GenerateAlgorithm::Rs384 { modulus_length } => {
-                Key::Rs384(rsa::pkcs1v15::SigningKey::new(rsa_key(modulus_length)?))
-            }
-            GenerateAlgorithm::Rs512 { modulus_length } => {
-                Key::Rs512(rsa::pkcs1v15::SigningKey::new(rsa_key(modulus_length)?))
-            }
-            GenerateAlgorithm::Ps256 { modulus_length } => {
-                Key::Ps256(rsa::pss::SigningKey::new(rsa_key(modulus_length)?))
-            }
-            GenerateAlgorithm::Ps384 { modulus_length } => {
-                Key::Ps384(rsa::pss::SigningKey::new(rsa_key(modulus_length)?))
-            }
-            GenerateAlgorithm::Ps512 { modulus_length } => {
-                Key::Ps512(rsa::pss::SigningKey::new(rsa_key(modulus_length)?))
-            }
-            GenerateAlgorithm::EdDsa => {
+            KeyAlgorithm::Rsa((algorithm, modulus_length)) => Key::Rsa {
+                key: rsa_key(modulus_length)?,
+                algorithm,
+            },
+            KeyAlgorithm::Ed25519 {
+                use_fully_specified_jws_algorithm,
+            } => {
                 let mut secret = [0u8; 32];
                 rand::rng().fill_bytes(&mut secret);
                 Key::Ed25519 {
                     key: ed25519_dalek::SigningKey::from_bytes(&secret),
-                    use_fully_specified_jws_algorithm: false,
-                }
-            }
-            GenerateAlgorithm::Ed25519 => {
-                let mut secret = [0u8; 32];
-                rand::rng().fill_bytes(&mut secret);
-                Key::Ed25519 {
-                    key: ed25519_dalek::SigningKey::from_bytes(&secret),
-                    use_fully_specified_jws_algorithm: true,
+                    use_fully_specified_jws_algorithm,
                 }
             }
         };
@@ -721,33 +733,18 @@ impl PrivateKey {
 /// Backend-internal helper behind the [`pkcs8_der`] conversion, keeping the
 /// per-algorithm decoding in one place.
 fn key_from_pkcs8_der(der: &[u8], key_type: AsymmetricAlgorithm) -> Result<Key, pkcs8::Error> {
-    match key_type {
-        AsymmetricAlgorithm::Es256 => p256::ecdsa::SigningKey::from_pkcs8_der(der).map(Key::Es256),
-        AsymmetricAlgorithm::Es384 => p384::ecdsa::SigningKey::from_pkcs8_der(der).map(Key::Es384),
-        AsymmetricAlgorithm::Rs256 => {
-            rsa::pkcs1v15::SigningKey::from_pkcs8_der(der).map(Key::Rs256)
+    match KeyAlgorithm::from(key_type) {
+        KeyAlgorithm::Es256 => p256::ecdsa::SigningKey::from_pkcs8_der(der).map(Key::Es256),
+        KeyAlgorithm::Es384 => p384::ecdsa::SigningKey::from_pkcs8_der(der).map(Key::Es384),
+        KeyAlgorithm::Rsa(algorithm) => {
+            rsa::PrivateKey::from_pkcs8_der(der).map(|key| Key::Rsa { key, algorithm })
         }
-        AsymmetricAlgorithm::Rs384 => {
-            rsa::pkcs1v15::SigningKey::from_pkcs8_der(der).map(Key::Rs384)
-        }
-        AsymmetricAlgorithm::Rs512 => {
-            rsa::pkcs1v15::SigningKey::from_pkcs8_der(der).map(Key::Rs512)
-        }
-        AsymmetricAlgorithm::Ps256 => rsa::pss::SigningKey::from_pkcs8_der(der).map(Key::Ps256),
-        AsymmetricAlgorithm::Ps384 => rsa::pss::SigningKey::from_pkcs8_der(der).map(Key::Ps384),
-        AsymmetricAlgorithm::Ps512 => rsa::pss::SigningKey::from_pkcs8_der(der).map(Key::Ps512),
-        AsymmetricAlgorithm::EdDsa => {
-            ed25519_dalek::SigningKey::from_pkcs8_der(der).map(|key| Key::Ed25519 {
-                key,
-                use_fully_specified_jws_algorithm: false,
-            })
-        }
-        AsymmetricAlgorithm::Ed25519 => {
-            ed25519_dalek::SigningKey::from_pkcs8_der(der).map(|key| Key::Ed25519 {
-                key,
-                use_fully_specified_jws_algorithm: true,
-            })
-        }
+        KeyAlgorithm::Ed25519 {
+            use_fully_specified_jws_algorithm,
+        } => ed25519_dalek::SigningKey::from_pkcs8_der(der).map(|key| Key::Ed25519 {
+            key,
+            use_fully_specified_jws_algorithm,
+        }),
     }
 }
 
@@ -919,8 +916,6 @@ impl JwsSigner for PrivateKeyInner {
         tracing::instrument(name = "huskarl.native.jws.sign", level = "trace", skip_all)
     )]
     fn sign<'a>(&'a self, input: &'a [u8]) -> MaybeSendBoxFuture<'a, Result<Vec<u8>, Error>> {
-        use rsa::signature::RandomizedSigner as _;
-
         // The panicking `Signer::sign` wrappers are off limits here: the load
         // paths accept keys that `generate` would refuse (e.g. an undersized
         // legacy RSA modulus the PSS/PKCS#1 encoding doesn't fit), so signing
@@ -941,36 +936,32 @@ impl JwsSigner for PrivateKeyInner {
                         .context(SigningJwsInputSnafu)?;
                     Ok(signature.to_vec())
                 }
-                Key::Rs256(signing_key) => Ok(signing_key
-                    .try_sign_with_rng(&mut rand::rng(), input)
+                Key::Rsa { key, algorithm } => {
+                    let mut rng = rand::rng();
+                    Ok(match algorithm {
+                        RsaAlgorithm::Rs256 => {
+                            key.pkcs1v15_sign_with_rng::<sha2::Sha256, _>(&mut rng, input)
+                        }
+                        RsaAlgorithm::Rs384 => {
+                            key.pkcs1v15_sign_with_rng::<sha2::Sha384, _>(&mut rng, input)
+                        }
+                        RsaAlgorithm::Rs512 => {
+                            key.pkcs1v15_sign_with_rng::<sha2::Sha512, _>(&mut rng, input)
+                        }
+                        RsaAlgorithm::Ps256 => {
+                            key.pss_sign_with_rng::<sha2::Sha256, _>(&mut rng, input)
+                        }
+                        RsaAlgorithm::Ps384 => {
+                            key.pss_sign_with_rng::<sha2::Sha384, _>(&mut rng, input)
+                        }
+                        RsaAlgorithm::Ps512 => {
+                            key.pss_sign_with_rng::<sha2::Sha512, _>(&mut rng, input)
+                        }
+                    }
+                    .map_err(signature::Error::from)
                     .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                    .context(SigningJwsInputSnafu)?
-                    .to_vec()),
-                Key::Rs384(signing_key) => Ok(signing_key
-                    .try_sign_with_rng(&mut rand::rng(), input)
-                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                    .context(SigningJwsInputSnafu)?
-                    .to_vec()),
-                Key::Rs512(signing_key) => Ok(signing_key
-                    .try_sign_with_rng(&mut rand::rng(), input)
-                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                    .context(SigningJwsInputSnafu)?
-                    .to_vec()),
-                Key::Ps256(signing_key) => Ok(signing_key
-                    .try_sign_with_rng(&mut rand::rng(), input)
-                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                    .context(SigningJwsInputSnafu)?
-                    .to_vec()),
-                Key::Ps384(signing_key) => Ok(signing_key
-                    .try_sign_with_rng(&mut rand::rng(), input)
-                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                    .context(SigningJwsInputSnafu)?
-                    .to_vec()),
-                Key::Ps512(signing_key) => Ok(signing_key
-                    .try_sign_with_rng(&mut rand::rng(), input)
-                    .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
-                    .context(SigningJwsInputSnafu)?
-                    .to_vec()),
+                    .context(SigningJwsInputSnafu)?)
+                }
                 Key::Ed25519 { key, .. } => Ok(key
                     .try_sign(input)
                     .inspect_err(|_| crate::diagnostics::failure("signing_failed"))
@@ -984,6 +975,45 @@ impl JwsSigner for PrivateKeyInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pkcs8_rsa_preserves_each_selected_algorithm() {
+        use huskarl_core::crypto::verifier::{JwsVerifier as _, KeyMatch};
+        use pkcs8::EncodePrivateKey as _;
+
+        use crate::asymmetric::verifier::AsymmetricPublicKey;
+
+        let source = rsa::PrivateKey::new(&mut rand::rng(), 2048).unwrap();
+        let der = source.to_pkcs8_der().unwrap();
+        for (algorithm, expected) in [
+            (AsymmetricAlgorithm::Rs256, "RS256"),
+            (AsymmetricAlgorithm::Rs384, "RS384"),
+            (AsymmetricAlgorithm::Rs512, "RS512"),
+            (AsymmetricAlgorithm::Ps256, "PS256"),
+            (AsymmetricAlgorithm::Ps384, "PS384"),
+            (AsymmetricAlgorithm::Ps512, "PS512"),
+        ] {
+            let jwk = pkcs8_der(der.as_bytes(), algorithm, Some("rsa-key")).unwrap();
+            assert_eq!(jwk.algorithm.as_deref(), Some(expected));
+            assert_eq!(jwk.kid.as_deref(), Some("rsa-key"));
+            let key = PrivateKey::from_jwk(jwk).unwrap();
+            assert_eq!(key.as_private_jwk().algorithm.as_deref(), Some(expected));
+            let signer = key.select_asymmetric_signer().await;
+            assert_eq!(signer.jws_algorithm().as_ref(), expected);
+            let public = signer.public_key_jwk().into_owned();
+            assert_eq!(public.algorithm.as_deref(), Some(expected));
+            let verifier = AsymmetricPublicKey::from_jwk(public).unwrap();
+            let signature = signer.sign(b"message").await.unwrap();
+            verifier
+                .verify(
+                    b"message",
+                    &signature,
+                    &KeyMatch::builder().alg(expected).build(),
+                )
+                .await
+                .unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn pkcs8_der_yields_a_complete_signing_jwk_with_the_requested_kid() {
@@ -1133,7 +1163,10 @@ mod tests {
         // 2048 bits, and PS512's PSS encoding (two 64-byte digests + 2) does
         // not fit a 1024-bit modulus — signing must fail as an error.
         let rsa_key = rsa::PrivateKey::new(&mut rand::rng(), 1024).unwrap();
-        let signing_key = Key::Ps512(rsa::pss::SigningKey::new(rsa_key));
+        let signing_key = Key::Rsa {
+            key: rsa_key,
+            algorithm: RsaAlgorithm::Ps512,
+        };
         let jwk = signing_key.as_public_jwk(None);
         let thumbprint = jwk.thumbprint();
         let key = PrivateKey {
