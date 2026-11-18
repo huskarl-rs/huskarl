@@ -302,6 +302,7 @@ pub(super) enum AuthorizationResponse {
         error_description: Option<String>,
         error_uri: Option<String>,
         state: Option<String>,
+        iss: Option<String>,
     },
 }
 
@@ -324,12 +325,14 @@ impl std::fmt::Debug for AuthorizationResponse {
                 error_description,
                 error_uri,
                 state,
+                iss,
             } => f
                 .debug_struct("Error")
                 .field("error", error)
                 .field("error_description", error_description)
                 .field("error_uri", error_uri)
                 .field("state", &state.as_ref().map(|_| "[REDACTED]"))
+                .field("iss", iss)
                 .finish(),
         }
     }
@@ -467,6 +470,7 @@ impl CompleteInput {
                 error_description: params.error_description,
                 error_uri: params.error_uri,
                 state: params.state,
+                iss: params.iss,
             })
         } else {
             CallbackPayload::Plain(AuthorizationResponse::Success {
@@ -708,18 +712,19 @@ mod tests {
     #[test]
     fn complete_input_parse_error_response_takes_precedence() {
         let parsed = "code=abc&state=xyz&error=access_denied&error_description=user+denied\
-                      &error_uri=https%3A%2F%2Fas.example.com%2Fdoc"
+                      &error_uri=https%3A%2F%2Fas.example.com%2Fdoc&iss=https%3A%2F%2Fas.example.com"
             .parse::<CompleteInput>()
             .unwrap();
         assert!(
             matches!(
                 &parsed.payload,
                 // `state` is kept so completion can bind the error to the flow.
-                CallbackPayload::Plain(AuthorizationResponse::Error { error, error_description, error_uri, state })
+                CallbackPayload::Plain(AuthorizationResponse::Error { error, error_description, error_uri, state, iss })
                     if error == "access_denied"
                         && error_description.as_deref() == Some("user denied")
                         && error_uri.as_deref() == Some("https://as.example.com/doc")
                         && state.as_deref() == Some("xyz")
+                        && iss.as_deref() == Some("https://as.example.com")
             ),
             "got {:?}",
             parsed.payload
@@ -826,6 +831,7 @@ mod tests {
                 error_description: Some("user refused".to_owned()),
                 error_uri: None,
                 state: Some("csrf-state-value".to_owned()),
+                iss: None,
             }),
             resource: None,
         };

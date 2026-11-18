@@ -41,6 +41,12 @@ pub(crate) enum CompleteError {
     ))]
     #[classify(no)]
     MissingIssuer,
+    /// The authorization response contains `iss`, but the grant has no configured issuer.
+    #[snafu(display(
+        "authorization response contains iss but no issuer is configured; provide an issuer via server metadata or builder"
+    ))]
+    #[classify(no)]
+    ResponseIssuerNotConfigured,
     /// The token response included an ID token but the grant cannot validate it.
     #[snafu(display(
         "ID token received but the grant cannot validate it; \
@@ -141,7 +147,8 @@ impl CompleteError {
             Self::StateMismatch => O::StateMismatch,
             Self::MissingJarmResponse | Self::UnexpectedJarmResponse => O::JarmDowngrade,
             Self::OAuthError { .. } => O::Rejected,
-            Self::IdTokenVerifierNotConfigured
+            Self::ResponseIssuerNotConfigured
+            | Self::IdTokenVerifierNotConfigured
             | Self::IdTokenIssuerNotConfigured
             | Self::JarmVerifierNotConfigured
             | Self::JarmIssuerNotConfigured => O::NotConfigured,
@@ -500,6 +507,7 @@ mod classification {
             (CompleteError::JarmVerifierNotConfigured, O::NotConfigured),
             (CompleteError::JarmIssuerNotConfigured, O::NotConfigured),
             (CompleteError::MissingIssuer, O::Protocol),
+            (CompleteError::ResponseIssuerNotConfigured, O::NotConfigured),
             (CompleteError::MissingIdToken, O::Protocol),
             (
                 CompleteError::JarmValidation {

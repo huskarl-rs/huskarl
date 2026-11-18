@@ -369,10 +369,14 @@ impl AuthorizationCodeGrant {
         #[from_metadata(path = "require_pushed_authorization_requests")]
         #[builder(default)]
         require_pushed_authorization_requests: bool,
-        /// Whether the server promises RFC 9207 response-issuer support.
+        /// Whether the server advertises support for RFC 9207.
         ///
-        /// Defaults to `false`. When enabled, every successful callback must
-        /// contain `iss`, and it must exactly match `issuer`.
+        /// Defaults to `false`. When `true`, success and error callbacks must
+        /// include `iss`.
+        ///
+        /// Regardless of this setting, any returned `iss` must exactly match
+        /// the configured `issuer`. If the callback contains `iss` but no issuer
+        /// is configured, validation fails.
         #[from_metadata(path = "authorization_response_iss_parameter_supported")]
         #[builder(default)]
         authorization_response_iss_parameter_supported: bool,

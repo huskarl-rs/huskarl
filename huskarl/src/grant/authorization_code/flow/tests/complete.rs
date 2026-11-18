@@ -979,3 +979,87 @@ async fn jarm_completion_uses_grant_clock_at_expiry_boundary() {
         ));
     }
 }
+
+/// RFC 9207 applies equally to success/error callbacks and advertised/implicit
+/// support. Rejected responses must never reach the token endpoint.
+#[rstest]
+#[tokio::test]
+async fn response_issuer_validation(
+    #[values(false, true)] advertised: bool,
+    #[values(false, true)] configured: bool,
+    #[values(false, true)] error_response: bool,
+    #[values(
+        None,
+        Some("https://as.example.com"),
+        Some("https://other.example.com"),
+        Some("https://as.example.com/"),
+        Some("")
+    )]
+    issuer: Option<&str>,
+) {
+    enum ExpectedFailure {
+        NotConfigured,
+        Mismatch,
+        Missing,
+    }
+
+    let mut grant = completing_grant(None, r#"{"access_token":"t","token_type":"bearer"}"#).await;
+    grant.authorization_response_iss_parameter_supported = advertised;
+    if !configured {
+        grant.issuer = None;
+    }
+    let expected_failure = match issuer {
+        Some(_) if !configured => Some(ExpectedFailure::NotConfigured),
+        Some(value) if value != "https://as.example.com" => Some(ExpectedFailure::Mismatch),
+        None if advertised => Some(ExpectedFailure::Missing),
+        _ => None,
+    };
+    if expected_failure.is_some() || error_response {
+        grant.http_client = Arc::new(NoHttp);
+    }
+    let mut params = form_urlencoded::Serializer::new(String::new());
+    params.append_pair("state", "st");
+    if error_response {
+        params.append_pair("error", "access_denied");
+    } else {
+        params.append_pair("code", "code");
+    }
+    if let Some(issuer) = issuer {
+        params.append_pair("iss", issuer);
+    }
+    let result = grant
+        .complete(&pending(false), params.finish().parse().unwrap())
+        .await;
+    match expected_failure {
+        Some(expected) => {
+            let err = result.expect_err("invalid issuer must fail before token exchange");
+            assert!(
+                err.verdict().is_none(),
+                "unvalidated OAuth errors are not server verdicts"
+            );
+            assert!(
+                match expected {
+                    ExpectedFailure::NotConfigured => matches!(
+                        complete_cause(&err),
+                        CompleteError::ResponseIssuerNotConfigured
+                    ),
+                    ExpectedFailure::Mismatch =>
+                        matches!(complete_cause(&err), CompleteError::IssuerMismatch { .. }),
+                    ExpectedFailure::Missing =>
+                        matches!(complete_cause(&err), CompleteError::MissingIssuer),
+                },
+                "{err:?}"
+            );
+        }
+        None if error_response => {
+            let err = result.unwrap_err();
+            assert_eq!(
+                err.verdict().map(|v| v.code().as_str()),
+                Some("access_denied")
+            );
+        }
+        None => {
+            result.unwrap();
+        }
+    }
+}
