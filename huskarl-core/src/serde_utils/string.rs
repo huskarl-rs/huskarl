@@ -10,10 +10,14 @@
 /// Pair with `#[serde(default, skip_serializing_if = "Vec::is_empty")]` to omit
 /// the empty case rather than emit `null`, and to allow an absent field to
 /// deserialize as an empty `Vec`.
+///
+/// [`deserialize`](string_or_vec::deserialize) accepts null as an empty list.
+/// [`deserialize_strict`](string_or_vec::deserialize_strict) rejects
+/// null and is used by JWT claims with empty lists omitted during serialization.
 pub mod string_or_vec {
     use serde::{Deserializer, Serializer, de};
 
-    /// Serializes a `Vec<String>` as a single string when length is 1, an array otherwise.
+    /// Serializes an empty list as null, one string as a bare string, and more as an array.
     ///
     /// # Errors
     ///
@@ -37,7 +41,7 @@ pub mod string_or_vec {
         }
     }
 
-    /// Deserializes a `Vec<String>` from either a single string or an array of strings.
+    /// Deserializes a string or array of strings, accepting null as an empty list.
     ///
     /// # Errors
     ///
@@ -46,70 +50,92 @@ pub mod string_or_vec {
     where
         D: Deserializer<'de>,
     {
-        struct StringOrVec;
+        deserializer.deserialize_any(StringOrVec::<true>)
+    }
 
-        impl<'de> de::Visitor<'de> for StringOrVec {
-            type Value = Vec<String>;
+    /// Deserializes a string or array of strings, rejecting explicit null.
+    ///
+    /// Pair with `#[serde(default)]` to allow an absent field.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for null, other types, or non-string array elements.
+    pub fn deserialize_strict<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(StringOrVec::<false>)
+    }
 
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a string or array of strings")
+    struct StringOrVec<const ALLOW_NULL: bool>;
+
+    impl<'de, const ALLOW_NULL: bool> de::Visitor<'de> for StringOrVec<ALLOW_NULL> {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or array of strings")
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(vec![v])
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(vec![v.to_owned()])
+        }
+
+        fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(vec![v.to_owned()])
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(1));
+            while let Some(value) = seq.next_element()? {
+                vec.push(value);
             }
+            Ok(vec)
+        }
 
-            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(vec![v])
-            }
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
 
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(vec![v.to_owned()])
-            }
-
-            fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(vec![v.to_owned()])
-            }
-
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: de::SeqAccess<'de>,
-            {
-                let mut vec = Vec::with_capacity(seq.size_hint().unwrap_or(1));
-                while let Some(value) = seq.next_element()? {
-                    vec.push(value);
-                }
-                Ok(vec)
-            }
-
-            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                deserializer.deserialize_any(self)
-            }
-
-            fn visit_none<E>(self) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
+        fn visit_none<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            if ALLOW_NULL {
                 Ok(Vec::new())
-            }
-
-            fn visit_unit<E>(self) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Ok(Vec::new())
+            } else {
+                Err(E::invalid_type(de::Unexpected::Unit, &self))
             }
         }
 
-        deserializer.deserialize_any(StringOrVec)
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            if ALLOW_NULL {
+                Ok(Vec::new())
+            } else {
+                Err(E::invalid_type(de::Unexpected::Unit, &self))
+            }
+        }
     }
 }
 
@@ -119,9 +145,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
     use serde_json::json;
 
-    /// Mirrors the `aud` attributes on
-    /// [`JwtClaims`](crate::jwt::JwtClaims) — `default` for an absent claim,
-    /// `skip_serializing_if` to omit the empty case.
+    /// Exercises the nullable adapter, with omission for an empty audience.
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
     struct WithAud {
         #[serde(
@@ -207,7 +231,8 @@ mod tests {
     }
 
     // Only `skip_serializing_if` suppresses the empty case; unguarded it emits
-    // `null`, which this adapter reads back as empty.
+    // `null`, which the nullable adapter reads back as empty. JWT claims use
+    // deserialize_strict instead and omit empty audiences during serialization.
     #[test]
     fn serialize_empty_without_skip_emits_null() {
         let v = serde_json::to_value(AlwaysAud { aud: vec![] }).unwrap();
