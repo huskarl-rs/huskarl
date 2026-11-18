@@ -67,7 +67,7 @@ pub fn parse_compact_jws<
 /// The returned JWS retains the usual registered claims and can be passed to
 /// [`JwtValidator::validate_parsed_jws`](crate::jwt::validator::JwtValidator::validate_parsed_jws).
 /// Neither the token nor the separately returned confirmation is authenticated
-/// until that validation succeeds. Missing or null `cnf` returns `None`.
+/// until that validation succeeds. Missing `cnf` returns `None`; explicit null is invalid.
 ///
 /// This experimental compatibility bridge may be removed when the shared
 /// confirmation type supports these methods in a future breaking release.
@@ -84,16 +84,19 @@ pub fn parse_compact_jws_with_confirmation<
 >(
     token: &str,
 ) -> Result<(ParsedJws<H, C>, Option<Confirmation>), JwsParseError> {
-    #[derive(Deserialize)]
-    struct Payload<T> {
-        cnf: Option<T>,
-    }
-
     parse_with_payload(token, |payload| {
-        let payload: Payload<Confirmation> =
+        let payload: ConfirmationPayload<Confirmation> =
             serde_json::from_slice(payload).context(ClaimsSnafu)?;
         Ok(payload.cnf)
     })
+}
+
+#[cfg(feature = "experimental-oidc-key-binding")]
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+struct ConfirmationPayload<T> {
+    #[serde(default, deserialize_with = "super::structure::deserialize_present")]
+    cnf: Option<T>,
 }
 
 fn parse_with_payload<
@@ -141,6 +144,7 @@ fn parse_with_payload<
 mod tests {
     use std::borrow::Cow;
 
+    use rstest::rstest;
     use serde::Deserialize;
 
     use crate::{
@@ -182,6 +186,99 @@ mod tests {
             Ok(_) => panic!("expected parse failure"),
             Err(e) => e,
         }
+    }
+
+    fn token(payload: &str) -> String {
+        use super::{BASE64_URL_SAFE_NO_PAD, Engine};
+
+        format!(
+            "{}.{}.AA",
+            BASE64_URL_SAFE_NO_PAD.encode(br#"{"alg":"ES256"}"#),
+            BASE64_URL_SAFE_NO_PAD.encode(payload)
+        )
+    }
+
+    #[test]
+    fn known_claims_may_be_absent() {
+        let parsed = parse_compact_jws::<(), ()>(&token("{}")).unwrap();
+        assert!(parsed.claims.iss.is_none());
+        assert!(parsed.claims.sub.is_none());
+        assert_eq!(parsed.claims.aud, Vec::<String>::new());
+        assert!(parsed.claims.exp.is_none());
+        assert!(parsed.claims.nbf.is_none());
+        assert!(parsed.claims.iat.is_none());
+        assert!(parsed.claims.jti.is_none());
+        assert!(parsed.claims.cnf.is_none());
+    }
+
+    #[rstest]
+    #[case::iss("iss")]
+    #[case::sub("sub")]
+    #[case::aud("aud")]
+    #[case::exp("exp")]
+    #[case::nbf("nbf")]
+    #[case::iat("iat")]
+    #[case::jti("jti")]
+    #[case::cnf("cnf")]
+    fn known_claims_reject_null(#[case] claim: &str) {
+        use super::JwsParseError;
+
+        let compact = token(&format!(r#"{{"{claim}":null}}"#));
+        assert!(matches!(
+            parse_compact_jws::<(), ()>(&compact),
+            Err(JwsParseError::Claims { .. })
+        ));
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        assert!(matches!(
+            super::parse_compact_jws_with_confirmation::<(), (), serde_json::Value>(&compact),
+            Err(JwsParseError::Claims { .. })
+        ));
+    }
+
+    #[rstest]
+    #[case::typ("typ")]
+    #[case::kid("kid")]
+    fn header_strings_reject_null(#[case] field: &str) {
+        use super::{BASE64_URL_SAFE_NO_PAD, Engine, JwsParseError};
+
+        let header = format!(r#"{{"alg":"ES256","{field}":null}}"#);
+        let compact = format!("{}.e30.AA", BASE64_URL_SAFE_NO_PAD.encode(header));
+        assert!(matches!(
+            parse_compact_jws::<(), ()>(&compact),
+            Err(JwsParseError::Header { .. })
+        ));
+        #[cfg(feature = "experimental-oidc-key-binding")]
+        assert!(matches!(
+            super::parse_compact_jws_with_confirmation::<(), (), serde_json::Value>(&compact),
+            Err(JwsParseError::Header { .. })
+        ));
+    }
+
+    #[rstest]
+    #[case::absent(r#"{"alg":"ES256"}"#, None, None)]
+    #[case::strings(r#"{"alg":"ES256","typ":"JWT","kid":"key"}"#, Some("JWT"), Some("key"))]
+    #[case::empty_strings(r#"{"alg":"ES256","typ":"","kid":""}"#, Some(""), Some(""))]
+    fn header_strings_allow_omission_and_strings(
+        #[case] header: &str,
+        #[case] typ: Option<&str>,
+        #[case] kid: Option<&str>,
+    ) {
+        use super::{BASE64_URL_SAFE_NO_PAD, Engine};
+
+        let compact = format!("{}.e30.AA", BASE64_URL_SAFE_NO_PAD.encode(header));
+        let parsed = parse_compact_jws::<(), ()>(&compact).unwrap();
+        assert_eq!(parsed.header.typ.as_deref(), typ);
+        assert_eq!(parsed.header.kid.as_deref(), kid);
+    }
+
+    #[test]
+    fn custom_claims_may_be_null() {
+        let parsed =
+            parse_compact_jws::<(), serde_json::Value>(&token(r#"{"custom":null}"#)).unwrap();
+        assert_eq!(
+            parsed.claims.claims.get("custom"),
+            Some(&serde_json::Value::Null)
+        );
     }
 
     #[test]
@@ -279,17 +376,39 @@ mod confirmation_tests {
 
     #[test]
     fn absent_confirmation_and_duplicate_members_are_handled() {
-        for payload in ["{}", r#"{"cnf":null}"#] {
-            let (_, confirmation) =
-                parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&token(
-                    payload,
-                ))
+        let (_, confirmation) =
+            parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&token("{}"))
                 .unwrap();
-            assert!(confirmation.is_none());
-        }
+        assert!(confirmation.is_none());
         let duplicate = format!(r#"{{"cnf":{{"jwk":{0}}},"cnf":{{"jwk":{0}}}}}"#, jwk());
         assert!(matches!(
             parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&token(&duplicate)),
+            Err(JwsParseError::Claims { .. })
+        ));
+    }
+
+    #[test]
+    fn confirmation_payload_rejects_null_independently() {
+        assert!(serde_json::from_str::<ConfirmationPayload<Value>>(r#"{"cnf":null}"#).is_err());
+        assert!(
+            serde_json::from_str::<ConfirmationPayload<Option<Value>>>(r#"{"cnf":null}"#).is_err()
+        );
+        let absent = serde_json::from_str::<ConfirmationPayload<Value>>("{}").unwrap();
+        assert!(absent.cnf.is_none());
+        let present =
+            serde_json::from_str::<ConfirmationPayload<Value>>(r#"{"cnf":{"jkt":"key"}}"#).unwrap();
+        assert_eq!(present.cnf, Some(json!({"jkt":"key"})));
+    }
+
+    #[test]
+    fn rejects_null_confirmation_even_for_permissive_types() {
+        let compact = token(r#"{"cnf":null}"#);
+        assert!(matches!(
+            parse_compact_jws_with_confirmation::<(), (), JwkConfirmationClaim>(&compact),
+            Err(JwsParseError::Claims { .. })
+        ));
+        assert!(matches!(
+            parse_compact_jws_with_confirmation::<(), (), Value>(&compact),
             Err(JwsParseError::Claims { .. })
         ));
     }

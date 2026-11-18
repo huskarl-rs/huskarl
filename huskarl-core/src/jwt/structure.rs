@@ -33,10 +33,20 @@ pub struct JwtHeader<'a, ExtraHeaders: Clone> {
     /// The JWS algorithm (RFC 7515 §4.1.1), e.g. `ES256`.
     pub alg: Cow<'a, str>,
     /// The media type of the token (RFC 7515 §4.1.9), e.g. `at+jwt`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// May be absent, but an explicit `null` is invalid.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub typ: Option<Cow<'a, str>>,
     /// The identifier of the key used to sign the token (RFC 7515 §4.1.4).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// May be absent, but an explicit `null` is invalid.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub kid: Option<Cow<'a, str>>,
     /// RFC 7515 §4.1.11: critical header parameters. Any non-empty value means the
     /// verifier MUST understand all listed parameters or reject the JWS entirely.
@@ -55,53 +65,96 @@ pub struct JwtHeader<'a, ExtraHeaders: Clone> {
 
 /// The registered JWT claims (RFC 7519 §4.1), with additional claims captured
 /// type-safely via the `Claims` type parameter.
+///
+/// Registered claims and `cnf` may be omitted, but must not be explicit `null`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "Claims: serde::de::Deserialize<'de>"))]
 pub struct JwtClaims<'a, Claims: Clone> {
     /// The issuer of the token (RFC 7519 §4.1.1).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub iss: Option<Cow<'a, str>>,
     /// The subject of the token (RFC 7519 §4.1.2).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub sub: Option<Cow<'a, str>>,
     /// The audiences of the token (RFC 7519 §4.1.3). A bare-string `aud`
     /// deserializes as a single-element vector; an absent claim as empty.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        with = "crate::serde_utils::string::string_or_vec"
+        serialize_with = "crate::serde_utils::string::string_or_vec::serialize",
+        deserialize_with = "crate::serde_utils::string::string_or_vec::deserialize_strict"
     )]
     pub aud: Vec<String>,
     /// When the token was issued (RFC 7519 §4.1.6).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "crate::serde_utils::time::option_unix_secs"
+        serialize_with = "crate::serde_utils::time::option_unix_secs::serialize",
+        deserialize_with = "deserialize_timestamp"
     )]
     pub iat: Option<SystemTime>,
     /// When the token expires (RFC 7519 §4.1.4).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "crate::serde_utils::time::option_unix_secs"
+        serialize_with = "crate::serde_utils::time::option_unix_secs::serialize",
+        deserialize_with = "deserialize_timestamp"
     )]
     pub exp: Option<SystemTime>,
     /// The time before which the token must not be accepted (RFC 7519 §4.1.5).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "crate::serde_utils::time::option_unix_secs"
+        serialize_with = "crate::serde_utils::time::option_unix_secs::serialize",
+        deserialize_with = "deserialize_timestamp"
     )]
     pub nbf: Option<SystemTime>,
     /// The unique identifier of the token (RFC 7519 §4.1.7).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub jti: Option<Cow<'a, str>>,
     /// Key confirmation claim (RFC 7800). Binds the token to a `DPoP` key or mTLS certificate.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// May be absent, but an explicit `null` is invalid.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub cnf: Option<ConfirmationClaim>,
     /// Additional claims beyond the registered JWT claim set.
     #[serde(flatten)]
     pub claims: Cow<'a, Claims>,
+}
+
+pub(crate) fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    // Reject null even when T itself accepts it (e.g. serde_json::Value).
+    Option::<T>::deserialize(deserializer)?
+        .map(Some)
+        .ok_or_else(|| {
+            serde::de::Error::invalid_type(serde::de::Unexpected::Unit, &"a non-null value")
+        })
+}
+
+fn deserialize_timestamp<'de, D>(deserializer: D) -> Result<Option<SystemTime>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    crate::serde_utils::time::unix_secs::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]
@@ -166,16 +219,27 @@ mod tests {
 
     // --- aud deserialization ---
 
-    // `aud` accepts a bare string, an array, null, or absence; null and absence
-    // both normalize to an empty list.
+    // `aud` accepts a bare string, an array, or absence; absence becomes an empty list.
     #[rstest]
     #[case::string(r#"{"aud":"x"}"#, vec!["x"])]
     #[case::array(r#"{"aud":["a","b"]}"#, vec!["a", "b"])]
-    #[case::null(r#"{"aud":null}"#, vec![])]
+    #[case::empty_array(r#"{"aud":[]}"#, vec![])]
     #[case::absent(r"{}", vec![])]
     fn aud_deserialize(#[case] json: &str, #[case] expected: Vec<&str>) {
         let c: JwtClaims<'_, ()> = serde_json::from_str(json).unwrap();
         assert_eq!(c.aud, expected);
+    }
+
+    #[rstest]
+    #[case::number(json!({"aud": 5}), "a string or array of strings")]
+    #[case::null(json!({"aud": null}), "a string or array of strings")]
+    #[case::element(json!({"aud": ["a", 1]}), "expected a string")]
+    fn audience_errors_describe_expected_type(
+        #[case] input: serde_json::Value,
+        #[case] expected: &str,
+    ) {
+        let error = serde_json::from_value::<JwtClaims<'_, ()>>(input).unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
     }
 
     // --- Timestamp deserialization ---
@@ -214,13 +278,6 @@ mod tests {
             let result = serde_json::from_str::<JwtClaims<'_, ()>>(&j);
             assert!(result.is_err(), "{claim} should be rejected");
         }
-    }
-
-    #[test]
-    fn timestamp_null() {
-        let j = r#"{"iat":null}"#;
-        let c: JwtClaims<'_, ()> = serde_json::from_str(j).unwrap();
-        assert_eq!(c.iat, None);
     }
 
     #[test]
