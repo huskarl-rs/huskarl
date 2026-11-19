@@ -167,7 +167,10 @@ When building `CompleteInput` via its builder instead (e.g. from
 framework-typed query parameters), include `iss`: a server that advertises
 RFC 9207 support in its metadata — as conforming servers do — makes the
 parameter mandatory, and completion fails with `MissingIssuer` if it is
-dropped.
+dropped. On both success and error callbacks, any present `iss` must exactly
+match the configured issuer, even if the server does not advertise support.
+If the callback contains `iss` but no issuer is configured, completion fails with
+`ResponseIssuerNotConfigured`.
 
 ## OpenID Connect flows
 

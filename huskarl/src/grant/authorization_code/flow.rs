@@ -29,8 +29,9 @@ use crate::{
                 IdTokenVerifierNotConfiguredSnafu, IssuerMismatchSnafu,
                 JarmIssuerNotConfiguredSnafu, JarmMissingParameterSnafu, JarmValidationSnafu,
                 JarmVerifierNotConfiguredSnafu, MissingIdTokenSnafu, MissingIssuerSnafu,
-                MissingJarmResponseSnafu, PushedAuthorizationRequestSnafu, StateMismatchSnafu,
-                UnexpectedJarmResponseSnafu, ValidatingIdTokenSnafu,
+                MissingJarmResponseSnafu, PushedAuthorizationRequestSnafu,
+                ResponseIssuerNotConfiguredSnafu, StateMismatchSnafu, UnexpectedJarmResponseSnafu,
+                ValidatingIdTokenSnafu,
             },
             grant::AuthorizationCodeGrant,
             par,
@@ -422,18 +423,21 @@ impl AuthorizationCodeGrant {
 
         // An error response surfaces here, not at parse time, so it is state-
         // checked too: an unsolicited one is CSRF, not a denied login.
-        let (code, iss) = match response {
+        let code = match response {
             AuthorizationResponse::Success { code, state, iss } => {
                 check_state(pending_state, Some(&state))?;
-                (code, iss)
+                self.check_response_issuer(iss.as_deref())?;
+                code
             }
             AuthorizationResponse::Error {
                 error,
                 error_description,
                 error_uri,
                 state,
+                iss,
             } => {
                 check_state(pending_state, state.as_deref())?;
+                self.check_response_issuer(iss.as_deref())?;
 
                 // Convert the wire fields into the verdict carried by `Error`.
                 return Err(Error::from(CompleteError::OAuthError {
@@ -443,28 +447,6 @@ impl AuthorizationCodeGrant {
                 }));
             }
         };
-
-        // RFC 9207 - check issuer match.
-        if self.authorization_response_iss_parameter_supported
-            && let Some(config_issuer) = self.issuer.as_deref()
-        {
-            if let Some(issuer) = iss {
-                // The issuer is public, not a secret, so a constant-time
-                // comparison is not required here (unlike `state` above).
-                if issuer.as_bytes() != config_issuer.as_bytes() {
-                    return Err(Error::from(
-                        IssuerMismatchSnafu {
-                            original: config_issuer,
-                            callback: issuer,
-                        }
-                        .build(),
-                    ));
-                }
-            } else {
-                // Server claimed to support RFC 9207 but no issuer received.
-                return Err(Error::from(MissingIssuerSnafu.build()));
-            }
-        }
 
         // Select the original proof key by its stored thumbprint, even if the
         // default key has rotated. Proof creation fails before HTTP if absent.
@@ -480,6 +462,29 @@ impl AuthorizationCodeGrant {
             .await?;
 
         self.finalize_id_token(pending_state, token).await
+    }
+
+    /// Validates the response issuer as required by RFC 9207, section 2.4.
+    fn check_response_issuer(&self, iss: Option<&str>) -> Result<(), Error> {
+        if let Some(issuer) = iss {
+            let expected = self
+                .issuer
+                .as_deref()
+                .ok_or_else(|| Error::from(ResponseIssuerNotConfiguredSnafu.build()))?;
+            // Issuers are public identifiers and require exact string comparison.
+            if issuer != expected {
+                return Err(Error::from(
+                    IssuerMismatchSnafu {
+                        original: expected,
+                        callback: issuer,
+                    }
+                    .build(),
+                ));
+            }
+        } else if self.authorization_response_iss_parameter_supported {
+            return Err(Error::from(MissingIssuerSnafu.build()));
+        }
+        Ok(())
     }
 
     /// Validates a returned ID token and enforces the OIDC requirement for one.
@@ -618,6 +623,7 @@ impl AuthorizationCodeGrant {
                 error_description: claims.error_description,
                 error_uri: claims.error_uri,
                 state: claims.state,
+                iss: validated.iss,
             });
         }
         let param = |value: Option<String>, param: &'static str| {
