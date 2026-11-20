@@ -13,6 +13,8 @@ db-urls = ["https://github.com/rustsec/advisory-db"]
 # directly.
 unmaintained = "workspace"
 yanked = "deny"
+# Detect ignored advisories that are no longer needed.
+unused-ignored-advisory = "deny"
 ignore = [
   # RUSTSEC-2023-0071 — "Marvin Attack" timing side-channel in the `rsa` crate.
   # Ref: https://github.com/RustCrypto/RSA/issues/19
