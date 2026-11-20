@@ -15,15 +15,6 @@ unmaintained = "workspace"
 yanked = "deny"
 # Detect ignored advisories that are no longer needed.
 unused-ignored-advisory = "deny"
-ignore = [
-  # RUSTSEC-2023-0071 — "Marvin Attack" timing side-channel in the `rsa` crate.
-  # Ref: https://github.com/RustCrypto/RSA/issues/19
-  # See https://github.com/RustCrypto/RSA/pull/394
-  #
-  # The dependencies use an RC version of RSA which should have fixed this
-  # particular sidechannel attack; but it's not yet in a non-RC version.
-  { id = "RUSTSEC-2023-0071", reason = "no fixed rsa release exists; huskarl does no RSA decryption" },
-]
 
 [licenses]
 allow = [
