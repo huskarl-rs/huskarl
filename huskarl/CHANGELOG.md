@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.12](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.11...huskarl-v0.11.12) - 2026-11-20
+
+### Fixed
+
+- fix!(client): Check that `iss` matches issuer whenever supplied to callback. ([#394](https://github.com/huskarl-rs/huskarl/pull/394))
+
 ## [0.11.11](https://github.com/huskarl-rs/huskarl/compare/huskarl-v0.11.10...huskarl-v0.11.11) - 2026-11-17
 
 ### Added

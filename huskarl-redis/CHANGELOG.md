@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5](https://github.com/huskarl-rs/huskarl/compare/huskarl-redis-v0.3.4...huskarl-redis-v0.3.5) - 2026-11-20
+
+### Other
+
+- updated the following local packages: huskarl-core
+
 ## [0.3.4](https://github.com/huskarl-rs/huskarl/compare/huskarl-redis-v0.3.3...huskarl-redis-v0.3.4) - 2026-11-17
 
 ### Other
