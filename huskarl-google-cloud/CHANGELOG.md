@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7](https://github.com/huskarl-rs/huskarl/compare/huskarl-google-cloud-v0.8.6...huskarl-google-cloud-v0.8.7) - 2026-11-20
+
+### Other
+
+- updated the following local packages: huskarl-core
+
 ## [0.8.6](https://github.com/huskarl-rs/huskarl/compare/huskarl-google-cloud-v0.8.5...huskarl-google-cloud-v0.8.6) - 2026-11-17
 
 ### Other
