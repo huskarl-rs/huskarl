@@ -99,7 +99,7 @@ wasm-bindgen-test = "0.3"
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 huskarl = { path = ".", features = ["authorization-flow-loopback"] }
 huskarl-reqwest = { path = "../huskarl-reqwest", features = ["rustls-tls"] }
-rstest = { version = "0.26.1", default-features = false }
+rstest = { version = "0.29", default-features = false }
 tokio = { version = "1.51", features = ["macros", "rt-multi-thread", "test-util", "time"] }
 reqwest = { version = "0.13", features = ["cookies", "form", "json", "query"] }
-httpmock = "0.8.3"
+httpmock = "0.9"
