@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.14](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.13...huskarl-resource-server-v0.11.14) - 2026-11-28
+
+### Other
+
+- Update dependencies ([#400](https://github.com/huskarl-rs/huskarl/pull/400))
+
 ## [0.11.13](https://github.com/huskarl-rs/huskarl/compare/huskarl-resource-server-v0.11.12...huskarl-resource-server-v0.11.13) - 2026-11-17
 
 ### Other
