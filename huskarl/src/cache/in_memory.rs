@@ -713,7 +713,11 @@ mod tests {
         // the lock. The caller must wait instead of returning the expired token.
         time.advance(Duration::from_secs(20)).unwrap();
         let mut refresh = std::pin::pin!(cache.refresh_ahead_now(current.clone()));
-        assert!(futures_util::poll!(&mut refresh).is_pending());
+        std::future::poll_fn(|cx| {
+            assert!(refresh.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
         assert_eq!(cache.source().calls(), 1);
 
         drop(refresh_lock);
